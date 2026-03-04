@@ -3,7 +3,7 @@ description: 'AI-based PR Reviewer & Summarizer with Chat Capabilities'
 branding:
   icon: 'git-merge'
   color: 'orange'
-author: 'CodeRabbit LLC'
+author: 'AI Reviewer'
 inputs:
   debug:
     required: false
@@ -151,12 +151,12 @@ inputs:
   openai_light_model:
     required: false
     description:
-      'Model to use for simple tasks like summarizing diff on a file.'
-    default: 'gpt-3.5-turbo'
+      'Model to use for simple tasks like summarizing diff on a file. Recommended: gpt-4.1-nano (fastest, cheapest, 1M context, 32K output).'
+    default: 'gpt-4.1-nano'
   openai_heavy_model:
     required: false
-    description: 'Model to use for complex tasks such as code reviews.'
-    default: 'gpt-4'
+    description: 'Model to use for complex tasks such as code reviews. Recommended: gpt-4.1-mini (high intelligence, 1M context, 32K output, beats gpt-4o).'
+    default: 'gpt-4.1-mini'
   openai_model_temperature:
     required: false
     description: 'Temperature for GPT model'
@@ -182,8 +182,8 @@ inputs:
     required: false
     description: 'System message to be sent to OpenAI'
     default: |
-      You are `@coderabbitai` (aka `github-actions[bot]`), a language model 
-      trained by OpenAI. Your purpose is to act as a highly experienced 
+      You are `@ai-reviewer` (aka `github-actions[bot]`), a language model
+      trained by OpenAI. Your purpose is to act as a highly experienced
       software engineer and provide a thorough review of the code hunks
       and suggest code snippets to improve key areas such as:
         - Logic
@@ -237,7 +237,7 @@ inputs:
   bot_icon:
     required: false
     description: 'The icon for the bot'
-    default: '<img src="https://avatars.githubusercontent.com/in/347564?s=41" alt="Image description" width="20" height="20">'
+    default: '<img src="" alt="AI Reviewer" width="20" height="20">'
 runs:
   using: 'node16'
   main: 'dist/index.js'
