@@ -1,3 +1,13 @@
+/**
+ * main.ts - GitHub Action 入口文件
+ *
+ * 整个 AI Reviewer 的启动入口，负责：
+ * 1. 读取 GitHub Action 的所有输入参数（配置项）
+ * 2. 初始化轻量模型 Bot（用于摘要）和重量模型 Bot（用于代码审查）
+ * 3. 根据 GitHub 事件类型分发到不同的处理流程：
+ *    - pull_request / pull_request_target → 执行完整代码审查流程
+ *    - pull_request_review_comment → 处理用户在审查评论中的回复
+ */
 import {
   getBooleanInput,
   getInput,
@@ -12,6 +22,7 @@ import {codeReview} from './review'
 import {handleReviewComment} from './review-comment'
 
 async function run(): Promise<void> {
+  // 从 action.yml 中读取所有配置参数，构建 Options 配置对象
   const options: Options = new Options(
     getBooleanInput('debug'),
     getBooleanInput('disable_review'),
@@ -32,16 +43,18 @@ async function run(): Promise<void> {
     getInput('language')
   )
 
-  // print options
+  // 打印所有配置项，方便调试
   options.print()
 
+  // 构建提示词模板对象，包含用户自定义的摘要和发布说明提示词
   const prompts: Prompts = new Prompts(
     getInput('summarize'),
     getInput('summarize_release_notes')
   )
 
-  // Create two bots, one for summary and one for review
+  // 创建两个 Bot 实例：轻量 Bot 用于文件摘要，重量 Bot 用于深度代码审查
 
+  // 初始化轻量模型 Bot（默认 gpt-3.5-turbo），用于快速生成文件摘要
   let lightBot: Bot | null = null
   try {
     lightBot = new Bot(
@@ -55,6 +68,7 @@ async function run(): Promise<void> {
     return
   }
 
+  // 初始化重量模型 Bot（默认 gpt-4），用于深度代码审查和最终摘要生成
   let heavyBot: Bot | null = null
   try {
     heavyBot = new Bot(
@@ -69,15 +83,17 @@ async function run(): Promise<void> {
   }
 
   try {
-    // check if the event is pull_request
+    // 根据 GitHub 事件类型分发处理逻辑
     if (
       process.env.GITHUB_EVENT_NAME === 'pull_request' ||
       process.env.GITHUB_EVENT_NAME === 'pull_request_target'
     ) {
+      // PR 事件：执行完整的代码审查流程（摘要 + 逐文件审查）
       await codeReview(lightBot, heavyBot, options, prompts)
     } else if (
       process.env.GITHUB_EVENT_NAME === 'pull_request_review_comment'
     ) {
+      // 审查评论事件：处理用户在 review comment 中 @ai-reviewer 的回复
       await handleReviewComment(heavyBot, options, prompts)
     } else {
       warning('Skipped: this action only works on push events or pull_request')
@@ -91,6 +107,7 @@ async function run(): Promise<void> {
   }
 }
 
+// 全局异常处理：捕获未处理的 Promise 拒绝和未捕获的异常
 process
   .on('unhandledRejection', (reason, p) => {
     warning(`Unhandled Rejection at Promise: ${reason}, promise is ${p}`)
@@ -99,4 +116,5 @@ process
     warning(`Uncaught Exception thrown: ${e}, backtrace: ${e.stack}`)
   })
 
+// 启动主流程
 await run()

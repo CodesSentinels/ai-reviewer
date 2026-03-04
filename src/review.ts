@@ -1,3 +1,17 @@
+/**
+ * review.ts - 核心代码审查模块
+ *
+ * PR 代码审查的主要业务逻辑，是整个项目最核心的文件。
+ *
+ * 整体流程分为四个阶段：
+ * 1. 准备阶段：获取增量 diff、过滤文件、解析代码块（hunk）
+ * 2. 摘要阶段：使用轻量模型并行生成每个文件的摘要，并进行变更分类（NEEDS_REVIEW / APPROVED）
+ * 3. 汇总阶段：使用重量模型合并摘要、生成最终总结和发布说明
+ * 4. 审查阶段：使用重量模型对需要审查的文件进行逐段代码审查，生成行级评论
+ *
+ * 支持增量审查：通过在摘要评论中存储已审查的 commit ID，
+ * 后续运行只审查新增的变更，避免重复审查。
+ */
 import {error, info, warning} from '@actions/core'
 // eslint-disable-next-line camelcase
 import {context as github_context} from '@actions/github'
@@ -22,8 +36,17 @@ import {getTokenCount} from './tokenizer'
 const context = github_context
 const repo = context.repo
 
+/** 在 PR 描述中添加此关键词可跳过 AI 审查 */
 const ignoreKeyword = '@ai-reviewer: ignore'
 
+/**
+ * 代码审查主函数
+ *
+ * @param lightBot - 轻量模型 Bot（用于文件摘要和变更分类）
+ * @param heavyBot - 重量模型 Bot（用于深度代码审查和最终摘要）
+ * @param options - 全局配置选项
+ * @param prompts - 提示词模板
+ */
 export const codeReview = async (
   lightBot: Bot,
   heavyBot: Bot,
@@ -32,9 +55,11 @@ export const codeReview = async (
 ): Promise<void> => {
   const commenter: Commenter = new Commenter()
 
+  // 初始化并发控制器：分别限制 OpenAI 和 GitHub API 的并发数
   const openaiConcurrencyLimit = pLimit(options.openaiConcurrencyLimit)
   const githubConcurrencyLimit = pLimit(options.githubConcurrencyLimit)
 
+  // ==================== 事件验证 ====================
   if (
     context.eventName !== 'pull_request' &&
     context.eventName !== 'pull_request_target'
@@ -49,6 +74,7 @@ export const codeReview = async (
     return
   }
 
+  // ==================== 填充 PR 基本信息 ====================
   const inputs: Inputs = new Inputs()
   inputs.title = context.payload.pull_request.title
   if (context.payload.pull_request.body != null) {
@@ -57,16 +83,17 @@ export const codeReview = async (
     )
   }
 
-  // if the description contains ignore_keyword, skip
+  // 如果 PR 描述中包含忽略关键词，跳过审查
   if (inputs.description.includes(ignoreKeyword)) {
     info('Skipped: description contains ignore_keyword')
     return
   }
 
-  // as gpt-3.5-turbo isn't paying attention to system message, add to inputs for now
+  // 将系统消息加入 inputs（因 gpt-3.5-turbo 对系统消息关注度不够）
   inputs.systemMessage = options.systemMessage
 
-  // get SUMMARIZE_TAG message
+  // ==================== 恢复增量审查状态 ====================
+  // 从已有的摘要评论中恢复上次审查的状态
   const existingSummarizeCmt = await commenter.findCommentWithTag(
     SUMMARIZE_TAG,
     context.payload.pull_request.number
@@ -75,15 +102,19 @@ export const codeReview = async (
   let existingSummarizeCmtBody = ''
   if (existingSummarizeCmt != null) {
     existingSummarizeCmtBody = existingSummarizeCmt.body
+    // 从摘要评论中恢复原始摘要和精简摘要
     inputs.rawSummary = commenter.getRawSummary(existingSummarizeCmtBody)
     inputs.shortSummary = commenter.getShortSummary(existingSummarizeCmtBody)
+    // 提取已审查的 commit ID 区块
     existingCommitIdsBlock = commenter.getReviewedCommitIdsBlock(
       existingSummarizeCmtBody
     )
   }
 
+  // 获取 PR 的所有 commit ID 列表
   const allCommitIds = await commenter.getAllCommitIds()
-  // find highest reviewed commit id
+
+  // 找到最近一次已审查的 commit ID，作为增量 diff 的起点
   let highestReviewedCommitId = ''
   if (existingCommitIdsBlock !== '') {
     highestReviewedCommitId = commenter.getHighestReviewedCommitId(
@@ -92,10 +123,12 @@ export const codeReview = async (
     )
   }
 
+  // 确定 diff 的起始 commit
   if (
     highestReviewedCommitId === '' ||
     highestReviewedCommitId === context.payload.pull_request.head.sha
   ) {
+    // 首次审查或已是最新：从 base 分支开始
     info(
       `Will review from the base commit: ${
         context.payload.pull_request.base.sha as string
@@ -103,10 +136,13 @@ export const codeReview = async (
     )
     highestReviewedCommitId = context.payload.pull_request.base.sha
   } else {
+    // 增量审查：从上次审查的 commit 开始
     info(`Will review from commit: ${highestReviewedCommitId}`)
   }
 
-  // Fetch the diff between the highest reviewed commit and the latest commit of the PR branch
+  // ==================== 获取 diff 数据 ====================
+
+  // 增量 diff：从上次审查的 commit 到最新 commit（仅包含新增变更）
   const incrementalDiff = await octokit.repos.compareCommits({
     owner: repo.owner,
     repo: repo.repo,
@@ -114,7 +150,7 @@ export const codeReview = async (
     head: context.payload.pull_request.head.sha
   })
 
-  // Fetch the diff between the target branch's base commit and the latest commit of the PR branch
+  // 全量 diff：从目标分支的 base 到最新 commit（完整变更视图）
   const targetBranchDiff = await octokit.repos.compareCommits({
     owner: repo.owner,
     repo: repo.repo,
@@ -130,7 +166,7 @@ export const codeReview = async (
     return
   }
 
-  // Filter out any file that is changed compared to the incremental changes
+  // 取两个 diff 的交集：既是整体变更的一部分，又包含新增内容的文件
   const files = targetBranchFiles.filter(targetBranchFile =>
     incrementalFiles.some(
       incrementalFile => incrementalFile.filename === targetBranchFile.filename
@@ -142,11 +178,12 @@ export const codeReview = async (
     return
   }
 
-  // skip files if they are filtered out
+  // ==================== 文件路径过滤 ====================
   const filterSelectedFiles = []
   const filterIgnoredFiles = []
   for (const file of files) {
     if (!options.checkPath(file.filename)) {
+      // 被路径过滤规则排除的文件
       info(`skip for excluded path: ${file.filename}`)
       filterIgnoredFiles.push(file)
     } else {
@@ -166,13 +203,14 @@ export const codeReview = async (
     return
   }
 
-  // find hunks to review
+  // ==================== 解析代码变更块（hunk） ====================
+  // 并行获取每个文件的内容和解析 diff patch
   const filteredFiles: Array<
     [string, string, string, Array<[number, number, string]>] | null
   > = await Promise.all(
     filterSelectedFiles.map(file =>
       githubConcurrencyLimit(async () => {
-        // retrieve file contents
+        // 获取文件在基准分支上的原始内容
         let fileContent = ''
         if (context.payload.pull_request == null) {
           warning('Skipped: context.payload.pull_request is null')
@@ -206,11 +244,13 @@ export const codeReview = async (
           )
         }
 
+        // 提取文件的完整 diff patch
         let fileDiff = ''
         if (file.patch != null) {
           fileDiff = file.patch
         }
 
+        // 将 patch 拆分为独立的 hunk，并解析每个 hunk 的行号范围和内容
         const patches: Array<[number, number, string]> = []
         for (const patch of splitPatch(file.patch)) {
           const patchLines = patchStartEndLine(patch)
@@ -221,6 +261,7 @@ export const codeReview = async (
           if (hunks == null) {
             continue
           }
+          // 格式化 hunk 为 AI 可理解的格式（new_hunk + old_hunk）
           const hunksStr = `
 ---new_hunk---
 \`\`\`
@@ -252,7 +293,7 @@ ${hunks.oldHunk}
     )
   )
 
-  // Filter out any null results
+  // 过滤掉没有有效 patch 的文件
   const filesAndChanges = filteredFiles.filter(file => file !== null) as Array<
     [string, string, string, Array<[number, number, string]>]
   >
@@ -262,6 +303,7 @@ ${hunks.oldHunk}
     return
   }
 
+  // ==================== 构建状态消息 ====================
   let statusMsg = `<details>
 <summary>Commits</summary>
 Files that changed from the base of the PR and between ${highestReviewedCommitId} and ${
@@ -295,17 +337,27 @@ ${
 }
 `
 
-  // update the existing comment with in progress status
+  // 更新摘要评论为"审查进行中"状态
   const inProgressSummarizeCmt = commenter.addInProgressStatus(
     existingSummarizeCmtBody,
     statusMsg
   )
 
-  // add in progress status to the summarize comment
   await commenter.comment(`${inProgressSummarizeCmt}`, SUMMARIZE_TAG, 'replace')
 
+  // ==================== 阶段一：并行文件摘要 ====================
   const summariesFailed: string[] = []
 
+  /**
+   * 对单个文件生成摘要
+   *
+   * 使用轻量模型（lightBot）：
+   * 1. 检查 diff token 数是否在限制内
+   * 2. 调用 AI 生成 100 字以内的摘要
+   * 3. 如果启用分类，解析 [TRIAGE] 标签判断是否需要深度审查
+   *
+   * @returns [文件名, 摘要内容, 是否需要审查] 三元组，或 null（失败时）
+   */
   const doSummary = async (
     filename: string,
     fileContent: string,
@@ -322,20 +374,21 @@ ${
     ins.filename = filename
     ins.fileDiff = fileDiff
 
-    // render prompt based on inputs so far
+    // 渲染摘要提示词
     const summarizePrompt = prompts.renderSummarizeFileDiff(
       ins,
       options.reviewSimpleChanges
     )
     const tokens = getTokenCount(summarizePrompt)
 
+    // 检查 token 是否超出轻量模型的限制
     if (tokens > options.lightTokenLimits.requestTokens) {
       info(`summarize: diff tokens exceeds limit, skip ${filename}`)
       summariesFailed.push(`${filename} (diff tokens exceeds limit)`)
       return null
     }
 
-    // summarize content
+    // 调用轻量模型生成摘要
     try {
       const [summarizeResp] = await lightBot.chat(summarizePrompt, {})
 
@@ -345,9 +398,7 @@ ${
         return null
       } else {
         if (options.reviewSimpleChanges === false) {
-          // parse the comment to look for triage classification
-          // Format is : [TRIAGE]: <NEEDS_REVIEW or APPROVED>
-          // if the change needs review return true, else false
+          // 解析 AI 响应中的分类标签：[TRIAGE]: NEEDS_REVIEW 或 APPROVED
           const triageRegex = /\[TRIAGE\]:\s*(NEEDS_REVIEW|APPROVED)/
           const triageMatch = summarizeResp.match(triageRegex)
 
@@ -355,12 +406,13 @@ ${
             const triage = triageMatch[1]
             const needsReview = triage === 'NEEDS_REVIEW'
 
-            // remove this line from the comment
+            // 从摘要中移除分类标签行
             const summary = summarizeResp.replace(triageRegex, '').trim()
             info(`filename: ${filename}, triage: ${triage}`)
             return [filename, summary, needsReview]
           }
         }
+        // 默认标记为需要审查
         return [filename, summarizeResp, true]
       }
     } catch (e: any) {
@@ -370,6 +422,7 @@ ${
     }
   }
 
+  // 并行执行所有文件的摘要任务（受 maxFiles 和并发限制约束）
   const summaryPromises = []
   const skippedFiles = []
   for (const [filename, fileContent, fileDiff] of filesAndChanges) {
@@ -388,10 +441,10 @@ ${
     summary => summary !== null
   ) as Array<[string, string, boolean]>
 
+  // ==================== 阶段二：合并摘要 ====================
+  // 将所有文件摘要分批（每批 10 个）发送给重量模型进行去重合并
   if (summaries.length > 0) {
     const batchSize = 10
-    // join summaries into one in the batches of batchSize
-    // and ask the bot to summarize the summaries
     for (let i = 0; i < summaries.length; i += batchSize) {
       const summariesBatch = summaries.slice(i, i + batchSize)
       for (const [filename, summary] of summariesBatch) {
@@ -399,7 +452,7 @@ ${
 ${filename}: ${summary}
 `
       }
-      // ask chatgpt to summarize the summaries
+      // 调用重量模型合并摘要
       const [summarizeResp] = await heavyBot.chat(
         prompts.renderSummarizeChangesets(inputs),
         {}
@@ -412,7 +465,9 @@ ${filename}: ${summary}
     }
   }
 
-  // final summary
+  // ==================== 阶段三：生成最终摘要和发布说明 ====================
+
+  // 生成最终摘要
   const [summarizeFinalResponse] = await heavyBot.chat(
     prompts.renderSummarize(inputs),
     {}
@@ -421,8 +476,8 @@ ${filename}: ${summary}
     info('summarize: nothing obtained from openai')
   }
 
+  // 生成发布说明并写入 PR 描述
   if (options.disableReleaseNotes === false) {
-    // final release notes
     const [releaseNotesResponse] = await heavyBot.chat(
       prompts.renderSummarizeReleaseNotes(inputs),
       {}
@@ -443,13 +498,14 @@ ${filename}: ${summary}
     }
   }
 
-  // generate a short summary as well
+  // 生成精简摘要（用于后续代码审查时提供上下文）
   const [summarizeShortResponse] = await heavyBot.chat(
     prompts.renderSummarizeShort(inputs),
     {}
   )
   inputs.shortSummary = summarizeShortResponse
 
+  // 构建最终的摘要评论内容（包含隐藏的状态数据）
   let summarizeComment = `${summarizeFinalResponse}
 ${RAW_SUMMARY_START_TAG}
 ${inputs.rawSummary}
@@ -468,6 +524,7 @@ AI Reviewer is an AI-powered code review tool that helps improve code quality.
 </details>
 `
 
+  // 追加处理统计信息到状态消息
   statusMsg += `
 ${
   skippedFiles.length > 0
@@ -499,7 +556,9 @@ ${
 }
 `
 
+  // ==================== 阶段四：逐文件代码审查 ====================
   if (!options.disableReview) {
+    // 筛选出需要审查的文件（分类为 NEEDS_REVIEW 的文件）
     const filesAndChangesReview = filesAndChanges.filter(([filename]) => {
       const needsReview =
         summaries.find(
@@ -508,6 +567,7 @@ ${
       return needsReview
     })
 
+    // 记录因分类为 APPROVED 而跳过审查的文件
     const reviewsSkipped = filesAndChanges
       .filter(
         ([filename]) =>
@@ -517,23 +577,34 @@ ${
       )
       .map(([filename]) => filename)
 
-    // failed reviews array
     const reviewsFailed: string[] = []
-    let lgtmCount = 0
-    let reviewCount = 0
+    let lgtmCount = 0    // LGTM 评论计数（被过滤掉的）
+    let reviewCount = 0   // 实际发布的审查评论计数
+
+    /**
+     * 对单个文件执行代码审查
+     *
+     * 使用重量模型（heavyBot）：
+     * 1. 计算当前提示词的 token 数，确定能装入多少个 patch
+     * 2. 获取每个 patch 范围内已有的评论链（作为上下文）
+     * 3. 将 patch 和评论链打包到提示词中
+     * 4. 调用 AI 生成审查评论
+     * 5. 解析 AI 响应，提取行号范围和评论内容
+     * 6. 过滤 LGTM 评论，将有效评论加入缓冲区
+     */
     const doReview = async (
       filename: string,
       fileContent: string,
       patches: Array<[number, number, string]>
     ): Promise<void> => {
       info(`reviewing ${filename}`)
-      // make a copy of inputs
       const ins: Inputs = inputs.clone()
       ins.filename = filename
 
-      // calculate tokens based on inputs so far
+      // 计算基础提示词的 token 数
       let tokens = getTokenCount(prompts.renderReviewFileDiff(ins))
-      // loop to calculate total patch tokens
+
+      // 计算在 token 预算内能装入多少个 patch
       let patchesToPack = 0
       for (const [, , patch] of patches) {
         const patchTokens = getTokenCount(patch)
@@ -547,13 +618,14 @@ ${
         patchesToPack += 1
       }
 
+      // 逐个 patch 打包到提示词中
       let patchesPacked = 0
       for (const [startLine, endLine, patch] of patches) {
         if (context.payload.pull_request == null) {
           warning('No pull request found, skipping.')
           continue
         }
-        // see if we can pack more patches into this request
+        // 检查是否已达到可打包的 patch 上限
         if (patchesPacked >= patchesToPack) {
           info(
             `unable to pack more patches into this request, packed: ${patchesPacked}, total patches: ${patches.length}, skipping.`
@@ -565,6 +637,7 @@ ${
         }
         patchesPacked += 1
 
+        // 获取该 patch 行号范围内已有的评论对话链（提供额外上下文）
         let commentChain = ''
         try {
           const allChains = await commenter.getCommentChainsWithinRange(
@@ -586,7 +659,8 @@ ${
             }`
           )
         }
-        // try packing comment_chain into this request
+
+        // 尝试将评论链加入 token 预算（超出则丢弃评论链上下文）
         const commentChainTokens = getTokenCount(commentChain)
         if (
           tokens + commentChainTokens >
@@ -597,9 +671,11 @@ ${
           tokens += commentChainTokens
         }
 
+        // 将 patch 内容追加到 inputs.patches
         ins.patches += `
 ${patch}
 `
+        // 如果有评论链上下文，也追加进去
         if (commentChain !== '') {
           ins.patches += `
 ---comment_chains---
@@ -614,9 +690,10 @@ ${commentChain}
 `
       }
 
+      // 如果成功打包了至少一个 patch，执行审查
       if (patchesPacked > 0) {
-        // perform review
         try {
+          // 调用重量模型执行代码审查
           const [response] = await heavyBot.chat(
             prompts.renderReviewFileDiff(ins),
             {}
@@ -626,10 +703,10 @@ ${commentChain}
             reviewsFailed.push(`${filename} (no response)`)
             return
           }
-          // parse review
+          // 解析 AI 响应，提取结构化的审查评论
           const reviews = parseReview(response, patches, options.debug)
           for (const review of reviews) {
-            // check for LGTM
+            // 过滤 LGTM 评论（如果配置为不保留）
             if (
               !options.reviewCommentLGTM &&
               (review.comment.includes('LGTM') ||
@@ -645,6 +722,7 @@ ${commentChain}
 
             try {
               reviewCount += 1
+              // 将审查评论加入缓冲区
               await commenter.bufferReviewComment(
                 filename,
                 review.startLine,
@@ -668,6 +746,7 @@ ${commentChain}
       }
     }
 
+    // 并行执行所有文件的审查任务
     const reviewPromises = []
     for (const [filename, fileContent, , patches] of filesAndChangesReview) {
       if (options.maxFiles <= 0 || reviewPromises.length < options.maxFiles) {
@@ -683,6 +762,7 @@ ${commentChain}
 
     await Promise.all(reviewPromises)
 
+    // 追加审查统计信息到状态消息
     statusMsg += `
 ${
   reviewsFailed.length > 0
@@ -726,7 +806,7 @@ ${
 - Invite the bot into a review comment chain by tagging \`@ai-reviewer\` in a reply.
 
 ### Code suggestions
-- The bot may make code suggestions, but please review them carefully before committing since the line number ranges may be misaligned. 
+- The bot may make code suggestions, but please review them carefully before committing since the line number ranges may be misaligned.
 - You can edit the comment made by the bot and manually tweak the suggestion if it is slightly off.
 
 ### Pausing incremental reviews
@@ -734,13 +814,13 @@ ${
 
 </details>
 `
-    // add existing_comment_ids_block with latest head sha
+    // 将最新的 head commit SHA 添加到已审查列表
     summarizeComment += `\n${commenter.addReviewedCommitId(
       existingCommitIdsBlock,
       context.payload.pull_request.head.sha
     )}`
 
-    // post the review
+    // 批量提交所有缓冲的审查评论
     await commenter.submitReview(
       context.payload.pull_request.number,
       commits[commits.length - 1].sha,
@@ -748,10 +828,16 @@ ${
     )
   }
 
-  // post the final summary comment
+  // 发布最终的摘要评论
   await commenter.comment(`${summarizeComment}`, SUMMARIZE_TAG, 'replace')
 }
 
+// ==================== Diff 解析辅助函数 ====================
+
+/**
+ * 将完整的 patch 字符串按 @@ hunk 标头拆分为独立的 hunk 数组
+ * 每个 hunk 以 @@ -a,b +c,d @@ 开头
+ */
 const splitPatch = (patch: string | null | undefined): string[] => {
   if (patch == null) {
     return []
@@ -776,6 +862,12 @@ const splitPatch = (patch: string | null | undefined): string[] => {
   return result
 }
 
+/**
+ * 从 hunk 标头中提取旧代码和新代码的起止行号
+ * 解析 @@ -oldStart,oldCount +newStart,newCount @@ 格式
+ *
+ * @returns { oldHunk: { startLine, endLine }, newHunk: { startLine, endLine } }
+ */
 const patchStartEndLine = (
   patch: string
 ): {
@@ -804,6 +896,14 @@ const patchStartEndLine = (
   }
 }
 
+/**
+ * 将 unified diff hunk 解析为旧代码和新代码两部分
+ *
+ * - 以 "-" 开头的行归入 oldHunk（被删除的代码）
+ * - 以 "+" 开头的行归入 newHunk（新增的代码），并标注行号
+ * - 无前缀的行为上下文行，同时归入两边
+ * - 新代码中间部分（跳过首尾 3 行上下文）会标注行号，方便 AI 定位
+ */
 const parsePatch = (
   patch: string
 ): {oldHunk: string; newHunk: string} | null => {
@@ -817,37 +917,42 @@ const parsePatch = (
 
   let newLine = hunkInfo.newHunk.startLine
 
-  const lines = patch.split('\n').slice(1) // Skip the @@ line
+  const lines = patch.split('\n').slice(1) // 跳过 @@ 行
 
-  // Remove the last line if it's empty
+  // 移除末尾空行
   if (lines[lines.length - 1] === '') {
     lines.pop()
   }
 
-  // Skip annotations for the first 3 and last 3 lines
+  // 首尾各 3 行上下文不标注行号（减少噪音）
   const skipStart = 3
   const skipEnd = 3
 
   let currentLine = 0
 
+  // 检查是否为纯删除操作（没有新增行）
   const removalOnly = !lines.some(line => line.startsWith('+'))
 
   for (const line of lines) {
     currentLine++
     if (line.startsWith('-')) {
+      // 删除的行：归入旧代码
       oldHunkLines.push(`${line.substring(1)}`)
     } else if (line.startsWith('+')) {
+      // 新增的行：归入新代码，并标注行号
       newHunkLines.push(`${newLine}: ${line.substring(1)}`)
       newLine++
     } else {
-      // context line
+      // 上下文行：同时归入两边
       oldHunkLines.push(`${line}`)
       if (
         removalOnly ||
         (currentLine > skipStart && currentLine <= lines.length - skipEnd)
       ) {
+        // 中间部分的上下文行标注行号
         newHunkLines.push(`${newLine}: ${line}`)
       } else {
+        // 首尾上下文行不标注行号
         newHunkLines.push(`${line}`)
       }
       newLine++
@@ -860,12 +965,32 @@ const parsePatch = (
   }
 }
 
+// ==================== AI 响应解析 ====================
+
+/** 审查评论的结构化表示 */
 interface Review {
-  startLine: number
-  endLine: number
-  comment: string
+  startLine: number  // 评论起始行号
+  endLine: number    // 评论结束行号
+  comment: string    // 评论内容
 }
 
+/**
+ * 解析 AI 的代码审查响应，提取结构化的评论列表
+ *
+ * AI 响应格式：
+ * ```
+ * startLine-endLine:
+ * 评论内容...
+ * ---
+ * startLine-endLine:
+ * 评论内容...
+ * ---
+ * ```
+ *
+ * 解析后将每条评论映射到实际的 patch 行号范围：
+ * - 如果评论的行号完全在某个 patch 内，直接使用
+ * - 如果不在任何 patch 内，映射到重叠最大的 patch（并添加说明）
+ */
 function parseReview(
   response: string,
   patches: Array<[number, number, string]>,
@@ -873,6 +998,7 @@ function parseReview(
 ): Review[] {
   const reviews: Review[] = []
 
+  // 清理响应中代码块内的行号前缀
   response = sanitizeResponse(response.trim())
 
   const lines = response.split('\n')
@@ -882,6 +1008,11 @@ function parseReview(
   let currentStartLine: number | null = null
   let currentEndLine: number | null = null
   let currentComment = ''
+
+  /**
+   * 存储当前解析的评论
+   * 将评论的行号范围映射到实际的 patch 范围
+   */
   function storeReview(): void {
     if (currentStartLine !== null && currentEndLine !== null) {
       const review: Review = {
@@ -890,6 +1021,7 @@ function parseReview(
         comment: currentComment
       }
 
+      // 查找与评论行号范围重叠最大的 patch
       let withinPatch = false
       let bestPatchStartLine = -1
       let bestPatchEndLine = -1
@@ -914,6 +1046,7 @@ function parseReview(
         if (withinPatch) break
       }
 
+      // 如果评论不在任何 patch 内，映射到最佳匹配的 patch
       if (!withinPatch) {
         if (bestPatchStartLine !== -1 && bestPatchEndLine !== -1) {
           review.comment = `> Note: This review was outside of the patch, so it was mapped to the patch with the greatest overlap. Original lines [${review.startLine}-${review.endLine}]
@@ -938,6 +1071,10 @@ ${review.comment}`
     }
   }
 
+  /**
+   * 清理代码块中的行号前缀
+   * AI 有时会在 suggestion/diff 代码块中保留行号，需要移除
+   */
   function sanitizeCodeBlock(comment: string, codeBlockLabel: string): string {
     const codeBlockStart = `\`\`\`${codeBlockLabel}`
     const codeBlockEnd = '```'
@@ -976,16 +1113,19 @@ ${review.comment}`
     return comment
   }
 
+  /** 清理 AI 响应中 suggestion 和 diff 代码块的行号 */
   function sanitizeResponse(comment: string): string {
     comment = sanitizeCodeBlock(comment, 'suggestion')
     comment = sanitizeCodeBlock(comment, 'diff')
     return comment
   }
 
+  // 逐行解析 AI 响应
   for (const line of lines) {
     const lineNumberRangeMatch = line.match(lineNumberRangeRegex)
 
     if (lineNumberRangeMatch != null) {
+      // 遇到新的行号范围标记，保存之前的评论并开始新评论
       storeReview()
       currentStartLine = parseInt(lineNumberRangeMatch[1], 10)
       currentEndLine = parseInt(lineNumberRangeMatch[2], 10)
@@ -997,6 +1137,7 @@ ${review.comment}`
     }
 
     if (line.trim() === commentSeparator) {
+      // 遇到 --- 分隔符，保存当前评论
       storeReview()
       currentStartLine = null
       currentEndLine = null
@@ -1007,11 +1148,13 @@ ${review.comment}`
       continue
     }
 
+    // 累积评论内容
     if (currentStartLine !== null && currentEndLine !== null) {
       currentComment += `${line}\n`
     }
   }
 
+  // 保存最后一条评论
   storeReview()
 
   return reviews
