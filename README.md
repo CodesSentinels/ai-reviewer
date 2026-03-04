@@ -6,10 +6,10 @@ AI-based PR reviewer and summarizer.
 
 ## Overview
 
-`ai-reviewer` is an AI-based code reviewer and summarizer for
-GitHub pull requests using OpenAI's `gpt-3.5-turbo` and `gpt-4` models. It is
-designed to be used as a GitHub Action and can be configured to run on every
-pull request and review comments
+`ai-reviewer` is an AI-based code reviewer and summarizer for GitHub pull
+requests using OpenAI's `gpt-4.1-nano` and `gpt-4.1-mini` models. It is designed to be
+used as a GitHub Action and can be configured to run on every pull request and
+review comments
 
 ## 项目架构与运行流程图
 
@@ -25,8 +25,8 @@ pull request and review comments
 ┌─────────────────────────────────────────────────────────────────────┐
 │                       main.ts (入口文件)                            │
 │  ┌─────────────┐  ┌──────────────┐  ┌────────────┐  ┌───────────┐ │
-│  │ Options 配置 │  │ Prompts 模板  │  │ lightBot   │  │ heavyBot  │ │
-│  │ (options.ts) │  │ (prompts.ts) │  │(gpt-3.5)   │  │ (gpt-4)   │ │
+│  │ Options 配置 │  │ Prompts 模板  │  │ lightBot    │  │ heavyBot  │ │
+│  │ (options.ts) │  │ (prompts.ts) │  │(gpt-4.1-nano)│  │(gpt-4.1-mini)│ │
 │  └──────┬──────┘  └──────┬───────┘  └─────┬──────┘  └─────┬─────┘ │
 │         │                │                 │               │       │
 │         └────────────────┼─────────────────┼───────────────┘       │
@@ -86,9 +86,9 @@ pull request and review comments
                                ▼
                     ┌─────────────────────┐
                     │ 创建 lightBot       │
-                    │ (gpt-3.5-turbo)     │
+                    │ (gpt-4.1-nano)      │
                     │ 创建 heavyBot       │
-                    │ (gpt-4)             │
+                    │ (gpt-4.1-mini)      │
                     └──────────┬──────────┘
                                ▼
                ┌───────────────────────────────┐
@@ -258,9 +258,8 @@ pull request and review comments
   and reduce noise by tracking changed files between commits and the base of the
   pull request.
 - **"Light" model for summary**: Designed to be used with a "light"
-  summarization model (e.g. `gpt-3.5-turbo`) and a "heavy" review model (e.g.
-  `gpt-4`). _For best results, use `gpt-4` as the "heavy" model, as thorough
-  code review needs strong reasoning abilities._
+  summarization model (e.g. `gpt-4.1-nano`) and a "heavy" review model (e.g.
+  `gpt-4.1-mini`). _`gpt-4.1-mini` 在多项 benchmark 上超越 gpt-4o，是代码审查的最优性价比选择。_
 - **Chat with bot**: Supports conversation with the bot in the context of lines
   of code or entire files, useful for providing context, generating test cases,
   and reducing code complexity.
@@ -285,11 +284,10 @@ FAQs, you can refer to the sections below.
 - [Contribute](#contribute)
 - [FAQs](#faqs)
 
-
 ## Install instructions
 
-`ai-reviewer` runs as a GitHub Action. Add the below file to your repository
-at `.github/workflows/ai-reviewer.yml`
+`ai-reviewer` runs as a GitHub Action. Add the below file to your repository at
+`.github/workflows/ai-reviewer.yml`
 
 ```yaml
 name: Code Review
@@ -314,7 +312,7 @@ jobs:
   review:
     runs-on: ubuntu-latest
     steps:
-      - uses: user/ai-reviewer@latest
+      - uses: CodesSentinels/ai-reviewer@latest
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -335,11 +333,13 @@ jobs:
   OpenAI API if you have multiple. Please add this key to your GitHub Action
   secrets.
 
-### Models: `gpt-4` and `gpt-3.5-turbo`
+### Models: `gpt-4.1-mini` and `gpt-4.1-nano`
 
-Recommend using `gpt-3.5-turbo` for lighter tasks such as summarizing the
-changes (`openai_light_model` in configuration) and `gpt-4` for more complex
-review and commenting tasks (`openai_heavy_model` in configuration).
+Recommend using `gpt-4.1-nano` for lighter tasks such as summarizing the
+changes (`openai_light_model` in configuration) and `gpt-4.1-mini` for more complex
+review and commenting tasks (`openai_heavy_model` in configuration). Both models
+support 1M context window and 32K max output tokens. `gpt-4.1-mini` surpasses
+gpt-4o on many benchmarks at 80% lower cost, making it the best value for code review.
 
 ### Prompts & Configuration
 
@@ -469,7 +469,7 @@ jobs:
   review:
     runs-on: ubuntu-latest
     steps:
-      - uses: user/ai-reviewer@latest
+      - uses: CodesSentinels/ai-reviewer@latest
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

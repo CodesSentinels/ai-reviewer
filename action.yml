@@ -151,12 +151,12 @@ inputs:
   openai_light_model:
     required: false
     description:
-      'Model to use for simple tasks like summarizing diff on a file.'
-    default: 'gpt-3.5-turbo'
+      'Model to use for simple tasks like summarizing diff on a file. Recommended: gpt-4.1-nano (fastest, cheapest, 1M context, 32K output).'
+    default: 'gpt-4.1-nano'
   openai_heavy_model:
     required: false
-    description: 'Model to use for complex tasks such as code reviews.'
-    default: 'gpt-4'
+    description: 'Model to use for complex tasks such as code reviews. Recommended: gpt-4.1-mini (high intelligence, 1M context, 32K output, beats gpt-4o).'
+    default: 'gpt-4.1-mini'
   openai_model_temperature:
     required: false
     description: 'Temperature for GPT model'

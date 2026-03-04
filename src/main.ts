@@ -54,7 +54,7 @@ async function run(): Promise<void> {
 
   // 创建两个 Bot 实例：轻量 Bot 用于文件摘要，重量 Bot 用于深度代码审查
 
-  // 初始化轻量模型 Bot（默认 gpt-3.5-turbo），用于快速生成文件摘要
+  // 初始化轻量模型 Bot（默认 gpt-4.1-nano），用于快速生成文件摘要
   let lightBot: Bot | null = null
   try {
     lightBot = new Bot(
@@ -68,7 +68,7 @@ async function run(): Promise<void> {
     return
   }
 
-  // 初始化重量模型 Bot（默认 gpt-4），用于深度代码审查和最终摘要生成
+  // 初始化重量模型 Bot（默认 gpt-4.1-mini），用于深度代码审查和最终摘要生成
   let heavyBot: Bot | null = null
   try {
     heavyBot = new Bot(

@@ -89,7 +89,7 @@ export const codeReview = async (
     return
   }
 
-  // 将系统消息加入 inputs（因 gpt-3.5-turbo 对系统消息关注度不够）
+  // 将系统消息加入 inputs（作为额外上下文补充）
   inputs.systemMessage = options.systemMessage
 
   // ==================== 恢复增量审查状态 ====================
