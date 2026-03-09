@@ -141,11 +141,15 @@ $description
 $short_summary
 \`\`\`
 
+## Cross-file references (auto-detected)
+
+$cross_file_context
+
 ## IMPORTANT Instructions
 
 Input: New hunks annotated with line numbers and old hunks (replaced code). Hunks represent incomplete code fragments.
-Additional Context: PR title, description, summaries and comment chains.
-Task: Review new hunks for substantive issues using provided context and respond with comments if necessary.
+Additional Context: PR title, description, summaries, comment chains, and cross-file references.
+Task: Review new hunks for substantive issues using provided context and respond with comments if necessary. If cross-file references are provided, check whether the changes are compatible with how the modified functions/variables are used in other files.
 Output: Review comments in markdown with exact line number ranges in new hunks. Start and end line numbers must be within the same hunk. For single-line comments, start=end line number. Must use example response format below.
 Use fenced code blocks using the relevant language identifier where applicable.
 Don't annotate code snippets with line numbers. Format and indent code correctly.

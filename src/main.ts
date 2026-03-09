@@ -40,7 +40,9 @@ async function run(): Promise<void> {
     getInput('openai_concurrency_limit'),
     getInput('github_concurrency_limit'),
     getInput('openai_base_url'),
-    getInput('language')
+    getInput('language'),
+    getBooleanInput('enable_dependency_analysis'),
+    getInput('max_dependency_files')
   )
 
   // 打印所有配置项，方便调试

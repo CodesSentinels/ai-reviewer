@@ -36,6 +36,8 @@ export class Options {
   heavyTokenLimits: TokenLimits   // 重量模型的 token 限制
   apiBaseUrl: string              // OpenAI API 基础 URL
   language: string                // 响应语言（ISO 语言代码）
+  enableDependencyAnalysis: boolean // 是否启用跨文件依赖分析
+  maxDependencyFiles: number      // 依赖分析最大扫描文件数
 
   constructor(
     debug: boolean,
@@ -54,7 +56,9 @@ export class Options {
     openaiConcurrencyLimit = '6',
     githubConcurrencyLimit = '6',
     apiBaseUrl = 'https://api.openai.com/v1',
-    language = 'en-US'
+    language = 'en-US',
+    enableDependencyAnalysis = true,
+    maxDependencyFiles = '50'
   ) {
     this.debug = debug
     this.disableReview = disableReview
@@ -75,6 +79,8 @@ export class Options {
     this.heavyTokenLimits = new TokenLimits(openaiHeavyModel)
     this.apiBaseUrl = apiBaseUrl
     this.language = language
+    this.enableDependencyAnalysis = enableDependencyAnalysis
+    this.maxDependencyFiles = parseInt(maxDependencyFiles)
   }
 
   /** 打印所有配置项到日志，方便调试 */
@@ -98,6 +104,8 @@ export class Options {
     info(`review_token_limits: ${this.heavyTokenLimits.string()}`)
     info(`api_base_url: ${this.apiBaseUrl}`)
     info(`language: ${this.language}`)
+    info(`enable_dependency_analysis: ${this.enableDependencyAnalysis}`)
+    info(`max_dependency_files: ${this.maxDependencyFiles}`)
   }
 
   /**

@@ -234,6 +234,14 @@ inputs:
     required: false
     description: ISO code for the response language
     default: en-US
+  enable_dependency_analysis:
+    required: false
+    description: '启用跨文件依赖分析，追踪被修改函数/变量的引用方'
+    default: 'true'
+  max_dependency_files:
+    required: false
+    description: '依赖分析时最大获取文件数（控制 API 调用量）'
+    default: '50'
   bot_icon:
     required: false
     description: 'The icon for the bot'
