@@ -153,14 +153,20 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
         } ms`
       )
 
-      // 从响应输出中提取文本
+      // 从响应输出中提取文本，并记录 web_search 和 reasoning 信息
       let responseText = ''
       if (response?.output) {
         for (const item of response.output) {
+          if (item.type === 'web_search_call') {
+            info(`[web_search] executed, id: ${(item as any).id}, status: ${(item as any).status}`)
+          }
           if (item.type === 'message') {
             for (const content of item.content) {
               if (content.type === 'output_text') {
                 responseText += content.text
+              }
+              if ((content as any).type === 'reasoning') {
+                info(`[reasoning] model thinking: ${JSON.stringify(content)}`)
               }
             }
           }
