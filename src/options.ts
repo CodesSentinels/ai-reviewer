@@ -36,6 +36,7 @@ export class Options {
   heavyTokenLimits: TokenLimits   // 重量模型的 token 限制
   apiBaseUrl: string              // OpenAI API 基础 URL
   language: string                // 响应语言（ISO 语言代码）
+  enableWebSearch: boolean        // 是否启用 web search（用于验证 API）
 
   constructor(
     debug: boolean,
@@ -54,7 +55,8 @@ export class Options {
     openaiConcurrencyLimit = '6',
     githubConcurrencyLimit = '6',
     apiBaseUrl = 'https://api.openai.com/v1',
-    language = 'en-US'
+    language = 'en-US',
+    enableWebSearch = true
   ) {
     this.debug = debug
     this.disableReview = disableReview
@@ -75,6 +77,7 @@ export class Options {
     this.heavyTokenLimits = new TokenLimits(openaiHeavyModel)
     this.apiBaseUrl = apiBaseUrl
     this.language = language
+    this.enableWebSearch = enableWebSearch
   }
 
   /** 打印所有配置项到日志，方便调试 */
@@ -98,6 +101,7 @@ export class Options {
     info(`review_token_limits: ${this.heavyTokenLimits.string()}`)
     info(`api_base_url: ${this.apiBaseUrl}`)
     info(`language: ${this.language}`)
+    info(`enable_web_search: ${this.enableWebSearch}`)
   }
 
   /**
@@ -187,13 +191,19 @@ export class PathFilter {
 export class OpenAIOptions {
   model: string            // 模型名称（如 "gpt-4"、"gpt-3.5-turbo"）
   tokenLimits: TokenLimits // 该模型的 token 限制配置
+  enableWebSearch: boolean // 是否启用 web search
 
-  constructor(model = 'gpt-4.1-nano', tokenLimits: TokenLimits | null = null) {
+  constructor(
+    model = 'gpt-4.1-nano',
+    tokenLimits: TokenLimits | null = null,
+    enableWebSearch = false
+  ) {
     this.model = model
     if (tokenLimits != null) {
       this.tokenLimits = tokenLimits
     } else {
       this.tokenLimits = new TokenLimits(model)
     }
+    this.enableWebSearch = enableWebSearch
   }
 }
