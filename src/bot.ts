@@ -157,8 +157,13 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
       let responseText = ''
       if (response?.output) {
         for (const item of response.output) {
+          info(`[openai response item] ${JSON.stringify(item)}`)
           if (item.type === 'web_search_call') {
-            info(`[web_search] executed, id: ${(item as any).id}, status: ${(item as any).status}`)
+            info(
+              `[web_search] executed, id: ${(item as any).id}, status: ${
+                (item as any).status
+              }`
+            )
           }
           if (item.type === 'message') {
             for (const content of item.content) {
