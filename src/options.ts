@@ -17,27 +17,28 @@ import {TokenLimits} from './limits'
  * 同时根据模型名称自动初始化轻量模型和重量模型的 token 限制。
  */
 export class Options {
-  debug: boolean                  // 是否开启调试模式
-  disableReview: boolean          // 是否禁用代码审查
-  disableReleaseNotes: boolean    // 是否禁用发布说明生成
-  maxFiles: number                // 最大处理文件数（0 表示不限制）
-  reviewSimpleChanges: boolean    // 是否审查简单变更（false 时启用分类筛选）
-  reviewCommentLGTM: boolean      // 是否保留 LGTM 评论
-  pathFilters: PathFilter         // 文件路径过滤规则
-  systemMessage: string           // AI 系统消息（定义角色和行为）
-  openaiLightModel: string        // 轻量模型名称（用于摘要）
-  openaiHeavyModel: string        // 重量模型名称（用于代码审查）
-  openaiModelTemperature: number  // 模型温度参数（控制随机性）
-  openaiRetries: number           // API 请求失败重试次数
-  openaiTimeoutMS: number         // API 请求超时时间（毫秒）
-  openaiConcurrencyLimit: number  // OpenAI API 并发请求数限制
-  githubConcurrencyLimit: number  // GitHub API 并发请求数限制
-  lightTokenLimits: TokenLimits   // 轻量模型的 token 限制
-  heavyTokenLimits: TokenLimits   // 重量模型的 token 限制
-  apiBaseUrl: string              // OpenAI API 基础 URL
-  language: string                // 响应语言（ISO 语言代码）
+  debug: boolean // 是否开启调试模式
+  disableReview: boolean // 是否禁用代码审查
+  disableReleaseNotes: boolean // 是否禁用发布说明生成
+  maxFiles: number // 最大处理文件数（0 表示不限制）
+  reviewSimpleChanges: boolean // 是否审查简单变更（false 时启用分类筛选）
+  reviewCommentLGTM: boolean // 是否保留 LGTM 评论
+  pathFilters: PathFilter // 文件路径过滤规则
+  systemMessage: string // AI 系统消息（定义角色和行为）
+  openaiLightModel: string // 轻量模型名称（用于摘要）
+  openaiHeavyModel: string // 重量模型名称（用于代码审查）
+  openaiModelTemperature: number // 模型温度参数（控制随机性）
+  openaiRetries: number // API 请求失败重试次数
+  openaiTimeoutMS: number // API 请求超时时间（毫秒）
+  openaiConcurrencyLimit: number // OpenAI API 并发请求数限制
+  githubConcurrencyLimit: number // GitHub API 并发请求数限制
+  lightTokenLimits: TokenLimits // 轻量模型的 token 限制
+  heavyTokenLimits: TokenLimits // 重量模型的 token 限制
+  apiBaseUrl: string // OpenAI API 基础 URL
+  language: string // 响应语言（ISO 语言代码）
   enableDependencyAnalysis: boolean // 是否启用跨文件依赖分析
-  maxDependencyFiles: number      // 依赖分析最大扫描文件数
+  maxDependencyFiles: number // 依赖分析最大扫描文件数
+  enableWebSearch: boolean // 是否启用 web search（用于验证 API）
 
   constructor(
     debug: boolean,
@@ -58,7 +59,8 @@ export class Options {
     apiBaseUrl = 'https://api.openai.com/v1',
     language = 'en-US',
     enableDependencyAnalysis = true,
-    maxDependencyFiles = '50'
+    maxDependencyFiles = '50',
+    enableWebSearch = true
   ) {
     this.debug = debug
     this.disableReview = disableReview
@@ -81,6 +83,7 @@ export class Options {
     this.language = language
     this.enableDependencyAnalysis = enableDependencyAnalysis
     this.maxDependencyFiles = parseInt(maxDependencyFiles)
+    this.enableWebSearch = enableWebSearch
   }
 
   /** 打印所有配置项到日志，方便调试 */
@@ -106,6 +109,7 @@ export class Options {
     info(`language: ${this.language}`)
     info(`enable_dependency_analysis: ${this.enableDependencyAnalysis}`)
     info(`max_dependency_files: ${this.maxDependencyFiles}`)
+    info(`enable_web_search: ${this.enableWebSearch}`)
   }
 
   /**
@@ -134,7 +138,9 @@ export class Options {
  * - 如果文件匹配任何排除规则，则被排除
  */
 export class PathFilter {
-  private readonly rules: Array<[string /* 规则模式 */, boolean /* 是否为排除规则 */]>
+  private readonly rules: Array<
+    [string /* 规则模式 */, boolean /* 是否为排除规则 */]
+  >
 
   constructor(rules: string[] | null = null) {
     this.rules = []
@@ -193,15 +199,21 @@ export class PathFilter {
  * 用于创建 Bot 实例时传入模型配置。
  */
 export class OpenAIOptions {
-  model: string            // 模型名称（如 "gpt-4"、"gpt-3.5-turbo"）
+  model: string // 模型名称（如 "gpt-4"、"gpt-3.5-turbo"）
   tokenLimits: TokenLimits // 该模型的 token 限制配置
+  enableWebSearch: boolean // 是否启用 web search
 
-  constructor(model = 'gpt-4.1-nano', tokenLimits: TokenLimits | null = null) {
+  constructor(
+    model = 'gpt-4.1-nano',
+    tokenLimits: TokenLimits | null = null,
+    enableWebSearch = false
+  ) {
     this.model = model
     if (tokenLimits != null) {
       this.tokenLimits = tokenLimits
     } else {
       this.tokenLimits = new TokenLimits(model)
     }
+    this.enableWebSearch = enableWebSearch
   }
 }

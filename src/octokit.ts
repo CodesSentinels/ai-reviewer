@@ -17,6 +17,7 @@ import {throttling} from '@octokit/plugin-throttling'
 const token = getInput('token') || process.env.GITHUB_TOKEN
 
 // 组合 Octokit 基础类与 throttling、retry 插件
+// @ts-ignore - throttling 插件与 @octokit/action 的类型版本不兼容，运行时正常
 const RetryAndThrottlingOctokit = Octokit.plugin(throttling, retry)
 
 // 导出配置好的 Octokit 单例实例

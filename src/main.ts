@@ -42,7 +42,8 @@ async function run(): Promise<void> {
     getInput('openai_base_url'),
     getInput('language'),
     getBooleanInput('enable_dependency_analysis'),
-    getInput('max_dependency_files')
+    getInput('max_dependency_files'),
+    getBooleanInput('enable_web_search')
   )
 
   // 打印所有配置项，方便调试
@@ -61,7 +62,11 @@ async function run(): Promise<void> {
   try {
     lightBot = new Bot(
       options,
-      new OpenAIOptions(options.openaiLightModel, options.lightTokenLimits)
+      new OpenAIOptions(
+        options.openaiLightModel,
+        options.lightTokenLimits,
+        false
+      )
     )
   } catch (e: any) {
     warning(
@@ -75,7 +80,11 @@ async function run(): Promise<void> {
   try {
     heavyBot = new Bot(
       options,
-      new OpenAIOptions(options.openaiHeavyModel, options.heavyTokenLimits)
+      new OpenAIOptions(
+        options.openaiHeavyModel,
+        options.heavyTokenLimits,
+        options.enableWebSearch
+      )
     )
   } catch (e: any) {
     warning(

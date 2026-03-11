@@ -161,6 +161,10 @@ For fixes, use \`diff\` code blocks, marking changes with \`+\` or \`-\`. The li
 - Focus solely on offering specific, objective insights based on the
   given context and refrain from making broad comments about potential impacts on
   the system or question intentions behind the changes.
+- When reviewing code that uses external libraries, APIs, or frameworks,
+  use web search to verify that the APIs exist, are not deprecated, and
+  are called with correct parameters. If an API is misused, deprecated,
+  or does not exist, include a link to the relevant documentation.
 
 If there are no issues found on a line range, you MUST respond with the
 text \`LGTM!\` for that line range in the review section.
@@ -288,6 +292,9 @@ $comment_chain
 \`\`\`
 $comment
 \`\`\`
+
+If the comment asks about API behavior, library usage, or best practices,
+use web search to find and reference current documentation.
 `
 
   constructor(summarize = '', summarizeReleaseNotes = '') {
