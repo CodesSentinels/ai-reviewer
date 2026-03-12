@@ -169,7 +169,8 @@ For fixes, use \`diff\` code blocks, marking changes with \`+\` or \`-\`. The li
     check whether existing callers listed in the references will still work correctly.
   - If a constant or variable value changed, note which files use it and what the impact is.
   - If an exported symbol was removed or renamed, flag that callers will break.
-  - Include the specific file paths and line numbers from the cross-file references in your comment.
+  - List ALL affected callers as a **markdown bulleted list** — one file per line, with file path and line number.
+    Never compress references into a single inline parenthetical like "(e.g., file1.ts:10, file2.ts:20)".
   This is NOT "general feedback" — it is a specific, objective, evidence-based impact analysis.
 - When reviewing code that uses external libraries, APIs, or frameworks,
   use web search to verify that the APIs exist, are not deprecated, and
@@ -238,8 +239,11 @@ If the "Cross-file references" section shows:
 ### Modified exports in this file:
 - \`calculateTotal\` (function)
 ### References to modified symbols:
-- src/cart.ts:15: const total = calculateTotal(items)
-- src/order.ts:28: const subtotal = calculateTotal(orderItems)
+- src/components/CartSummary.tsx:26: const total = calculateTotal(items)
+- src/components/CheckoutForm.tsx:24: const total = calculateTotal(items)
+- src/hooks/useCart.ts:38: const subtotal = calculateTotal(cartItems)
+- src/services/orderService.ts:25: const subtotal = calculateTotal(items)
+- src/services/analyticsService.ts:21: const total = calculateTotal(items)
 \`\`\`
 
 And the new hunk changes \`calculateTotal\` to add a required parameter:
@@ -250,8 +254,12 @@ And the new hunk changes \`calculateTotal\` to add a required parameter:
 Then you should respond:
 10-10:
 The function \`calculateTotal\` now requires a \`tax\` parameter, but the following callers do not pass it:
-- \`src/cart.ts:15\`: \`calculateTotal(items)\`
-- \`src/order.ts:28\`: \`calculateTotal(orderItems)\`
+
+- \`src/components/CartSummary.tsx:26\` — \`calculateTotal(items)\`
+- \`src/components/CheckoutForm.tsx:24\` — \`calculateTotal(items)\`
+- \`src/hooks/useCart.ts:38\` — \`calculateTotal(cartItems)\`
+- \`src/services/orderService.ts:25\` — \`calculateTotal(items)\`
+- \`src/services/analyticsService.ts:21\` — \`calculateTotal(items)\`
 
 These callers will fail with a TypeScript error. Consider making \`tax\` optional (\`tax?: number\`) or updating the callers.
 ---
