@@ -247,11 +247,15 @@ inputs:
     default: en-US
   enable_dependency_analysis:
     required: false
-    description: '启用跨文件依赖分析，追踪被修改函数/变量的引用方'
+    description:
+      'Enable cross-file dependency analysis to track references to modified
+      exported functions/variables in other files.'
     default: 'true'
   max_dependency_files:
     required: false
-    description: '依赖分析时最大获取文件数（控制 API 调用量）'
+    description:
+      'Maximum number of external files to scan during dependency analysis
+      (controls GitHub API call volume).'
     default: '50'
   bot_icon:
     required: false

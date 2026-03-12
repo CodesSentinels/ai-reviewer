@@ -40,6 +40,9 @@ import {getTokenCount} from './tokenizer'
 
 // eslint-disable-next-line camelcase
 const context = github_context
+
+/** 跨文件上下文注入的 token 上限 */
+const MAX_CROSS_FILE_CONTEXT_TOKENS = 1500
 const repo = context.repo
 
 /** 在 PR 描述中添加此关键词可跳过 AI 审查 */
@@ -636,7 +639,7 @@ ${
           const crossFileCtx = formatCrossFileContext(fileAnalysis)
           if (crossFileCtx.length > 0) {
             const ctxTokens = getTokenCount(crossFileCtx)
-            if (ctxTokens <= 1500) {
+            if (ctxTokens <= MAX_CROSS_FILE_CONTEXT_TOKENS) {
               ins.crossFileContext = crossFileCtx
               info(`injected cross-file context for ${filename}: ${ctxTokens} tokens`)
             } else {

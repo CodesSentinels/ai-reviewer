@@ -8642,7 +8642,6 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
             let responseText = '';
             if (response?.output) {
                 for (const item of response.output) {
-                    (0,core.info)(`[openai response item] ${JSON.stringify(item)}`);
                     if (item.type === 'web_search_call') {
                         (0,core.info)(`[web_search] executed, id: ${item.id}, status: ${item.status}`);
                     }
@@ -9492,7 +9491,8 @@ class Inputs {
     diff; // 当前被评论的 diff 片段
     commentChain; // 评论对话链（已有的评论上下文）
     comment; // 当前用户的评论内容
-    constructor(systemMessage = '', title = 'no title provided', description = 'no description provided', rawSummary = '', shortSummary = '', filename = '', fileContent = 'file contents cannot be provided', fileDiff = 'file diff cannot be provided', patches = '', diff = 'no diff', commentChain = 'no other comments on this patch', comment = 'no comment provided') {
+    crossFileContext; // 跨文件引用上下文（依赖分析生成，注入到审查提示词）
+    constructor(systemMessage = '', title = 'no title provided', description = 'no description provided', rawSummary = '', shortSummary = '', filename = '', fileContent = 'file contents cannot be provided', fileDiff = 'file diff cannot be provided', patches = '', diff = 'no diff', commentChain = 'no other comments on this patch', comment = 'no comment provided', crossFileContext = '') {
         this.systemMessage = systemMessage;
         this.title = title;
         this.description = description;
@@ -9505,13 +9505,14 @@ class Inputs {
         this.diff = diff;
         this.commentChain = commentChain;
         this.comment = comment;
+        this.crossFileContext = crossFileContext;
     }
     /**
      * 创建当前对象的深拷贝
      * 用于并行处理多个文件时，每个任务持有独立的 Inputs 副本
      */
     clone() {
-        return new Inputs(this.systemMessage, this.title, this.description, this.rawSummary, this.shortSummary, this.filename, this.fileContent, this.fileDiff, this.patches, this.diff, this.commentChain, this.comment);
+        return new Inputs(this.systemMessage, this.title, this.description, this.rawSummary, this.shortSummary, this.filename, this.fileContent, this.fileDiff, this.patches, this.diff, this.commentChain, this.comment, this.crossFileContext);
     }
     /**
      * 渲染提示词模板：将模板中的 $variable 占位符替换为实际值
@@ -9558,6 +9559,8 @@ class Inputs {
         if (this.comment) {
             content = content.replace('$comment', this.comment);
         }
+        // 跨文件上下文：无论是否有值，都替换占位符（避免模板残留）
+        content = content.replace('$cross_file_context', this.crossFileContext || 'No cross-file references detected.');
         return content;
     }
 }
@@ -9576,7 +9579,7 @@ __nccwpck_require__.r(__webpack_exports__);
 /* harmony import */ var _bot__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(4936);
 /* harmony import */ var _options__WEBPACK_IMPORTED_MODULE_2__ = __nccwpck_require__(5341);
 /* harmony import */ var _prompts__WEBPACK_IMPORTED_MODULE_5__ = __nccwpck_require__(2379);
-/* harmony import */ var _review__WEBPACK_IMPORTED_MODULE_3__ = __nccwpck_require__(2990);
+/* harmony import */ var _review__WEBPACK_IMPORTED_MODULE_3__ = __nccwpck_require__(6439);
 /* harmony import */ var _review_comment__WEBPACK_IMPORTED_MODULE_4__ = __nccwpck_require__(3458);
 /**
  * main.ts - GitHub Action 入口文件
@@ -9596,7 +9599,7 @@ __nccwpck_require__.r(__webpack_exports__);
 
 async function run() {
     // 从 action.yml 中读取所有配置参数，构建 Options 配置对象
-    const options = new _options__WEBPACK_IMPORTED_MODULE_2__/* .Options */ .Ei((0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('debug'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('disable_review'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('disable_release_notes'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_files'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('review_simple_changes'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('review_comment_lgtm'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getMultilineInput)('path_filters'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('system_message'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_light_model'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_heavy_model'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_model_temperature'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_retries'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_timeout_ms'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_concurrency_limit'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('github_concurrency_limit'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_base_url'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('language'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_web_search'));
+    const options = new _options__WEBPACK_IMPORTED_MODULE_2__/* .Options */ .Ei((0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('debug'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('disable_review'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('disable_release_notes'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_files'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('review_simple_changes'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('review_comment_lgtm'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getMultilineInput)('path_filters'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('system_message'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_light_model'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_heavy_model'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_model_temperature'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_retries'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_timeout_ms'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_concurrency_limit'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('github_concurrency_limit'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_base_url'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('language'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_dependency_analysis'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_dependency_files'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_web_search'));
     // 打印所有配置项，方便调试
     options.print();
     // 构建提示词模板对象，包含用户自定义的摘要和发布说明提示词
@@ -11836,8 +11839,10 @@ class Options {
     heavyTokenLimits; // 重量模型的 token 限制
     apiBaseUrl; // OpenAI API 基础 URL
     language; // 响应语言（ISO 语言代码）
+    enableDependencyAnalysis; // 是否启用跨文件依赖分析
+    maxDependencyFiles; // 依赖分析最大扫描文件数
     enableWebSearch; // 是否启用 web search（用于验证 API）
-    constructor(debug, disableReview, disableReleaseNotes, maxFiles = '0', reviewSimpleChanges = false, reviewCommentLGTM = false, pathFilters = null, systemMessage = '', openaiLightModel = 'gpt-4.1-nano', openaiHeavyModel = 'gpt-4.1-mini', openaiModelTemperature = '0.0', openaiRetries = '3', openaiTimeoutMS = '120000', openaiConcurrencyLimit = '6', githubConcurrencyLimit = '6', apiBaseUrl = 'https://api.openai.com/v1', language = 'en-US', enableWebSearch = true) {
+    constructor(debug, disableReview, disableReleaseNotes, maxFiles = '0', reviewSimpleChanges = false, reviewCommentLGTM = false, pathFilters = null, systemMessage = '', openaiLightModel = 'gpt-4.1-nano', openaiHeavyModel = 'gpt-4.1-mini', openaiModelTemperature = '0.0', openaiRetries = '3', openaiTimeoutMS = '120000', openaiConcurrencyLimit = '6', githubConcurrencyLimit = '6', apiBaseUrl = 'https://api.openai.com/v1', language = 'en-US', enableDependencyAnalysis = true, maxDependencyFiles = '50', enableWebSearch = true) {
         this.debug = debug;
         this.disableReview = disableReview;
         this.disableReleaseNotes = disableReleaseNotes;
@@ -11857,6 +11862,8 @@ class Options {
         this.heavyTokenLimits = new TokenLimits(openaiHeavyModel);
         this.apiBaseUrl = apiBaseUrl;
         this.language = language;
+        this.enableDependencyAnalysis = enableDependencyAnalysis;
+        this.maxDependencyFiles = parseInt(maxDependencyFiles);
         this.enableWebSearch = enableWebSearch;
     }
     /** 打印所有配置项到日志，方便调试 */
@@ -11880,6 +11887,8 @@ class Options {
         (0,core.info)(`review_token_limits: ${this.heavyTokenLimits.string()}`);
         (0,core.info)(`api_base_url: ${this.apiBaseUrl}`);
         (0,core.info)(`language: ${this.language}`);
+        (0,core.info)(`enable_dependency_analysis: ${this.enableDependencyAnalysis}`);
+        (0,core.info)(`max_dependency_files: ${this.maxDependencyFiles}`);
         (0,core.info)(`enable_web_search: ${this.enableWebSearch}`);
     }
     /**
@@ -12112,11 +12121,15 @@ $description
 $short_summary
 \`\`\`
 
+## Cross-file references (auto-detected)
+
+$cross_file_context
+
 ## IMPORTANT Instructions
 
 Input: New hunks annotated with line numbers and old hunks (replaced code). Hunks represent incomplete code fragments.
-Additional Context: PR title, description, summaries and comment chains.
-Task: Review new hunks for substantive issues using provided context and respond with comments if necessary.
+Additional Context: PR title, description, summaries, comment chains, and cross-file references.
+Task: Review new hunks for substantive issues using provided context and respond with comments if necessary. If cross-file references are provided, check whether the changes are compatible with how the modified functions/variables are used in other files.
 Output: Review comments in markdown with exact line number ranges in new hunks. Start and end line numbers must be within the same hunk. For single-line comments, start=end line number. Must use example response format below.
 Use fenced code blocks using the relevant language identifier where applicable.
 Don't annotate code snippets with line numbers. Format and indent code correctly.
@@ -12490,7 +12503,7 @@ const handleReviewComment = async (heavyBot, options, prompts) => {
 
 /***/ }),
 
-/***/ 2990:
+/***/ 6439:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
 "use strict";
@@ -12668,10 +12681,1040 @@ function pLimit(concurrency) {
 
 // EXTERNAL MODULE: ./lib/commenter.js
 var lib_commenter = __nccwpck_require__(4558);
-// EXTERNAL MODULE: ./lib/inputs.js
-var lib_inputs = __nccwpck_require__(6305);
 // EXTERNAL MODULE: ./lib/octokit.js
 var octokit = __nccwpck_require__(2247);
+;// CONCATENATED MODULE: ./lib/repo-tree.js
+/**
+ * repo-tree.ts - 仓库文件树获取与缓存
+ *
+ * 使用 GitHub Git Tree API 一次性获取整个仓库的文件列表，
+ * 避免逐文件调用 getContent API。
+ * 提供按扩展名/路径模式过滤的便捷方法，以及相对导入路径解析。
+ */
+
+// eslint-disable-next-line camelcase
+
+
+// eslint-disable-next-line camelcase
+const context = github.context;
+const repo = context.repo;
+/** 语言到扩展名的映射 */
+const LANGUAGE_EXTENSIONS = {
+    typescript: ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'],
+    python: ['.py'],
+    go: ['.go'],
+    java: ['.java'],
+    unknown: []
+};
+/** 文件树缓存（同一次运行中避免重复调用 API） */
+let cachedTree = null;
+let cachedTreeRef = null;
+/**
+ * 获取仓库文件树（使用 recursive=true 一次性获取）
+ *
+ * 调用 GitHub Git Tree API 获取指定 ref 下的所有文件路径。
+ * 结果会缓存，同一 ref 的重复调用直接返回缓存。
+ *
+ * @param ref - Git 引用（commit SHA / branch / tag）
+ * @returns 仓库中所有文件的路径列表
+ */
+async function getRepoFileTree(ref) {
+    // 如果缓存命中，直接返回
+    if (cachedTree != null && cachedTreeRef === ref) {
+        (0,core.info)(`repo tree cache hit for ref: ${ref}`);
+        return cachedTree;
+    }
+    try {
+        (0,core.info)(`fetching repo tree for ref: ${ref}`);
+        const { data } = await octokit/* octokit.git.getTree */.K.git.getTree({
+            owner: repo.owner,
+            repo: repo.repo,
+            tree_sha: ref,
+            recursive: 'true'
+        });
+        // 仅保留 blob 类型（文件），排除 tree 类型（目录）
+        const files = data.tree
+            .filter(item => item.type === 'blob' && item.path != null)
+            .map(item => item.path);
+        (0,core.info)(`repo tree fetched: ${files.length} files`);
+        // 更新缓存
+        cachedTree = files;
+        cachedTreeRef = ref;
+        return files;
+    }
+    catch (e) {
+        (0,core.warning)(`failed to fetch repo tree: ${e.message}`);
+        return [];
+    }
+}
+/**
+ * 根据文件扩展名检测语言
+ *
+ * @param filename - 文件路径
+ * @returns 检测到的语言
+ */
+function detectLanguage(filename) {
+    const lower = filename.toLowerCase();
+    for (const [lang, exts] of Object.entries(LANGUAGE_EXTENSIONS)) {
+        for (const ext of exts) {
+            if (lower.endsWith(ext)) {
+                return lang;
+            }
+        }
+    }
+    return 'unknown';
+}
+/**
+ * 按扩展名过滤文件列表
+ *
+ * @param files - 文件路径列表
+ * @param extensions - 允许的扩展名列表（如 ['.ts', '.js']）
+ * @returns 匹配的文件路径
+ */
+function filterByExtension(files, extensions) {
+    const exts = new Set(extensions.map(e => e.toLowerCase()));
+    return files.filter(f => {
+        const idx = f.lastIndexOf('.');
+        if (idx === -1)
+            return false;
+        return exts.has(f.substring(idx).toLowerCase());
+    });
+}
+/**
+ * 获取指定语言对应的文件扩展名列表
+ *
+ * @param language - 语言类型
+ * @returns 扩展名列表
+ */
+function getExtensionsForLanguage(language) {
+    return LANGUAGE_EXTENSIONS[language] ?? [];
+}
+/**
+ * 将相对导入路径解析为仓库内的绝对路径
+ *
+ * 支持以下场景：
+ * - 相对路径：'./utils/helper' → 尝试 .ts, .tsx, .js, .jsx, /index.ts, /index.js
+ * - 父级路径：'../shared/types' → 逐层向上解析
+ *
+ * @param importingFile - 发起导入的文件路径（如 'src/review.ts'）
+ * @param importPath - 导入路径（如 './utils/helper'）
+ * @param repoFilesSet - 仓库文件路径的 Set（用于 O(1) 查找）
+ * @returns 解析后的仓库内绝对路径，或 null（无法解析时）
+ */
+function resolveImportPath(importingFile, importPath, repoFilesSet) {
+    // 非相对路径（如 npm 包）不尝试解析
+    if (!importPath.startsWith('.')) {
+        return null;
+    }
+    // 获取导入方文件所在目录
+    const dir = importingFile.substring(0, importingFile.lastIndexOf('/'));
+    // 将相对路径拼接为绝对路径
+    const parts = (dir ? dir + '/' + importPath : importPath).split('/');
+    const resolved = [];
+    for (const part of parts) {
+        if (part === '.')
+            continue;
+        if (part === '..') {
+            resolved.pop();
+        }
+        else {
+            resolved.push(part);
+        }
+    }
+    const basePath = resolved.join('/');
+    // 如果路径本身已存在（如导入 JSON 等带扩展名的文件）
+    if (repoFilesSet.has(basePath)) {
+        return basePath;
+    }
+    // 尝试补全扩展名
+    const extensions = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
+    for (const ext of extensions) {
+        if (repoFilesSet.has(basePath + ext)) {
+            return basePath + ext;
+        }
+    }
+    // 尝试 index 文件
+    const indexExtensions = ['/index.ts', '/index.tsx', '/index.js', '/index.jsx'];
+    for (const idx of indexExtensions) {
+        if (repoFilesSet.has(basePath + idx)) {
+            return basePath + idx;
+        }
+    }
+    return null;
+}
+/**
+ * 按优先级对候选文件排序（同目录文件优先）
+ *
+ * @param candidateFiles - 候选文件列表
+ * @param modifiedFiles - PR 中被修改的文件列表
+ * @returns 按优先级排序后的文件列表
+ */
+function sortByProximity(candidateFiles, modifiedFiles) {
+    // 收集所有修改文件的目录
+    const modifiedDirs = new Set(modifiedFiles.map(f => f.substring(0, f.lastIndexOf('/'))));
+    // 计算优先级分数：同目录 = 0，同父目录 = 1，其他 = 2
+    const getScore = (file) => {
+        const dir = file.substring(0, file.lastIndexOf('/'));
+        if (modifiedDirs.has(dir))
+            return 0;
+        const parentDir = dir.substring(0, dir.lastIndexOf('/'));
+        if (modifiedDirs.has(parentDir))
+            return 1;
+        return 2;
+    };
+    return [...candidateFiles].sort((a, b) => getScore(a) - getScore(b));
+}
+
+;// CONCATENATED MODULE: ./lib/dependency-analyzer.js
+/**
+ * dependency-analyzer.ts - 跨文件依赖分析模块
+ *
+ * 提供三个核心功能：
+ * 1. 导入关系解析：通过正则表达式解析 import/require 语句，构建文件依赖图
+ * 2. 修改符号提取：从 diff 中提取被修改的导出函数/变量名
+ * 3. 引用搜索：在依赖文件中搜索对修改符号的引用
+ *
+ * 设计原则：
+ * - 不引入 AST 库，使用正则覆盖 80%+ 的常见导入/导出模式
+ * - 最小化 GitHub API 调用，优先使用已获取的文件内容
+ * - 生成简洁的影响摘要，控制在 token 预算内
+ *
+ * 支持语言：TypeScript/JavaScript、Python、Go、Java
+ */
+
+// eslint-disable-next-line camelcase
+
+
+
+// eslint-disable-next-line camelcase
+const dependency_analyzer_context = github.context;
+const dependency_analyzer_repo = dependency_analyzer_context.repo;
+// ==================== 导入解析（正则） ====================
+/**
+ * 解析文件中的导入语句
+ *
+ * 支持 TS/JS、Python、Go、Java 的常见导入模式。
+ * 返回每个导入语句的路径和导入符号。
+ *
+ * @param content - 文件内容
+ * @param filename - 文件路径（用于检测语言）
+ * @returns 导入信息列表
+ */
+function parseImports(content, filename) {
+    const language = detectLanguage(filename);
+    switch (language) {
+        case 'typescript':
+            return parseTsImports(content);
+        case 'python':
+            return parsePyImports(content);
+        case 'go':
+            return parseGoImports(content);
+        case 'java':
+            return parseJavaImports(content);
+        default:
+            return [];
+    }
+}
+/**
+ * 解析 TypeScript/JavaScript 导入语句
+ *
+ * 覆盖模式：
+ * - import { foo, bar } from './module'
+ * - import foo from './module'
+ * - import * as foo from './module'
+ * - const { foo } = require('./module')
+ * - const foo = require('./module')
+ * - export { foo } from './module'（re-export）
+ */
+function parseTsImports(content) {
+    const imports = [];
+    // import { foo, bar } from './module'（排除 import type { ... }）
+    const namedImportRe = /import\s+(?!type\s)\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]/g;
+    let match;
+    while ((match = namedImportRe.exec(content)) !== null) {
+        const symbols = match[1]
+            .split(',')
+            .map(s => s.trim().split(/\s+as\s+/)[0].trim())
+            .filter(s => s.length > 0);
+        imports.push({
+            importPath: match[2],
+            importedSymbols: symbols,
+            isDefault: false,
+            isNamespace: false
+        });
+    }
+    // import foo from './module'（排除 import type X from）
+    const defaultImportRe = /import\s+(\w+)\s+from\s+['"]([^'"]+)['"]/g;
+    while ((match = defaultImportRe.exec(content)) !== null) {
+        // 跳过 import type X from '...'（type 被捕获为符号名）
+        if (match[1] === 'type')
+            continue;
+        imports.push({
+            importPath: match[2],
+            importedSymbols: [match[1]],
+            isDefault: true,
+            isNamespace: false
+        });
+    }
+    // import * as foo from './module'
+    const namespaceImportRe = /import\s+\*\s+as\s+(\w+)\s+from\s+['"]([^'"]+)['"]/g;
+    while ((match = namespaceImportRe.exec(content)) !== null) {
+        imports.push({
+            importPath: match[2],
+            importedSymbols: [match[1]],
+            isDefault: false,
+            isNamespace: true
+        });
+    }
+    // const { foo, bar } = require('./module')
+    const destructuredRequireRe = /(?:const|let|var)\s+\{([^}]+)\}\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
+    while ((match = destructuredRequireRe.exec(content)) !== null) {
+        const symbols = match[1]
+            .split(',')
+            .map(s => s.trim().split(/\s*:\s*/)[0].trim())
+            .filter(s => s.length > 0);
+        imports.push({
+            importPath: match[2],
+            importedSymbols: symbols,
+            isDefault: false,
+            isNamespace: false
+        });
+    }
+    // const foo = require('./module')
+    const simpleRequireRe = /(?:const|let|var)\s+(\w+)\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
+    while ((match = simpleRequireRe.exec(content)) !== null) {
+        imports.push({
+            importPath: match[2],
+            importedSymbols: [match[1]],
+            isDefault: true,
+            isNamespace: false
+        });
+    }
+    // export { foo, bar } from './module'（re-export，排除 export type { ... }）
+    const reExportRe = /export\s+(?!type\s)\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]/g;
+    while ((match = reExportRe.exec(content)) !== null) {
+        const symbols = match[1]
+            .split(',')
+            .map(s => s.trim().split(/\s+as\s+/)[0].trim())
+            .filter(s => s.length > 0);
+        imports.push({
+            importPath: match[2],
+            importedSymbols: symbols,
+            isDefault: false,
+            isNamespace: false
+        });
+    }
+    return imports;
+}
+/**
+ * 解析 Python 导入语句
+ *
+ * 覆盖模式：
+ * - from module import foo, bar
+ * - from module import (foo, bar)
+ * - import module
+ */
+function parsePyImports(content) {
+    const imports = [];
+    let match;
+    // from module import foo, bar（支持多行括号形式）
+    const fromImportRe = /from\s+([\w.]+)\s+import\s+\(([^)]+)\)|from\s+([\w.]+)\s+import\s+([^(\n]+)/g;
+    while ((match = fromImportRe.exec(content)) !== null) {
+        // 分组1+2 = 括号形式, 分组3+4 = 单行形式
+        const modulePath = match[1] ?? match[3];
+        const symbolsStr = match[2] ?? match[4];
+        const symbols = symbolsStr
+            .split(',')
+            .map(s => s.trim().split(/\s+as\s+/)[0].trim())
+            .filter(s => s.length > 0 && s !== '*');
+        imports.push({
+            importPath: modulePath,
+            importedSymbols: symbols,
+            isDefault: false,
+            isNamespace: symbols.length === 0
+        });
+    }
+    // import module
+    const simpleImportRe = /^import\s+([\w.]+)(?:\s+as\s+\w+)?$/gm;
+    while ((match = simpleImportRe.exec(content)) !== null) {
+        imports.push({
+            importPath: match[1],
+            importedSymbols: [match[1].split('.').pop() ?? match[1]],
+            isDefault: false,
+            isNamespace: true
+        });
+    }
+    return imports;
+}
+/**
+ * 解析 Go 导入语句
+ *
+ * 覆盖模式：
+ * - import "package"
+ * - import ( "pkg1" \n "pkg2" )
+ * - import alias "package"
+ */
+function parseGoImports(content) {
+    const imports = [];
+    let match;
+    // 分组 import ( ... ) —— 先处理分组导入，记录其范围以避免单行重复匹配
+    const groupRanges = [];
+    const groupImportRe = /import\s*\(([\s\S]*?)\)/g;
+    while ((match = groupImportRe.exec(content)) !== null) {
+        groupRanges.push([match.index, match.index + match[0].length]);
+        const block = match[1];
+        const lineRe = /(?:(\w+)\s+)?"([^"]+)"/g;
+        let lineMatch;
+        while ((lineMatch = lineRe.exec(block)) !== null) {
+            const alias = lineMatch[1] ?? lineMatch[2].split('/').pop() ?? '';
+            imports.push({
+                importPath: lineMatch[2],
+                importedSymbols: [alias],
+                isDefault: false,
+                isNamespace: true
+            });
+        }
+    }
+    // 单行 import "package" 或 import alias "package"（跳过已被分组匹配的范围）
+    const singleImportRe = /import\s+(?:(\w+)\s+)?"([^"]+)"/g;
+    while ((match = singleImportRe.exec(content)) !== null) {
+        const pos = match.index;
+        const inGroup = groupRanges.some(([s, e]) => pos >= s && pos < e);
+        if (inGroup)
+            continue;
+        const alias = match[1] ?? match[2].split('/').pop() ?? '';
+        imports.push({
+            importPath: match[2],
+            importedSymbols: [alias],
+            isDefault: false,
+            isNamespace: true
+        });
+    }
+    return imports;
+}
+/**
+ * 解析 Java 导入语句
+ *
+ * 覆盖模式：
+ * - import com.pkg.Class;
+ * - import static com.pkg.Class.method;
+ */
+function parseJavaImports(content) {
+    const imports = [];
+    let match;
+    const javaImportRe = /import\s+(?:static\s+)?([a-zA-Z0-9_.]+(?:\.\*)?)\s*;/g;
+    while ((match = javaImportRe.exec(content)) !== null) {
+        const fullPath = match[1];
+        const parts = fullPath.split('.');
+        const symbol = parts[parts.length - 1];
+        imports.push({
+            importPath: fullPath,
+            importedSymbols: [symbol],
+            isDefault: false,
+            isNamespace: symbol === '*'
+        });
+    }
+    return imports;
+}
+// ==================== 修改符号提取 ====================
+/**
+ * 从 diff 中提取被修改的导出符号
+ *
+ * 仅分析 diff 的新增行（以 + 开头），识别被修改或新增的导出声明。
+ * 同时检查删除行（以 - 开头），识别被删除的导出符号。
+ *
+ * @param filename - 文件路径
+ * @param fileDiff - 文件的 unified diff
+ * @returns 被修改的符号列表
+ */
+function extractModifiedSymbols(filename, fileDiff) {
+    const language = detectLanguage(filename);
+    const symbols = [];
+    const seen = new Set();
+    const lines = fileDiff.split('\n');
+    for (const line of lines) {
+        // 只处理新增行和删除行
+        if (!line.startsWith('+') && !line.startsWith('-'))
+            continue;
+        // 跳过 diff 头部行
+        if (line.startsWith('+++') || line.startsWith('---'))
+            continue;
+        const content = line.substring(1); // 去掉 +/- 前缀
+        let extracted = [];
+        switch (language) {
+            case 'typescript':
+                extracted = extractTsSymbols(content);
+                break;
+            case 'python':
+                extracted = extractPySymbols(content);
+                break;
+            case 'go':
+                extracted = extractGoSymbols(content);
+                break;
+            case 'java':
+                extracted = extractJavaSymbols(content);
+                break;
+        }
+        for (const sym of extracted) {
+            const key = `${sym.name}:${sym.type}`;
+            if (!seen.has(key)) {
+                seen.add(key);
+                symbols.push({ ...sym, filename });
+            }
+        }
+    }
+    return symbols;
+}
+/** 从 TS/JS 代码行提取导出符号 */
+function extractTsSymbols(line) {
+    const results = [];
+    const trimmed = line.trim();
+    // export function foo( / export async function foo(
+    let m = trimmed.match(/^export\s+(?:async\s+)?function\s+(\w+)/);
+    if (m) {
+        results.push({ name: m[1], type: 'function', isExported: true });
+        return results;
+    }
+    // export const/let/var foo =
+    m = trimmed.match(/^export\s+(?:const|let|var)\s+(\w+)/);
+    if (m) {
+        results.push({ name: m[1], type: 'variable', isExported: true });
+        return results;
+    }
+    // export class Foo
+    m = trimmed.match(/^export\s+(?:abstract\s+)?class\s+(\w+)/);
+    if (m) {
+        results.push({ name: m[1], type: 'class', isExported: true });
+        return results;
+    }
+    // export interface Foo
+    m = trimmed.match(/^export\s+interface\s+(\w+)/);
+    if (m) {
+        results.push({ name: m[1], type: 'interface', isExported: true });
+        return results;
+    }
+    // export type Foo
+    m = trimmed.match(/^export\s+type\s+(\w+)/);
+    if (m) {
+        results.push({ name: m[1], type: 'type', isExported: true });
+        return results;
+    }
+    // export enum Foo
+    m = trimmed.match(/^export\s+enum\s+(\w+)/);
+    if (m) {
+        results.push({ name: m[1], type: 'enum', isExported: true });
+        return results;
+    }
+    // export default function/class
+    m = trimmed.match(/^export\s+default\s+(?:function|class)\s+(\w+)/);
+    if (m) {
+        results.push({ name: m[1], type: 'function', isExported: true });
+        return results;
+    }
+    // module.exports.foo = / exports.foo =
+    m = trimmed.match(/^(?:module\.)?exports\.(\w+)\s*=/);
+    if (m) {
+        results.push({ name: m[1], type: 'variable', isExported: true });
+        return results;
+    }
+    return results;
+}
+/** 从 Python 代码行提取顶层符号（Python 顶层定义视为导出） */
+function extractPySymbols(line) {
+    const results = [];
+    // def foo( / async def foo(
+    let m = line.match(/^(?:async\s+)?def\s+(\w+)/);
+    if (m && !m[1].startsWith('_')) {
+        results.push({ name: m[1], type: 'function', isExported: true });
+        return results;
+    }
+    // class Foo
+    m = line.match(/^class\s+(\w+)/);
+    if (m && !m[1].startsWith('_')) {
+        results.push({ name: m[1], type: 'class', isExported: true });
+        return results;
+    }
+    return results;
+}
+/** 从 Go 代码行提取导出符号（大写开头的函数/类型为导出） */
+function extractGoSymbols(line) {
+    const results = [];
+    const trimmed = line.trim();
+    // func FunctionName( 或 func (r *Receiver) MethodName(
+    let m = trimmed.match(/^func\s+(?:\([^)]*\)\s+)?([A-Z]\w*)/);
+    if (m) {
+        results.push({ name: m[1], type: 'function', isExported: true });
+        return results;
+    }
+    // type TypeName struct/interface
+    m = trimmed.match(/^type\s+([A-Z]\w+)\s+(?:struct|interface)/);
+    if (m) {
+        results.push({ name: m[1], type: 'class', isExported: true });
+        return results;
+    }
+    return results;
+}
+/** 从 Java 代码行提取公共符号 */
+function extractJavaSymbols(line) {
+    const results = [];
+    const trimmed = line.trim();
+    // public class/interface/enum ClassName
+    let m = trimmed.match(/^(?:public|protected)\s+(?:static\s+)?(?:abstract\s+)?(?:final\s+)?(?:class|interface|enum)\s+(\w+)/);
+    if (m) {
+        results.push({ name: m[1], type: 'class', isExported: true });
+        return results;
+    }
+    // public ReturnType methodName(
+    m = trimmed.match(/^(?:public|protected)\s+(?:static\s+)?(?:final\s+)?(?:synchronized\s+)?(?:\w+(?:<[^>]*>)?)\s+(\w+)\s*\(/);
+    if (m && m[1] !== 'if' && m[1] !== 'for' && m[1] !== 'while') {
+        results.push({ name: m[1], type: 'function', isExported: true });
+        return results;
+    }
+    return results;
+}
+// ==================== 引用搜索 ====================
+/**
+ * 在文件内容中搜索对指定符号的引用
+ *
+ * 使用词边界匹配（\b），排除注释行中的匹配。
+ * 每个引用保留行号和行内容（截断到 120 字符），用于上下文展示。
+ *
+ * @param filename - 搜索目标文件路径
+ * @param content - 文件内容
+ * @param symbolNames - 要搜索的符号名列表
+ * @param maxRefsPerSymbol - 每个符号最多返回的引用数（默认 5）
+ * @returns 引用列表
+ */
+// 正则缓存：避免对同一符号重复编译正则
+const regexCache = new Map();
+function getSymbolRegex(symbolName) {
+    let regex = regexCache.get(symbolName);
+    if (regex == null) {
+        regex = new RegExp(`\\b${escapeRegex(symbolName)}\\b`);
+        regexCache.set(symbolName, regex);
+    }
+    return regex;
+}
+function findReferencesInContent(filename, content, symbolNames, maxRefsPerSymbol = 5) {
+    const references = [];
+    const lines = content.split('\n');
+    for (const symbolName of symbolNames) {
+        const regex = getSymbolRegex(symbolName);
+        let refCount = 0;
+        for (let i = 0; i < lines.length; i++) {
+            if (refCount >= maxRefsPerSymbol)
+                break;
+            const line = lines[i];
+            // 跳过注释行（启发式：行首为 //, #, /*, * 的行）
+            const trimmedLine = line.trim();
+            if (trimmedLine.startsWith('//') ||
+                trimmedLine.startsWith('#') ||
+                trimmedLine.startsWith('/*') ||
+                trimmedLine.startsWith('*') ||
+                trimmedLine.startsWith('"""') ||
+                trimmedLine.startsWith("'''")) {
+                continue;
+            }
+            // 跳过 import/from 行（导入行不算"引用"）
+            if (trimmedLine.startsWith('import ') ||
+                trimmedLine.startsWith('from ') ||
+                trimmedLine.match(/^(?:const|let|var)\s+.*=\s*require\s*\(/)) {
+                continue;
+            }
+            if (regex.test(line)) {
+                references.push({
+                    filename,
+                    symbolName,
+                    lineNumber: i + 1,
+                    lineContent: line.trim().substring(0, 120)
+                });
+                refCount++;
+            }
+        }
+    }
+    return references;
+}
+/** 转义正则特殊字符 */
+function escapeRegex(str) {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+// ==================== 依赖分析编排 ====================
+/**
+ * 执行完整的跨文件依赖分析
+ *
+ * 流程：
+ * 1. 从 diff 中提取每个修改文件的导出符号
+ * 2. 获取仓库文件树，按语言过滤候选依赖文件
+ * 3. 并行获取候选文件内容
+ * 4. 解析每个候选文件的导入语句，构建依赖图
+ * 5. 在依赖文件中搜索修改符号的引用
+ *
+ * @param filesAndChanges - PR 中的文件变更列表 [filename, fileContent, fileDiff, patches]
+ * @param repoFiles - 仓库文件树
+ * @param options - 全局配置
+ * @param githubConcurrencyLimit - GitHub API 并发限制器
+ * @returns 完整的依赖分析上下文
+ */
+async function analyzeDependencies(filesAndChanges, repoFiles, options, githubConcurrencyLimit) {
+    const fileAnalyses = new Map();
+    // 空文件树时跳过分析（getRepoFileTree 失败返回空数组）
+    if (repoFiles.length === 0) {
+        (0,core.warning)('dependency analysis: repo file tree is empty, skipping analysis');
+        return { fileAnalyses };
+    }
+    // ===== 步骤 1: 提取所有修改文件的导出符号 =====
+    (0,core.info)(`dependency analysis [step 1]: analyzing ${filesAndChanges.length} modified files for exported symbols`);
+    const modifiedFileNames = filesAndChanges.map(([f]) => f);
+    const allModifiedSymbols = new Map();
+    for (const [filename, , fileDiff] of filesAndChanges) {
+        const symbols = extractModifiedSymbols(filename, fileDiff);
+        const allSymbols = symbols.length;
+        const exportedSymbols = symbols.filter(s => s.isExported);
+        if (exportedSymbols.length > 0) {
+            allModifiedSymbols.set(filename, exportedSymbols);
+            (0,core.info)(`dependency analysis [step 1]: ${filename} → ${exportedSymbols.length} exported / ${allSymbols} total symbols: [${exportedSymbols.map(s => `${s.name}(${s.type})`).join(', ')}]`);
+        }
+        else {
+            (0,core.info)(`dependency analysis [step 1]: ${filename} → no modified exports (${allSymbols} internal symbols), skipping`);
+        }
+    }
+    // 如果没有修改任何导出符号，跳过后续分析
+    if (allModifiedSymbols.size === 0) {
+        (0,core.info)(`dependency analysis [step 1]: ✓ no modified exports found across all files, skipping dependency scan (saved ~${options.maxDependencyFiles} API calls)`);
+        return { fileAnalyses };
+    }
+    // ===== 步骤 1.5: 智能过滤 — 排除不太可能被导入的文件 =====
+    // 入口文件和测试文件通常不会被其他模块导入，跳过分析可节省大量 API 调用
+    const preFilterCount = allModifiedSymbols.size;
+    const filesToRemove = [];
+    for (const [filename] of allModifiedSymbols) {
+        if (isEntryPointFile(filename)) {
+            (0,core.info)(`dependency analysis [step 1.5]: ✗ skipping ${filename} (entry point file — imports others but is not imported)`);
+            filesToRemove.push(filename);
+        }
+        else if (isTestFile(filename)) {
+            (0,core.info)(`dependency analysis [step 1.5]: ✗ skipping ${filename} (test file — not imported by production code)`);
+            filesToRemove.push(filename);
+        }
+    }
+    for (const f of filesToRemove) {
+        allModifiedSymbols.delete(f);
+    }
+    if (allModifiedSymbols.size === 0) {
+        (0,core.info)(`dependency analysis [step 1.5]: ✓ all ${preFilterCount} files with modified exports are entry/test files, skipping dependency scan`);
+        return { fileAnalyses };
+    }
+    if (preFilterCount !== allModifiedSymbols.size) {
+        (0,core.info)(`dependency analysis [step 1.5]: filtered ${preFilterCount} → ${allModifiedSymbols.size} files (removed ${preFilterCount - allModifiedSymbols.size} entry/test files)`);
+    }
+    // ===== 步骤 2: 获取 PR 内文件的 head 版本内容并分析导入关系 =====
+    // 注意：filesAndChanges 中的 fileContent 是 base 分支版本，不能用于解析当前导入
+    // 需要获取 head 版本以准确检测 PR 内文件是否导入了被修改的文件
+    const dependencyGraph = new Map();
+    const fileContents = new Map();
+    const repoFilesSet = new Set(repoFiles);
+    for (const [modifiedFile] of allModifiedSymbols) {
+        dependencyGraph.set(modifiedFile, []);
+    }
+    // 并行获取 PR 内非自身文件的 head 版本内容
+    const prCandidates = filesAndChanges
+        .map(([f]) => f)
+        .filter(f => !allModifiedSymbols.has(f));
+    const headSha = dependency_analyzer_context.payload.pull_request?.head?.sha ?? '';
+    const prFetchPromises = prCandidates.map(f => githubConcurrencyLimit(async () => {
+        try {
+            const response = await octokit/* octokit.repos.getContent */.K.repos.getContent({
+                owner: dependency_analyzer_repo.owner,
+                repo: dependency_analyzer_repo.repo,
+                path: f,
+                ref: headSha
+            });
+            const data = response.data;
+            if (data.content && data.encoding === 'base64') {
+                fileContents.set(f, Buffer.from(data.content, 'base64').toString());
+            }
+        }
+        catch {
+            // 获取失败静默跳过（新文件可能不在 head 上）
+        }
+    }));
+    await Promise.all(prFetchPromises);
+    let prInternalHits = 0;
+    for (const candidateFile of prCandidates) {
+        const content = fileContents.get(candidateFile);
+        if (content == null || content.length === 0)
+            continue;
+        const imports = parseImports(content, candidateFile);
+        for (const imp of imports) {
+            const resolvedPath = resolveImportPath(candidateFile, imp.importPath, repoFilesSet);
+            if (resolvedPath != null && allModifiedSymbols.has(resolvedPath)) {
+                const deps = dependencyGraph.get(resolvedPath) ?? [];
+                // 去重：同一文件多次 import 同一模块时合并符号
+                const existing = deps.find(d => d.file === candidateFile);
+                if (existing != null) {
+                    for (const s of imp.importedSymbols) {
+                        if (!existing.symbols.includes(s))
+                            existing.symbols.push(s);
+                    }
+                }
+                else {
+                    deps.push({ file: candidateFile, symbols: [...imp.importedSymbols] });
+                }
+                dependencyGraph.set(resolvedPath, deps);
+                prInternalHits++;
+                (0,core.info)(`dependency analysis [step 2]: ✓ PR-internal hit: ${candidateFile} imports {${imp.importedSymbols.join(', ')}} from ${resolvedPath}`);
+            }
+        }
+    }
+    (0,core.info)(`dependency analysis [step 2]: PR-internal scan complete — ${prInternalHits} import relationships found (${prCandidates.length} API calls for head content)`);
+    // ===== 步骤 3: 确定需要扫描的外部候选文件 =====
+    // 收集所有修改文件的语言，获取对应扩展名
+    const languages = new Set();
+    for (const [filename] of allModifiedSymbols) {
+        languages.add(detectLanguage(filename));
+    }
+    let extensions = [];
+    for (const lang of languages) {
+        extensions = extensions.concat(getExtensionsForLanguage(lang));
+    }
+    // 按扩展名过滤仓库文件，排除 PR 中已处理的文件和测试文件
+    const modifiedFileSet = new Set(modifiedFileNames);
+    const prCandidatesSet = new Set(prCandidates);
+    let candidateFiles = filterByExtension(repoFiles, extensions).filter(f => !modifiedFileSet.has(f) && !prCandidatesSet.has(f) && !isTestFile(f));
+    // 使用 pathFilters 排除不需要的文件（直接调用 pathFilters.check 避免逐文件日志）
+    candidateFiles = candidateFiles.filter(f => options.pathFilters.check(f));
+    // 按与修改文件的距离排序，优先分析同目录文件
+    candidateFiles = sortByProximity(candidateFiles, modifiedFileNames);
+    // 限制最大扫描文件数
+    const maxFiles = options.maxDependencyFiles;
+    if (candidateFiles.length > maxFiles) {
+        (0,core.info)(`dependency analysis: limiting candidate files from ${candidateFiles.length} to ${maxFiles}`);
+        candidateFiles = candidateFiles.slice(0, maxFiles);
+    }
+    (0,core.info)(`dependency analysis [step 3]: scanning ${candidateFiles.length} external candidate files (API calls needed: ${candidateFiles.length})`);
+    // ===== 步骤 4: 并行获取外部候选文件内容 =====
+    const fetchPromises = candidateFiles.map(f => githubConcurrencyLimit(async () => {
+        try {
+            const response = await octokit/* octokit.repos.getContent */.K.repos.getContent({
+                owner: dependency_analyzer_repo.owner,
+                repo: dependency_analyzer_repo.repo,
+                path: f,
+                ref: headSha
+            });
+            const data = response.data;
+            if (data.content && data.encoding === 'base64') {
+                const content = Buffer.from(data.content, 'base64').toString();
+                fileContents.set(f, content);
+            }
+        }
+        catch {
+            // 获取失败的文件静默跳过
+        }
+    }));
+    await Promise.all(fetchPromises);
+    (0,core.info)(`dependency analysis [step 4]: fetched ${candidateFiles.length} external file contents (${fileContents.size} total in cache including ${prCandidates.length} PR files from step 2)`);
+    // ===== 步骤 5: 解析外部文件的导入语句，扩充依赖图 =====
+    const prFileSet = new Set(filesAndChanges.map(([f]) => f));
+    let externalHits = 0;
+    for (const [candidateFile, content] of fileContents) {
+        // PR 内文件已在步骤 2 处理，跳过
+        if (prFileSet.has(candidateFile))
+            continue;
+        const imports = parseImports(content, candidateFile);
+        for (const imp of imports) {
+            const resolvedPath = resolveImportPath(candidateFile, imp.importPath, repoFilesSet);
+            if (resolvedPath != null && allModifiedSymbols.has(resolvedPath)) {
+                const deps = dependencyGraph.get(resolvedPath) ?? [];
+                // 去重：同一文件多次 import 同一模块时合并符号
+                const existing = deps.find(d => d.file === candidateFile);
+                if (existing != null) {
+                    for (const s of imp.importedSymbols) {
+                        if (!existing.symbols.includes(s))
+                            existing.symbols.push(s);
+                    }
+                }
+                else {
+                    deps.push({ file: candidateFile, symbols: [...imp.importedSymbols] });
+                }
+                dependencyGraph.set(resolvedPath, deps);
+                externalHits++;
+                (0,core.info)(`dependency analysis [step 5]: ✓ external hit: ${candidateFile} imports {${imp.importedSymbols.join(', ')}} from ${resolvedPath}`);
+            }
+        }
+    }
+    (0,core.info)(`dependency analysis [step 5]: external scan complete — ${externalHits} import relationships found`);
+    // ===== 步骤 6: 在依赖文件中搜索修改符号的引用 =====
+    for (const [modifiedFile, symbols] of allModifiedSymbols) {
+        const deps = dependencyGraph.get(modifiedFile) ?? [];
+        const dependentFiles = deps.map(d => d.file);
+        const symbolNames = symbols.map(s => s.name);
+        const allReferences = [];
+        if (deps.length === 0) {
+            // 关键日志：该文件没有被任何文件导入，跳过引用搜索
+            (0,core.info)(`dependency analysis [step 6]: ✗ ${modifiedFile} has 0 dependents — no files import it, skipping reference search`);
+        }
+        else {
+            (0,core.info)(`dependency analysis [step 6]: ${modifiedFile} has ${deps.length} dependents, searching for references to [${symbolNames.join(', ')}]`);
+        }
+        for (const dep of deps) {
+            const content = fileContents.get(dep.file);
+            if (content == null)
+                continue;
+            // 仅搜索该依赖文件实际导入的符号（取交集），减少假阳性
+            const relevantSymbols = dep.symbols.length > 0
+                ? symbolNames.filter(s => dep.symbols.includes(s))
+                : symbolNames;
+            // 如果该文件导入的符号与修改符号无交集，仍用全量搜索（可能是 namespace import）
+            const searchSymbols = relevantSymbols.length > 0 ? relevantSymbols : symbolNames;
+            const refs = findReferencesInContent(dep.file, content, searchSymbols);
+            if (refs.length > 0) {
+                (0,core.info)(`dependency analysis [step 6]: ✓ ${dep.file} → ${refs.length} references found: [${refs.map(r => `${r.symbolName}:L${r.lineNumber}`).join(', ')}]`);
+            }
+            allReferences.push(...refs);
+        }
+        fileAnalyses.set(modifiedFile, {
+            filename: modifiedFile,
+            modifiedSymbols: symbols,
+            dependentFiles,
+            references: allReferences
+        });
+    }
+    // ===== 最终统计 =====
+    let totalRefs = 0;
+    let filesWithRefs = 0;
+    let filesWithoutRefs = 0;
+    for (const [, analysis] of fileAnalyses) {
+        totalRefs += analysis.references.length;
+        if (analysis.references.length > 0) {
+            filesWithRefs++;
+        }
+        else {
+            filesWithoutRefs++;
+        }
+    }
+    (0,core.info)(`dependency analysis [summary]: ${fileAnalyses.size} files analyzed, ${totalRefs} cross-file references found`);
+    (0,core.info)(`dependency analysis [summary]: ${filesWithRefs} files have external references, ${filesWithoutRefs} files have no references (API calls used: ${candidateFiles.length})`);
+    return { fileAnalyses };
+}
+// ==================== 格式化输出 ====================
+/** 跨文件上下文的 token 上限 */
+const MAX_CROSS_FILE_CONTEXT_CHARS = 3000;
+/**
+ * 将文件依赖分析结果格式化为紧凑的审查上下文字符串
+ *
+ * 输出格式示例：
+ * ```
+ * ### Modified exports in this file:
+ * - `calculateTotal` (function)
+ * - `TAX_RATE` (variable)
+ *
+ * ### Files that import from this file (3):
+ * - src/checkout/payment.ts: { calculateTotal }
+ * - src/reports/summary.ts: { calculateTotal, TAX_RATE }
+ *
+ * ### References to modified symbols:
+ * - src/checkout/payment.ts:45: const total = calculateTotal(cartItems)
+ * - src/reports/summary.ts:23: report.total = calculateTotal(allOrders)
+ * ```
+ *
+ * @param analysis - 文件依赖分析结果
+ * @returns 格式化的上下文字符串
+ */
+function formatCrossFileContext(analysis) {
+    const parts = [];
+    // 第 1 部分：修改的导出符号
+    if (analysis.modifiedSymbols.length > 0) {
+        parts.push('### Modified exports in this file:');
+        for (const sym of analysis.modifiedSymbols) {
+            parts.push(`- \`${sym.name}\` (${sym.type})`);
+        }
+        parts.push('');
+    }
+    // 第 2 部分：依赖文件列表
+    if (analysis.dependentFiles.length > 0) {
+        parts.push(`### Files that import from this file (${analysis.dependentFiles.length}):`);
+        // 最多展示 10 个依赖文件
+        const displayFiles = analysis.dependentFiles.slice(0, 10);
+        for (const f of displayFiles) {
+            parts.push(`- ${f}`);
+        }
+        if (analysis.dependentFiles.length > 10) {
+            parts.push(`- ... and ${analysis.dependentFiles.length - 10} more files`);
+        }
+        parts.push('');
+    }
+    // 第 3 部分：引用位置
+    if (analysis.references.length > 0) {
+        parts.push('### References to modified symbols:');
+        // 优先展示非测试文件的引用
+        const sortedRefs = [...analysis.references].sort((a, b) => {
+            const aIsTest = isTestFile(a.filename) ? 1 : 0;
+            const bIsTest = isTestFile(b.filename) ? 1 : 0;
+            return aIsTest - bIsTest;
+        });
+        // 最多展示 15 个引用
+        const displayRefs = sortedRefs.slice(0, 15);
+        for (const ref of displayRefs) {
+            parts.push(`- ${ref.filename}:${ref.lineNumber}: ${ref.lineContent}`);
+        }
+        if (analysis.references.length > 15) {
+            parts.push(`- ... and ${analysis.references.length - 15} more references`);
+        }
+    }
+    let result = parts.join('\n');
+    // 截断到字符上限（按行边界截断，避免切断 markdown 语法）
+    if (result.length > MAX_CROSS_FILE_CONTEXT_CHARS) {
+        const cutoff = result.lastIndexOf('\n', MAX_CROSS_FILE_CONTEXT_CHARS);
+        result =
+            result.substring(0, cutoff > 0 ? cutoff : MAX_CROSS_FILE_CONTEXT_CHARS) +
+                '\n... (truncated for token budget)';
+    }
+    return result;
+}
+/**
+ * 判断文件是否为入口文件（通常不会被其他模块导入）
+ *
+ * 入口文件是程序的启动点，它们导入其他模块，但自身很少被导入。
+ * 跳过这些文件的依赖分析可避免无效的 API 调用。
+ */
+function isEntryPointFile(filename) {
+    const basename = filename.substring(filename.lastIndexOf('/') + 1);
+    const lower = basename.toLowerCase();
+    return (lower === 'main.ts' ||
+        lower === 'main.js' ||
+        lower === 'main.py' ||
+        lower === 'main.go' ||
+        lower === 'app.ts' ||
+        lower === 'app.js' ||
+        lower === 'server.ts' ||
+        lower === 'server.js' ||
+        lower === 'cli.ts' ||
+        lower === 'cli.js' ||
+        // 根目录的 index 文件通常是入口
+        (lower.startsWith('index.') && !filename.includes('/src/')));
+}
+/** 判断文件是否为测试文件 */
+function isTestFile(filename) {
+    const lower = filename.toLowerCase();
+    // 使用精确匹配避免误匹配（如 attestation.ts、contest.ts）
+    return (lower.includes('__tests__') ||
+        lower.includes('__test__') ||
+        lower.endsWith('.test.ts') ||
+        lower.endsWith('.test.tsx') ||
+        lower.endsWith('.test.js') ||
+        lower.endsWith('.test.jsx') ||
+        lower.endsWith('.spec.ts') ||
+        lower.endsWith('.spec.tsx') ||
+        lower.endsWith('.spec.js') ||
+        lower.endsWith('.spec.jsx') ||
+        lower.endsWith('_test.go') ||
+        lower.endsWith('_test.py') ||
+        /(?:^|[/\\])test_\w+\.py$/.test(lower) ||
+        /[/\\]tests?[/\\]/.test(lower));
+}
+
+// EXTERNAL MODULE: ./lib/inputs.js
+var lib_inputs = __nccwpck_require__(6305);
 // EXTERNAL MODULE: ./lib/tokenizer.js
 var tokenizer = __nccwpck_require__(7525);
 ;// CONCATENATED MODULE: ./lib/review.js
@@ -12697,9 +13740,13 @@ var tokenizer = __nccwpck_require__(7525);
 
 
 
+
+
 // eslint-disable-next-line camelcase
-const context = github.context;
-const repo = context.repo;
+const review_context = github.context;
+/** 跨文件上下文注入的 token 上限 */
+const MAX_CROSS_FILE_CONTEXT_TOKENS = 1500;
+const review_repo = review_context.repo;
 /** 在 PR 描述中添加此关键词可跳过 AI 审查 */
 const ignoreKeyword = '@ai-reviewer: ignore';
 /**
@@ -12716,20 +13763,20 @@ const codeReview = async (lightBot, heavyBot, options, prompts) => {
     const openaiConcurrencyLimit = pLimit(options.openaiConcurrencyLimit);
     const githubConcurrencyLimit = pLimit(options.githubConcurrencyLimit);
     // ==================== 事件验证 ====================
-    if (context.eventName !== 'pull_request' &&
-        context.eventName !== 'pull_request_target') {
-        (0,core.warning)(`Skipped: current event is ${context.eventName}, only support pull_request event`);
+    if (review_context.eventName !== 'pull_request' &&
+        review_context.eventName !== 'pull_request_target') {
+        (0,core.warning)(`Skipped: current event is ${review_context.eventName}, only support pull_request event`);
         return;
     }
-    if (context.payload.pull_request == null) {
+    if (review_context.payload.pull_request == null) {
         (0,core.warning)('Skipped: context.payload.pull_request is null');
         return;
     }
     // ==================== 填充 PR 基本信息 ====================
     const inputs = new lib_inputs/* Inputs */.k();
-    inputs.title = context.payload.pull_request.title;
-    if (context.payload.pull_request.body != null) {
-        inputs.description = commenter.getDescription(context.payload.pull_request.body);
+    inputs.title = review_context.payload.pull_request.title;
+    if (review_context.payload.pull_request.body != null) {
+        inputs.description = commenter.getDescription(review_context.payload.pull_request.body);
     }
     // 如果 PR 描述中包含忽略关键词，跳过审查
     if (inputs.description.includes(ignoreKeyword)) {
@@ -12740,7 +13787,7 @@ const codeReview = async (lightBot, heavyBot, options, prompts) => {
     inputs.systemMessage = options.systemMessage;
     // ==================== 恢复增量审查状态 ====================
     // 从已有的摘要评论中恢复上次审查的状态
-    const existingSummarizeCmt = await commenter.findCommentWithTag(lib_commenter/* SUMMARIZE_TAG */.Rp, context.payload.pull_request.number);
+    const existingSummarizeCmt = await commenter.findCommentWithTag(lib_commenter/* SUMMARIZE_TAG */.Rp, review_context.payload.pull_request.number);
     let existingCommitIdsBlock = '';
     let existingSummarizeCmtBody = '';
     if (existingSummarizeCmt != null) {
@@ -12760,10 +13807,10 @@ const codeReview = async (lightBot, heavyBot, options, prompts) => {
     }
     // 确定 diff 的起始 commit
     if (highestReviewedCommitId === '' ||
-        highestReviewedCommitId === context.payload.pull_request.head.sha) {
+        highestReviewedCommitId === review_context.payload.pull_request.head.sha) {
         // 首次审查或已是最新：从 base 分支开始
-        (0,core.info)(`Will review from the base commit: ${context.payload.pull_request.base.sha}`);
-        highestReviewedCommitId = context.payload.pull_request.base.sha;
+        (0,core.info)(`Will review from the base commit: ${review_context.payload.pull_request.base.sha}`);
+        highestReviewedCommitId = review_context.payload.pull_request.base.sha;
     }
     else {
         // 增量审查：从上次审查的 commit 开始
@@ -12772,17 +13819,17 @@ const codeReview = async (lightBot, heavyBot, options, prompts) => {
     // ==================== 获取 diff 数据 ====================
     // 增量 diff：从上次审查的 commit 到最新 commit（仅包含新增变更）
     const incrementalDiff = await octokit/* octokit.repos.compareCommits */.K.repos.compareCommits({
-        owner: repo.owner,
-        repo: repo.repo,
+        owner: review_repo.owner,
+        repo: review_repo.repo,
         base: highestReviewedCommitId,
-        head: context.payload.pull_request.head.sha
+        head: review_context.payload.pull_request.head.sha
     });
     // 全量 diff：从目标分支的 base 到最新 commit（完整变更视图）
     const targetBranchDiff = await octokit/* octokit.repos.compareCommits */.K.repos.compareCommits({
-        owner: repo.owner,
-        repo: repo.repo,
-        base: context.payload.pull_request.base.sha,
-        head: context.payload.pull_request.head.sha
+        owner: review_repo.owner,
+        repo: review_repo.repo,
+        base: review_context.payload.pull_request.base.sha,
+        head: review_context.payload.pull_request.head.sha
     });
     const incrementalFiles = incrementalDiff.data.files;
     const targetBranchFiles = targetBranchDiff.data.files;
@@ -12823,16 +13870,16 @@ const codeReview = async (lightBot, heavyBot, options, prompts) => {
     const filteredFiles = await Promise.all(filterSelectedFiles.map(file => githubConcurrencyLimit(async () => {
         // 获取文件在基准分支上的原始内容
         let fileContent = '';
-        if (context.payload.pull_request == null) {
+        if (review_context.payload.pull_request == null) {
             (0,core.warning)('Skipped: context.payload.pull_request is null');
             return null;
         }
         try {
             const contents = await octokit/* octokit.repos.getContent */.K.repos.getContent({
-                owner: repo.owner,
-                repo: repo.repo,
+                owner: review_repo.owner,
+                repo: review_repo.repo,
                 path: file.filename,
-                ref: context.payload.pull_request.base.sha
+                ref: review_context.payload.pull_request.base.sha
             });
             if (contents.data != null) {
                 if (!Array.isArray(contents.data)) {
@@ -12893,10 +13940,25 @@ ${hunks.oldHunk}
         (0,core.error)('Skipped: no files to review');
         return;
     }
+    // ==================== 阶段零：跨文件依赖分析 ====================
+    let dependencyContext = null;
+    if (options.enableDependencyAnalysis) {
+        try {
+            (0,core.info)('Phase 0: starting cross-file dependency analysis');
+            // 获取仓库文件树（1 次 API 调用，结果缓存）
+            const repoFiles = await getRepoFileTree(review_context.payload.pull_request.head.sha);
+            // 分析依赖关系：解析导入、提取被修改的导出符号、搜索引用
+            dependencyContext = await analyzeDependencies(filesAndChanges, repoFiles, options, githubConcurrencyLimit);
+            (0,core.info)('Phase 0: dependency analysis completed');
+        }
+        catch (e) {
+            (0,core.warning)(`Phase 0: dependency analysis failed: ${e.message}, skipping`);
+        }
+    }
     // ==================== 构建状态消息 ====================
     let statusMsg = `<details>
 <summary>Commits</summary>
-Files that changed from the base of the PR and between ${highestReviewedCommitId} and ${context.payload.pull_request.head.sha} commits.
+Files that changed from the base of the PR and between ${highestReviewedCommitId} and ${review_context.payload.pull_request.head.sha} commits.
 </details>
 ${filesAndChanges.length > 0
         ? `
@@ -13035,7 +14097,7 @@ ${filename}: ${summary}
             let message = '### Summary by AI Reviewer\n\n';
             message += releaseNotesResponse;
             try {
-                await commenter.updateDescription(context.payload.pull_request.number, message);
+                await commenter.updateDescription(review_context.payload.pull_request.number, message);
             }
             catch (e) {
                 (0,core.warning)(`release notes: error from github: ${e.message}`);
@@ -13115,6 +14177,23 @@ ${summariesFailed.length > 0
             (0,core.info)(`reviewing ${filename}`);
             const ins = inputs.clone();
             ins.filename = filename;
+            // 注入跨文件引用上下文（在 token 预算内）
+            if (dependencyContext != null) {
+                const fileAnalysis = dependencyContext.fileAnalyses.get(filename);
+                if (fileAnalysis != null && fileAnalysis.references.length > 0) {
+                    const crossFileCtx = formatCrossFileContext(fileAnalysis);
+                    if (crossFileCtx.length > 0) {
+                        const ctxTokens = (0,tokenizer/* getTokenCount */.V)(crossFileCtx);
+                        if (ctxTokens <= MAX_CROSS_FILE_CONTEXT_TOKENS) {
+                            ins.crossFileContext = crossFileCtx;
+                            (0,core.info)(`injected cross-file context for ${filename}: ${ctxTokens} tokens`);
+                        }
+                        else {
+                            (0,core.info)(`cross-file context too large for ${filename}: ${ctxTokens} tokens, skipping`);
+                        }
+                    }
+                }
+            }
             // 计算基础提示词的 token 数
             let tokens = (0,tokenizer/* getTokenCount */.V)(prompts.renderReviewFileDiff(ins));
             // 计算在 token 预算内能装入多少个 patch
@@ -13131,7 +14210,7 @@ ${summariesFailed.length > 0
             // 逐个 patch 打包到提示词中
             let patchesPacked = 0;
             for (const [startLine, endLine, patch] of patches) {
-                if (context.payload.pull_request == null) {
+                if (review_context.payload.pull_request == null) {
                     (0,core.warning)('No pull request found, skipping.');
                     continue;
                 }
@@ -13147,7 +14226,7 @@ ${summariesFailed.length > 0
                 // 获取该 patch 行号范围内已有的评论对话链（提供额外上下文）
                 let commentChain = '';
                 try {
-                    const allChains = await commenter.getCommentChainsWithinRange(context.payload.pull_request.number, filename, startLine, endLine, lib_commenter/* COMMENT_REPLY_TAG */.aD);
+                    const allChains = await commenter.getCommentChainsWithinRange(review_context.payload.pull_request.number, filename, startLine, endLine, lib_commenter/* COMMENT_REPLY_TAG */.aD);
                     if (allChains.length > 0) {
                         (0,core.info)(`Found comment chains: ${allChains} for ${filename}`);
                         commentChain = allChains;
@@ -13202,7 +14281,7 @@ ${commentChain}
                             lgtmCount += 1;
                             continue;
                         }
-                        if (context.payload.pull_request == null) {
+                        if (review_context.payload.pull_request == null) {
                             (0,core.warning)('No pull request found, skipping.');
                             continue;
                         }
@@ -13285,9 +14364,9 @@ ${reviewsSkipped.length > 0
 </details>
 `;
         // 将最新的 head commit SHA 添加到已审查列表
-        summarizeComment += `\n${commenter.addReviewedCommitId(existingCommitIdsBlock, context.payload.pull_request.head.sha)}`;
+        summarizeComment += `\n${commenter.addReviewedCommitId(existingCommitIdsBlock, review_context.payload.pull_request.head.sha)}`;
         // 批量提交所有缓冲的审查评论
-        await commenter.submitReview(context.payload.pull_request.number, commits[commits.length - 1].sha, statusMsg);
+        await commenter.submitReview(review_context.payload.pull_request.number, commits[commits.length - 1].sha, statusMsg);
     }
     // 发布最终的摘要评论
     await commenter.comment(`${summarizeComment}`, lib_commenter/* SUMMARIZE_TAG */.Rp, 'replace');
