@@ -260,7 +260,7 @@ inputs:
   bot_icon:
     required: false
     description: 'The icon for the bot'
-    default: '<img src="" alt="AI Reviewer" width="20" height="20">'
+    default: '🤖'
 runs:
   using: 'node20'
   main: 'dist/index.js'
