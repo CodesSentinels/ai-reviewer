@@ -12214,34 +12214,21 @@ LGTM!
 
 ### Example: Cross-file impact review
 
-If the "Cross-file references" section shows:
+If the "Cross-file references" section shows that \`getUser\` is modified and referenced by multiple callers,
+and the new hunk adds a required parameter:
 \`\`\`
-### Modified exports in this file:
-- \`calculateTotal\` (function)
-### References to modified symbols:
-- src/components/CartSummary.tsx:26: const total = calculateTotal(items)
-- src/components/CheckoutForm.tsx:24: const total = calculateTotal(items)
-- src/hooks/useCart.ts:38: const subtotal = calculateTotal(cartItems)
-- src/services/orderService.ts:25: const subtotal = calculateTotal(items)
-- src/services/analyticsService.ts:21: const total = calculateTotal(items)
+10: export function getUser(id: string, includeProfile: boolean): User {
 \`\`\`
 
-And the new hunk changes \`calculateTotal\` to add a required parameter:
-\`\`\`
-10: export function calculateTotal(items: Item[], tax: number): number {
-\`\`\`
-
-Then you should respond:
+Then you MUST respond:
 10-10:
-The function \`calculateTotal\` now requires a \`tax\` parameter, but the following callers do not pass it:
+\`getUser\` now requires a second parameter \`includeProfile\`, but these callers do not pass it:
 
-- \`src/components/CartSummary.tsx:26\` — \`calculateTotal(items)\`
-- \`src/components/CheckoutForm.tsx:24\` — \`calculateTotal(items)\`
-- \`src/hooks/useCart.ts:38\` — \`calculateTotal(cartItems)\`
-- \`src/services/orderService.ts:25\` — \`calculateTotal(items)\`
-- \`src/services/analyticsService.ts:21\` — \`calculateTotal(items)\`
+- \`src/api/auth.ts:42\` — \`getUser(userId)\`
+- \`src/api/admin.ts:18\` — \`getUser(req.id)\`
+- \`src/controllers/profile.ts:55\` — \`getUser(session.uid)\`
 
-These callers will fail with a TypeScript error. Consider making \`tax\` optional (\`tax?: number\`) or updating the callers.
+Consider making \`includeProfile\` optional or updating all callers.
 ---
 
 ## Changes made to \`$filename\` for your review
