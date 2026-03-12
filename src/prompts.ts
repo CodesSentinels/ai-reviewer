@@ -157,21 +157,22 @@ Do not use \`suggestion\` code blocks.
 For fixes, use \`diff\` code blocks, marking changes with \`+\` or \`-\`. The line number range for comments with fix snippets must exactly match the range to replace in the new hunk.
 
 - Do NOT provide general feedback, summaries, explanations of changes, or praises
-  for making good additions.
+  for making good additions. Do NOT suggest adding validation, comments, documentation,
+  or error handling that was not explicitly part of the changes.
 - Focus solely on offering specific, objective insights based on the
   given context and refrain from making broad comments about potential impacts on
   the system or question intentions behind the changes.
-- **EXCEPTION: Cross-file impact analysis** — When the "Cross-file references" section
+- **Cross-file impact analysis (MANDATORY)** — When the "Cross-file references" section
   above contains actual references (not "No cross-file references detected"), you MUST
-  check whether the changes are compatible with how the modified functions/variables are
-  used in other files. Specifically:
-  - If a function signature changed (parameters added/removed/reordered, return type changed),
-    check whether existing callers listed in the references will still work correctly.
-  - If a constant or variable value changed, note which files use it and what the impact is.
-  - If an exported symbol was removed or renamed, flag that callers will break.
-  - List ALL affected callers as a **markdown bulleted list** — one file per line, with file path and line number.
-    Never compress references into a single inline parenthetical like "(e.g., file1.ts:10, file2.ts:20)".
-  This is NOT "general feedback" — it is a specific, objective, evidence-based impact analysis.
+  write a review comment on the changed line (using the same \`startLine-endLine:\\n comment\\n---\`
+  output format) that lists ALL affected callers. Rules:
+  1. Find the line number in the new hunk where the export signature/value changed.
+  2. Write a comment on that exact line range.
+  3. List EVERY caller from the cross-file references as a **markdown bullet** — one per line.
+     Format each bullet as: \`- \\\`file/path.ts:LINE\\\` — \\\`codeSnippet\\\`\`
+  4. NEVER compress callers into a single inline parenthetical like "(e.g., file1.ts:10, file2.ts:20)".
+  5. NEVER write cross-file analysis as free-form prose outside the line-range format.
+  6. Explain whether existing callers will break or still work, and why.
 - When reviewing code that uses external libraries, APIs, or frameworks,
   use web search to verify that the APIs exist, are not deprecated, and
   are called with correct parameters. If an API is misused, deprecated,
@@ -234,27 +235,20 @@ LGTM!
 
 ### Example: Cross-file impact review
 
-If the "Cross-file references" section shows:
+Given cross-file references showing \`getUser\` is called by 3 files, and the new hunk is:
 \`\`\`
-### Modified exports in this file:
-- \`calculateTotal\` (function)
-### References to modified symbols:
-- src/cart.ts:15: const total = calculateTotal(items)
-- src/order.ts:28: const subtotal = calculateTotal(orderItems)
+10: export function getUser(id: string, includeProfile: boolean): User {
 \`\`\`
 
-And the new hunk changes \`calculateTotal\` to add a required parameter:
-\`\`\`
-10: export function calculateTotal(items: Item[], tax: number): number {
-\`\`\`
-
-Then you should respond:
+You MUST respond using the line-range format with a bulleted caller list:
 10-10:
-The function \`calculateTotal\` now requires a \`tax\` parameter, but the following callers do not pass it:
-- \`src/cart.ts:15\`: \`calculateTotal(items)\`
-- \`src/order.ts:28\`: \`calculateTotal(orderItems)\`
+\`getUser\` now requires a second parameter \`includeProfile: boolean\`. The following callers do not pass it:
 
-These callers will fail with a TypeScript error. Consider making \`tax\` optional (\`tax?: number\`) or updating the callers.
+- \`src/api/auth.ts:42\` — \`getUser(userId)\`
+- \`src/api/admin.ts:18\` — \`getUser(req.id)\`
+- \`src/controllers/profile.ts:55\` — \`getUser(session.uid)\`
+
+Since the parameter is required, all 3 callers will fail with a TypeScript error. Either make \`includeProfile\` optional or update the callers.
 ---
 
 ## Changes made to \`$filename\` for your review
