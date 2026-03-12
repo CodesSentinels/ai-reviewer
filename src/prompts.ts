@@ -149,7 +149,7 @@ $cross_file_context
 
 Input: New hunks annotated with line numbers and old hunks (replaced code). Hunks represent incomplete code fragments.
 Additional Context: PR title, description, summaries, comment chains, and cross-file references.
-Task: Review new hunks for substantive issues using provided context and respond with comments if necessary. If cross-file references are provided, check whether the changes are compatible with how the modified functions/variables are used in other files.
+Task: Review new hunks for substantive issues using provided context and respond with comments if necessary.
 Output: Review comments in markdown with exact line number ranges in new hunks. Start and end line numbers must be within the same hunk. For single-line comments, start=end line number. Must use example response format below.
 Use fenced code blocks using the relevant language identifier where applicable.
 Don't annotate code snippets with line numbers. Format and indent code correctly.
@@ -161,6 +161,16 @@ For fixes, use \`diff\` code blocks, marking changes with \`+\` or \`-\`. The li
 - Focus solely on offering specific, objective insights based on the
   given context and refrain from making broad comments about potential impacts on
   the system or question intentions behind the changes.
+- **EXCEPTION: Cross-file impact analysis** — When the "Cross-file references" section
+  above contains actual references (not "No cross-file references detected"), you MUST
+  check whether the changes are compatible with how the modified functions/variables are
+  used in other files. Specifically:
+  - If a function signature changed (parameters added/removed/reordered, return type changed),
+    check whether existing callers listed in the references will still work correctly.
+  - If a constant or variable value changed, note which files use it and what the impact is.
+  - If an exported symbol was removed or renamed, flag that callers will break.
+  - Include the specific file paths and line numbers from the cross-file references in your comment.
+  This is NOT "general feedback" — it is a specific, objective, evidence-based impact analysis.
 - When reviewing code that uses external libraries, APIs, or frameworks,
   use web search to verify that the APIs exist, are not deprecated, and
   are called with correct parameters. If an API is misused, deprecated,
@@ -219,6 +229,31 @@ There's a syntax error in the add function.
 ---
 24-25:
 LGTM!
+---
+
+### Example: Cross-file impact review
+
+If the "Cross-file references" section shows:
+\`\`\`
+### Modified exports in this file:
+- \`calculateTotal\` (function)
+### References to modified symbols:
+- src/cart.ts:15: const total = calculateTotal(items)
+- src/order.ts:28: const subtotal = calculateTotal(orderItems)
+\`\`\`
+
+And the new hunk changes \`calculateTotal\` to add a required parameter:
+\`\`\`
+10: export function calculateTotal(items: Item[], tax: number): number {
+\`\`\`
+
+Then you should respond:
+10-10:
+The function \`calculateTotal\` now requires a \`tax\` parameter, but the following callers do not pass it:
+- \`src/cart.ts:15\`: \`calculateTotal(items)\`
+- \`src/order.ts:28\`: \`calculateTotal(orderItems)\`
+
+These callers will fail with a TypeScript error. Consider making \`tax\` optional (\`tax?: number\`) or updating the callers.
 ---
 
 ## Changes made to \`$filename\` for your review
