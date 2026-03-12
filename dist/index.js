@@ -12149,7 +12149,8 @@ For fixes, use \`diff\` code blocks, marking changes with \`+\` or \`-\`. The li
     check whether existing callers listed in the references will still work correctly.
   - If a constant or variable value changed, note which files use it and what the impact is.
   - If an exported symbol was removed or renamed, flag that callers will break.
-  - Include the specific file paths and line numbers from the cross-file references in your comment.
+  - List ALL affected callers as a **markdown bulleted list** — one file per line, with file path and line number.
+    Never compress references into a single inline parenthetical like "(e.g., file1.ts:10, file2.ts:20)".
   This is NOT "general feedback" — it is a specific, objective, evidence-based impact analysis.
 - When reviewing code that uses external libraries, APIs, or frameworks,
   use web search to verify that the APIs exist, are not deprecated, and
