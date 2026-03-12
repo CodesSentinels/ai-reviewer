@@ -12149,8 +12149,7 @@ For fixes, use \`diff\` code blocks, marking changes with \`+\` or \`-\`. The li
     check whether existing callers listed in the references will still work correctly.
   - If a constant or variable value changed, note which files use it and what the impact is.
   - If an exported symbol was removed or renamed, flag that callers will break.
-  - List ALL affected callers as a **markdown bulleted list** — one file per line, with file path and line number.
-    Never compress references into a single inline parenthetical like "(e.g., file1.ts:10, file2.ts:20)".
+  - Include the specific file paths and line numbers from the cross-file references in your comment.
   This is NOT "general feedback" — it is a specific, objective, evidence-based impact analysis.
 - When reviewing code that uses external libraries, APIs, or frameworks,
   use web search to verify that the APIs exist, are not deprecated, and
@@ -12214,21 +12213,27 @@ LGTM!
 
 ### Example: Cross-file impact review
 
-If the "Cross-file references" section shows that \`getUser\` is modified and referenced by multiple callers,
-and the new hunk adds a required parameter:
+If the "Cross-file references" section shows:
 \`\`\`
-10: export function getUser(id: string, includeProfile: boolean): User {
+### Modified exports in this file:
+- \`calculateTotal\` (function)
+### References to modified symbols:
+- src/cart.ts:15: const total = calculateTotal(items)
+- src/order.ts:28: const subtotal = calculateTotal(orderItems)
 \`\`\`
 
-Then you MUST respond:
+And the new hunk changes \`calculateTotal\` to add a required parameter:
+\`\`\`
+10: export function calculateTotal(items: Item[], tax: number): number {
+\`\`\`
+
+Then you should respond:
 10-10:
-\`getUser\` now requires a second parameter \`includeProfile\`, but these callers do not pass it:
+The function \`calculateTotal\` now requires a \`tax\` parameter, but the following callers do not pass it:
+- \`src/cart.ts:15\`: \`calculateTotal(items)\`
+- \`src/order.ts:28\`: \`calculateTotal(orderItems)\`
 
-- \`src/api/auth.ts:42\` — \`getUser(userId)\`
-- \`src/api/admin.ts:18\` — \`getUser(req.id)\`
-- \`src/controllers/profile.ts:55\` — \`getUser(session.uid)\`
-
-Consider making \`includeProfile\` optional or updating all callers.
+These callers will fail with a TypeScript error. Consider making \`tax\` optional (\`tax?: number\`) or updating the callers.
 ---
 
 ## Changes made to \`$filename\` for your review
