@@ -244,7 +244,8 @@ inputs:
   language:
     required: false
     description: ISO code for the response language
-    default: en-US
+    # default: en-US
+    default: zh-CN
   enable_dependency_analysis:
     required: false
     description:
