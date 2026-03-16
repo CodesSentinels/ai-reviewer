@@ -200,7 +200,7 @@ function tryResolveWithExtensions(
   }
 
   // 尝试补全扩展名
-  const extensions = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']
+  const extensions = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.java']
   for (const ext of extensions) {
     if (repoFilesSet.has(basePath + ext)) {
       return basePath + ext
@@ -208,7 +208,7 @@ function tryResolveWithExtensions(
   }
 
   // 尝试 index 文件
-  const indexExtensions = ['/index.ts', '/index.tsx', '/index.js', '/index.jsx']
+  const indexExtensions = ['/index.ts', '/index.tsx', '/index.js', '/index.jsx', '/__init__.py']
   for (const idx of indexExtensions) {
     if (repoFilesSet.has(basePath + idx)) {
       return basePath + idx

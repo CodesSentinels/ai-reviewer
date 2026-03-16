@@ -235,6 +235,18 @@ function parseTsImports(content: string): ImportInfo[] {
     })
   }
 
+  // export * from './module'（通配符 re-export）
+  const exportStarRe = /export\s+\*\s+from\s+['"]([^'"]+)['"]/g
+  while ((match = exportStarRe.exec(content)) !== null) {
+    imports.push({
+      importPath: match[1],
+      importedSymbols: [],
+      aliasMap: {},
+      isDefault: false,
+      isNamespace: true
+    })
+  }
+
   return imports
 }
 
@@ -257,6 +269,23 @@ function parsePyImports(content: string): ImportInfo[] {
     // 分组1+2 = 括号形式, 分组3+4 = 单行形式
     const modulePath = match[1] ?? match[3]
     const symbolsStr = match[2] ?? match[4]
+
+    // 将 Python 点式相对导入转换为路径表示法
+    // .utils → ./utils, ..shared → ../shared, ..shared.helpers → ../shared/helpers
+    let importPath = modulePath
+    const dotMatch = modulePath.match(/^(\.+)(.*)$/)
+    if (dotMatch) {
+      const dots = dotMatch[1].length
+      const rest = dotMatch[2]
+      if (!rest) {
+        // from . import foo → 当前目录, from .. import foo → 父目录
+        importPath = dots === 1 ? '.' : Array(dots - 1).fill('..').join('/')
+      } else {
+        const prefix = dots === 1 ? './' : '../'.repeat(dots - 1)
+        importPath = prefix + rest.replace(/\./g, '/')
+      }
+    }
+
     const aliasMap: Record<string, string> = {}
     const symbols = symbolsStr
       .split(',')
@@ -270,7 +299,7 @@ function parsePyImports(content: string): ImportInfo[] {
       })
       .filter(s => s.length > 0 && s !== '*')
     imports.push({
-      importPath: modulePath,
+      importPath,
       importedSymbols: symbols,
       aliasMap,
       isDefault: false,
@@ -660,6 +689,55 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+// ==================== 依赖图辅助 ====================
+
+/** 依赖图条目类型 */
+type DepEntry = {file: string; symbols: string[]; aliasMap: Record<string, string>; defaultImportName: string | null; namespaceName: string | null}
+
+/** 合并或新增依赖条目（去重 + 合并符号、别名、default/namespace 信息） */
+function mergeDep(deps: DepEntry[], file: string, imp: ImportInfo): void {
+  const existing = deps.find(d => d.file === file)
+  if (existing != null) {
+    for (const s of imp.importedSymbols) {
+      if (!existing.symbols.includes(s)) existing.symbols.push(s)
+    }
+    Object.assign(existing.aliasMap, imp.aliasMap)
+    if (imp.isDefault && existing.defaultImportName == null) {
+      existing.defaultImportName = imp.importedSymbols[0] ?? null
+    }
+    if (imp.isNamespace && existing.namespaceName == null) {
+      existing.namespaceName = imp.importedSymbols[0] ?? null
+    }
+  } else {
+    deps.push({
+      file,
+      symbols: [...imp.importedSymbols],
+      aliasMap: {...imp.aliasMap},
+      defaultImportName: imp.isDefault ? imp.importedSymbols[0] ?? null : null,
+      namespaceName: imp.isNamespace ? imp.importedSymbols[0] ?? null : null
+    })
+  }
+}
+
+/**
+ * 检测文件是否包含指向目标文件的 re-export 语句
+ * （用于 barrel file 识别）
+ */
+function hasReExportFrom(
+  content: string,
+  sourceFile: string,
+  targetFile: string,
+  repoFilesSet: Set<string>
+): boolean {
+  const reExportRe = /export\s+(?:\{[^}]*\}|\*)\s+from\s+['"]([^'"]+)['"]/g
+  let match
+  while ((match = reExportRe.exec(content)) !== null) {
+    const resolved = resolveImportPath(sourceFile, match[1], repoFilesSet)
+    if (resolved === targetFile) return true
+  }
+  return false
+}
+
 // ==================== 依赖分析编排 ====================
 
 /**
@@ -755,7 +833,7 @@ export async function analyzeDependencies(
   // ===== 步骤 2: 获取 PR 内文件的 head 版本内容并分析导入关系 =====
   // 注意：filesAndChanges 中的 fileContent 是 base 分支版本，不能用于解析当前导入
   // 需要获取 head 版本以准确检测 PR 内文件是否导入了被修改的文件
-  const dependencyGraph = new Map<string, Array<{file: string; symbols: string[]; aliasMap: Record<string, string>}>>()
+  const dependencyGraph = new Map<string, Array<{file: string; symbols: string[]; aliasMap: Record<string, string>; defaultImportName: string | null; namespaceName: string | null}>>()
   const fileContents = new Map<string, string>()
   const repoFilesSet = new Set(repoFiles)
 
@@ -804,15 +882,7 @@ export async function analyzeDependencies(
       if (resolvedPath != null && allModifiedSymbols.has(resolvedPath)) {
         const deps = dependencyGraph.get(resolvedPath) ?? []
         // 去重：同一文件多次 import 同一模块时合并符号和别名
-        const existing = deps.find(d => d.file === candidateFile)
-        if (existing != null) {
-          for (const s of imp.importedSymbols) {
-            if (!existing.symbols.includes(s)) existing.symbols.push(s)
-          }
-          Object.assign(existing.aliasMap, imp.aliasMap)
-        } else {
-          deps.push({file: candidateFile, symbols: [...imp.importedSymbols], aliasMap: {...imp.aliasMap}})
-        }
+        mergeDep(deps, candidateFile, imp)
         dependencyGraph.set(resolvedPath, deps)
         prInternalHits++
         info(
@@ -907,16 +977,7 @@ export async function analyzeDependencies(
 
       if (resolvedPath != null && allModifiedSymbols.has(resolvedPath)) {
         const deps = dependencyGraph.get(resolvedPath) ?? []
-        // 去重：同一文件多次 import 同一模块时合并符号和别名
-        const existing = deps.find(d => d.file === candidateFile)
-        if (existing != null) {
-          for (const s of imp.importedSymbols) {
-            if (!existing.symbols.includes(s)) existing.symbols.push(s)
-          }
-          Object.assign(existing.aliasMap, imp.aliasMap)
-        } else {
-          deps.push({file: candidateFile, symbols: [...imp.importedSymbols], aliasMap: {...imp.aliasMap}})
-        }
+        mergeDep(deps, candidateFile, imp)
         dependencyGraph.set(resolvedPath, deps)
         externalHits++
         info(
@@ -928,6 +989,56 @@ export async function analyzeDependencies(
   info(
     `dependency analysis [step 5]: external scan complete — ${externalHits} import relationships found`
   )
+
+  // ===== 步骤 5.5: Barrel file 传递追踪 =====
+  // 识别依赖图中的 barrel file（re-export 中转文件），
+  // 将其消费者也加入被修改文件的依赖图（零额外 API 调用）
+  let barrelHits = 0
+  for (const [modifiedFile] of allModifiedSymbols) {
+    const deps = dependencyGraph.get(modifiedFile) ?? []
+    const barrelFiles: string[] = []
+
+    // 在已有依赖中识别 barrel file
+    for (const dep of deps) {
+      const content = fileContents.get(dep.file)
+      if (content == null) continue
+      if (hasReExportFrom(content, dep.file, modifiedFile, repoFilesSet)) {
+        barrelFiles.push(dep.file)
+      }
+    }
+
+    if (barrelFiles.length === 0) continue
+    info(
+      `dependency analysis [step 5.5]: ${modifiedFile} has ${barrelFiles.length} barrel file(s): [${barrelFiles.join(', ')}]`
+    )
+
+    // 在所有已获取文件中查找 barrel file 的消费者
+    const existingDepFiles = new Set(deps.map(d => d.file))
+    for (const [candidateFile, content] of fileContents) {
+      // 跳过被修改文件自身、已有依赖
+      if (candidateFile === modifiedFile) continue
+      if (existingDepFiles.has(candidateFile)) continue
+
+      const imports = parseImports(content, candidateFile)
+      for (const imp of imports) {
+        const resolved = resolveImportPath(candidateFile, imp.importPath, repoFilesSet)
+        if (resolved != null && barrelFiles.includes(resolved)) {
+          mergeDep(deps, candidateFile, imp)
+          existingDepFiles.add(candidateFile)
+          barrelHits++
+          info(
+            `dependency analysis [step 5.5]: ✓ barrel passthrough: ${candidateFile} imports {${imp.importedSymbols.join(', ')}} from barrel ${resolved} ← ${modifiedFile}`
+          )
+        }
+      }
+    }
+    dependencyGraph.set(modifiedFile, deps)
+  }
+  if (barrelHits > 0) {
+    info(
+      `dependency analysis [step 5.5]: barrel passthrough complete — ${barrelHits} indirect dependencies found`
+    )
+  }
 
   // ===== 步骤 6: 在依赖文件中搜索修改符号的引用 =====
   for (const [modifiedFile, symbols] of allModifiedSymbols) {
@@ -948,6 +1059,9 @@ export async function analyzeDependencies(
     }
 
     for (const dep of deps) {
+      // 循环引用保护：跳过被修改文件自身
+      if (dep.file === modifiedFile) continue
+
       const content = fileContents.get(dep.file)
       if (content == null) continue
 
@@ -964,6 +1078,21 @@ export async function analyzeDependencies(
         const alias = dep.aliasMap[sym]
         if (alias && !searchSymbols.includes(alias)) {
           searchSymbols.push(alias)
+        }
+      }
+
+      // default import：消费者用本地名引用默认导出（如 import calc from './utils' → 搜索 calc）
+      if (dep.defaultImportName && !searchSymbols.includes(dep.defaultImportName)) {
+        searchSymbols.push(dep.defaultImportName)
+      }
+
+      // namespace import：搜索 namespaceName.symbolName 模式（如 utils.calculateTotal）
+      if (dep.namespaceName) {
+        for (const sym of symbolNames) {
+          const nsPattern = `${dep.namespaceName}.${sym}`
+          if (!searchSymbols.includes(nsPattern)) {
+            searchSymbols.push(nsPattern)
+          }
         }
       }
 

@@ -935,3 +935,167 @@ console.log(result)
     expect(refs.some(r => r.lineContent.includes('handleOrder(order)'))).toBe(true)
   })
 })
+
+// ==================== P0: export * from 解析 ====================
+describe('export * from 解析', () => {
+  test('解析 export * from 语句', () => {
+    const content = `export * from './calculator'
+export * from '../shared/utils'
+import { foo } from './bar'
+`
+    const imports = parseImports(content, 'src/utils/index.ts')
+    const starExports = imports.filter(i => i.isNamespace && i.importedSymbols.length === 0)
+    expect(starExports.length).toBe(2)
+    expect(starExports[0].importPath).toBe('./calculator')
+    expect(starExports[1].importPath).toBe('../shared/utils')
+  })
+})
+
+// ==================== P0: barrel file 端到端 ====================
+describe('端到端场景: Barrel file 间接引用追踪', () => {
+  test('通过 barrel file re-export 的间接消费者能被追踪', () => {
+    // 场景：calculator.ts 被修改 → index.ts re-export → Dashboard.tsx 间接消费
+    const calculatorDiff = `--- a/src/utils/calculator.ts
++++ b/src/utils/calculator.ts
+@@ -1,3 +1,3 @@
+-export function calculateTotal(items: Item[]): number {
++export function calculateTotal(items: Item[], tax: number): number {
+   return items.reduce((sum, item) => sum + item.price, 0)
+ }
+`
+    // 步骤 1：提取修改符号
+    const symbols = extractModifiedSymbols('src/utils/calculator.ts', calculatorDiff)
+    expect(symbols.some(s => s.name === 'calculateTotal')).toBe(true)
+
+    // 步骤 2-5 模拟：barrel file 直接 import calculator
+    const barrelContent = `export { calculateTotal } from './calculator'
+export { formatPrice } from './formatter'
+`
+    const barrelImports = parseImports(barrelContent, 'src/utils/index.ts')
+    expect(barrelImports.some(i => i.importPath === './calculator')).toBe(true)
+
+    // 步骤 5.5 模拟：Dashboard 通过 barrel file 间接消费
+    const dashboardContent = `import { calculateTotal } from '../utils'
+
+export function Dashboard() {
+  const total = calculateTotal(cartItems)
+  return <div>{total}</div>
+}
+`
+    const dashboardImports = parseImports(dashboardContent, 'src/pages/Dashboard.tsx')
+    expect(dashboardImports[0].importPath).toBe('../utils')
+    // 解析路径应指向 barrel file
+    const repoFiles = new Set([
+      'src/utils/calculator.ts',
+      'src/utils/index.ts',
+      'src/utils/formatter.ts',
+      'src/pages/Dashboard.tsx'
+    ])
+    const resolved = resolveImportPath('src/pages/Dashboard.tsx', '../utils', repoFiles)
+    expect(resolved).toBe('src/utils/index.ts')
+
+    // barrel 检测：index.ts 包含指向 calculator.ts 的 re-export
+    const hasReExport = barrelContent.match(/export\s+(?:\{[^}]*\}|\*)\s+from\s+['"]([^'"]+)['"]/)
+    expect(hasReExport).toBeTruthy()
+    const reExportResolved = resolveImportPath('src/utils/index.ts', hasReExport![1], repoFiles)
+    expect(reExportResolved).toBe('src/utils/calculator.ts')
+
+    // 引用搜索能在 Dashboard 中找到 calculateTotal
+    const refs = findReferencesInContent(
+      'src/pages/Dashboard.tsx',
+      dashboardContent,
+      ['calculateTotal']
+    )
+    expect(refs.length).toBeGreaterThanOrEqual(1)
+    expect(refs.some(r => r.lineContent.includes('calculateTotal(cartItems)'))).toBe(true)
+  })
+})
+
+// ==================== P1: default import 引用追踪 ====================
+describe('default import 引用追踪', () => {
+  test('default import 的本地名应加入搜索列表', () => {
+    // import calc from './utils' → 文件中使用 calc() 而非 calculateTotal()
+    const content = `import calc from './utils'
+
+const total = calc(items)
+console.log(total)
+`
+    const imports = parseImports(content, 'src/consumer.ts')
+    expect(imports[0].isDefault).toBe(true)
+    expect(imports[0].importedSymbols).toEqual(['calc'])
+
+    // 搜索时应包含 default import 的本地名 'calc'
+    const refs = findReferencesInContent('src/consumer.ts', content, ['calc'])
+    expect(refs.length).toBeGreaterThanOrEqual(1)
+    expect(refs.some(r => r.lineContent.includes('calc(items)'))).toBe(true)
+
+    // 原始导出名 'calculateTotal' 搜索不到（这正是 bug 所在）
+    const refsOriginal = findReferencesInContent('src/consumer.ts', content, ['calculateTotal'])
+    expect(refsOriginal.length).toBe(0)
+  })
+})
+
+// ==================== P1: namespace import 引用追踪 ====================
+describe('namespace import 引用追踪', () => {
+  test('namespace import 的 namespaceName.symbolName 模式应被搜索', () => {
+    const content = `import * as utils from './calculator'
+
+const total = utils.calculateTotal(items)
+const price = utils.formatPrice(total)
+`
+    const imports = parseImports(content, 'src/consumer.ts')
+    expect(imports[0].isNamespace).toBe(true)
+    expect(imports[0].importedSymbols).toEqual(['utils'])
+
+    // 搜索 utils.calculateTotal 应能找到
+    const refs = findReferencesInContent(
+      'src/consumer.ts',
+      content,
+      ['utils.calculateTotal']
+    )
+    expect(refs.length).toBeGreaterThanOrEqual(1)
+    expect(refs.some(r => r.lineContent.includes('utils.calculateTotal(items)'))).toBe(true)
+  })
+})
+
+// ==================== P2: Python 点式相对导入 ====================
+describe('Python 点式相对导入', () => {
+  test('from .utils import foo → 转换为 ./utils', () => {
+    const content = `from .utils import calculate_total
+from ..shared import helper
+from ...core.base import BaseClass
+`
+    const imports = parseImports(content, 'src/pkg/module.py')
+    expect(imports[0].importPath).toBe('./utils')
+    expect(imports[0].importedSymbols).toContain('calculate_total')
+    expect(imports[1].importPath).toBe('../shared')
+    expect(imports[1].importedSymbols).toContain('helper')
+    expect(imports[2].importPath).toBe('../../core/base')
+    expect(imports[2].importedSymbols).toContain('BaseClass')
+  })
+
+  test('from . import foo → 当前目录', () => {
+    const content = `from . import utils
+`
+    const imports = parseImports(content, 'src/pkg/module.py')
+    expect(imports[0].importPath).toBe('.')
+    expect(imports[0].importedSymbols).toContain('utils')
+  })
+
+  test('Python 相对导入路径解析（配合 __init__.py）', () => {
+    const repoFiles = new Set([
+      'src/pkg/utils.py',
+      'src/pkg/module.py',
+      'src/shared/__init__.py',
+      'src/shared/helper.py'
+    ])
+
+    // ./utils → src/pkg/utils.py
+    const resolved1 = resolveImportPath('src/pkg/module.py', './utils', repoFiles)
+    expect(resolved1).toBe('src/pkg/utils.py')
+
+    // ../shared → src/shared/__init__.py
+    const resolved2 = resolveImportPath('src/pkg/module.py', '../shared', repoFiles)
+    expect(resolved2).toBe('src/shared/__init__.py')
+  })
+})
