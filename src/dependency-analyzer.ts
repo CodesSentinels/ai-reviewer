@@ -53,7 +53,8 @@ export interface SymbolReference {
 /** 导入关系信息 */
 export interface ImportInfo {
   importPath: string       // 导入路径（原始值）
-  importedSymbols: string[] // 导入的符号列表
+  importedSymbols: string[] // 导入的符号列表（原始名，用于匹配导出符号）
+  aliasMap: Record<string, string> // 别名映射：originalName → localAlias（无别名时为空对象）
   isDefault: boolean       // 是否为默认导入
   isNamespace: boolean     // 是否为命名空间导入（import * as X）
 }
@@ -117,16 +118,26 @@ function parseTsImports(content: string): ImportInfo[] {
   const imports: ImportInfo[] = []
 
   // import { foo, bar } from './module'（排除 import type { ... }）
+  // import { foo as bar } from './module' → importedSymbols: ['foo'], aliasMap: { foo: 'bar' }
   const namedImportRe = /import\s+(?!type\s)\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]/g
   let match
   while ((match = namedImportRe.exec(content)) !== null) {
+    const aliasMap: Record<string, string> = {}
     const symbols = match[1]
       .split(',')
-      .map(s => s.trim().split(/\s+as\s+/)[0].trim())
+      .map(s => {
+        const parts = s.trim().split(/\s+as\s+/)
+        const original = parts[0].trim()
+        if (parts.length > 1) {
+          aliasMap[original] = parts[1].trim()
+        }
+        return original
+      })
       .filter(s => s.length > 0)
     imports.push({
       importPath: match[2],
       importedSymbols: symbols,
+      aliasMap,
       isDefault: false,
       isNamespace: false
     })
@@ -141,6 +152,7 @@ function parseTsImports(content: string): ImportInfo[] {
     imports.push({
       importPath: match[2],
       importedSymbols: [match[1]],
+      aliasMap: {},
       isDefault: true,
       isNamespace: false
     })
@@ -153,22 +165,33 @@ function parseTsImports(content: string): ImportInfo[] {
     imports.push({
       importPath: match[2],
       importedSymbols: [match[1]],
+      aliasMap: {},
       isDefault: false,
       isNamespace: true
     })
   }
 
   // const { foo, bar } = require('./module')
+  // const { foo: bar } = require('./module') → importedSymbols: ['foo'], aliasMap: { foo: 'bar' }
   const destructuredRequireRe =
     /(?:const|let|var)\s+\{([^}]+)\}\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)/g
   while ((match = destructuredRequireRe.exec(content)) !== null) {
+    const aliasMap: Record<string, string> = {}
     const symbols = match[1]
       .split(',')
-      .map(s => s.trim().split(/\s*:\s*/)[0].trim())
+      .map(s => {
+        const parts = s.trim().split(/\s*:\s*/)
+        const original = parts[0].trim()
+        if (parts.length > 1) {
+          aliasMap[original] = parts[1].trim()
+        }
+        return original
+      })
       .filter(s => s.length > 0)
     imports.push({
       importPath: match[2],
       importedSymbols: symbols,
+      aliasMap,
       isDefault: false,
       isNamespace: false
     })
@@ -181,21 +204,32 @@ function parseTsImports(content: string): ImportInfo[] {
     imports.push({
       importPath: match[2],
       importedSymbols: [match[1]],
+      aliasMap: {},
       isDefault: true,
       isNamespace: false
     })
   }
 
   // export { foo, bar } from './module'（re-export，排除 export type { ... }）
+  // export { foo as bar } from './module' → importedSymbols: ['foo'], aliasMap: { foo: 'bar' }
   const reExportRe = /export\s+(?!type\s)\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]/g
   while ((match = reExportRe.exec(content)) !== null) {
+    const aliasMap: Record<string, string> = {}
     const symbols = match[1]
       .split(',')
-      .map(s => s.trim().split(/\s+as\s+/)[0].trim())
+      .map(s => {
+        const parts = s.trim().split(/\s+as\s+/)
+        const original = parts[0].trim()
+        if (parts.length > 1) {
+          aliasMap[original] = parts[1].trim()
+        }
+        return original
+      })
       .filter(s => s.length > 0)
     imports.push({
       importPath: match[2],
       importedSymbols: symbols,
+      aliasMap,
       isDefault: false,
       isNamespace: false
     })
@@ -217,29 +251,45 @@ function parsePyImports(content: string): ImportInfo[] {
   let match
 
   // from module import foo, bar（支持多行括号形式）
+  // from module import foo as bar → importedSymbols: ['foo'], aliasMap: { foo: 'bar' }
   const fromImportRe = /from\s+([\w.]+)\s+import\s+\(([^)]+)\)|from\s+([\w.]+)\s+import\s+([^(\n]+)/g
   while ((match = fromImportRe.exec(content)) !== null) {
     // 分组1+2 = 括号形式, 分组3+4 = 单行形式
     const modulePath = match[1] ?? match[3]
     const symbolsStr = match[2] ?? match[4]
+    const aliasMap: Record<string, string> = {}
     const symbols = symbolsStr
       .split(',')
-      .map(s => s.trim().split(/\s+as\s+/)[0].trim())
+      .map(s => {
+        const parts = s.trim().split(/\s+as\s+/)
+        const original = parts[0].trim()
+        if (parts.length > 1) {
+          aliasMap[original] = parts[1].trim()
+        }
+        return original
+      })
       .filter(s => s.length > 0 && s !== '*')
     imports.push({
       importPath: modulePath,
       importedSymbols: symbols,
+      aliasMap,
       isDefault: false,
       isNamespace: symbols.length === 0
     })
   }
 
-  // import module
-  const simpleImportRe = /^import\s+([\w.]+)(?:\s+as\s+\w+)?$/gm
+  // import module / import module as alias
+  const simpleImportRe = /^import\s+([\w.]+)(?:\s+as\s+(\w+))?$/gm
   while ((match = simpleImportRe.exec(content)) !== null) {
+    const moduleName = match[1].split('.').pop() ?? match[1]
+    const aliasMap: Record<string, string> = {}
+    if (match[2]) {
+      aliasMap[moduleName] = match[2]
+    }
     imports.push({
       importPath: match[1],
-      importedSymbols: [match[1].split('.').pop() ?? match[1]],
+      importedSymbols: [moduleName],
+      aliasMap,
       isDefault: false,
       isNamespace: true
     })
@@ -273,6 +323,7 @@ function parseGoImports(content: string): ImportInfo[] {
       imports.push({
         importPath: lineMatch[2],
         importedSymbols: [alias],
+        aliasMap: {},
         isDefault: false,
         isNamespace: true
       })
@@ -289,6 +340,7 @@ function parseGoImports(content: string): ImportInfo[] {
     imports.push({
       importPath: match[2],
       importedSymbols: [alias],
+      aliasMap: {},
       isDefault: false,
       isNamespace: true
     })
@@ -316,6 +368,7 @@ function parseJavaImports(content: string): ImportInfo[] {
     imports.push({
       importPath: fullPath,
       importedSymbols: [symbol],
+      aliasMap: {},
       isDefault: false,
       isNamespace: symbol === '*'
     })
@@ -702,7 +755,7 @@ export async function analyzeDependencies(
   // ===== 步骤 2: 获取 PR 内文件的 head 版本内容并分析导入关系 =====
   // 注意：filesAndChanges 中的 fileContent 是 base 分支版本，不能用于解析当前导入
   // 需要获取 head 版本以准确检测 PR 内文件是否导入了被修改的文件
-  const dependencyGraph = new Map<string, Array<{file: string; symbols: string[]}>>()
+  const dependencyGraph = new Map<string, Array<{file: string; symbols: string[]; aliasMap: Record<string, string>}>>()
   const fileContents = new Map<string, string>()
   const repoFilesSet = new Set(repoFiles)
 
@@ -750,14 +803,15 @@ export async function analyzeDependencies(
       )
       if (resolvedPath != null && allModifiedSymbols.has(resolvedPath)) {
         const deps = dependencyGraph.get(resolvedPath) ?? []
-        // 去重：同一文件多次 import 同一模块时合并符号
+        // 去重：同一文件多次 import 同一模块时合并符号和别名
         const existing = deps.find(d => d.file === candidateFile)
         if (existing != null) {
           for (const s of imp.importedSymbols) {
             if (!existing.symbols.includes(s)) existing.symbols.push(s)
           }
+          Object.assign(existing.aliasMap, imp.aliasMap)
         } else {
-          deps.push({file: candidateFile, symbols: [...imp.importedSymbols]})
+          deps.push({file: candidateFile, symbols: [...imp.importedSymbols], aliasMap: {...imp.aliasMap}})
         }
         dependencyGraph.set(resolvedPath, deps)
         prInternalHits++
@@ -853,14 +907,15 @@ export async function analyzeDependencies(
 
       if (resolvedPath != null && allModifiedSymbols.has(resolvedPath)) {
         const deps = dependencyGraph.get(resolvedPath) ?? []
-        // 去重：同一文件多次 import 同一模块时合并符号
+        // 去重：同一文件多次 import 同一模块时合并符号和别名
         const existing = deps.find(d => d.file === candidateFile)
         if (existing != null) {
           for (const s of imp.importedSymbols) {
             if (!existing.symbols.includes(s)) existing.symbols.push(s)
           }
+          Object.assign(existing.aliasMap, imp.aliasMap)
         } else {
-          deps.push({file: candidateFile, symbols: [...imp.importedSymbols]})
+          deps.push({file: candidateFile, symbols: [...imp.importedSymbols], aliasMap: {...imp.aliasMap}})
         }
         dependencyGraph.set(resolvedPath, deps)
         externalHits++
@@ -901,7 +956,16 @@ export async function analyzeDependencies(
         ? symbolNames.filter(s => dep.symbols.includes(s))
         : symbolNames
       // 如果该文件导入的符号与修改符号无交集，仍用全量搜索（可能是 namespace import）
-      const searchSymbols = relevantSymbols.length > 0 ? relevantSymbols : symbolNames
+      const baseSymbols = relevantSymbols.length > 0 ? relevantSymbols : symbolNames
+
+      // 扩展搜索列表：除原始符号名外，还搜索其在该文件中的别名
+      const searchSymbols = [...baseSymbols]
+      for (const sym of baseSymbols) {
+        const alias = dep.aliasMap[sym]
+        if (alias && !searchSymbols.includes(alias)) {
+          searchSymbols.push(alias)
+        }
+      }
 
       const refs = findReferencesInContent(
         dep.file,

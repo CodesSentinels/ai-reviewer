@@ -132,16 +132,44 @@ export function getExtensionsForLanguage(language: Language): string[] {
  * @param repoFilesSet - 仓库文件路径的 Set（用于 O(1) 查找）
  * @returns 解析后的仓库内绝对路径，或 null（无法解析时）
  */
+/** 常见路径别名前缀及其可能映射到的源码目录 */
+const PATH_ALIAS_RULES = [
+  {prefix: '@/', candidates: ['src/', 'app/', 'lib/', '']},
+  {prefix: '~/', candidates: ['src/', 'app/', 'lib/', '']},
+  {prefix: '#/', candidates: ['src/', 'app/', 'lib/', '']}
+]
+
 export function resolveImportPath(
   importingFile: string,
   importPath: string,
   repoFilesSet: Set<string>
 ): string | null {
-  // 非相对路径（如 npm 包）不尝试解析
-  if (!importPath.startsWith('.')) {
-    return null
+  if (importPath.startsWith('.')) {
+    // 相对路径解析
+    return resolveRelativePath(importingFile, importPath, repoFilesSet)
   }
 
+  // 尝试常见路径别名（@/, ~/, #/）
+  for (const rule of PATH_ALIAS_RULES) {
+    if (importPath.startsWith(rule.prefix)) {
+      const stripped = importPath.substring(rule.prefix.length)
+      for (const dir of rule.candidates) {
+        const resolved = tryResolveWithExtensions(dir + stripped, repoFilesSet)
+        if (resolved != null) return resolved
+      }
+    }
+  }
+
+  // 非相对、非别名路径（如 npm 包）不尝试解析
+  return null
+}
+
+/** 解析相对路径（./xxx, ../xxx） */
+function resolveRelativePath(
+  importingFile: string,
+  importPath: string,
+  repoFilesSet: Set<string>
+): string | null {
   // 获取导入方文件所在目录
   const dir = importingFile.substring(0, importingFile.lastIndexOf('/'))
 
@@ -158,6 +186,14 @@ export function resolveImportPath(
   }
   const basePath = resolved.join('/')
 
+  return tryResolveWithExtensions(basePath, repoFilesSet)
+}
+
+/** 尝试直接匹配、补全扩展名、补全 index 文件 */
+function tryResolveWithExtensions(
+  basePath: string,
+  repoFilesSet: Set<string>
+): string | null {
   // 如果路径本身已存在（如导入 JSON 等带扩展名的文件）
   if (repoFilesSet.has(basePath)) {
     return basePath

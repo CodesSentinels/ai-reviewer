@@ -90,12 +90,41 @@ describe('parseImports', () => {
     expect(imports[0].importedSymbols).toEqual(['Options', 'PathFilter'])
   })
 
-  test('解析带 as 别名的 import', () => {
+  test('解析带 as 别名的 import — 返回原始名并记录 aliasMap', () => {
     const content = `import { foo as bar, baz as qux } from './module'`
     const imports = parseImports(content, 'src/app.ts')
     expect(imports).toHaveLength(1)
     // 应返回原始名称，不是别名
     expect(imports[0].importedSymbols).toEqual(['foo', 'baz'])
+    // aliasMap 应记录别名映射
+    expect(imports[0].aliasMap).toEqual({foo: 'bar', baz: 'qux'})
+  })
+
+  test('无别名时 aliasMap 为空对象', () => {
+    const content = `import { foo, bar } from './module'`
+    const imports = parseImports(content, 'src/app.ts')
+    expect(imports[0].aliasMap).toEqual({})
+  })
+
+  test('解析 require 解构别名（冒号语法）', () => {
+    const content = `const { foo: myFoo, bar } = require('./module')`
+    const imports = parseImports(content, 'src/app.js')
+    expect(imports[0].importedSymbols).toEqual(['foo', 'bar'])
+    expect(imports[0].aliasMap).toEqual({foo: 'myFoo'})
+  })
+
+  test('解析 re-export 别名', () => {
+    const content = `export { Options as Opts, PathFilter } from './options'`
+    const imports = parseImports(content, 'src/index.ts')
+    expect(imports[0].importedSymbols).toEqual(['Options', 'PathFilter'])
+    expect(imports[0].aliasMap).toEqual({Options: 'Opts'})
+  })
+
+  test('解析 Python from import 别名', () => {
+    const content = `from utils import calculate_total as calc, format_output`
+    const imports = parseImports(content, 'src/main.py')
+    expect(imports[0].importedSymbols).toEqual(['calculate_total', 'format_output'])
+    expect(imports[0].aliasMap).toEqual({calculate_total: 'calc'})
   })
 
   test('解析 Python from import', () => {
@@ -471,6 +500,40 @@ describe('resolveImportPath', () => {
     )
     expect(result).toBeNull()
   })
+
+  test('解析 @/ 路径别名（映射到 src/）', () => {
+    const result = resolveImportPath('src/app.ts', '@/utils/helper', repoFiles)
+    expect(result).toBe('src/utils/helper.ts')
+  })
+
+  test('解析 @/ 路径别名（映射到 app/ 目录）', () => {
+    const appRepoFiles = new Set([
+      'app/components/Button.tsx',
+      'app/utils/format.ts'
+    ])
+    const result = resolveImportPath('app/page.tsx', '@/components/Button', appRepoFiles)
+    expect(result).toBe('app/components/Button.tsx')
+  })
+
+  test('解析 ~/ 路径别名', () => {
+    const result = resolveImportPath('src/app.ts', '~/utils/helper', repoFiles)
+    expect(result).toBe('src/utils/helper.ts')
+  })
+
+  test('解析 #/ 路径别名', () => {
+    const result = resolveImportPath('src/app.ts', '#/utils/helper', repoFiles)
+    expect(result).toBe('src/utils/helper.ts')
+  })
+
+  test('路径别名解析失败返回 null', () => {
+    const result = resolveImportPath('src/app.ts', '@/nonexistent', repoFiles)
+    expect(result).toBeNull()
+  })
+
+  test('路径别名支持 index 文件解析', () => {
+    const result = resolveImportPath('src/app.ts', '@/utils', repoFiles)
+    expect(result).toBe('src/utils/index.ts')
+  })
 })
 
 // ==================== filterByExtension 测试 ====================
@@ -795,5 +858,80 @@ console.log('this file does not call it')
     expect(
       lower.includes('__tests__') || lower.endsWith('.test.ts')
     ).toBe(true)
+  })
+})
+
+// ==================== 别名引用端到端测试 ====================
+
+describe('端到端场景: 别名引用 — import { foo as bar } 能被正确追踪', () => {
+  test('符号别名：通过别名使用的引用能被搜索到', () => {
+    // 步骤 1：提取修改的导出符号
+    const diff = `@@ -1,3 +1,5 @@
++export function calculateTotal(items: Item[], discount = 0): number {
++  const subtotal = items.reduce((sum, item) => sum + item.price, 0)
++  return subtotal * (1 - discount)
++}`
+    const symbols = extractModifiedSymbols('src/utils/pricing.ts', diff)
+    const exported = symbols.filter(s => s.isExported)
+    expect(exported.find(s => s.name === 'calculateTotal')).toBeDefined()
+
+    // 步骤 2：解析包含别名的依赖文件导入
+    const paymentContent = `import { calculateTotal as calcTotal } from '../utils/pricing'
+
+export function processPayment(items: Item[]): PaymentResult {
+  const total = calcTotal(items)
+  return { total }
+}
+`
+    const imports = parseImports(paymentContent, 'src/checkout/payment.ts')
+    const pricingImport = imports.find(i => i.importPath.includes('pricing'))
+    expect(pricingImport).toBeDefined()
+    expect(pricingImport!.importedSymbols).toContain('calculateTotal')
+    expect(pricingImport!.aliasMap).toEqual({calculateTotal: 'calcTotal'})
+
+    // 步骤 3：使用别名搜索引用 — 同时搜索原始名和别名
+    const searchSymbols = ['calculateTotal']
+    const alias = pricingImport!.aliasMap['calculateTotal']
+    if (alias) searchSymbols.push(alias)
+
+    const refs = findReferencesInContent(
+      'src/checkout/payment.ts',
+      paymentContent,
+      searchSymbols
+    )
+    // 应该找到 calcTotal(items) 这一行
+    expect(refs.length).toBeGreaterThanOrEqual(1)
+    expect(refs.some(r => r.lineContent.includes('calcTotal(items)'))).toBe(true)
+  })
+
+  test('路径别名：@/ 路径导入能正确解析', () => {
+    const repoFiles = new Set([
+      'src/utils/pricing.ts',
+      'src/checkout/payment.ts'
+    ])
+
+    // @/utils/pricing 应解析到 src/utils/pricing.ts
+    const resolved = resolveImportPath(
+      'src/checkout/payment.ts',
+      '@/utils/pricing',
+      repoFiles
+    )
+    expect(resolved).toBe('src/utils/pricing.ts')
+  })
+
+  test('require 解构别名：const { foo: bar } = require(...) 能被追踪', () => {
+    const content = `const { processOrder: handleOrder } = require('./orders')
+
+const result = handleOrder(order)
+console.log(result)
+`
+    const imports = parseImports(content, 'src/app.js')
+    expect(imports[0].importedSymbols).toEqual(['processOrder'])
+    expect(imports[0].aliasMap).toEqual({processOrder: 'handleOrder'})
+
+    // 搜索时加入别名
+    const searchSymbols = ['processOrder', 'handleOrder']
+    const refs = findReferencesInContent('src/app.js', content, searchSymbols)
+    expect(refs.some(r => r.lineContent.includes('handleOrder(order)'))).toBe(true)
   })
 })
