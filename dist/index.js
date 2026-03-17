@@ -8954,23 +8954,8 @@ ${COMMENT_TAG}`;
 ${statusMsg}
 `;
         if (this.reviewCommentsBuffer.length === 0) {
-            // 没有审查评论时，提交一个仅包含状态消息的空审查
-            (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`Submitting empty review for PR #${pullNumber}`);
-            try {
-                await _octokit__WEBPACK_IMPORTED_MODULE_2__/* .octokit.pulls.createReview */ .K.pulls.createReview({
-                    owner: repo.owner,
-                    repo: repo.repo,
-                    // eslint-disable-next-line camelcase
-                    pull_number: pullNumber,
-                    // eslint-disable-next-line camelcase
-                    commit_id: commitId,
-                    event: 'COMMENT',
-                    body
-                });
-            }
-            catch (e) {
-                (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Failed to submit empty review: ${e}`);
-            }
+            // 没有审查评论时，跳过空审查提交（GitHub API 不允许无评论的 COMMENT 审查）
+            (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`Skipping empty review for PR #${pullNumber} — no review comments to submit`);
             return;
         }
         // 删除同一位置的旧 bot 评论，避免重复评论
@@ -9277,19 +9262,35 @@ ${chain}
             (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Failed to create comment: ${e}`);
         }
     }
-    /** 查找并替换已有评论；如果不存在则新建 */
+    /** 查找并替换已有评论；如果不存在则新建。同时清理并发运行产生的重复评论 */
     async replace(body, tag, target) {
         try {
-            const cmt = await this.findCommentWithTag(tag, target);
-            if (cmt) {
-                // 找到已有评论，更新其内容
+            const comments = await this.listComments(target);
+            const matchedComments = comments.filter((cmt) => cmt.body && cmt.body.includes(tag));
+            if (matchedComments.length > 0) {
+                // 更新第一条匹配的评论
                 await _octokit__WEBPACK_IMPORTED_MODULE_2__/* .octokit.issues.updateComment */ .K.issues.updateComment({
                     owner: repo.owner,
                     repo: repo.repo,
                     // eslint-disable-next-line camelcase
-                    comment_id: cmt.id,
+                    comment_id: matchedComments[0].id,
                     body
                 });
+                // 删除多余的重复评论（并发运行时可能产生）
+                for (let i = 1; i < matchedComments.length; i++) {
+                    (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`Deleting duplicate comment ${matchedComments[i].id} with tag ${tag}`);
+                    try {
+                        await _octokit__WEBPACK_IMPORTED_MODULE_2__/* .octokit.issues.deleteComment */ .K.issues.deleteComment({
+                            owner: repo.owner,
+                            repo: repo.repo,
+                            // eslint-disable-next-line camelcase
+                            comment_id: matchedComments[i].id
+                        });
+                    }
+                    catch (e) {
+                        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Failed to delete duplicate comment: ${e}`);
+                    }
+                }
             }
             else {
                 // 未找到，创建新评论
@@ -12831,11 +12832,33 @@ function getExtensionsForLanguage(language) {
  * @param repoFilesSet - 仓库文件路径的 Set（用于 O(1) 查找）
  * @returns 解析后的仓库内绝对路径，或 null（无法解析时）
  */
+/** 常见路径别名前缀及其可能映射到的源码目录 */
+const PATH_ALIAS_RULES = [
+    { prefix: '@/', candidates: ['src/', 'app/', 'lib/', ''] },
+    { prefix: '~/', candidates: ['src/', 'app/', 'lib/', ''] },
+    { prefix: '#/', candidates: ['src/', 'app/', 'lib/', ''] }
+];
 function resolveImportPath(importingFile, importPath, repoFilesSet) {
-    // 非相对路径（如 npm 包）不尝试解析
-    if (!importPath.startsWith('.')) {
-        return null;
+    if (importPath.startsWith('.')) {
+        // 相对路径解析
+        return resolveRelativePath(importingFile, importPath, repoFilesSet);
     }
+    // 尝试常见路径别名（@/, ~/, #/）
+    for (const rule of PATH_ALIAS_RULES) {
+        if (importPath.startsWith(rule.prefix)) {
+            const stripped = importPath.substring(rule.prefix.length);
+            for (const dir of rule.candidates) {
+                const resolved = tryResolveWithExtensions(dir + stripped, repoFilesSet);
+                if (resolved != null)
+                    return resolved;
+            }
+        }
+    }
+    // 非相对、非别名路径（如 npm 包）不尝试解析
+    return null;
+}
+/** 解析相对路径（./xxx, ../xxx） */
+function resolveRelativePath(importingFile, importPath, repoFilesSet) {
     // 获取导入方文件所在目录
     const dir = importingFile.substring(0, importingFile.lastIndexOf('/'));
     // 将相对路径拼接为绝对路径
@@ -12852,19 +12875,23 @@ function resolveImportPath(importingFile, importPath, repoFilesSet) {
         }
     }
     const basePath = resolved.join('/');
+    return tryResolveWithExtensions(basePath, repoFilesSet);
+}
+/** 尝试直接匹配、补全扩展名、补全 index 文件 */
+function tryResolveWithExtensions(basePath, repoFilesSet) {
     // 如果路径本身已存在（如导入 JSON 等带扩展名的文件）
     if (repoFilesSet.has(basePath)) {
         return basePath;
     }
     // 尝试补全扩展名
-    const extensions = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
+    const extensions = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.java'];
     for (const ext of extensions) {
         if (repoFilesSet.has(basePath + ext)) {
             return basePath + ext;
         }
     }
     // 尝试 index 文件
-    const indexExtensions = ['/index.ts', '/index.tsx', '/index.js', '/index.jsx'];
+    const indexExtensions = ['/index.ts', '/index.tsx', '/index.js', '/index.jsx', '/__init__.py'];
     for (const idx of indexExtensions) {
         if (repoFilesSet.has(basePath + idx)) {
             return basePath + idx;
@@ -12959,16 +12986,26 @@ function parseImports(content, filename) {
 function parseTsImports(content) {
     const imports = [];
     // import { foo, bar } from './module'（排除 import type { ... }）
+    // import { foo as bar } from './module' → importedSymbols: ['foo'], aliasMap: { foo: 'bar' }
     const namedImportRe = /import\s+(?!type\s)\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]/g;
     let match;
     while ((match = namedImportRe.exec(content)) !== null) {
+        const aliasMap = {};
         const symbols = match[1]
             .split(',')
-            .map(s => s.trim().split(/\s+as\s+/)[0].trim())
+            .map(s => {
+            const parts = s.trim().split(/\s+as\s+/);
+            const original = parts[0].trim();
+            if (parts.length > 1) {
+                aliasMap[original] = parts[1].trim();
+            }
+            return original;
+        })
             .filter(s => s.length > 0);
         imports.push({
             importPath: match[2],
             importedSymbols: symbols,
+            aliasMap,
             isDefault: false,
             isNamespace: false
         });
@@ -12982,6 +13019,7 @@ function parseTsImports(content) {
         imports.push({
             importPath: match[2],
             importedSymbols: [match[1]],
+            aliasMap: {},
             isDefault: true,
             isNamespace: false
         });
@@ -12992,20 +13030,31 @@ function parseTsImports(content) {
         imports.push({
             importPath: match[2],
             importedSymbols: [match[1]],
+            aliasMap: {},
             isDefault: false,
             isNamespace: true
         });
     }
     // const { foo, bar } = require('./module')
+    // const { foo: bar } = require('./module') → importedSymbols: ['foo'], aliasMap: { foo: 'bar' }
     const destructuredRequireRe = /(?:const|let|var)\s+\{([^}]+)\}\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
     while ((match = destructuredRequireRe.exec(content)) !== null) {
+        const aliasMap = {};
         const symbols = match[1]
             .split(',')
-            .map(s => s.trim().split(/\s*:\s*/)[0].trim())
+            .map(s => {
+            const parts = s.trim().split(/\s*:\s*/);
+            const original = parts[0].trim();
+            if (parts.length > 1) {
+                aliasMap[original] = parts[1].trim();
+            }
+            return original;
+        })
             .filter(s => s.length > 0);
         imports.push({
             importPath: match[2],
             importedSymbols: symbols,
+            aliasMap,
             isDefault: false,
             isNamespace: false
         });
@@ -13016,22 +13065,44 @@ function parseTsImports(content) {
         imports.push({
             importPath: match[2],
             importedSymbols: [match[1]],
+            aliasMap: {},
             isDefault: true,
             isNamespace: false
         });
     }
     // export { foo, bar } from './module'（re-export，排除 export type { ... }）
+    // export { foo as bar } from './module' → importedSymbols: ['foo'], aliasMap: { foo: 'bar' }
     const reExportRe = /export\s+(?!type\s)\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]/g;
     while ((match = reExportRe.exec(content)) !== null) {
+        const aliasMap = {};
         const symbols = match[1]
             .split(',')
-            .map(s => s.trim().split(/\s+as\s+/)[0].trim())
+            .map(s => {
+            const parts = s.trim().split(/\s+as\s+/);
+            const original = parts[0].trim();
+            if (parts.length > 1) {
+                aliasMap[original] = parts[1].trim();
+            }
+            return original;
+        })
             .filter(s => s.length > 0);
         imports.push({
             importPath: match[2],
             importedSymbols: symbols,
+            aliasMap,
             isDefault: false,
             isNamespace: false
+        });
+    }
+    // export * from './module'（通配符 re-export）
+    const exportStarRe = /export\s+\*\s+from\s+['"]([^'"]+)['"]/g;
+    while ((match = exportStarRe.exec(content)) !== null) {
+        imports.push({
+            importPath: match[1],
+            importedSymbols: [],
+            aliasMap: {},
+            isDefault: false,
+            isNamespace: true
         });
     }
     return imports;
@@ -13048,28 +13119,60 @@ function parsePyImports(content) {
     const imports = [];
     let match;
     // from module import foo, bar（支持多行括号形式）
+    // from module import foo as bar → importedSymbols: ['foo'], aliasMap: { foo: 'bar' }
     const fromImportRe = /from\s+([\w.]+)\s+import\s+\(([^)]+)\)|from\s+([\w.]+)\s+import\s+([^(\n]+)/g;
     while ((match = fromImportRe.exec(content)) !== null) {
         // 分组1+2 = 括号形式, 分组3+4 = 单行形式
         const modulePath = match[1] ?? match[3];
         const symbolsStr = match[2] ?? match[4];
+        // 将 Python 点式相对导入转换为路径表示法
+        // .utils → ./utils, ..shared → ../shared, ..shared.helpers → ../shared/helpers
+        let importPath = modulePath;
+        const dotMatch = modulePath.match(/^(\.+)(.*)$/);
+        if (dotMatch) {
+            const dots = dotMatch[1].length;
+            const rest = dotMatch[2];
+            if (!rest) {
+                // from . import foo → 当前目录, from .. import foo → 父目录
+                importPath = dots === 1 ? '.' : Array(dots - 1).fill('..').join('/');
+            }
+            else {
+                const prefix = dots === 1 ? './' : '../'.repeat(dots - 1);
+                importPath = prefix + rest.replace(/\./g, '/');
+            }
+        }
+        const aliasMap = {};
         const symbols = symbolsStr
             .split(',')
-            .map(s => s.trim().split(/\s+as\s+/)[0].trim())
+            .map(s => {
+            const parts = s.trim().split(/\s+as\s+/);
+            const original = parts[0].trim();
+            if (parts.length > 1) {
+                aliasMap[original] = parts[1].trim();
+            }
+            return original;
+        })
             .filter(s => s.length > 0 && s !== '*');
         imports.push({
-            importPath: modulePath,
+            importPath,
             importedSymbols: symbols,
+            aliasMap,
             isDefault: false,
             isNamespace: symbols.length === 0
         });
     }
-    // import module
-    const simpleImportRe = /^import\s+([\w.]+)(?:\s+as\s+\w+)?$/gm;
+    // import module / import module as alias
+    const simpleImportRe = /^import\s+([\w.]+)(?:\s+as\s+(\w+))?$/gm;
     while ((match = simpleImportRe.exec(content)) !== null) {
+        const moduleName = match[1].split('.').pop() ?? match[1];
+        const aliasMap = {};
+        if (match[2]) {
+            aliasMap[moduleName] = match[2];
+        }
         imports.push({
             importPath: match[1],
-            importedSymbols: [match[1].split('.').pop() ?? match[1]],
+            importedSymbols: [moduleName],
+            aliasMap,
             isDefault: false,
             isNamespace: true
         });
@@ -13100,6 +13203,7 @@ function parseGoImports(content) {
             imports.push({
                 importPath: lineMatch[2],
                 importedSymbols: [alias],
+                aliasMap: {},
                 isDefault: false,
                 isNamespace: true
             });
@@ -13116,6 +13220,7 @@ function parseGoImports(content) {
         imports.push({
             importPath: match[2],
             importedSymbols: [alias],
+            aliasMap: {},
             isDefault: false,
             isNamespace: true
         });
@@ -13140,6 +13245,7 @@ function parseJavaImports(content) {
         imports.push({
             importPath: fullPath,
             importedSymbols: [symbol],
+            aliasMap: {},
             isDefault: false,
             isNamespace: symbol === '*'
         });
@@ -13328,12 +13434,43 @@ function getSymbolRegex(symbolName) {
 function findReferencesInContent(filename, content, symbolNames, maxRefsPerSymbol = 5) {
     const references = [];
     const lines = content.split('\n');
+    // 预处理：标记 export { ... } from 和 import { ... } from 多行块中的行号
+    // 这些行只是 re-export/import 声明，不是真正的引用
+    const skipLines = new Set();
+    let inExportImportBlock = false;
+    for (let i = 0; i < lines.length; i++) {
+        const trimmed = lines[i].trim();
+        // 检测多行 export { / import { 块的开始
+        if ((trimmed.startsWith('export {') || trimmed.startsWith('export type {') ||
+            trimmed.startsWith('import {') || trimmed.startsWith('import type {')) &&
+            !trimmed.includes('}')) {
+            inExportImportBlock = true;
+            skipLines.add(i);
+            continue;
+        }
+        if (inExportImportBlock) {
+            skipLines.add(i);
+            if (trimmed.includes('}')) {
+                inExportImportBlock = false;
+            }
+            continue;
+        }
+        // 单行 export { ... } from / export * from（re-export）
+        if (trimmed.startsWith('export {') ||
+            trimmed.startsWith('export *') ||
+            trimmed.startsWith('export type {')) {
+            skipLines.add(i);
+        }
+    }
     for (const symbolName of symbolNames) {
         const regex = getSymbolRegex(symbolName);
         let refCount = 0;
         for (let i = 0; i < lines.length; i++) {
             if (refCount >= maxRefsPerSymbol)
                 break;
+            // 跳过 export/import 块中的行（re-export 不算引用）
+            if (skipLines.has(i))
+                continue;
             const line = lines[i];
             // 跳过注释行（启发式：行首为 //, #, /*, * 的行）
             const trimmedLine = line.trim();
@@ -13367,6 +13504,46 @@ function findReferencesInContent(filename, content, symbolNames, maxRefsPerSymbo
 /** 转义正则特殊字符 */
 function escapeRegex(str) {
     return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+/** 合并或新增依赖条目（去重 + 合并符号、别名、default/namespace 信息） */
+function mergeDep(deps, file, imp) {
+    const existing = deps.find(d => d.file === file);
+    if (existing != null) {
+        for (const s of imp.importedSymbols) {
+            if (!existing.symbols.includes(s))
+                existing.symbols.push(s);
+        }
+        Object.assign(existing.aliasMap, imp.aliasMap);
+        if (imp.isDefault && existing.defaultImportName == null) {
+            existing.defaultImportName = imp.importedSymbols[0] ?? null;
+        }
+        if (imp.isNamespace && existing.namespaceName == null) {
+            existing.namespaceName = imp.importedSymbols[0] ?? null;
+        }
+    }
+    else {
+        deps.push({
+            file,
+            symbols: [...imp.importedSymbols],
+            aliasMap: { ...imp.aliasMap },
+            defaultImportName: imp.isDefault ? imp.importedSymbols[0] ?? null : null,
+            namespaceName: imp.isNamespace ? imp.importedSymbols[0] ?? null : null
+        });
+    }
+}
+/**
+ * 检测文件是否包含指向目标文件的 re-export 语句
+ * （用于 barrel file 识别）
+ */
+function hasReExportFrom(content, sourceFile, targetFile, repoFilesSet) {
+    const reExportRe = /export\s+(?:\{[^}]*\}|\*)\s+from\s+['"]([^'"]+)['"]/g;
+    let match;
+    while ((match = reExportRe.exec(content)) !== null) {
+        const resolved = resolveImportPath(sourceFile, match[1], repoFilesSet);
+        if (resolved === targetFile)
+            return true;
+    }
+    return false;
 }
 // ==================== 依赖分析编排 ====================
 /**
@@ -13479,17 +13656,8 @@ async function analyzeDependencies(filesAndChanges, repoFiles, options, githubCo
             const resolvedPath = resolveImportPath(candidateFile, imp.importPath, repoFilesSet);
             if (resolvedPath != null && allModifiedSymbols.has(resolvedPath)) {
                 const deps = dependencyGraph.get(resolvedPath) ?? [];
-                // 去重：同一文件多次 import 同一模块时合并符号
-                const existing = deps.find(d => d.file === candidateFile);
-                if (existing != null) {
-                    for (const s of imp.importedSymbols) {
-                        if (!existing.symbols.includes(s))
-                            existing.symbols.push(s);
-                    }
-                }
-                else {
-                    deps.push({ file: candidateFile, symbols: [...imp.importedSymbols] });
-                }
+                // 去重：同一文件多次 import 同一模块时合并符号和别名
+                mergeDep(deps, candidateFile, imp);
                 dependencyGraph.set(resolvedPath, deps);
                 prInternalHits++;
                 (0,core.info)(`dependency analysis [step 2]: ✓ PR-internal hit: ${candidateFile} imports {${imp.importedSymbols.join(', ')}} from ${resolvedPath}`);
@@ -13555,17 +13723,7 @@ async function analyzeDependencies(filesAndChanges, repoFiles, options, githubCo
             const resolvedPath = resolveImportPath(candidateFile, imp.importPath, repoFilesSet);
             if (resolvedPath != null && allModifiedSymbols.has(resolvedPath)) {
                 const deps = dependencyGraph.get(resolvedPath) ?? [];
-                // 去重：同一文件多次 import 同一模块时合并符号
-                const existing = deps.find(d => d.file === candidateFile);
-                if (existing != null) {
-                    for (const s of imp.importedSymbols) {
-                        if (!existing.symbols.includes(s))
-                            existing.symbols.push(s);
-                    }
-                }
-                else {
-                    deps.push({ file: candidateFile, symbols: [...imp.importedSymbols] });
-                }
+                mergeDep(deps, candidateFile, imp);
                 dependencyGraph.set(resolvedPath, deps);
                 externalHits++;
                 (0,core.info)(`dependency analysis [step 5]: ✓ external hit: ${candidateFile} imports {${imp.importedSymbols.join(', ')}} from ${resolvedPath}`);
@@ -13573,6 +13731,49 @@ async function analyzeDependencies(filesAndChanges, repoFiles, options, githubCo
         }
     }
     (0,core.info)(`dependency analysis [step 5]: external scan complete — ${externalHits} import relationships found`);
+    // ===== 步骤 5.5: Barrel file 传递追踪 =====
+    // 识别依赖图中的 barrel file（re-export 中转文件），
+    // 将其消费者也加入被修改文件的依赖图（零额外 API 调用）
+    let barrelHits = 0;
+    for (const [modifiedFile] of allModifiedSymbols) {
+        const deps = dependencyGraph.get(modifiedFile) ?? [];
+        const barrelFiles = [];
+        // 在已有依赖中识别 barrel file
+        for (const dep of deps) {
+            const content = fileContents.get(dep.file);
+            if (content == null)
+                continue;
+            if (hasReExportFrom(content, dep.file, modifiedFile, repoFilesSet)) {
+                barrelFiles.push(dep.file);
+            }
+        }
+        if (barrelFiles.length === 0)
+            continue;
+        (0,core.info)(`dependency analysis [step 5.5]: ${modifiedFile} has ${barrelFiles.length} barrel file(s): [${barrelFiles.join(', ')}]`);
+        // 在所有已获取文件中查找 barrel file 的消费者
+        const existingDepFiles = new Set(deps.map(d => d.file));
+        for (const [candidateFile, content] of fileContents) {
+            // 跳过被修改文件自身、已有依赖
+            if (candidateFile === modifiedFile)
+                continue;
+            if (existingDepFiles.has(candidateFile))
+                continue;
+            const imports = parseImports(content, candidateFile);
+            for (const imp of imports) {
+                const resolved = resolveImportPath(candidateFile, imp.importPath, repoFilesSet);
+                if (resolved != null && barrelFiles.includes(resolved)) {
+                    mergeDep(deps, candidateFile, imp);
+                    existingDepFiles.add(candidateFile);
+                    barrelHits++;
+                    (0,core.info)(`dependency analysis [step 5.5]: ✓ barrel passthrough: ${candidateFile} imports {${imp.importedSymbols.join(', ')}} from barrel ${resolved} ← ${modifiedFile}`);
+                }
+            }
+        }
+        dependencyGraph.set(modifiedFile, deps);
+    }
+    if (barrelHits > 0) {
+        (0,core.info)(`dependency analysis [step 5.5]: barrel passthrough complete — ${barrelHits} indirect dependencies found`);
+    }
     // ===== 步骤 6: 在依赖文件中搜索修改符号的引用 =====
     for (const [modifiedFile, symbols] of allModifiedSymbols) {
         const deps = dependencyGraph.get(modifiedFile) ?? [];
@@ -13587,6 +13788,9 @@ async function analyzeDependencies(filesAndChanges, repoFiles, options, githubCo
             (0,core.info)(`dependency analysis [step 6]: ${modifiedFile} has ${deps.length} dependents, searching for references to [${symbolNames.join(', ')}]`);
         }
         for (const dep of deps) {
+            // 循环引用保护：跳过被修改文件自身
+            if (dep.file === modifiedFile)
+                continue;
             const content = fileContents.get(dep.file);
             if (content == null)
                 continue;
@@ -13595,7 +13799,28 @@ async function analyzeDependencies(filesAndChanges, repoFiles, options, githubCo
                 ? symbolNames.filter(s => dep.symbols.includes(s))
                 : symbolNames;
             // 如果该文件导入的符号与修改符号无交集，仍用全量搜索（可能是 namespace import）
-            const searchSymbols = relevantSymbols.length > 0 ? relevantSymbols : symbolNames;
+            const baseSymbols = relevantSymbols.length > 0 ? relevantSymbols : symbolNames;
+            // 扩展搜索列表：除原始符号名外，还搜索其在该文件中的别名
+            const searchSymbols = [...baseSymbols];
+            for (const sym of baseSymbols) {
+                const alias = dep.aliasMap[sym];
+                if (alias && !searchSymbols.includes(alias)) {
+                    searchSymbols.push(alias);
+                }
+            }
+            // default import：消费者用本地名引用默认导出（如 import calc from './utils' → 搜索 calc）
+            if (dep.defaultImportName && !searchSymbols.includes(dep.defaultImportName)) {
+                searchSymbols.push(dep.defaultImportName);
+            }
+            // namespace import：搜索 namespaceName.symbolName 模式（如 utils.calculateTotal）
+            if (dep.namespaceName) {
+                for (const sym of symbolNames) {
+                    const nsPattern = `${dep.namespaceName}.${sym}`;
+                    if (!searchSymbols.includes(nsPattern)) {
+                        searchSymbols.push(nsPattern);
+                    }
+                }
+            }
             const refs = findReferencesInContent(dep.file, content, searchSymbols);
             if (refs.length > 0) {
                 (0,core.info)(`dependency analysis [step 6]: ✓ ${dep.file} → ${refs.length} references found: [${refs.map(r => `${r.symbolName}:L${r.lineNumber}`).join(', ')}]`);
