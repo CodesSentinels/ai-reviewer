@@ -12144,9 +12144,10 @@ For fixes, use \`diff\` code blocks, marking changes with \`+\` or \`-\`. The li
   given context and refrain from making broad comments about potential impacts on
   the system or question intentions behind the changes.
 - **Cross-file impact analysis (MANDATORY)** — When the "Cross-file references" section
-  above contains actual references (not "No cross-file references detected"), you MUST
-  write a review comment on the changed line (using the same \`startLine-endLine:\\n comment\\n---\`
-  output format) that lists ALL affected callers. Rules:
+  above contains actual references or dependent files (not "No cross-file references detected"),
+  you MUST write a review comment on the changed line (using the same \`startLine-endLine:\\n comment\\n---\`
+  output format) that lists ALL callers. This is mandatory **regardless of whether callers are
+  affected or not**. Rules:
   1. Find the line number in the new hunk where the export signature/value changed.
   2. Write a comment on that exact line range.
   3. List EVERY caller from the cross-file references as a **markdown bullet** — one per line.
@@ -12154,13 +12155,10 @@ For fixes, use \`diff\` code blocks, marking changes with \`+\` or \`-\`. The li
   4. NEVER compress callers into a single inline parenthetical like "(e.g., file1.ts:10, file2.ts:20)".
   5. NEVER write cross-file analysis as free-form prose outside the line-range format.
   6. Explain whether existing callers will break or still work, and why.
-- **Cross-file "not affected" notice** — When the "Cross-file references" section shows
-  dependent files that are **not affected** (i.e. they import from this module but do not
-  reference the modified symbols), write a brief informational comment on the changed export
-  line listing those files. Use this format:
-  \`ℹ️ The following files import from this module but are not affected by this change:\`
-  followed by a markdown bullet list of the file paths. This is purely informational — do NOT
-  flag it as a warning or issue. Keep the tone neutral and concise.
+  7. **Even when all callers are NOT affected**, you MUST still write the comment. List all
+     callers and clearly state that they are not impacted. Use the prefix
+     \`ℹ️ Cross-file dependency notice:\` and explain why they are safe. This is informational
+     — do NOT flag it as a warning or issue, just inform the user about the dependency scope.
 - When reviewing code that uses external libraries, APIs, or frameworks,
   use web search to verify that the APIs exist, are not deprecated, and
   are called with correct parameters. If an API is misused, deprecated,
@@ -12237,6 +12235,24 @@ You MUST respond using the line-range format with a bulleted caller list:
 - \`src/controllers/profile.ts:55\` — \`getUser(session.uid)\`
 
 Since the parameter is required, all 3 callers will fail with a TypeScript error. Either make \`includeProfile\` optional or update the callers.
+---
+
+### Example: Cross-file impact review (callers NOT affected)
+
+Given cross-file references showing \`logInfo\` is called by 3 files, and the new hunk is:
+\`\`\`
+8: export function logInfo(message: string, context?: Record<string, unknown>): void {
+\`\`\`
+
+The parameter \`context\` is optional (added with \`?\`), so existing callers are safe. You MUST still respond:
+8-8:
+ℹ️ Cross-file dependency notice: \`logInfo\` signature changed — a new optional parameter \`context\` was added. The following callers are **not affected** because the parameter is optional:
+
+- \`src/app/main.ts:15\` — \`logInfo("server started")\`
+- \`src/services/authService.ts:42\` — \`logInfo("login success")\`
+- \`src/hooks/useCart.ts:28\` — \`logInfo("cart updated")\`
+
+No action required — existing callers will continue to work as before.
 ---
 
 ## Changes made to \`$filename\` for your review
