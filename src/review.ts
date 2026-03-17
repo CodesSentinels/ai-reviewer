@@ -634,13 +634,9 @@ ${
       ins.filename = filename
 
       // 注入跨文件引用上下文（在 token 预算内）
-      // 即使没有受影响的引用，只要存在依赖文件也注入上下文，告知用户引用关系
       if (dependencyContext != null) {
         const fileAnalysis = dependencyContext.fileAnalyses.get(filename)
-        if (
-          fileAnalysis != null &&
-          (fileAnalysis.references.length > 0 || fileAnalysis.dependentFiles.length > 0)
-        ) {
+        if (fileAnalysis != null && fileAnalysis.references.length > 0) {
           const crossFileCtx = formatCrossFileContext(fileAnalysis)
           if (crossFileCtx.length > 0) {
             const ctxTokens = getTokenCount(crossFileCtx)

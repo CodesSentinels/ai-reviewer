@@ -1255,21 +1255,6 @@ export function formatCrossFileContext(
         `- ... and ${analysis.references.length - 15} more references`
       )
     }
-  } else if (analysis.dependentFiles.length > 0) {
-    // 有依赖文件但没有受影响的引用 —— 告知用户这些文件不受影响
-    parts.push('### Dependent files (not affected by this change):')
-    parts.push('')
-    parts.push('The following files import from this module but do **not** reference the modified symbols — no breaking changes detected for these callers.')
-    parts.push('')
-    const displayFiles = analysis.dependentFiles.slice(0, 10)
-    for (const f of displayFiles) {
-      parts.push(`- ${f}`)
-    }
-    if (analysis.dependentFiles.length > 10) {
-      parts.push(
-        `- ... and ${analysis.dependentFiles.length - 10} more files`
-      )
-    }
   }
 
   let result = parts.join('\n')
@@ -1366,17 +1351,7 @@ export function formatDependencySummary(ctx: DependencyContext): string {
     }
 
     if (refs.length === 0) {
-      if (info.dependentFiles.length > 0) {
-        lines.push(`- ℹ️ ${info.dependentFiles.length} file${info.dependentFiles.length > 1 ? 's' : ''} import from this module but are **not affected** by the changes:`)
-        for (const depFile of info.dependentFiles.slice(0, 10)) {
-          lines.push(`  - ${depFile}`)
-        }
-        if (info.dependentFiles.length > 10) {
-          lines.push(`  - ... and ${info.dependentFiles.length - 10} more files`)
-        }
-      } else {
-        lines.push('- No cross-file references found')
-      }
+      lines.push('- No cross-file references affected')
     } else {
       // 按文件分组引用
       const byFile = new Map<string, string[]>()
