@@ -173,6 +173,13 @@ For fixes, use \`diff\` code blocks, marking changes with \`+\` or \`-\`. The li
   4. NEVER compress callers into a single inline parenthetical like "(e.g., file1.ts:10, file2.ts:20)".
   5. NEVER write cross-file analysis as free-form prose outside the line-range format.
   6. Explain whether existing callers will break or still work, and why.
+- **Cross-file "not affected" notice** — When the "Cross-file references" section shows
+  dependent files that are **not affected** (i.e. they import from this module but do not
+  reference the modified symbols), write a brief informational comment on the changed export
+  line listing those files. Use this format:
+  \`ℹ️ The following files import from this module but are not affected by this change:\`
+  followed by a markdown bullet list of the file paths. This is purely informational — do NOT
+  flag it as a warning or issue. Keep the tone neutral and concise.
 - When reviewing code that uses external libraries, APIs, or frameworks,
   use web search to verify that the APIs exist, are not deprecated, and
   are called with correct parameters. If an API is misused, deprecated,
