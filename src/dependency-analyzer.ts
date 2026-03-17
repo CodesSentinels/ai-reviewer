@@ -1316,3 +1316,61 @@ function isTestFile(filename: string): boolean {
     /[/\\]tests?[/\\]/.test(lower)
   )
 }
+
+/**
+ * 将依赖分析结果格式化为 PR 评论中的摘要区块（Markdown）
+ *
+ * 即使没有发现跨文件影响，也会显示分析结果，让用户了解分析覆盖范围。
+ */
+export function formatDependencySummary(ctx: DependencyContext): string {
+  const entries = Array.from(ctx.fileAnalyses.entries())
+  if (entries.length === 0) {
+    return ''
+  }
+
+  const lines: string[] = []
+  lines.push('')
+  lines.push('<details>')
+  lines.push(
+    `<summary>Cross-file dependency analysis (${entries.length} file${entries.length > 1 ? 's' : ''})</summary>`
+  )
+  lines.push('')
+
+  for (const [filename, info] of entries) {
+    const symbols = info.modifiedSymbols.filter(s => s.isExported)
+    const refs = info.references
+
+    lines.push(`**${filename}**`)
+
+    if (symbols.length === 0) {
+      lines.push('- No exported symbols modified')
+    } else {
+      lines.push(
+        `- Modified exports: ${symbols.map(s => `\`${s.name}\` (${s.type})`).join(', ')}`
+      )
+    }
+
+    if (refs.length === 0) {
+      lines.push('- No cross-file references affected')
+    } else {
+      // 按文件分组引用
+      const byFile = new Map<string, string[]>()
+      for (const ref of refs) {
+        const list = byFile.get(ref.filename) ?? []
+        list.push(ref.symbolName)
+        byFile.set(ref.filename, list)
+      }
+      lines.push(`- Referenced by ${byFile.size} file${byFile.size > 1 ? 's' : ''}:`)
+      for (const [refFile, syms] of byFile) {
+        const unique = [...new Set(syms)]
+        lines.push(`  - ${refFile} → ${unique.map(s => `\`${s}\``).join(', ')}`)
+      }
+    }
+
+    lines.push('')
+  }
+
+  lines.push('</details>')
+  lines.push('')
+  return lines.join('\n')
+}

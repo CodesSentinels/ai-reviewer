@@ -29,6 +29,7 @@ import {
 import {
   analyzeDependencies,
   formatCrossFileContext,
+  formatDependencySummary,
   type DependencyContext
 } from './dependency-analyzer'
 import {Inputs} from './inputs'
@@ -843,7 +844,7 @@ ${
 * LGTM: ${lgtmCount}
 
 </details>
-
+${dependencyContext != null ? formatDependencySummary(dependencyContext) : ''}
 ---
 
 <details>
