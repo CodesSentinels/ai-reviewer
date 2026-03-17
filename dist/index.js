@@ -14418,7 +14418,7 @@ ${lib_commenter/* RAW_SUMMARY_END_TAG */.rV}
 ${lib_commenter/* SHORT_SUMMARY_START_TAG */.O$}
 ${inputs.shortSummary}
 ${lib_commenter/* SHORT_SUMMARY_END_TAG */.Zb}
-
+${dependencyContext != null ? `\n${formatDependencySummary(dependencyContext)}` : ''}
 ---
 
 <details>
@@ -14647,7 +14647,7 @@ ${reviewsSkipped.length > 0
 * LGTM: ${lgtmCount}
 
 </details>
-${dependencyContext != null ? formatDependencySummary(dependencyContext) : ''}
+
 ---
 
 <details>

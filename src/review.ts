@@ -545,7 +545,7 @@ ${RAW_SUMMARY_END_TAG}
 ${SHORT_SUMMARY_START_TAG}
 ${inputs.shortSummary}
 ${SHORT_SUMMARY_END_TAG}
-
+${dependencyContext != null ? `\n${formatDependencySummary(dependencyContext)}` : ''}
 ---
 
 <details>
@@ -844,7 +844,7 @@ ${
 * LGTM: ${lgtmCount}
 
 </details>
-${dependencyContext != null ? formatDependencySummary(dependencyContext) : ''}
+
 ---
 
 <details>
