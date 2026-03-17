@@ -233,10 +233,10 @@ ${tag}`
 
   /** 审查评论缓冲区：在内存中暂存所有审查评论，最后一次性提交 */
   private readonly reviewCommentsBuffer: Array<{
-    path: string       // 文件路径
-    startLine: number  // 评论起始行号
-    endLine: number    // 评论结束行号
-    message: string    // 评论内容
+    path: string // 文件路径
+    startLine: number // 评论起始行号
+    endLine: number // 评论结束行号
+    message: string // 评论内容
   }> = []
 
   /**
@@ -322,22 +322,10 @@ ${statusMsg}
 `
 
     if (this.reviewCommentsBuffer.length === 0) {
-      // 没有审查评论时，提交一个仅包含状态消息的空审查
-      info(`Submitting empty review for PR #${pullNumber}`)
-      try {
-        await octokit.pulls.createReview({
-          owner: repo.owner,
-          repo: repo.repo,
-          // eslint-disable-next-line camelcase
-          pull_number: pullNumber,
-          // eslint-disable-next-line camelcase
-          commit_id: commitId,
-          event: 'COMMENT',
-          body
-        })
-      } catch (e) {
-        warning(`Failed to submit empty review: ${e}`)
-      }
+      // 没有审查评论时，跳过空审查提交（GitHub API 不允许无评论的 COMMENT 审查）
+      info(
+        `Skipping empty review for PR #${pullNumber} — no review comments to submit`
+      )
       return
     }
 
@@ -728,19 +716,40 @@ ${chain}
     }
   }
 
-  /** 查找并替换已有评论；如果不存在则新建 */
+  /** 查找并替换已有评论；如果不存在则新建。同时清理并发运行产生的重复评论 */
   async replace(body: string, tag: string, target: number) {
     try {
-      const cmt = await this.findCommentWithTag(tag, target)
-      if (cmt) {
-        // 找到已有评论，更新其内容
+      const comments = await this.listComments(target)
+      const matchedComments = comments.filter(
+        (cmt: any) => cmt.body && cmt.body.includes(tag)
+      )
+
+      if (matchedComments.length > 0) {
+        // 更新第一条匹配的评论
         await octokit.issues.updateComment({
           owner: repo.owner,
           repo: repo.repo,
           // eslint-disable-next-line camelcase
-          comment_id: cmt.id,
+          comment_id: matchedComments[0].id,
           body
         })
+
+        // 删除多余的重复评论（并发运行时可能产生）
+        for (let i = 1; i < matchedComments.length; i++) {
+          info(
+            `Deleting duplicate comment ${matchedComments[i].id} with tag ${tag}`
+          )
+          try {
+            await octokit.issues.deleteComment({
+              owner: repo.owner,
+              repo: repo.repo,
+              // eslint-disable-next-line camelcase
+              comment_id: matchedComments[i].id
+            })
+          } catch (e) {
+            warning(`Failed to delete duplicate comment: ${e}`)
+          }
+        }
       } else {
         // 未找到，创建新评论
         await this.create(body, target)
