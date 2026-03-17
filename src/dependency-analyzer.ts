@@ -639,12 +639,48 @@ export function findReferencesInContent(
   const references: SymbolReference[] = []
   const lines = content.split('\n')
 
+  // 预处理：标记 export { ... } from 和 import { ... } from 多行块中的行号
+  // 这些行只是 re-export/import 声明，不是真正的引用
+  const skipLines = new Set<number>()
+  let inExportImportBlock = false
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim()
+    // 检测多行 export { / import { 块的开始
+    if (
+      (trimmed.startsWith('export {') || trimmed.startsWith('export type {') ||
+       trimmed.startsWith('import {') || trimmed.startsWith('import type {')) &&
+      !trimmed.includes('}')
+    ) {
+      inExportImportBlock = true
+      skipLines.add(i)
+      continue
+    }
+    if (inExportImportBlock) {
+      skipLines.add(i)
+      if (trimmed.includes('}')) {
+        inExportImportBlock = false
+      }
+      continue
+    }
+    // 单行 export { ... } from / export * from（re-export）
+    if (
+      trimmed.startsWith('export {') ||
+      trimmed.startsWith('export *') ||
+      trimmed.startsWith('export type {')
+    ) {
+      skipLines.add(i)
+    }
+  }
+
   for (const symbolName of symbolNames) {
     const regex = getSymbolRegex(symbolName)
     let refCount = 0
 
     for (let i = 0; i < lines.length; i++) {
       if (refCount >= maxRefsPerSymbol) break
+
+      // 跳过 export/import 块中的行（re-export 不算引用）
+      if (skipLines.has(i)) continue
 
       const line = lines[i]
       // 跳过注释行（启发式：行首为 //, #, /*, * 的行）

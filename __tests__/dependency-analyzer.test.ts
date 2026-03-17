@@ -1099,3 +1099,195 @@ from ...core.base import BaseClass
     expect(resolved2).toBe('src/shared/__init__.py')
   })
 })
+
+// ==================== Case G 诊断测试 ====================
+describe('Case G 诊断: 多文件导入同一模块 → 去重 + 多引用聚合', () => {
+  test('多行 re-export 能被正确解析', () => {
+    const indexContent = `export {
+  log,
+  logInfo,
+  logWarn,
+  logError,
+  logDebug,
+  setLogLevel,
+} from "./logger";
+export type { LogLevel } from "./logger";
+`
+    const imports = parseImports(indexContent, 'src/utils/index.ts')
+    const loggerImport = imports.find(i => i.importPath === './logger' && !i.isNamespace)
+    expect(loggerImport).toBeDefined()
+    expect(loggerImport!.importedSymbols).toContain('logInfo')
+    expect(loggerImport!.importedSymbols).toContain('log')
+    expect(loggerImport!.importedSymbols).toContain('setLogLevel')
+    // type import 应被排除
+    const typeImport = imports.filter(i => i.importedSymbols.includes('LogLevel'))
+    expect(typeImport).toHaveLength(0)
+  })
+
+  test('re-export 行中的符号不应算作"引用"（假阳性）', () => {
+    const indexContent = `export {
+  log,
+  logInfo,
+  logWarn,
+} from "./logger";
+
+// 真正的使用
+const x = logInfo('test');
+`
+    const refs = findReferencesInContent('src/utils/index.ts', indexContent, ['logInfo'])
+    // 修复后：只找到第 8 行的真正使用，不包含 re-export 中的 logInfo
+    expect(refs).toHaveLength(1)
+    expect(refs[0].lineNumber).toBe(8)
+    expect(refs[0].lineContent).toContain("logInfo('test')")
+  })
+
+  test('单行 export { } from / export * from 也应被跳过', () => {
+    const content = `export { logInfo, logError } from './logger';
+export * from './helpers';
+
+const result = logInfo('hello');
+`
+    const refs = findReferencesInContent('test.ts', content, ['logInfo'])
+    expect(refs).toHaveLength(1)
+    expect(refs[0].lineNumber).toBe(4)
+  })
+
+  test('多行 import { } from 也应被跳过', () => {
+    const content = `import {
+  logInfo,
+  logError,
+} from './logger';
+
+logInfo('hello');
+`
+    const refs = findReferencesInContent('test.ts', content, ['logInfo'])
+    expect(refs).toHaveLength(1)
+    expect(refs[0].lineNumber).toBe(6)
+  })
+
+  test('export const/function 等声明中的引用应保留', () => {
+    const content = `export const total = calculateTotal(items);
+export function process() {
+  return calculateTotal(data);
+}
+`
+    const refs = findReferencesInContent('test.ts', content, ['calculateTotal'])
+    // export const/function 不以 'export {' 开头，所以不会被过滤
+    expect(refs.length).toBe(2)
+  })
+
+  test('Case G 端到端: 多文件去重 + 多引用聚合', () => {
+    // Step 1: 提取修改的符号
+    const diff = `@@ -49,3 +49,7 @@
+-export function logInfo(msg: string, ...args: unknown[]): void {
+-  log("info", msg, ...args);
+-}
++export function logInfo(
++  msg: string,
++  context?: string,
++  ...args: unknown[]
++): void {
++  log("info", context ? \`[\${context}] \${msg}\` : msg, ...args);
++}`
+    const symbols = extractModifiedSymbols('src/utils/logger.ts', diff)
+    const exported = symbols.filter(s => s.isExported)
+    expect(exported.find(s => s.name === 'logInfo')).toBeDefined()
+
+    // Step 2-5: 模拟多个文件导入 logInfo
+    const files: Record<string, string> = {
+      'src/hooks/useCart.ts': `import { logInfo } from '../utils/logger'
+
+export function useCart() {
+  logInfo('Adding item to cart', item.name)
+  logInfo('Removing item from cart', itemId)
+}`,
+      'src/components/CartSummary.tsx': `import { logInfo } from '../utils/logger'
+
+export const CartSummary = () => {
+  logInfo('Cart summary rendered', \`\${items.length} items\`)
+}`,
+      'src/components/CheckoutForm.tsx': `import { logInfo, logError } from '../utils/logger'
+
+export const CheckoutForm = () => {
+  logInfo('Checkout submitted', \`total: \${total}\`)
+  logError('Checkout failed', String(err))
+}`,
+      'src/services/orderService.ts': `import { logInfo, logError, logWarn } from '../utils/logger'
+
+export async function createOrder() {
+  logInfo('Creating order', \`subtotal=\${subtotal}\`)
+  logWarn('Empty cart')
+  logInfo('Order created', orderId)
+  logError('Failed', String(err))
+  logInfo('Cancelling order', orderId)
+  logWarn('Order cancelled', orderId)
+}`,
+    }
+
+    const repoFiles = new Set([
+      'src/utils/logger.ts',
+      'src/utils/index.ts',
+      ...Object.keys(files),
+    ])
+
+    // 模拟依赖图构建
+    const deps: Array<{file: string; symbols: string[]; aliasMap: Record<string, string>}> = []
+    for (const [file, content] of Object.entries(files)) {
+      const imports = parseImports(content, file)
+      for (const imp of imports) {
+        const resolved = resolveImportPath(file, imp.importPath, repoFiles)
+        if (resolved === 'src/utils/logger.ts') {
+          const existing = deps.find(d => d.file === file)
+          if (existing) {
+            for (const s of imp.importedSymbols) {
+              if (!existing.symbols.includes(s)) existing.symbols.push(s)
+            }
+            Object.assign(existing.aliasMap, imp.aliasMap)
+          } else {
+            deps.push({file, symbols: [...imp.importedSymbols], aliasMap: {...imp.aliasMap}})
+          }
+        }
+      }
+    }
+
+    // 去重验证：每个文件只出现一次
+    expect(deps.length).toBe(4)
+    const fileNames = deps.map(d => d.file)
+    expect(new Set(fileNames).size).toBe(4) // 无重复
+
+    // 验证各文件导入的符号
+    const checkoutDep = deps.find(d => d.file.includes('CheckoutForm'))
+    expect(checkoutDep!.symbols).toEqual(['logInfo', 'logError'])
+
+    const orderDep = deps.find(d => d.file.includes('orderService'))
+    expect(orderDep!.symbols).toEqual(['logInfo', 'logError', 'logWarn'])
+
+    // Step 6: 引用搜索
+    const symbolNames = ['logInfo']
+    let allReferences: Array<{filename: string; symbolName: string; lineNumber: number; lineContent: string}> = []
+    for (const dep of deps) {
+      const content = files[dep.file]
+      const relevantSymbols = dep.symbols.length > 0
+        ? symbolNames.filter(s => dep.symbols.includes(s))
+        : symbolNames
+      const searchSymbols = relevantSymbols.length > 0 ? relevantSymbols : symbolNames
+
+      const refs = findReferencesInContent(dep.file, content, searchSymbols)
+      allReferences.push(...refs)
+    }
+
+    // 多引用聚合验证
+    console.log('All references:', allReferences.map(r => `${r.filename}:${r.lineNumber}: ${r.lineContent}`))
+    // useCart: 2 refs, CartSummary: 1 ref, CheckoutForm: 1 ref, orderService: 3 refs = 7 total
+    expect(allReferences.length).toBe(7)
+
+    // 来自不同文件
+    const refFiles = new Set(allReferences.map(r => r.filename))
+    expect(refFiles.size).toBe(4) // 4 个不同文件都有引用
+
+    // 只搜索 logInfo，不搜索 logError 和 logWarn
+    for (const ref of allReferences) {
+      expect(ref.symbolName).toBe('logInfo')
+    }
+  })
+})
