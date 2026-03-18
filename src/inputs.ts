@@ -18,6 +18,7 @@ export class Inputs {
   diff: string            // 当前被评论的 diff 片段
   commentChain: string    // 评论对话链（已有的评论上下文）
   comment: string         // 当前用户的评论内容
+  crossFileContext: string // 跨文件引用上下文（依赖分析生成，注入到审查提示词）
 
   constructor(
     systemMessage = '',
@@ -31,7 +32,8 @@ export class Inputs {
     patches = '',
     diff = 'no diff',
     commentChain = 'no other comments on this patch',
-    comment = 'no comment provided'
+    comment = 'no comment provided',
+    crossFileContext = ''
   ) {
     this.systemMessage = systemMessage
     this.title = title
@@ -45,6 +47,7 @@ export class Inputs {
     this.diff = diff
     this.commentChain = commentChain
     this.comment = comment
+    this.crossFileContext = crossFileContext
   }
 
   /**
@@ -64,7 +67,8 @@ export class Inputs {
       this.patches,
       this.diff,
       this.commentChain,
-      this.comment
+      this.comment,
+      this.crossFileContext
     )
   }
 
@@ -113,6 +117,11 @@ export class Inputs {
     if (this.comment) {
       content = content.replace('$comment', this.comment)
     }
+    // 跨文件上下文：无论是否有值，都替换占位符（避免模板残留）
+    content = content.replace(
+      '$cross_file_context',
+      this.crossFileContext || 'No cross-file references detected.'
+    )
     return content
   }
 }

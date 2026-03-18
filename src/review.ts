@@ -26,14 +26,24 @@ import {
   SHORT_SUMMARY_START_TAG,
   SUMMARIZE_TAG
 } from './commenter'
+import {
+  analyzeDependencies,
+  formatCrossFileContext,
+  formatDependencySummary,
+  type DependencyContext
+} from './dependency-analyzer'
 import {Inputs} from './inputs'
 import {octokit} from './octokit'
 import {type Options} from './options'
 import {type Prompts} from './prompts'
+import {getRepoFileTree} from './repo-tree'
 import {getTokenCount} from './tokenizer'
 
 // eslint-disable-next-line camelcase
 const context = github_context
+
+/** 跨文件上下文注入的 token 上限 */
+const MAX_CROSS_FILE_CONTEXT_TOKENS = 1500
 const repo = context.repo
 
 /** 在 PR 描述中添加此关键词可跳过 AI 审查 */
@@ -303,6 +313,28 @@ ${hunks.oldHunk}
     return
   }
 
+  // ==================== 阶段零：跨文件依赖分析 ====================
+  let dependencyContext: DependencyContext | null = null
+  if (options.enableDependencyAnalysis) {
+    try {
+      info('Phase 0: starting cross-file dependency analysis')
+      // 获取仓库文件树（1 次 API 调用，结果缓存）
+      const repoFiles = await getRepoFileTree(
+        context.payload.pull_request.head.sha
+      )
+      // 分析依赖关系：解析导入、提取被修改的导出符号、搜索引用
+      dependencyContext = await analyzeDependencies(
+        filesAndChanges,
+        repoFiles,
+        options,
+        githubConcurrencyLimit
+      )
+      info('Phase 0: dependency analysis completed')
+    } catch (e: any) {
+      warning(`Phase 0: dependency analysis failed: ${e.message}, skipping`)
+    }
+  }
+
   // ==================== 构建状态消息 ====================
   let statusMsg = `<details>
 <summary>Commits</summary>
@@ -513,7 +545,7 @@ ${RAW_SUMMARY_END_TAG}
 ${SHORT_SUMMARY_START_TAG}
 ${inputs.shortSummary}
 ${SHORT_SUMMARY_END_TAG}
-
+${dependencyContext != null ? `\n${formatDependencySummary(dependencyContext)}` : ''}
 ---
 
 <details>
@@ -600,6 +632,23 @@ ${
       info(`reviewing ${filename}`)
       const ins: Inputs = inputs.clone()
       ins.filename = filename
+
+      // 注入跨文件引用上下文（在 token 预算内）
+      if (dependencyContext != null) {
+        const fileAnalysis = dependencyContext.fileAnalyses.get(filename)
+        if (fileAnalysis != null && fileAnalysis.references.length > 0) {
+          const crossFileCtx = formatCrossFileContext(fileAnalysis)
+          if (crossFileCtx.length > 0) {
+            const ctxTokens = getTokenCount(crossFileCtx)
+            if (ctxTokens <= MAX_CROSS_FILE_CONTEXT_TOKENS) {
+              ins.crossFileContext = crossFileCtx
+              info(`injected cross-file context for ${filename}: ${ctxTokens} tokens`)
+            } else {
+              info(`cross-file context too large for ${filename}: ${ctxTokens} tokens, skipping`)
+            }
+          }
+        }
+      }
 
       // 计算基础提示词的 token 数
       let tokens = getTokenCount(prompts.renderReviewFileDiff(ins))

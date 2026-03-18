@@ -41,6 +41,8 @@ async function run(): Promise<void> {
     getInput('github_concurrency_limit'),
     getInput('openai_base_url'),
     getInput('language'),
+    getBooleanInput('enable_dependency_analysis'),
+    getInput('max_dependency_files'),
     getBooleanInput('enable_web_search')
   )
 
@@ -60,7 +62,11 @@ async function run(): Promise<void> {
   try {
     lightBot = new Bot(
       options,
-      new OpenAIOptions(options.openaiLightModel, options.lightTokenLimits, false)
+      new OpenAIOptions(
+        options.openaiLightModel,
+        options.lightTokenLimits,
+        false
+      )
     )
   } catch (e: any) {
     warning(

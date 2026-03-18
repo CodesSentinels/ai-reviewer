@@ -13,7 +13,7 @@
 import {type Inputs} from './inputs'
 
 export class Prompts {
-  summarize: string             // 用户自定义的最终摘要提示词
+  summarize: string // 用户自定义的最终摘要提示词
   summarizeReleaseNotes: string // 用户自定义的发布说明提示词
 
   /**
@@ -141,10 +141,14 @@ $description
 $short_summary
 \`\`\`
 
+## Cross-file references (auto-detected)
+
+$cross_file_context
+
 ## IMPORTANT Instructions
 
 Input: New hunks annotated with line numbers and old hunks (replaced code). Hunks represent incomplete code fragments.
-Additional Context: PR title, description, summaries and comment chains.
+Additional Context: PR title, description, summaries, comment chains, and cross-file references.
 Task: Review new hunks for substantive issues using provided context and respond with comments if necessary.
 Output: Review comments in markdown with exact line number ranges in new hunks. Start and end line numbers must be within the same hunk. For single-line comments, start=end line number. Must use example response format below.
 Use fenced code blocks using the relevant language identifier where applicable.
@@ -153,10 +157,22 @@ Do not use \`suggestion\` code blocks.
 For fixes, use \`diff\` code blocks, marking changes with \`+\` or \`-\`. The line number range for comments with fix snippets must exactly match the range to replace in the new hunk.
 
 - Do NOT provide general feedback, summaries, explanations of changes, or praises
-  for making good additions.
+  for making good additions. Do NOT suggest adding validation, comments, documentation,
+  or error handling that was not explicitly part of the changes.
 - Focus solely on offering specific, objective insights based on the
   given context and refrain from making broad comments about potential impacts on
   the system or question intentions behind the changes.
+- **Cross-file impact analysis (MANDATORY)** — When the "Cross-file references" section
+  above contains actual references (not "No cross-file references detected"), you MUST
+  write a review comment on the changed line (using the same \`startLine-endLine:\\n comment\\n---\`
+  output format) that lists ALL affected callers. Rules:
+  1. Find the line number in the new hunk where the export signature/value changed.
+  2. Write a comment on that exact line range.
+  3. List EVERY caller from the cross-file references as a **markdown bullet** — one per line.
+     Format each bullet as: \`- \\\`file/path.ts:LINE\\\` — \\\`codeSnippet\\\`\`
+  4. NEVER compress callers into a single inline parenthetical like "(e.g., file1.ts:10, file2.ts:20)".
+  5. NEVER write cross-file analysis as free-form prose outside the line-range format.
+  6. Explain whether existing callers will break or still work, and why.
 - When reviewing code that uses external libraries, APIs, or frameworks,
   use web search to verify that the APIs exist, are not deprecated, and
   are called with correct parameters. If an API is misused, deprecated,
@@ -215,6 +231,24 @@ There's a syntax error in the add function.
 ---
 24-25:
 LGTM!
+---
+
+### Example: Cross-file impact review
+
+Given cross-file references showing \`getUser\` is called by 3 files, and the new hunk is:
+\`\`\`
+10: export function getUser(id: string, includeProfile: boolean): User {
+\`\`\`
+
+You MUST respond using the line-range format with a bulleted caller list:
+10-10:
+\`getUser\` now requires a second parameter \`includeProfile: boolean\`. The following callers do not pass it:
+
+- \`src/api/auth.ts:42\` — \`getUser(userId)\`
+- \`src/api/admin.ts:18\` — \`getUser(req.id)\`
+- \`src/controllers/profile.ts:55\` — \`getUser(session.uid)\`
+
+Since the parameter is required, all 3 callers will fail with a TypeScript error. Either make \`includeProfile\` optional or update the callers.
 ---
 
 ## Changes made to \`$filename\` for your review
