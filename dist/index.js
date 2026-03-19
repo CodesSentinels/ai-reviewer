@@ -12731,7 +12731,7 @@ const context = github.context;
 const repo = context.repo;
 /** 语言到扩展名的映射 */
 const LANGUAGE_EXTENSIONS = {
-    typescript: ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'],
+    typescript: ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.vue'],
     python: ['.py'],
     go: ['.go'],
     java: ['.java'],
@@ -12836,7 +12836,8 @@ function getExtensionsForLanguage(language) {
 const PATH_ALIAS_RULES = [
     { prefix: '@/', candidates: ['src/', 'app/', 'lib/', ''] },
     { prefix: '~/', candidates: ['src/', 'app/', 'lib/', ''] },
-    { prefix: '#/', candidates: ['src/', 'app/', 'lib/', ''] }
+    { prefix: '#/', candidates: ['src/', 'app/', 'lib/', ''] },
+    { prefix: '#components/', candidates: ['components/'] }
 ];
 function resolveImportPath(importingFile, importPath, repoFilesSet) {
     if (importPath.startsWith('.')) {
@@ -12884,14 +12885,14 @@ function tryResolveWithExtensions(basePath, repoFilesSet) {
         return basePath;
     }
     // 尝试补全扩展名
-    const extensions = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.java'];
+    const extensions = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.vue', '.py', '.go', '.java'];
     for (const ext of extensions) {
         if (repoFilesSet.has(basePath + ext)) {
             return basePath + ext;
         }
     }
     // 尝试 index 文件
-    const indexExtensions = ['/index.ts', '/index.tsx', '/index.js', '/index.jsx', '/__init__.py'];
+    const indexExtensions = ['/index.ts', '/index.tsx', '/index.js', '/index.jsx', '/index.vue', '/__init__.py'];
     for (const idx of indexExtensions) {
         if (repoFilesSet.has(basePath + idx)) {
             return basePath + idx;
@@ -12946,11 +12947,31 @@ function sortByProximity(candidateFiles, modifiedFiles) {
 // eslint-disable-next-line camelcase
 const dependency_analyzer_context = github.context;
 const dependency_analyzer_repo = dependency_analyzer_context.repo;
+// ==================== Vue SFC 解析 ====================
+/**
+ * 从 Vue 单文件组件中提取 <script> 块内容
+ *
+ * 处理 <script>、<script setup>、<script lang="ts"> 等各种变体。
+ * Vue 3 允许同时存在 <script> 和 <script setup>，本函数拼接所有 script 块。
+ *
+ * @param content - .vue 文件完整内容
+ * @returns 所有 script 块的内容拼接
+ */
+function extractVueScriptContent(content) {
+    const scriptBlocks = [];
+    const scriptRe = /<script\b[^>]*>([\s\S]*?)<\/script>/gi;
+    let match;
+    while ((match = scriptRe.exec(content)) !== null) {
+        scriptBlocks.push(match[1]);
+    }
+    return scriptBlocks.join('\n');
+}
 // ==================== 导入解析（正则） ====================
 /**
  * 解析文件中的导入语句
  *
  * 支持 TS/JS、Python、Go、Java 的常见导入模式。
+ * 对 .vue 文件，先提取 <script> 块内容再解析。
  * 返回每个导入语句的路径和导入符号。
  *
  * @param content - 文件内容
@@ -12959,15 +12980,22 @@ const dependency_analyzer_repo = dependency_analyzer_context.repo;
  */
 function parseImports(content, filename) {
     const language = detectLanguage(filename);
+    // 对 .vue 文件，先提取 script 块内容
+    let effectiveContent = content;
+    if (filename.endsWith('.vue')) {
+        effectiveContent = extractVueScriptContent(content);
+        if (effectiveContent.trim().length === 0)
+            return [];
+    }
     switch (language) {
         case 'typescript':
-            return parseTsImports(content);
+            return parseTsImports(effectiveContent);
         case 'python':
-            return parsePyImports(content);
+            return parsePyImports(effectiveContent);
         case 'go':
-            return parseGoImports(content);
+            return parseGoImports(effectiveContent);
         case 'java':
-            return parseJavaImports(content);
+            return parseJavaImports(effectiveContent);
         default:
             return [];
     }
@@ -13103,6 +13131,18 @@ function parseTsImports(content) {
             aliasMap: {},
             isDefault: false,
             isNamespace: true
+        });
+    }
+    // 动态 import()：import('./module') / import("./module")
+    // 覆盖场景：defineAsyncComponent(() => import('./Comp.vue'))、路由懒加载等
+    const dynamicImportRe = /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
+    while ((match = dynamicImportRe.exec(content)) !== null) {
+        imports.push({
+            importPath: match[1],
+            importedSymbols: [],
+            aliasMap: {},
+            isDefault: true,
+            isNamespace: false
         });
     }
     return imports;
@@ -13268,14 +13308,37 @@ function extractModifiedSymbols(filename, fileDiff) {
     const symbols = [];
     const seen = new Set();
     const lines = fileDiff.split('\n');
+    // 对 .vue 文件，追踪是否在 <script> 块内
+    const isVue = filename.endsWith('.vue');
+    let inScriptBlock = !isVue; // 非 vue 文件始终视为在 script 块内
     for (const line of lines) {
-        // 只处理新增行和删除行
-        if (!line.startsWith('+') && !line.startsWith('-'))
+        // 上下文行（无 +/-）：更新 .vue 的 script 块追踪状态
+        if (!line.startsWith('+') && !line.startsWith('-')) {
+            if (isVue) {
+                if (/<script\b/i.test(line))
+                    inScriptBlock = true;
+                if (/<\/script>/i.test(line))
+                    inScriptBlock = false;
+            }
             continue;
+        }
         // 跳过 diff 头部行
         if (line.startsWith('+++') || line.startsWith('---'))
             continue;
         const content = line.substring(1); // 去掉 +/- 前缀
+        // 对 .vue 文件，追踪 diff 行中的 script 块边界
+        if (isVue) {
+            if (/<script\b/i.test(content)) {
+                inScriptBlock = true;
+                continue;
+            }
+            if (/<\/script>/i.test(content)) {
+                inScriptBlock = false;
+                continue;
+            }
+            if (!inScriptBlock)
+                continue;
+        }
         let extracted = [];
         switch (language) {
             case 'typescript':
@@ -13351,6 +13414,31 @@ function extractTsSymbols(line) {
     m = trimmed.match(/^(?:module\.)?exports\.(\w+)\s*=/);
     if (m) {
         results.push({ name: m[1], type: 'variable', isExported: true });
+        return results;
+    }
+    // Vue <script setup> 编译器宏
+    // const props = defineProps<{ ... }>() / defineProps({ ... })
+    m = trimmed.match(/^(?:const\s+(\w+)\s*=\s*)?defineProps/);
+    if (m) {
+        results.push({ name: m[1] ?? 'props', type: 'variable', isExported: true });
+        return results;
+    }
+    // const emit = defineEmits<{ ... }>() / defineEmits([...])
+    m = trimmed.match(/^(?:const\s+(\w+)\s*=\s*)?defineEmits/);
+    if (m) {
+        results.push({ name: m[1] ?? 'emits', type: 'variable', isExported: true });
+        return results;
+    }
+    // defineExpose({ foo, bar }) — 显式暴露的绑定
+    m = trimmed.match(/^defineExpose\s*\(\s*\{([^}]*)/);
+    if (m) {
+        const exposed = m[1]
+            .split(',')
+            .map(s => s.trim().split(/\s*:/)[0].trim())
+            .filter(s => s.length > 0);
+        for (const name of exposed) {
+            results.push({ name, type: 'variable', isExported: true });
+        }
         return results;
     }
     return results;
@@ -13731,6 +13819,50 @@ async function analyzeDependencies(filesAndChanges, repoFiles, options, githubCo
         }
     }
     (0,core.info)(`dependency analysis [step 5]: external scan complete — ${externalHits} import relationships found`);
+    // ===== 步骤 5.1: Nuxt auto-import 约定检测 =====
+    // Nuxt 会自动导入 composables/、utils/、components/、stores/ 目录下的导出，
+    // 消费者无需显式 import。扫描已获取的文件内容，检查是否使用了被修改的符号。
+    let autoImportHits = 0;
+    for (const [modifiedFile, symbols] of allModifiedSymbols) {
+        if (!isNuxtAutoImportSource(modifiedFile))
+            continue;
+        const deps = dependencyGraph.get(modifiedFile) ?? [];
+        const existingDepFiles = new Set(deps.map(d => d.file));
+        const symbolNames = symbols.map(s => s.name);
+        for (const [candidateFile, content] of fileContents) {
+            if (candidateFile === modifiedFile)
+                continue;
+            if (existingDepFiles.has(candidateFile))
+                continue;
+            if (!candidateFile.endsWith('.vue') &&
+                !candidateFile.endsWith('.ts') &&
+                !candidateFile.endsWith('.js'))
+                continue;
+            // 对 .vue 文件提取 script 内容再搜索，避免 template 误匹配
+            const searchContent = candidateFile.endsWith('.vue')
+                ? extractVueScriptContent(content)
+                : content;
+            if (searchContent.trim().length === 0)
+                continue;
+            const refs = findReferencesInContent(candidateFile, searchContent, symbolNames, 1);
+            if (refs.length > 0) {
+                deps.push({
+                    file: candidateFile,
+                    symbols: symbolNames,
+                    aliasMap: {},
+                    defaultImportName: null,
+                    namespaceName: null
+                });
+                existingDepFiles.add(candidateFile);
+                autoImportHits++;
+                (0,core.info)(`dependency analysis [step 5.1]: ✓ auto-import hit: ${candidateFile} uses {${refs.map(r => r.symbolName).join(', ')}} from ${modifiedFile}`);
+            }
+        }
+        dependencyGraph.set(modifiedFile, deps);
+    }
+    if (autoImportHits > 0) {
+        (0,core.info)(`dependency analysis [step 5.1]: auto-import scan complete — ${autoImportHits} implicit dependencies found`);
+    }
     // ===== 步骤 5.5: Barrel file 传递追踪 =====
     // 识别依赖图中的 barrel file（re-export 中转文件），
     // 将其消费者也加入被修改文件的依赖图（零额外 API 调用）
@@ -13821,7 +13953,11 @@ async function analyzeDependencies(filesAndChanges, repoFiles, options, githubCo
                     }
                 }
             }
-            const refs = findReferencesInContent(dep.file, content, searchSymbols);
+            // 对 .vue 文件，提取 script 块内容再搜索引用，避免 template 误匹配
+            const searchContent = dep.file.endsWith('.vue')
+                ? extractVueScriptContent(content)
+                : content;
+            const refs = findReferencesInContent(dep.file, searchContent.length > 0 ? searchContent : content, searchSymbols);
             if (refs.length > 0) {
                 (0,core.info)(`dependency analysis [step 6]: ✓ ${dep.file} → ${refs.length} references found: [${refs.map(r => `${r.symbolName}:L${r.lineNumber}`).join(', ')}]`);
             }
@@ -13927,6 +14063,15 @@ function formatCrossFileContext(analysis) {
     return result;
 }
 /**
+ * 判断文件是否为 Nuxt auto-import 源（composables/、utils/、components/、stores/）
+ *
+ * Nuxt 会自动导入这些目录下的导出，消费者无需显式 import。
+ * 用于步骤 5.1 的隐式依赖检测。
+ */
+function isNuxtAutoImportSource(filename) {
+    return /\/(composables|utils|components|stores)\//.test(filename);
+}
+/**
  * 判断文件是否为入口文件（通常不会被其他模块导入）
  *
  * 入口文件是程序的启动点，它们导入其他模块，但自身很少被导入。
@@ -13935,16 +14080,26 @@ function formatCrossFileContext(analysis) {
 function isEntryPointFile(filename) {
     const basename = filename.substring(filename.lastIndexOf('/') + 1);
     const lower = basename.toLowerCase();
+    // Nuxt 约定：pages/、layouts/、server/api/、server/routes/ 是框架消费的入口
+    if (filename.includes('/pages/') ||
+        filename.includes('/layouts/') ||
+        filename.includes('/server/api/') ||
+        filename.includes('/server/routes/')) {
+        return true;
+    }
     return (lower === 'main.ts' ||
         lower === 'main.js' ||
         lower === 'main.py' ||
         lower === 'main.go' ||
         lower === 'app.ts' ||
         lower === 'app.js' ||
+        lower === 'app.vue' ||
         lower === 'server.ts' ||
         lower === 'server.js' ||
         lower === 'cli.ts' ||
         lower === 'cli.js' ||
+        lower === 'nuxt.config.ts' ||
+        lower === 'nuxt.config.js' ||
         // 根目录的 index 文件通常是入口
         (lower.startsWith('index.') && !filename.includes('/src/')));
 }
