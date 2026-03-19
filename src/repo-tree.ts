@@ -19,7 +19,7 @@ export type Language = 'typescript' | 'python' | 'go' | 'java' | 'unknown'
 
 /** 语言到扩展名的映射 */
 const LANGUAGE_EXTENSIONS: Record<Language, string[]> = {
-  typescript: ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'],
+  typescript: ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.vue'],
   python: ['.py'],
   go: ['.go'],
   java: ['.java'],
@@ -136,7 +136,8 @@ export function getExtensionsForLanguage(language: Language): string[] {
 const PATH_ALIAS_RULES = [
   {prefix: '@/', candidates: ['src/', 'app/', 'lib/', '']},
   {prefix: '~/', candidates: ['src/', 'app/', 'lib/', '']},
-  {prefix: '#/', candidates: ['src/', 'app/', 'lib/', '']}
+  {prefix: '#/', candidates: ['src/', 'app/', 'lib/', '']},
+  {prefix: '#components/', candidates: ['components/']}
 ]
 
 export function resolveImportPath(
@@ -200,7 +201,7 @@ function tryResolveWithExtensions(
   }
 
   // 尝试补全扩展名
-  const extensions = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.java']
+  const extensions = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.vue', '.py', '.go', '.java']
   for (const ext of extensions) {
     if (repoFilesSet.has(basePath + ext)) {
       return basePath + ext
@@ -208,7 +209,7 @@ function tryResolveWithExtensions(
   }
 
   // 尝试 index 文件
-  const indexExtensions = ['/index.ts', '/index.tsx', '/index.js', '/index.jsx', '/__init__.py']
+  const indexExtensions = ['/index.ts', '/index.tsx', '/index.js', '/index.jsx', '/index.vue', '/__init__.py']
   for (const idx of indexExtensions) {
     if (repoFilesSet.has(basePath + idx)) {
       return basePath + idx
