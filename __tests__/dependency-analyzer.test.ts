@@ -336,6 +336,46 @@ describe('extractModifiedSymbols', () => {
     expect(symbols).toHaveLength(1)
     expect(symbols[0].name).toBe('realSymbol')
   })
+
+  test('从 @@ hunk 上下文中提取包围的导出函数', () => {
+    // 模拟修改 export function useCart() 内部的子函数
+    // git diff 会在 @@ 行尾部显示所在的函数上下文
+    const diff = `@@ -30,3 +30,5 @@ export function useCart() {
+-  function removeItem(id: string) {
+-    items.value = items.value.filter(i => i.id !== id)
+-  }
++  function removeItem(id: string, silent: boolean = false) {
++    items.value = items.value.filter(i => i.id !== id)
++    if (!silent) console.log(\`Removed item: \${id}\`)
++  }`
+    const symbols = extractModifiedSymbols('composables/useCart.ts', diff)
+    // removeItem 是内部函数（非导出），useCart 是导出函数（从 hunk 上下文提取）
+    const exported = symbols.filter(s => s.isExported)
+    expect(exported).toHaveLength(1)
+    expect(exported[0].name).toBe('useCart')
+    expect(exported[0].type).toBe('function')
+  })
+
+  test('hunk 上下文中的非导出函数不会被添加', () => {
+    // 修改发生在内部函数 helper() 内部
+    const diff = `@@ -10,3 +10,4 @@ function helper() {
++    const x = 1
++    const y = 2`
+    const symbols = extractModifiedSymbols('src/utils.ts', diff)
+    const exported = symbols.filter(s => s.isExported)
+    expect(exported).toHaveLength(0)
+  })
+
+  test('多个 hunk 各自提取上下文导出函数', () => {
+    const diff = `@@ -10,3 +10,4 @@ export function foo() {
++    const a = 1
+@@ -30,3 +31,4 @@ export function bar() {
++    const b = 2`
+    const symbols = extractModifiedSymbols('src/utils.ts', diff)
+    const exported = symbols.filter(s => s.isExported)
+    expect(exported).toHaveLength(2)
+    expect(exported.map(s => s.name).sort()).toEqual(['bar', 'foo'])
+  })
 })
 
 // ==================== findReferencesInContent 测试 ====================

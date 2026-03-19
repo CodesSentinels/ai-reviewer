@@ -13311,7 +13311,23 @@ function extractModifiedSymbols(filename, fileDiff) {
     // 对 .vue 文件，追踪是否在 <script> 块内
     const isVue = filename.endsWith('.vue');
     let inScriptBlock = !isVue; // 非 vue 文件始终视为在 script 块内
+    // 追踪当前 hunk 的上下文函数（从 @@ 行的尾部提取）
+    // 当 diff 修改了导出函数内部代码时，函数声明行不在 +/- 行中，
+    // 但 git diff 会在 @@ 行尾部显示所在的函数上下文
+    let currentHunkContext = null;
+    let hunkHasChanges = false;
     for (const line of lines) {
+        // 解析 @@ hunk 头：@@ -start,count +start,count @@ context
+        if (line.startsWith('@@')) {
+            // 先处理上一个 hunk 的上下文函数
+            if (hunkHasChanges && currentHunkContext != null) {
+                addHunkContextSymbol(language, currentHunkContext, symbols, seen, filename);
+            }
+            const hunkMatch = line.match(/^@@[^@]*@@\s*(.*)$/);
+            currentHunkContext = hunkMatch?.[1]?.trim() || null;
+            hunkHasChanges = false;
+            continue;
+        }
         // 上下文行（无 +/-）：更新 .vue 的 script 块追踪状态
         if (!line.startsWith('+') && !line.startsWith('-')) {
             if (isVue) {
@@ -13325,6 +13341,7 @@ function extractModifiedSymbols(filename, fileDiff) {
         // 跳过 diff 头部行
         if (line.startsWith('+++') || line.startsWith('---'))
             continue;
+        hunkHasChanges = true;
         const content = line.substring(1); // 去掉 +/- 前缀
         // 对 .vue 文件，追踪 diff 行中的 script 块边界
         if (isVue) {
@@ -13362,7 +13379,47 @@ function extractModifiedSymbols(filename, fileDiff) {
             }
         }
     }
+    // 处理最后一个 hunk 的上下文函数
+    if (hunkHasChanges && currentHunkContext != null) {
+        addHunkContextSymbol(language, currentHunkContext, symbols, seen, filename);
+    }
     return symbols;
+}
+/**
+ * 从 @@ hunk 上下文中提取包围的导出符号
+ *
+ * git diff 的 @@ 行尾部会显示变更所在的函数/类上下文，例如：
+ *   @@ -30,3 +30,5 @@ export function useCart() {
+ * 当修改发生在导出函数内部（如修改内部子函数），函数声明行本身不在 +/- 行中，
+ * 但通过 hunk 上下文可以识别出该导出函数被修改。
+ */
+function addHunkContextSymbol(language, hunkContext, symbols, seen, filename) {
+    // 仅对 TS/JS 和 Python、Go、Java 提取上下文中的导出符号
+    let extracted = [];
+    switch (language) {
+        case 'typescript':
+            extracted = extractTsSymbols(hunkContext);
+            break;
+        case 'python':
+            extracted = extractPySymbols(hunkContext);
+            break;
+        case 'go':
+            extracted = extractGoSymbols(hunkContext);
+            break;
+        case 'java':
+            extracted = extractJavaSymbols(hunkContext);
+            break;
+    }
+    // 仅添加导出符号（非导出的上下文函数不需要跟踪）
+    for (const sym of extracted) {
+        if (!sym.isExported)
+            continue;
+        const key = `${sym.name}:${sym.type}`;
+        if (!seen.has(key)) {
+            seen.add(key);
+            symbols.push({ ...sym, filename });
+        }
+    }
 }
 /** 从 TS/JS 代码行提取导出符号 */
 function extractTsSymbols(line) {
