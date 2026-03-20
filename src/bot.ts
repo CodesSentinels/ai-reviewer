@@ -48,15 +48,10 @@ export class Bot {
     if (process.env.OPENAI_API_KEY) {
       // 构建系统消息：包含自定义系统消息 + 知识截止日期 + 当前日期 + 语言要求
       const currentDate = new Date().toISOString().split('T')[0]
-      const webSearchInstruction = openaiOptions.enableWebSearch
-        ? `
-IMPORTANT: You have web search capability enabled. When reviewing code that uses ANY external library, SDK, API, framework, browser Web API, or Node.js built-in module, you MUST use the web_search tool to verify the API usage is correct BEFORE writing your review. Never give LGTM on code that calls third-party or platform APIs without first searching to confirm the method names and parameters are correct. Do not skip web search even if you think you know the answer.
-`
-        : ''
       this.systemMessage = `${options.systemMessage}
 Knowledge cutoff: ${openaiOptions.tokenLimits.knowledgeCutOff}
 Current date: ${currentDate}
-${webSearchInstruction}
+
 IMPORTANT: Entire response must be in the language with ISO code: ${options.language}
 `
 
