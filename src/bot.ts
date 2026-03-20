@@ -114,7 +114,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
       // 构建工具列表（可选启用 web search）
       const tools: OpenAI.Responses.Tool[] = []
       if (this.enableWebSearch) {
-        tools.push({type: 'web_search_preview', search_context_size: 'medium'})
+        tools.push({type: 'web_search', search_context_size: 'high'})
       }
 
       info(`[web_search_debug] model=${this.model}, enableWebSearch=${this.enableWebSearch}, tools=${JSON.stringify(tools)}`)
