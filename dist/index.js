@@ -14126,7 +14126,7 @@ function formatCrossFileContext(analysis) {
  * 用于步骤 5.1 的隐式依赖检测。
  */
 function isNuxtAutoImportSource(filename) {
-    return /\/(composables|utils|components|stores)\//.test(filename);
+    return /(^|\/)(?:composables|utils|components|stores)\//.test(filename);
 }
 /**
  * 判断文件是否为入口文件（通常不会被其他模块导入）

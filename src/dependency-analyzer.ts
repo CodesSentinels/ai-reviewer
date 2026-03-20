@@ -1500,7 +1500,7 @@ export function formatCrossFileContext(
  * 用于步骤 5.1 的隐式依赖检测。
  */
 function isNuxtAutoImportSource(filename: string): boolean {
-  return /\/(composables|utils|components|stores)\//.test(filename)
+  return /(^|\/)(?:composables|utils|components|stores)\//.test(filename)
 }
 
 /**
