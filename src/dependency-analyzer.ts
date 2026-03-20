@@ -688,20 +688,38 @@ export function findEnclosingExports(
 
   if (exportDeclarations.length === 0) return []
 
-  // 2. 从 diff 中提取修改行的行号范围（基于新文件的行号）
-  const modifiedLineRanges: Array<{start: number; end: number}> = []
+  // 2. 从 diff 中提取实际修改行的行号（基于新文件的行号）
+  // 只追踪 +/- 行，不是整个 hunk 范围，避免误判相邻函数
+  const modifiedLines = new Set<number>()
   const hunkRe = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/
+  let currentNewLine = 0
+  let inHunk = false
   for (const line of fileDiff.split('\n')) {
     const m = line.match(hunkRe)
     if (m) {
-      const start = parseInt(m[1], 10)
-      const count = m[2] != null ? parseInt(m[2], 10) : 1
-      modifiedLineRanges.push({start, end: start + count - 1})
+      currentNewLine = parseInt(m[1], 10)
+      inHunk = true
+      continue
+    }
+    if (!inHunk) continue
+    if (line.startsWith('+')) {
+      modifiedLines.add(currentNewLine)
+      currentNewLine++
+    } else if (line.startsWith('-')) {
+      // 删除行：标记当前位置（删除发生在此行号处）
+      modifiedLines.add(currentNewLine)
+      // 删除行不增加新文件行号
+    } else if (line.startsWith(' ')) {
+      currentNewLine++
+    } else if (line.startsWith('\\')) {
+      // "\ No newline at end of file" — 忽略
+    } else {
+      inHunk = false
     }
   }
 
   // 3. 为每个导出声明估算作用域范围（到下一个导出声明之前）
-  // 然后检查是否有 hunk 落在该范围内
+  // 然后检查是否有实际修改行落在该范围内
   const results: ModifiedSymbol[] = []
   const seen = new Set<string>()
 
@@ -712,20 +730,24 @@ export function findEnclosingExports(
       ? exportDeclarations[i + 1].line - 1
       : Infinity
 
-    for (const range of modifiedLineRanges) {
-      // hunk 范围与导出作用域有交集
-      if (range.start <= scopeEnd && range.end >= scopeStart) {
-        const key = `${decl.name}:${decl.type}`
-        if (!seen.has(key)) {
-          seen.add(key)
-          results.push({
-            name: decl.name,
-            type: decl.type,
-            isExported: true,
-            filename
-          })
-        }
+    // 检查是否有实际修改行在此导出的作用域内
+    let hasModifiedLine = false
+    for (const lineNo of modifiedLines) {
+      if (lineNo >= scopeStart && lineNo <= scopeEnd) {
+        hasModifiedLine = true
         break
+      }
+    }
+    if (hasModifiedLine) {
+      const key = `${decl.name}:${decl.type}`
+      if (!seen.has(key)) {
+        seen.add(key)
+        results.push({
+          name: decl.name,
+          type: decl.type,
+          isExported: true,
+          filename
+        })
       }
     }
   }
@@ -1732,6 +1754,12 @@ function isTestFile(filename: string): boolean {
 export function formatDependencySummary(ctx: DependencyContext): string {
   const entries = Array.from(ctx.fileAnalyses.entries())
   if (entries.length === 0) {
+    return ''
+  }
+
+  // 如果所有文件都没有外部引用，则不输出依赖分析区块
+  const hasAnyReference = entries.some(([, info]) => info.references.length > 0)
+  if (!hasAnyReference) {
     return ''
   }
 
