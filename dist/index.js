@@ -8610,6 +8610,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
             if (this.enableWebSearch) {
                 tools.push({ type: 'web_search_preview', search_context_size: 'medium' });
             }
+            (0,core.info)(`[web_search_debug] enableWebSearch=${this.enableWebSearch}, tools=${JSON.stringify(tools)}, model=${this.model}`);
             // 构建 Responses API 请求参数
             const params = {
                 model: this.model,
@@ -8641,6 +8642,8 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
             // 从响应输出中提取文本，并记录 web_search 和 reasoning 信息
             let responseText = '';
             if (response?.output) {
+                const outputTypes = response.output.map((item) => item.type);
+                (0,core.info)(`[web_search_debug] response output types: ${JSON.stringify(outputTypes)}`);
                 for (const item of response.output) {
                     if (item.type === 'web_search_call') {
                         (0,core.info)(`[web_search] executed, id: ${item.id}, status: ${item.status}`);
