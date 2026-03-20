@@ -427,6 +427,31 @@ export function foo() {
     expect(results).toHaveLength(0)
   })
 
+  test('diff 无声明行变更（仅逻辑修改），也能检测包围的导出函数', () => {
+    // 模拟 useAuth.ts：仅修改函数体内的普通代码行，无 function/class 声明
+    const fileContent = `import { logInfo } from '~/base-layer/utils/logger'
+
+export function useAuth() {
+  const isLoggedIn = computed(() => !!userStore.currentUser)
+
+  async function login(email: string, password: string) {
+    logInfo("login attempt", { email })
+    await userStore.setUser({ email, name: email.split("@")[0] })
+  }
+
+  return { isLoggedIn, login }
+}`
+    // diff 只修改第 8 行（函数体内的普通代码行），extractModifiedSymbols 会返回 0 个符号
+    const fileDiff = `@@ -7,2 +7,3 @@
+-    logInfo("login attempt", { email })
++    logInfo("login attempt", { email, timestamp: Date.now() })
++    console.log("debug")`
+    const results = findEnclosingExports('composables/useAuth.ts', fileContent, fileDiff)
+    expect(results).toHaveLength(1)
+    expect(results[0].name).toBe('useAuth')
+    expect(results[0].type).toBe('function')
+  })
+
   test('多个导出函数，仅检测包含修改的那个', () => {
     const fileContent = `export function foo() {
   return 1

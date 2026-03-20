@@ -1091,15 +1091,18 @@ export async function analyzeDependencies(
     const allSymbols = symbols.length
     let exportedSymbols = symbols.filter(s => s.isExported)
 
-    // 回退策略：当 diff 中有修改但未检测到导出符号时，
-    // 解析文件内容查找包含修改行的导出函数/类作用域
-    if (exportedSymbols.length === 0 && allSymbols > 0 && fileContent.length > 0) {
-      const fallbackExports = findEnclosingExports(filename, fileContent, fileDiff)
-      if (fallbackExports.length > 0) {
-        exportedSymbols = fallbackExports
-        info(
-          `dependency analysis [step 1]: ${filename} → fallback: found ${fallbackExports.length} enclosing exports via file content: [${fallbackExports.map(s => `${s.name}(${s.type})`).join(', ')}]`
-        )
+    // 补充策略：始终解析文件内容，查找包含修改行的导出函数/类作用域
+    // 当修改发生在导出函数内部时，diff 行中不包含 export 声明，
+    // 需要通过文件内容 + hunk 行号范围来识别受影响的导出
+    if (fileContent.length > 0) {
+      const enclosingExports = findEnclosingExports(filename, fileContent, fileDiff)
+      for (const sym of enclosingExports) {
+        if (!exportedSymbols.some(s => s.name === sym.name && s.type === sym.type)) {
+          exportedSymbols.push(sym)
+          info(
+            `dependency analysis [step 1]: ${filename} → enclosing export detected: ${sym.name}(${sym.type})`
+          )
+        }
       }
     }
 
