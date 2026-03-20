@@ -775,18 +775,11 @@ function extractTsSymbols(
   }
 
   // Vue <script setup> 编译器宏
-  // const props = defineProps<{ ... }>() / defineProps({ ... })
-  m = trimmed.match(/^(?:const\s+(\w+)\s*=\s*)?defineProps/)
-  if (m) {
-    results.push({name: m[1] ?? 'props', type: 'variable', isExported: true})
-    return results
-  }
-
-  // const emit = defineEmits<{ ... }>() / defineEmits([...])
-  m = trimmed.match(/^(?:const\s+(\w+)\s*=\s*)?defineEmits/)
-  if (m) {
-    results.push({name: m[1] ?? 'emits', type: 'variable', isExported: true})
-    return results
+  // defineProps / defineEmits 是组件接口声明，其返回值（props, emits）
+  // 是组件内部的局部变量，不是可被其他文件导入的符号，因此不提取。
+  // 仅 defineExpose 会创建外部可访问的绑定。
+  if (trimmed.match(/^(?:const\s+\w+\s*=\s*)?define(?:Props|Emits)/)) {
+    return results // 跳过，不提取
   }
 
   // defineExpose({ foo, bar }) — 显式暴露的绑定
@@ -1489,6 +1482,22 @@ export async function analyzeDependencies(
         searchContent.length > 0 ? searchContent : content,
         searchSymbols
       )
+
+      // 动态 import() 或 default import 的依赖文件可能不直接引用具名符号，
+      // 但导入关系已确认存在（步骤 2/5 已验证），应作为依赖方报告
+      if (refs.length === 0 && dep.symbols.length === 0) {
+        const implicitRef: SymbolReference = {
+          filename: dep.file,
+          symbolName: '(module)',
+          lineNumber: 0,
+          lineContent: `imports ${modifiedFile} via dynamic import or default import`
+        }
+        refs.push(implicitRef)
+        info(
+          `dependency analysis [step 6]: ✓ ${dep.file} → implicit dependency (dynamic/default import, no named symbol references)`
+        )
+      }
+
       if (refs.length > 0) {
         info(
           `dependency analysis [step 6]: ✓ ${dep.file} → ${refs.length} references found: [${refs.map(r => `${r.symbolName}:L${r.lineNumber}`).join(', ')}]`

@@ -1618,22 +1618,22 @@ describe('extractModifiedSymbols - Vue SFC', () => {
     expect(symbols).toHaveLength(0)
   })
 
-  test('提取 defineProps 宏', () => {
+  test('defineProps 不提取为导出符号（局部变量）', () => {
     const diff = ` <script setup lang="ts">
 +const props = defineProps<{ title: string; count: number }>()
  </script>`
 
     const symbols = extractModifiedSymbols('components/Card.vue', diff)
-    expect(symbols.some(s => s.name === 'props')).toBe(true)
+    expect(symbols.some(s => s.name === 'props')).toBe(false)
   })
 
-  test('提取 defineEmits 宏', () => {
+  test('defineEmits 不提取为导出符号（局部变量）', () => {
     const diff = ` <script setup lang="ts">
 +const emit = defineEmits<{ click: [id: string] }>()
  </script>`
 
     const symbols = extractModifiedSymbols('components/Button.vue', diff)
-    expect(symbols.some(s => s.name === 'emit')).toBe(true)
+    expect(symbols.some(s => s.name === 'emit')).toBe(false)
   })
 
   test('提取 defineExpose 宏中的符号', () => {
