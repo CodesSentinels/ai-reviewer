@@ -13421,6 +13421,102 @@ function addHunkContextSymbol(language, hunkContext, symbols, seen, filename) {
         }
     }
 }
+/**
+ * 回退策略：从文件内容中查找包含修改行的导出函数/类作用域
+ *
+ * 当 diff 中仅修改了导出函数内部代码（如子函数），extractModifiedSymbols
+ * 可能无法从 diff 行中提取到导出符号。此函数解析文件内容，找到所有导出
+ * 声明的行号，然后检查 diff hunk 的行范围是否落在某个导出作用域内。
+ *
+ * 作用域判断采用简化启发式：导出声明从其定义行开始，到下一个同级
+ * 导出声明之前（或文件末尾）结束。
+ */
+function findEnclosingExports(filename, fileContent, fileDiff) {
+    const language = detectLanguage(filename);
+    // 对 .vue 文件提取 script 块
+    let content = fileContent;
+    let lineOffset = 0;
+    if (filename.endsWith('.vue')) {
+        const scriptMatch = fileContent.match(/<script\b[^>]*>/);
+        if (scriptMatch && scriptMatch.index != null) {
+            const beforeScript = fileContent.substring(0, scriptMatch.index + scriptMatch[0].length);
+            lineOffset = beforeScript.split('\n').length - 1;
+        }
+        content = extractVueScriptContent(fileContent);
+        if (content.trim().length === 0)
+            return [];
+    }
+    const lines = content.split('\n');
+    // 1. 扫描文件内容，找到所有导出声明及其行号
+    const exportDeclarations = [];
+    for (let i = 0; i < lines.length; i++) {
+        let extracted = [];
+        switch (language) {
+            case 'typescript':
+                extracted = extractTsSymbols(lines[i]);
+                break;
+            case 'python':
+                extracted = extractPySymbols(lines[i]);
+                break;
+            case 'go':
+                extracted = extractGoSymbols(lines[i]);
+                break;
+            case 'java':
+                extracted = extractJavaSymbols(lines[i]);
+                break;
+        }
+        for (const sym of extracted) {
+            if (sym.isExported) {
+                exportDeclarations.push({
+                    name: sym.name,
+                    type: sym.type,
+                    line: i + 1 + lineOffset
+                });
+            }
+        }
+    }
+    if (exportDeclarations.length === 0)
+        return [];
+    // 2. 从 diff 中提取修改行的行号范围（基于新文件的行号）
+    const modifiedLineRanges = [];
+    const hunkRe = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/;
+    for (const line of fileDiff.split('\n')) {
+        const m = line.match(hunkRe);
+        if (m) {
+            const start = parseInt(m[1], 10);
+            const count = m[2] != null ? parseInt(m[2], 10) : 1;
+            modifiedLineRanges.push({ start, end: start + count - 1 });
+        }
+    }
+    // 3. 为每个导出声明估算作用域范围（到下一个导出声明之前）
+    // 然后检查是否有 hunk 落在该范围内
+    const results = [];
+    const seen = new Set();
+    for (let i = 0; i < exportDeclarations.length; i++) {
+        const decl = exportDeclarations[i];
+        const scopeStart = decl.line;
+        const scopeEnd = i + 1 < exportDeclarations.length
+            ? exportDeclarations[i + 1].line - 1
+            : Infinity;
+        for (const range of modifiedLineRanges) {
+            // hunk 范围与导出作用域有交集
+            if (range.start <= scopeEnd && range.end >= scopeStart) {
+                const key = `${decl.name}:${decl.type}`;
+                if (!seen.has(key)) {
+                    seen.add(key);
+                    results.push({
+                        name: decl.name,
+                        type: decl.type,
+                        isExported: true,
+                        filename
+                    });
+                }
+                break;
+            }
+        }
+    }
+    return results;
+}
 /** 从 TS/JS 代码行提取导出符号 */
 function extractTsSymbols(line) {
     const results = [];
@@ -13718,10 +13814,19 @@ async function analyzeDependencies(filesAndChanges, repoFiles, options, githubCo
     (0,core.info)(`dependency analysis [step 1]: analyzing ${filesAndChanges.length} modified files for exported symbols`);
     const modifiedFileNames = filesAndChanges.map(([f]) => f);
     const allModifiedSymbols = new Map();
-    for (const [filename, , fileDiff] of filesAndChanges) {
+    for (const [filename, fileContent, fileDiff] of filesAndChanges) {
         const symbols = extractModifiedSymbols(filename, fileDiff);
         const allSymbols = symbols.length;
-        const exportedSymbols = symbols.filter(s => s.isExported);
+        let exportedSymbols = symbols.filter(s => s.isExported);
+        // 回退策略：当 diff 中有修改但未检测到导出符号时，
+        // 解析文件内容查找包含修改行的导出函数/类作用域
+        if (exportedSymbols.length === 0 && allSymbols > 0 && fileContent.length > 0) {
+            const fallbackExports = findEnclosingExports(filename, fileContent, fileDiff);
+            if (fallbackExports.length > 0) {
+                exportedSymbols = fallbackExports;
+                (0,core.info)(`dependency analysis [step 1]: ${filename} → fallback: found ${fallbackExports.length} enclosing exports via file content: [${fallbackExports.map(s => `${s.name}(${s.type})`).join(', ')}]`);
+            }
+        }
         if (exportedSymbols.length > 0) {
             allModifiedSymbols.set(filename, exportedSymbols);
             (0,core.info)(`dependency analysis [step 1]: ${filename} → ${exportedSymbols.length} exported / ${allSymbols} total symbols: [${exportedSymbols.map(s => `${s.name}(${s.type})`).join(', ')}]`);

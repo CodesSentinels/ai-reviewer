@@ -33,6 +33,7 @@ import {
   parseImports,
   extractModifiedSymbols,
   extractVueScriptContent,
+  findEnclosingExports,
   findReferencesInContent,
   formatCrossFileContext,
   type FileDependencyInfo
@@ -375,6 +376,76 @@ describe('extractModifiedSymbols', () => {
     const exported = symbols.filter(s => s.isExported)
     expect(exported).toHaveLength(2)
     expect(exported.map(s => s.name).sort()).toEqual(['bar', 'foo'])
+  })
+})
+
+// ==================== findEnclosingExports 测试 ====================
+
+describe('findEnclosingExports', () => {
+  test('修改导出函数内部代码时，检测到包围的导出函数', () => {
+    const fileContent = `export interface CartItem {
+  id: string
+}
+
+export function useCart() {
+  const items = ref<CartItem[]>([])
+
+  function removeItem(id: string) {
+    items.value = items.value.filter(i => i.id !== id)
+  }
+
+  return { items, removeItem }
+}`
+    // diff 修改 removeItem（第 8-10 行），hunk 起始行 +8
+    const fileDiff = `@@ -8,3 +8,4 @@
+-  function removeItem(id: string) {
+-    items.value = items.value.filter(i => i.id !== id)
+-  }
++  function removeItem(id: string, silent = false) {
++    items.value = items.value.filter(i => i.id !== id)
++    if (!silent) console.log('removed')
++  }`
+    const results = findEnclosingExports('composables/useCart.ts', fileContent, fileDiff)
+    expect(results).toHaveLength(1)
+    expect(results[0].name).toBe('useCart')
+    expect(results[0].type).toBe('function')
+    expect(results[0].isExported).toBe(true)
+  })
+
+  test('修改落在第一个导出之前时，不检测任何导出', () => {
+    const fileContent = `// 头部注释
+const internal = 'hello'
+
+export function foo() {
+  return 1
+}`
+    // 修改第 2 行（internal），在 export function foo 之前
+    const fileDiff = `@@ -2,1 +2,1 @@
+-const internal = 'hello'
++const internal = 'world'`
+    const results = findEnclosingExports('src/utils.ts', fileContent, fileDiff)
+    expect(results).toHaveLength(0)
+  })
+
+  test('多个导出函数，仅检测包含修改的那个', () => {
+    const fileContent = `export function foo() {
+  return 1
+}
+
+export function bar() {
+  return helper()
+}
+
+export function baz() {
+  return 3
+}`
+    // 修改第 6 行，在 bar() 作用域内
+    const fileDiff = `@@ -6,1 +6,1 @@
+-  return helper()
++  return helper(true)`
+    const results = findEnclosingExports('src/utils.ts', fileContent, fileDiff)
+    expect(results).toHaveLength(1)
+    expect(results[0].name).toBe('bar')
   })
 })
 
