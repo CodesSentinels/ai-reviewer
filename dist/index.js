@@ -8610,7 +8610,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
             if (this.enableWebSearch) {
                 tools.push({ type: 'web_search_preview', search_context_size: 'medium' });
             }
-            (0,core.info)(`[web_search_debug] enableWebSearch=${this.enableWebSearch}, tools=${JSON.stringify(tools)}, model=${this.model}`);
+            (0,core.info)(`[web_search_debug] model=${this.model}, enableWebSearch=${this.enableWebSearch}, tools=${JSON.stringify(tools)}`);
             // 构建 Responses API 请求参数
             const params = {
                 model: this.model,
