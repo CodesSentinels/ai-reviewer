@@ -50,7 +50,7 @@ export class Bot {
       const currentDate = new Date().toISOString().split('T')[0]
       const webSearchInstruction = openaiOptions.enableWebSearch
         ? `
-IMPORTANT: You have web search capability enabled. When reviewing code that uses ANY external library, SDK, API, framework, browser Web API, or Node.js built-in module, you MUST use the web_search tool to verify the API usage is correct before writing your review. Do not skip web search even if you think you know the answer.
+IMPORTANT: You have web search capability enabled. When reviewing code that uses ANY external library, SDK, API, framework, browser Web API, or Node.js built-in module, you MUST use the web_search tool to verify the API usage is correct BEFORE writing your review. Never give LGTM on code that calls third-party or platform APIs without first searching to confirm the method names and parameters are correct. Do not skip web search even if you think you know the answer.
 `
         : ''
       this.systemMessage = `${options.systemMessage}

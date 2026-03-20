@@ -8550,7 +8550,7 @@ class Bot {
             const currentDate = new Date().toISOString().split('T')[0];
             const webSearchInstruction = openaiOptions.enableWebSearch
                 ? `
-IMPORTANT: You have web search capability enabled. When reviewing code that uses ANY external library, SDK, API, framework, browser Web API, or Node.js built-in module, you MUST use the web_search tool to verify the API usage is correct before writing your review. Do not skip web search even if you think you know the answer.
+IMPORTANT: You have web search capability enabled. When reviewing code that uses ANY external library, SDK, API, framework, browser Web API, or Node.js built-in module, you MUST use the web_search tool to verify the API usage is correct BEFORE writing your review. Never give LGTM on code that calls third-party or platform APIs without first searching to confirm the method names and parameters are correct. Do not skip web search even if you think you know the answer.
 `
                 : '';
             this.systemMessage = `${options.systemMessage}
@@ -12174,8 +12174,11 @@ For fixes, use \`diff\` code blocks, marking changes with \`+\` or \`-\`. The li
   npm package docs, SDK reference) in your comment regardless of whether
   the API usage is correct or not.
 
-If there are no issues found on a line range, you MUST respond with the
-text \`LGTM!\` for that line range in the review section.
+If code uses any external library, SDK, or API (including method calls on third-party
+objects), you MUST NOT mark it as LGTM until you have performed a web search to verify
+the API usage. After verification, if the usage is correct, include the documentation
+link and then respond with LGTM. If no external API is involved and there are no issues
+found on a line range, you MUST respond with the text \`LGTM!\` for that line range.
 
 ## Example
 

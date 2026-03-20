@@ -188,8 +188,11 @@ For fixes, use \`diff\` code blocks, marking changes with \`+\` or \`-\`. The li
   npm package docs, SDK reference) in your comment regardless of whether
   the API usage is correct or not.
 
-If there are no issues found on a line range, you MUST respond with the
-text \`LGTM!\` for that line range in the review section.
+If code uses any external library, SDK, or API (including method calls on third-party
+objects), you MUST NOT mark it as LGTM until you have performed a web search to verify
+the API usage. After verification, if the usage is correct, include the documentation
+link and then respond with LGTM. If no external API is involved and there are no issues
+found on a line range, you MUST respond with the text \`LGTM!\` for that line range.
 
 ## Example
 
