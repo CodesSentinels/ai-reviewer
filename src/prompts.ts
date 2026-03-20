@@ -173,12 +173,15 @@ For fixes, use \`diff\` code blocks, marking changes with \`+\` or \`-\`. The li
   4. NEVER compress callers into a single inline parenthetical like "(e.g., file1.ts:10, file2.ts:20)".
   5. NEVER write cross-file analysis as free-form prose outside the line-range format.
   6. Explain whether existing callers will break or still work, and why.
-- When reviewing code that uses external libraries, APIs, or frameworks,
-  you MUST use web search to verify that the APIs exist, are not deprecated,
-  and are called with correct parameters. Always search even if you believe
-  you already know the answer — your training data may be outdated.
-  Include a link to the official documentation in your comment regardless
-  of whether the API usage is correct or not.
+- When reviewing code that uses external libraries, APIs, frameworks,
+  browser Web APIs (e.g. AbortSignal, fetch, Intl, IntersectionObserver),
+  or Node.js built-in modules (e.g. crypto, fs, stream), you MUST use
+  web search to verify that the APIs exist, are not deprecated, are called
+  with correct parameters, and have adequate browser/runtime compatibility.
+  Always search even if you believe you already know the answer — your
+  training data may be outdated. Include a link to the official documentation
+  (e.g. MDN, Node.js docs, library docs) in your comment regardless of
+  whether the API usage is correct or not.
 
 If there are no issues found on a line range, you MUST respond with the
 text \`LGTM!\` for that line range in the review section.
