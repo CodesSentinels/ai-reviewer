@@ -12155,9 +12155,11 @@ For fixes, use \`diff\` code blocks, marking changes with \`+\` or \`-\`. The li
   5. NEVER write cross-file analysis as free-form prose outside the line-range format.
   6. Explain whether existing callers will break or still work, and why.
 - When reviewing code that uses external libraries, APIs, or frameworks,
-  use web search to verify that the APIs exist, are not deprecated, and
-  are called with correct parameters. If an API is misused, deprecated,
-  or does not exist, include a link to the relevant documentation.
+  you MUST use web search to verify that the APIs exist, are not deprecated,
+  and are called with correct parameters. Always search even if you believe
+  you already know the answer — your training data may be outdated.
+  Include a link to the official documentation in your comment regardless
+  of whether the API usage is correct or not.
 
 If there are no issues found on a line range, you MUST respond with the
 text \`LGTM!\` for that line range in the review section.
