@@ -8608,7 +8608,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
             // 构建工具列表（可选启用 web search）
             const tools = [];
             if (this.enableWebSearch) {
-                tools.push({ type: 'web_search' });
+                tools.push({ type: 'web_search_preview', search_context_size: 'medium' });
             }
             // 构建 Responses API 请求参数
             const params = {
