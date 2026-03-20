@@ -1618,22 +1618,26 @@ describe('extractModifiedSymbols - Vue SFC', () => {
     expect(symbols).toHaveLength(0)
   })
 
-  test('defineProps 不提取为导出符号（局部变量）', () => {
+  test('defineProps 提取为组件名（非 props 局部变量）', () => {
     const diff = ` <script setup lang="ts">
 +const props = defineProps<{ title: string; count: number }>()
  </script>`
 
     const symbols = extractModifiedSymbols('components/Card.vue', diff)
+    // 不应提取 props（局部变量），而是提取组件名 Card
     expect(symbols.some(s => s.name === 'props')).toBe(false)
+    expect(symbols.some(s => s.name === 'Card' && s.isExported)).toBe(true)
   })
 
-  test('defineEmits 不提取为导出符号（局部变量）', () => {
+  test('defineEmits 提取为组件名（非 emits 局部变量）', () => {
     const diff = ` <script setup lang="ts">
 +const emit = defineEmits<{ click: [id: string] }>()
  </script>`
 
     const symbols = extractModifiedSymbols('components/Button.vue', diff)
+    // 不应提取 emit（局部变量），而是提取组件名 Button
     expect(symbols.some(s => s.name === 'emit')).toBe(false)
+    expect(symbols.some(s => s.name === 'Button' && s.isExported)).toBe(true)
   })
 
   test('提取 defineExpose 宏中的符号', () => {

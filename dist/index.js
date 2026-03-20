@@ -13383,6 +13383,26 @@ function extractModifiedSymbols(filename, fileDiff) {
     if (hunkHasChanges && currentHunkContext != null) {
         addHunkContextSymbol(language, currentHunkContext, symbols, seen, filename);
     }
+    // Vue SFC 后处理：将 __vue_component__ 标记转换为文件名派生的组件名
+    // defineProps/defineEmits 修改 → 组件接口变更 → 消费方通过组件名引用
+    if (filename.endsWith('.vue')) {
+        const hasComponentMarker = symbols.some(s => s.name === '__vue_component__');
+        if (hasComponentMarker) {
+            // 从文件名派生 PascalCase 组件名：components/HeavyChart.vue → HeavyChart
+            const baseName = filename.substring(filename.lastIndexOf('/') + 1).replace('.vue', '');
+            const componentName = baseName.charAt(0).toUpperCase() + baseName.slice(1);
+            // 移除标记，替换为组件名
+            const idx = symbols.findIndex(s => s.name === '__vue_component__');
+            if (idx >= 0)
+                symbols.splice(idx, 1);
+            seen.delete('__vue_component__:variable');
+            const key = `${componentName}:variable`;
+            if (!seen.has(key)) {
+                seen.add(key);
+                symbols.push({ name: componentName, type: 'variable', isExported: true, filename });
+            }
+        }
+    }
     return symbols;
 }
 /**
@@ -13570,11 +13590,11 @@ function extractTsSymbols(line) {
         return results;
     }
     // Vue <script setup> 编译器宏
-    // defineProps / defineEmits 是组件接口声明，其返回值（props, emits）
-    // 是组件内部的局部变量，不是可被其他文件导入的符号，因此不提取。
-    // 仅 defineExpose 会创建外部可访问的绑定。
+    // defineProps / defineEmits 修改意味着组件接口变更。
+    // 提取为特殊标记 __vue_component__，由 extractModifiedSymbols 转换为组件名。
     if (trimmed.match(/^(?:const\s+\w+\s*=\s*)?define(?:Props|Emits)/)) {
-        return results; // 跳过，不提取
+        results.push({ name: '__vue_component__', type: 'variable', isExported: true });
+        return results;
     }
     // defineExpose({ foo, bar }) — 显式暴露的绑定
     m = trimmed.match(/^defineExpose\s*\(\s*\{([^}]*)/);
