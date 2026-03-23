@@ -72,12 +72,34 @@ export interface DependencyContext {
   fileAnalyses: Map<string, FileDependencyInfo>
 }
 
+// ==================== Vue SFC 解析 ====================
+
+/**
+ * 从 Vue 单文件组件中提取 <script> 块内容
+ *
+ * 处理 <script>、<script setup>、<script lang="ts"> 等各种变体。
+ * Vue 3 允许同时存在 <script> 和 <script setup>，本函数拼接所有 script 块。
+ *
+ * @param content - .vue 文件完整内容
+ * @returns 所有 script 块的内容拼接
+ */
+export function extractVueScriptContent(content: string): string {
+  const scriptBlocks: string[] = []
+  const scriptRe = /<script\b[^>]*>([\s\S]*?)<\/script>/gi
+  let match
+  while ((match = scriptRe.exec(content)) !== null) {
+    scriptBlocks.push(match[1])
+  }
+  return scriptBlocks.join('\n')
+}
+
 // ==================== 导入解析（正则） ====================
 
 /**
  * 解析文件中的导入语句
  *
  * 支持 TS/JS、Python、Go、Java 的常见导入模式。
+ * 对 .vue 文件，先提取 <script> 块内容再解析。
  * 返回每个导入语句的路径和导入符号。
  *
  * @param content - 文件内容
@@ -89,15 +111,23 @@ export function parseImports(
   filename: string
 ): ImportInfo[] {
   const language = detectLanguage(filename)
+
+  // 对 .vue 文件，先提取 script 块内容
+  let effectiveContent = content
+  if (filename.endsWith('.vue')) {
+    effectiveContent = extractVueScriptContent(content)
+    if (effectiveContent.trim().length === 0) return []
+  }
+
   switch (language) {
     case 'typescript':
-      return parseTsImports(content)
+      return parseTsImports(effectiveContent)
     case 'python':
-      return parsePyImports(content)
+      return parsePyImports(effectiveContent)
     case 'go':
-      return parseGoImports(content)
+      return parseGoImports(effectiveContent)
     case 'java':
-      return parseJavaImports(content)
+      return parseJavaImports(effectiveContent)
     default:
       return []
   }
@@ -244,6 +274,19 @@ function parseTsImports(content: string): ImportInfo[] {
       aliasMap: {},
       isDefault: false,
       isNamespace: true
+    })
+  }
+
+  // 动态 import()：import('./module') / import("./module")
+  // 覆盖场景：defineAsyncComponent(() => import('./Comp.vue'))、路由懒加载等
+  const dynamicImportRe = /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g
+  while ((match = dynamicImportRe.exec(content)) !== null) {
+    imports.push({
+      importPath: match[1],
+      importedSymbols: [],
+      aliasMap: {},
+      isDefault: true,
+      isNamespace: false
     })
   }
 
@@ -428,13 +471,55 @@ export function extractModifiedSymbols(
 
   const lines = fileDiff.split('\n')
 
+  // 对 .vue 文件，追踪是否在 <script> 块内
+  const isVue = filename.endsWith('.vue')
+  let inScriptBlock = !isVue // 非 vue 文件始终视为在 script 块内
+
+  // 追踪当前 hunk 的上下文函数（从 @@ 行的尾部提取）
+  // 当 diff 修改了导出函数内部代码时，函数声明行不在 +/- 行中，
+  // 但 git diff 会在 @@ 行尾部显示所在的函数上下文
+  let currentHunkContext: string | null = null
+  let hunkHasChanges = false
+
   for (const line of lines) {
-    // 只处理新增行和删除行
-    if (!line.startsWith('+') && !line.startsWith('-')) continue
+    // 解析 @@ hunk 头：@@ -start,count +start,count @@ context
+    if (line.startsWith('@@')) {
+      // 先处理上一个 hunk 的上下文函数
+      if (hunkHasChanges && currentHunkContext != null) {
+        addHunkContextSymbol(language, currentHunkContext, symbols, seen, filename)
+      }
+      const hunkMatch = line.match(/^@@[^@]*@@\s*(.*)$/)
+      currentHunkContext = hunkMatch?.[1]?.trim() || null
+      hunkHasChanges = false
+      continue
+    }
+
+    // 上下文行（无 +/-）：更新 .vue 的 script 块追踪状态
+    if (!line.startsWith('+') && !line.startsWith('-')) {
+      if (isVue) {
+        if (/<script\b/i.test(line)) inScriptBlock = true
+        if (/<\/script>/i.test(line)) inScriptBlock = false
+      }
+      continue
+    }
     // 跳过 diff 头部行
     if (line.startsWith('+++') || line.startsWith('---')) continue
 
+    hunkHasChanges = true
     const content = line.substring(1) // 去掉 +/- 前缀
+
+    // 对 .vue 文件，追踪 diff 行中的 script 块边界
+    if (isVue) {
+      if (/<script\b/i.test(content)) {
+        inScriptBlock = true
+        continue
+      }
+      if (/<\/script>/i.test(content)) {
+        inScriptBlock = false
+        continue
+      }
+      if (!inScriptBlock) continue
+    }
     let extracted: Array<{name: string; type: ModifiedSymbol['type']; isExported: boolean}> = []
 
     switch (language) {
@@ -461,7 +546,213 @@ export function extractModifiedSymbols(
     }
   }
 
+  // 处理最后一个 hunk 的上下文函数
+  if (hunkHasChanges && currentHunkContext != null) {
+    addHunkContextSymbol(language, currentHunkContext, symbols, seen, filename)
+  }
+
+  // Vue SFC 后处理：将 __vue_component__ 标记转换为文件名派生的组件名
+  // defineProps/defineEmits 修改 → 组件接口变更 → 消费方通过组件名引用
+  if (filename.endsWith('.vue')) {
+    const hasComponentMarker = symbols.some(s => s.name === '__vue_component__')
+    if (hasComponentMarker) {
+      // 从文件名派生 PascalCase 组件名：components/HeavyChart.vue → HeavyChart
+      const baseName = filename.substring(filename.lastIndexOf('/') + 1).replace('.vue', '')
+      const componentName = baseName.charAt(0).toUpperCase() + baseName.slice(1)
+
+      // 移除标记，替换为组件名
+      const idx = symbols.findIndex(s => s.name === '__vue_component__')
+      if (idx >= 0) symbols.splice(idx, 1)
+      seen.delete('__vue_component__:variable')
+
+      const key = `${componentName}:variable`
+      if (!seen.has(key)) {
+        seen.add(key)
+        symbols.push({name: componentName, type: 'variable', isExported: true, filename})
+      }
+    }
+  }
+
   return symbols
+}
+
+/**
+ * 从 @@ hunk 上下文中提取包围的导出符号
+ *
+ * git diff 的 @@ 行尾部会显示变更所在的函数/类上下文，例如：
+ *   @@ -30,3 +30,5 @@ export function useCart() {
+ * 当修改发生在导出函数内部（如修改内部子函数），函数声明行本身不在 +/- 行中，
+ * 但通过 hunk 上下文可以识别出该导出函数被修改。
+ */
+function addHunkContextSymbol(
+  language: Language,
+  hunkContext: string,
+  symbols: ModifiedSymbol[],
+  seen: Set<string>,
+  filename: string
+): void {
+  // 仅对 TS/JS 和 Python、Go、Java 提取上下文中的导出符号
+  let extracted: Array<{name: string; type: ModifiedSymbol['type']; isExported: boolean}> = []
+
+  switch (language) {
+    case 'typescript':
+      extracted = extractTsSymbols(hunkContext)
+      break
+    case 'python':
+      extracted = extractPySymbols(hunkContext)
+      break
+    case 'go':
+      extracted = extractGoSymbols(hunkContext)
+      break
+    case 'java':
+      extracted = extractJavaSymbols(hunkContext)
+      break
+  }
+
+  // 仅添加导出符号（非导出的上下文函数不需要跟踪）
+  for (const sym of extracted) {
+    if (!sym.isExported) continue
+    const key = `${sym.name}:${sym.type}`
+    if (!seen.has(key)) {
+      seen.add(key)
+      symbols.push({...sym, filename})
+    }
+  }
+}
+
+/**
+ * 回退策略：从文件内容中查找包含修改行的导出函数/类作用域
+ *
+ * 当 diff 中仅修改了导出函数内部代码（如子函数），extractModifiedSymbols
+ * 可能无法从 diff 行中提取到导出符号。此函数解析文件内容，找到所有导出
+ * 声明的行号，然后检查 diff hunk 的行范围是否落在某个导出作用域内。
+ *
+ * 作用域判断采用简化启发式：导出声明从其定义行开始，到下一个同级
+ * 导出声明之前（或文件末尾）结束。
+ */
+export function findEnclosingExports(
+  filename: string,
+  fileContent: string,
+  fileDiff: string
+): ModifiedSymbol[] {
+  const language = detectLanguage(filename)
+
+  // 对 .vue 文件提取 script 块
+  let content = fileContent
+  let lineOffset = 0
+  if (filename.endsWith('.vue')) {
+    const scriptMatch = fileContent.match(/<script\b[^>]*>/)
+    if (scriptMatch && scriptMatch.index != null) {
+      const beforeScript = fileContent.substring(0, scriptMatch.index + scriptMatch[0].length)
+      lineOffset = beforeScript.split('\n').length - 1
+    }
+    content = extractVueScriptContent(fileContent)
+    if (content.trim().length === 0) return []
+  }
+
+  const lines = content.split('\n')
+
+  // 1. 扫描文件内容，找到所有导出声明及其行号
+  const exportDeclarations: Array<{
+    name: string
+    type: ModifiedSymbol['type']
+    line: number // 基于原始文件的行号（1-based）
+  }> = []
+
+  for (let i = 0; i < lines.length; i++) {
+    let extracted: Array<{name: string; type: ModifiedSymbol['type']; isExported: boolean}> = []
+    switch (language) {
+      case 'typescript':
+        extracted = extractTsSymbols(lines[i])
+        break
+      case 'python':
+        extracted = extractPySymbols(lines[i])
+        break
+      case 'go':
+        extracted = extractGoSymbols(lines[i])
+        break
+      case 'java':
+        extracted = extractJavaSymbols(lines[i])
+        break
+    }
+    for (const sym of extracted) {
+      if (sym.isExported) {
+        exportDeclarations.push({
+          name: sym.name,
+          type: sym.type,
+          line: i + 1 + lineOffset
+        })
+      }
+    }
+  }
+
+  if (exportDeclarations.length === 0) return []
+
+  // 2. 从 diff 中提取实际修改行的行号（基于新文件的行号）
+  // 只追踪 +/- 行，不是整个 hunk 范围，避免误判相邻函数
+  const modifiedLines = new Set<number>()
+  const hunkRe = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/
+  let currentNewLine = 0
+  let inHunk = false
+  for (const line of fileDiff.split('\n')) {
+    const m = line.match(hunkRe)
+    if (m) {
+      currentNewLine = parseInt(m[1], 10)
+      inHunk = true
+      continue
+    }
+    if (!inHunk) continue
+    if (line.startsWith('+')) {
+      modifiedLines.add(currentNewLine)
+      currentNewLine++
+    } else if (line.startsWith('-')) {
+      // 删除行：标记当前位置（删除发生在此行号处）
+      modifiedLines.add(currentNewLine)
+      // 删除行不增加新文件行号
+    } else if (line.startsWith(' ')) {
+      currentNewLine++
+    } else if (line.startsWith('\\')) {
+      // "\ No newline at end of file" — 忽略
+    } else {
+      inHunk = false
+    }
+  }
+
+  // 3. 为每个导出声明估算作用域范围（到下一个导出声明之前）
+  // 然后检查是否有实际修改行落在该范围内
+  const results: ModifiedSymbol[] = []
+  const seen = new Set<string>()
+
+  for (let i = 0; i < exportDeclarations.length; i++) {
+    const decl = exportDeclarations[i]
+    const scopeStart = decl.line
+    const scopeEnd = i + 1 < exportDeclarations.length
+      ? exportDeclarations[i + 1].line - 1
+      : Infinity
+
+    // 检查是否有实际修改行在此导出的作用域内
+    let hasModifiedLine = false
+    for (const lineNo of modifiedLines) {
+      if (lineNo >= scopeStart && lineNo <= scopeEnd) {
+        hasModifiedLine = true
+        break
+      }
+    }
+    if (hasModifiedLine) {
+      const key = `${decl.name}:${decl.type}`
+      if (!seen.has(key)) {
+        seen.add(key)
+        results.push({
+          name: decl.name,
+          type: decl.type,
+          isExported: true,
+          filename
+        })
+      }
+    }
+  }
+
+  return results
 }
 
 /** 从 TS/JS 代码行提取导出符号 */
@@ -524,6 +815,27 @@ function extractTsSymbols(
   m = trimmed.match(/^(?:module\.)?exports\.(\w+)\s*=/)
   if (m) {
     results.push({name: m[1], type: 'variable', isExported: true})
+    return results
+  }
+
+  // Vue <script setup> 编译器宏
+  // defineProps / defineEmits 修改意味着组件接口变更。
+  // 提取为特殊标记 __vue_component__，由 extractModifiedSymbols 转换为组件名。
+  if (trimmed.match(/^(?:const\s+\w+\s*=\s*)?define(?:Props|Emits)/)) {
+    results.push({name: '__vue_component__', type: 'variable', isExported: true})
+    return results
+  }
+
+  // defineExpose({ foo, bar }) — 显式暴露的绑定
+  m = trimmed.match(/^defineExpose\s*\(\s*\{([^}]*)/)
+  if (m) {
+    const exposed = m[1]
+      .split(',')
+      .map(s => s.trim().split(/\s*:/)[0].trim())
+      .filter(s => s.length > 0)
+    for (const name of exposed) {
+      results.push({name, type: 'variable', isExported: true})
+    }
     return results
   }
 
@@ -811,10 +1123,26 @@ export async function analyzeDependencies(
   const modifiedFileNames = filesAndChanges.map(([f]) => f)
   const allModifiedSymbols = new Map<string, ModifiedSymbol[]>()
 
-  for (const [filename, , fileDiff] of filesAndChanges) {
+  for (const [filename, fileContent, fileDiff] of filesAndChanges) {
     const symbols = extractModifiedSymbols(filename, fileDiff)
     const allSymbols = symbols.length
-    const exportedSymbols = symbols.filter(s => s.isExported)
+    let exportedSymbols = symbols.filter(s => s.isExported)
+
+    // 补充策略：始终解析文件内容，查找包含修改行的导出函数/类作用域
+    // 当修改发生在导出函数内部时，diff 行中不包含 export 声明，
+    // 需要通过文件内容 + hunk 行号范围来识别受影响的导出
+    if (fileContent.length > 0) {
+      const enclosingExports = findEnclosingExports(filename, fileContent, fileDiff)
+      for (const sym of enclosingExports) {
+        if (!exportedSymbols.some(s => s.name === sym.name && s.type === sym.type)) {
+          exportedSymbols.push(sym)
+          info(
+            `dependency analysis [step 1]: ${filename} → enclosing export detected: ${sym.name}(${sym.type})`
+          )
+        }
+      }
+    }
+
     if (exportedSymbols.length > 0) {
       allModifiedSymbols.set(filename, exportedSymbols)
       info(
@@ -1026,6 +1354,62 @@ export async function analyzeDependencies(
     `dependency analysis [step 5]: external scan complete — ${externalHits} import relationships found`
   )
 
+  // ===== 步骤 5.1: Nuxt auto-import 约定检测 =====
+  // Nuxt 会自动导入 composables/、utils/、components/、stores/ 目录下的导出，
+  // 消费者无需显式 import。扫描已获取的文件内容，检查是否使用了被修改的符号。
+  let autoImportHits = 0
+  for (const [modifiedFile, symbols] of allModifiedSymbols) {
+    if (!isNuxtAutoImportSource(modifiedFile)) continue
+
+    const deps = dependencyGraph.get(modifiedFile) ?? []
+    const existingDepFiles = new Set(deps.map(d => d.file))
+    const symbolNames = symbols.map(s => s.name)
+
+    for (const [candidateFile, content] of fileContents) {
+      if (candidateFile === modifiedFile) continue
+      if (existingDepFiles.has(candidateFile)) continue
+      if (
+        !candidateFile.endsWith('.vue') &&
+        !candidateFile.endsWith('.ts') &&
+        !candidateFile.endsWith('.js')
+      )
+        continue
+
+      // 对 .vue 文件提取 script 内容再搜索，避免 template 误匹配
+      const searchContent = candidateFile.endsWith('.vue')
+        ? extractVueScriptContent(content)
+        : content
+      if (searchContent.trim().length === 0) continue
+
+      const refs = findReferencesInContent(
+        candidateFile,
+        searchContent,
+        symbolNames,
+        1
+      )
+      if (refs.length > 0) {
+        deps.push({
+          file: candidateFile,
+          symbols: symbolNames,
+          aliasMap: {},
+          defaultImportName: null,
+          namespaceName: null
+        })
+        existingDepFiles.add(candidateFile)
+        autoImportHits++
+        info(
+          `dependency analysis [step 5.1]: ✓ auto-import hit: ${candidateFile} uses {${refs.map(r => r.symbolName).join(', ')}} from ${modifiedFile}`
+        )
+      }
+    }
+    dependencyGraph.set(modifiedFile, deps)
+  }
+  if (autoImportHits > 0) {
+    info(
+      `dependency analysis [step 5.1]: auto-import scan complete — ${autoImportHits} implicit dependencies found`
+    )
+  }
+
   // ===== 步骤 5.5: Barrel file 传递追踪 =====
   // 识别依赖图中的 barrel file（re-export 中转文件），
   // 将其消费者也加入被修改文件的依赖图（零额外 API 调用）
@@ -1132,11 +1516,32 @@ export async function analyzeDependencies(
         }
       }
 
+      // 对 .vue 文件，提取 script 块内容再搜索引用，避免 template 误匹配
+      const searchContent = dep.file.endsWith('.vue')
+        ? extractVueScriptContent(content)
+        : content
+
       const refs = findReferencesInContent(
         dep.file,
-        content,
+        searchContent.length > 0 ? searchContent : content,
         searchSymbols
       )
+
+      // 动态 import() 或 default import 的依赖文件可能不直接引用具名符号，
+      // 但导入关系已确认存在（步骤 2/5 已验证），应作为依赖方报告
+      if (refs.length === 0 && dep.symbols.length === 0) {
+        const implicitRef: SymbolReference = {
+          filename: dep.file,
+          symbolName: '(module)',
+          lineNumber: 0,
+          lineContent: `imports ${modifiedFile} via dynamic import or default import`
+        }
+        refs.push(implicitRef)
+        info(
+          `dependency analysis [step 6]: ✓ ${dep.file} → implicit dependency (dynamic/default import, no named symbol references)`
+        )
+      }
+
       if (refs.length > 0) {
         info(
           `dependency analysis [step 6]: ✓ ${dep.file} → ${refs.length} references found: [${refs.map(r => `${r.symbolName}:L${r.lineNumber}`).join(', ')}]`
@@ -1271,6 +1676,16 @@ export function formatCrossFileContext(
 }
 
 /**
+ * 判断文件是否为 Nuxt auto-import 源（composables/、utils/、components/、stores/）
+ *
+ * Nuxt 会自动导入这些目录下的导出，消费者无需显式 import。
+ * 用于步骤 5.1 的隐式依赖检测。
+ */
+function isNuxtAutoImportSource(filename: string): boolean {
+  return /(^|\/)(?:composables|utils|components|stores)\//.test(filename)
+}
+
+/**
  * 判断文件是否为入口文件（通常不会被其他模块导入）
  *
  * 入口文件是程序的启动点，它们导入其他模块，但自身很少被导入。
@@ -1279,6 +1694,17 @@ export function formatCrossFileContext(
 function isEntryPointFile(filename: string): boolean {
   const basename = filename.substring(filename.lastIndexOf('/') + 1)
   const lower = basename.toLowerCase()
+
+  // Nuxt 约定：pages/、layouts/、server/api/、server/routes/ 是框架消费的入口
+  if (
+    filename.includes('/pages/') ||
+    filename.includes('/layouts/') ||
+    filename.includes('/server/api/') ||
+    filename.includes('/server/routes/')
+  ) {
+    return true
+  }
+
   return (
     lower === 'main.ts' ||
     lower === 'main.js' ||
@@ -1286,10 +1712,13 @@ function isEntryPointFile(filename: string): boolean {
     lower === 'main.go' ||
     lower === 'app.ts' ||
     lower === 'app.js' ||
+    lower === 'app.vue' ||
     lower === 'server.ts' ||
     lower === 'server.js' ||
     lower === 'cli.ts' ||
     lower === 'cli.js' ||
+    lower === 'nuxt.config.ts' ||
+    lower === 'nuxt.config.js' ||
     // 根目录的 index 文件通常是入口
     (lower.startsWith('index.') && !filename.includes('/src/'))
   )
@@ -1325,6 +1754,12 @@ function isTestFile(filename: string): boolean {
 export function formatDependencySummary(ctx: DependencyContext): string {
   const entries = Array.from(ctx.fileAnalyses.entries())
   if (entries.length === 0) {
+    return ''
+  }
+
+  // 如果所有文件都没有外部引用，则不输出依赖分析区块
+  const hasAnyReference = entries.some(([, info]) => info.references.length > 0)
+  if (!hasAnyReference) {
     return ''
   }
 

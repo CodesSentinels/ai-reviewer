@@ -32,6 +32,8 @@ jest.mock('../src/octokit', () => ({
 import {
   parseImports,
   extractModifiedSymbols,
+  extractVueScriptContent,
+  findEnclosingExports,
   findReferencesInContent,
   formatCrossFileContext,
   type FileDependencyInfo
@@ -181,6 +183,28 @@ export type { Config } from './config'`
     const configExport = imports.find(i => i.importPath === './config')
     expect(configExport).toBeUndefined()
   })
+
+  test('解析动态 import()（defineAsyncComponent / 路由懒加载）', () => {
+    const content = `
+const AsyncComp = defineAsyncComponent(() => import('./components/Heavy.vue'))
+const routes = [
+  { path: '/about', component: () => import('./pages/About.vue') }
+]
+import { ref } from 'vue'`
+    const imports = parseImports(content, 'src/app.ts')
+    const paths = imports.map(i => i.importPath)
+    expect(paths).toContain('./components/Heavy.vue')
+    expect(paths).toContain('./pages/About.vue')
+    expect(paths).toContain('vue')
+  })
+
+  test('动态 import() 标记为 default import', () => {
+    const content = `const Lazy = defineAsyncComponent(() => import('./Lazy.vue'))`
+    const imports = parseImports(content, 'src/app.ts')
+    const lazyImport = imports.find(i => i.importPath === './Lazy.vue')
+    expect(lazyImport).toBeDefined()
+    expect(lazyImport!.isDefault).toBe(true)
+  })
 })
 
 // ==================== extractModifiedSymbols 测试 ====================
@@ -312,6 +336,141 @@ describe('extractModifiedSymbols', () => {
     const symbols = extractModifiedSymbols('src/utils.ts', diff)
     expect(symbols).toHaveLength(1)
     expect(symbols[0].name).toBe('realSymbol')
+  })
+
+  test('从 @@ hunk 上下文中提取包围的导出函数', () => {
+    // 模拟修改 export function useCart() 内部的子函数
+    // git diff 会在 @@ 行尾部显示所在的函数上下文
+    const diff = `@@ -30,3 +30,5 @@ export function useCart() {
+-  function removeItem(id: string) {
+-    items.value = items.value.filter(i => i.id !== id)
+-  }
++  function removeItem(id: string, silent: boolean = false) {
++    items.value = items.value.filter(i => i.id !== id)
++    if (!silent) console.log(\`Removed item: \${id}\`)
++  }`
+    const symbols = extractModifiedSymbols('composables/useCart.ts', diff)
+    // removeItem 是内部函数（非导出），useCart 是导出函数（从 hunk 上下文提取）
+    const exported = symbols.filter(s => s.isExported)
+    expect(exported).toHaveLength(1)
+    expect(exported[0].name).toBe('useCart')
+    expect(exported[0].type).toBe('function')
+  })
+
+  test('hunk 上下文中的非导出函数不会被添加', () => {
+    // 修改发生在内部函数 helper() 内部
+    const diff = `@@ -10,3 +10,4 @@ function helper() {
++    const x = 1
++    const y = 2`
+    const symbols = extractModifiedSymbols('src/utils.ts', diff)
+    const exported = symbols.filter(s => s.isExported)
+    expect(exported).toHaveLength(0)
+  })
+
+  test('多个 hunk 各自提取上下文导出函数', () => {
+    const diff = `@@ -10,3 +10,4 @@ export function foo() {
++    const a = 1
+@@ -30,3 +31,4 @@ export function bar() {
++    const b = 2`
+    const symbols = extractModifiedSymbols('src/utils.ts', diff)
+    const exported = symbols.filter(s => s.isExported)
+    expect(exported).toHaveLength(2)
+    expect(exported.map(s => s.name).sort()).toEqual(['bar', 'foo'])
+  })
+})
+
+// ==================== findEnclosingExports 测试 ====================
+
+describe('findEnclosingExports', () => {
+  test('修改导出函数内部代码时，检测到包围的导出函数', () => {
+    const fileContent = `export interface CartItem {
+  id: string
+}
+
+export function useCart() {
+  const items = ref<CartItem[]>([])
+
+  function removeItem(id: string) {
+    items.value = items.value.filter(i => i.id !== id)
+  }
+
+  return { items, removeItem }
+}`
+    // diff 修改 removeItem（第 8-10 行），hunk 起始行 +8
+    const fileDiff = `@@ -8,3 +8,4 @@
+-  function removeItem(id: string) {
+-    items.value = items.value.filter(i => i.id !== id)
+-  }
++  function removeItem(id: string, silent = false) {
++    items.value = items.value.filter(i => i.id !== id)
++    if (!silent) console.log('removed')
++  }`
+    const results = findEnclosingExports('composables/useCart.ts', fileContent, fileDiff)
+    expect(results).toHaveLength(1)
+    expect(results[0].name).toBe('useCart')
+    expect(results[0].type).toBe('function')
+    expect(results[0].isExported).toBe(true)
+  })
+
+  test('修改落在第一个导出之前时，不检测任何导出', () => {
+    const fileContent = `// 头部注释
+const internal = 'hello'
+
+export function foo() {
+  return 1
+}`
+    // 修改第 2 行（internal），在 export function foo 之前
+    const fileDiff = `@@ -2,1 +2,1 @@
+-const internal = 'hello'
++const internal = 'world'`
+    const results = findEnclosingExports('src/utils.ts', fileContent, fileDiff)
+    expect(results).toHaveLength(0)
+  })
+
+  test('diff 无声明行变更（仅逻辑修改），也能检测包围的导出函数', () => {
+    // 模拟 useAuth.ts：仅修改函数体内的普通代码行，无 function/class 声明
+    const fileContent = `import { logInfo } from '~/base-layer/utils/logger'
+
+export function useAuth() {
+  const isLoggedIn = computed(() => !!userStore.currentUser)
+
+  async function login(email: string, password: string) {
+    logInfo("login attempt", { email })
+    await userStore.setUser({ email, name: email.split("@")[0] })
+  }
+
+  return { isLoggedIn, login }
+}`
+    // diff 只修改第 8 行（函数体内的普通代码行），extractModifiedSymbols 会返回 0 个符号
+    const fileDiff = `@@ -7,2 +7,3 @@
+-    logInfo("login attempt", { email })
++    logInfo("login attempt", { email, timestamp: Date.now() })
++    console.log("debug")`
+    const results = findEnclosingExports('composables/useAuth.ts', fileContent, fileDiff)
+    expect(results).toHaveLength(1)
+    expect(results[0].name).toBe('useAuth')
+    expect(results[0].type).toBe('function')
+  })
+
+  test('多个导出函数，仅检测包含修改的那个', () => {
+    const fileContent = `export function foo() {
+  return 1
+}
+
+export function bar() {
+  return helper()
+}
+
+export function baz() {
+  return 3
+}`
+    // 修改第 6 行，在 bar() 作用域内
+    const fileDiff = `@@ -6,1 +6,1 @@
+-  return helper()
++  return helper(true)`
+    const results = findEnclosingExports('src/utils.ts', fileContent, fileDiff)
+    expect(results).toHaveLength(1)
+    expect(results[0].name).toBe('bar')
   })
 })
 
@@ -1289,5 +1448,295 @@ export async function createOrder() {
     for (const ref of allReferences) {
       expect(ref.symbolName).toBe('logInfo')
     }
+  })
+})
+
+// ==================== Vue SFC 测试 ====================
+
+describe('extractVueScriptContent', () => {
+  test('提取 <script setup lang="ts"> 内容', () => {
+    const content = `<template><div>{{ msg }}</div></template>
+<script setup lang="ts">
+import { ref } from 'vue'
+const msg = ref('hello')
+</script>
+<style scoped>.div { color: red }</style>`
+
+    const result = extractVueScriptContent(content)
+    expect(result).toContain("import { ref } from 'vue'")
+    expect(result).toContain("const msg = ref('hello')")
+    expect(result).not.toContain('<template>')
+    expect(result).not.toContain('<style')
+  })
+
+  test('提取双 script 块（<script> + <script setup>）并拼接', () => {
+    const content = `<script lang="ts">
+import type { Product } from '../types'
+</script>
+<script setup lang="ts">
+import { computed } from 'vue'
+const total = computed(() => 0)
+</script>
+<template><div></div></template>`
+
+    const result = extractVueScriptContent(content)
+    expect(result).toContain("import type { Product } from '../types'")
+    expect(result).toContain("import { computed } from 'vue'")
+    expect(result).toContain('const total = computed')
+  })
+
+  test('无 script 块返回空字符串', () => {
+    const content = `<template><div>Static</div></template>
+<style>.div { color: red }</style>`
+
+    const result = extractVueScriptContent(content)
+    expect(result.trim()).toBe('')
+  })
+
+  test('template 中的 "script" 字样不被误匹配', () => {
+    const content = `<template>
+  <div>This is a script tag example</div>
+</template>
+<script setup>
+import { ref } from 'vue'
+</script>`
+
+    const result = extractVueScriptContent(content)
+    expect(result).toContain("import { ref } from 'vue'")
+    expect(result).not.toContain('script tag example')
+  })
+})
+
+describe('parseImports - Vue SFC', () => {
+  test('解析 .vue 文件 <script setup> 内的 ES6 import', () => {
+    const content = `<template><div>{{ msg }}</div></template>
+<script setup lang="ts">
+import { ref } from 'vue'
+import BaseButton from '~/components/ui/BaseButton.vue'
+import { useAuth } from '@/composables/auth'
+const msg = ref('hello')
+</script>
+<style scoped>.div { color: red }</style>`
+
+    const imports = parseImports(content, 'pages/index.vue')
+    expect(imports).toHaveLength(3)
+    // parseTsImports 先解析 named import 再解析 default import
+    const paths = imports.map(i => i.importPath)
+    expect(paths).toContain('vue')
+    expect(paths).toContain('~/components/ui/BaseButton.vue')
+    expect(paths).toContain('@/composables/auth')
+    const defaultImport = imports.find(i => i.importPath === '~/components/ui/BaseButton.vue')!
+    expect(defaultImport.isDefault).toBe(true)
+    const namedImport = imports.find(i => i.importPath === '@/composables/auth')!
+    expect(namedImport.importedSymbols).toContain('useAuth')
+  })
+
+  test('解析 .vue 文件 <script>（非 setup）内的 import', () => {
+    const content = `<script lang="ts">
+import { defineComponent } from 'vue'
+import { useCart } from '../composables/useCart'
+export default defineComponent({
+  setup() { return { ...useCart() } }
+})
+</script>
+<template><div></div></template>`
+
+    const imports = parseImports(content, 'components/CartSummary.vue')
+    expect(imports).toHaveLength(2)
+    expect(imports[0].importPath).toBe('vue')
+    expect(imports[1].importPath).toBe('../composables/useCart')
+  })
+
+  test('双 script 块合并解析', () => {
+    const content = `<script lang="ts">
+import { defineComponent } from 'vue'
+</script>
+<script setup lang="ts">
+import { useCart } from '../composables/useCart'
+</script>
+<template><div></div></template>`
+
+    const imports = parseImports(content, 'components/Card.vue')
+    expect(imports).toHaveLength(2)
+  })
+
+  test('无 script 块返回空', () => {
+    const content = `<template><div>Static</div></template>
+<style>.div { color: red }</style>`
+
+    const imports = parseImports(content, 'components/Static.vue')
+    expect(imports).toHaveLength(0)
+  })
+
+  test('template 中的伪 import 不被解析', () => {
+    const content = `<template>
+  <div>{{ "import { foo } from 'bar'" }}</div>
+</template>
+<script setup>
+import { ref } from 'vue'
+</script>`
+
+    const imports = parseImports(content, 'components/Foo.vue')
+    expect(imports).toHaveLength(1)
+    expect(imports[0].importPath).toBe('vue')
+  })
+})
+
+describe('extractModifiedSymbols - Vue SFC', () => {
+  test('提取 .vue <script> 块内的 export function', () => {
+    const diff = ` <script setup lang="ts">
++export function useAuth() {
++  return { isLoggedIn: ref(false) }
++}
+ </script>`
+
+    const symbols = extractModifiedSymbols('composables/useAuth.vue', diff)
+    expect(symbols).toHaveLength(1)
+    expect(symbols[0].name).toBe('useAuth')
+    expect(symbols[0].isExported).toBe(true)
+  })
+
+  test('忽略 template 区域的变更', () => {
+    const diff = ` <template>
++  <div>{{ newFunction() }}</div>
+ </template>
+ <script setup>
+ </script>`
+
+    const symbols = extractModifiedSymbols('components/Foo.vue', diff)
+    expect(symbols).toHaveLength(0)
+  })
+
+  test('忽略 style 区域的变更', () => {
+    const diff = ` <script setup>
+ </script>
+ <style>
++.new-class { color: red }
+ </style>`
+
+    const symbols = extractModifiedSymbols('components/Foo.vue', diff)
+    expect(symbols).toHaveLength(0)
+  })
+
+  test('defineProps 提取为组件名（非 props 局部变量）', () => {
+    const diff = ` <script setup lang="ts">
++const props = defineProps<{ title: string; count: number }>()
+ </script>`
+
+    const symbols = extractModifiedSymbols('components/Card.vue', diff)
+    // 不应提取 props（局部变量），而是提取组件名 Card
+    expect(symbols.some(s => s.name === 'props')).toBe(false)
+    expect(symbols.some(s => s.name === 'Card' && s.isExported)).toBe(true)
+  })
+
+  test('defineEmits 提取为组件名（非 emits 局部变量）', () => {
+    const diff = ` <script setup lang="ts">
++const emit = defineEmits<{ click: [id: string] }>()
+ </script>`
+
+    const symbols = extractModifiedSymbols('components/Button.vue', diff)
+    // 不应提取 emit（局部变量），而是提取组件名 Button
+    expect(symbols.some(s => s.name === 'emit')).toBe(false)
+    expect(symbols.some(s => s.name === 'Button' && s.isExported)).toBe(true)
+  })
+
+  test('提取 defineExpose 宏中的符号', () => {
+    const diff = ` <script setup lang="ts">
++defineExpose({ validate, reset })
+ </script>`
+
+    const symbols = extractModifiedSymbols('components/Form.vue', diff)
+    expect(symbols.some(s => s.name === 'validate')).toBe(true)
+    expect(symbols.some(s => s.name === 'reset')).toBe(true)
+  })
+
+  test('非 .vue 文件不受 script 块追踪影响', () => {
+    const diff = `+export function helper() {
++  return true
++}`
+
+    const symbols = extractModifiedSymbols('utils/helper.ts', diff)
+    expect(symbols).toHaveLength(1)
+    expect(symbols[0].name).toBe('helper')
+  })
+})
+
+describe('resolveImportPath - .vue extension', () => {
+  test('无扩展名路径解析到 .vue 文件', () => {
+    const repoFiles = new Set([
+      'components/ProductCard.vue',
+      'components/ui/BaseButton.vue'
+    ])
+
+    const result = resolveImportPath(
+      'pages/index.vue',
+      '../components/ProductCard',
+      repoFiles
+    )
+    expect(result).toBe('components/ProductCard.vue')
+  })
+
+  test('显式 .vue 扩展名解析', () => {
+    const repoFiles = new Set(['components/ui/BaseButton.vue'])
+
+    const result = resolveImportPath(
+      'components/CartSummary.vue',
+      './ui/BaseButton.vue',
+      repoFiles
+    )
+    expect(result).toBe('components/ui/BaseButton.vue')
+  })
+
+  test('#components/ 别名解析', () => {
+    const repoFiles = new Set(['components/AppHeader.vue'])
+
+    const result = resolveImportPath(
+      'layouts/default.vue',
+      '#components/AppHeader',
+      repoFiles
+    )
+    expect(result).toBe('components/AppHeader.vue')
+  })
+
+  test('解析 index.vue 目录入口', () => {
+    const repoFiles = new Set(['components/ui/index.vue'])
+
+    const result = resolveImportPath(
+      'pages/index.vue',
+      '../components/ui',
+      repoFiles
+    )
+    expect(result).toBe('components/ui/index.vue')
+  })
+})
+
+describe('detectLanguage - Vue', () => {
+  test('.vue 文件检测为 typescript', () => {
+    expect(detectLanguage('components/Foo.vue')).toBe('typescript')
+    expect(detectLanguage('pages/index.vue')).toBe('typescript')
+    expect(detectLanguage('App.vue')).toBe('typescript')
+  })
+})
+
+describe('filterByExtension - Vue', () => {
+  test('按 .vue 扩展名过滤', () => {
+    const files = [
+      'components/Foo.vue',
+      'utils/helper.ts',
+      'pages/index.vue',
+      'README.md'
+    ]
+    const result = filterByExtension(files, ['.vue'])
+    expect(result).toEqual(['components/Foo.vue', 'pages/index.vue'])
+  })
+
+  test('.vue 包含在 typescript 扩展名组中', () => {
+    const files = [
+      'components/Foo.vue',
+      'utils/helper.ts',
+      'main.py'
+    ]
+    const result = filterByExtension(files, ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.vue'])
+    expect(result).toEqual(['components/Foo.vue', 'utils/helper.ts'])
   })
 })
