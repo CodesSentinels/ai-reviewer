@@ -114,10 +114,19 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
       // 构建工具列表（可选启用 web search）
       const tools: OpenAI.Responses.Tool[] = []
       if (this.enableWebSearch) {
+        // search_context_size 是 OpenAI Responses API 中 web_search 工具的参数，用于控制网页搜索时获取的上下文量。
+        // 'low' — 搜索结果少，速度快，token 消耗低
+        // 'medium' — 默认值
+        // 'high' — 获取更多搜索结果和上下文，回答更全面，但 token 消耗更高
+        // 这里设为 'high' 是为了让模型在做 web search 时尽可能多地获取信息，提高回答质量。
         tools.push({type: 'web_search', search_context_size: 'high'})
       }
 
-      info(`[web_search_debug] model=${this.model}, enableWebSearch=${this.enableWebSearch}, tools=${JSON.stringify(tools)}`)
+      info(
+        `[web_search_debug] model=${this.model}, enableWebSearch=${
+          this.enableWebSearch
+        }, tools=${JSON.stringify(tools)}`
+      )
 
       // 构建 Responses API 请求参数
       const params: OpenAI.Responses.ResponseCreateParams = {
@@ -159,7 +168,11 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
       let responseText = ''
       if (response?.output) {
         const outputTypes = response.output.map((item: any) => item.type)
-        info(`[web_search_debug] response output types: ${JSON.stringify(outputTypes)}`)
+        info(
+          `[web_search_debug] response output types: ${JSON.stringify(
+            outputTypes
+          )}`
+        )
         for (const item of response.output) {
           if (item.type === 'web_search_call') {
             info(
