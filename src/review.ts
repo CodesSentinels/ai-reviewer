@@ -741,8 +741,31 @@ ${commentChain}
 
       // 如果成功打包了至少一个 patch，执行审查
       if (patchesPacked > 0) {
+        // 阶段 4a：使用轻量模型生成分析链（预分析推理）
+        let analysisChainText = ''
         try {
-          // 调用重量模型执行代码审查
+          const [analysisResponse] = await lightBot.chat(
+            prompts.renderAnalyzeFileDiff(ins),
+            {}
+          )
+          if (analysisResponse !== '') {
+            const analysisTokens = getTokenCount(analysisResponse)
+            // 仅在 token 预算充足时注入分析链
+            if (tokens + analysisTokens <= options.heavyTokenLimits.requestTokens) {
+              analysisChainText = analysisResponse
+              ins.analysisChain = analysisResponse
+              tokens += analysisTokens
+              info(`analysis chain generated for ${filename}: ${analysisTokens} tokens`)
+            } else {
+              info(`analysis chain too large for ${filename}: ${analysisTokens} tokens, skipping injection`)
+            }
+          }
+        } catch (e: any) {
+          warning(`Failed to generate analysis chain for ${filename}: ${e as string}`)
+        }
+
+        try {
+          // 阶段 4b：调用重量模型执行代码审查（注入分析链上下文）
           const [response] = await heavyBot.chat(
             prompts.renderReviewFileDiff(ins),
             {}
@@ -754,6 +777,21 @@ ${commentChain}
           }
           // 解析 AI 响应，提取结构化的审查评论
           const reviews = parseReview(response, patches, options.debug)
+
+          // 将分析链以折叠块形式附加到第一条实质性评论
+          if (analysisChainText !== '' && reviews.length > 0) {
+            const firstSubstantive = reviews.find(
+              r =>
+                !r.comment.includes('LGTM') &&
+                !r.comment.includes('looks good to me')
+            )
+            if (firstSubstantive != null) {
+              firstSubstantive.comment =
+                `<details>\n<summary>🧩 Analysis chain</summary>\n\n${analysisChainText}\n\n</details>\n\n` +
+                firstSubstantive.comment
+            }
+          }
+
           for (const review of reviews) {
             // 过滤 LGTM 评论（如果配置为不保留）
             if (

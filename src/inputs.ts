@@ -19,6 +19,7 @@ export class Inputs {
   commentChain: string    // 评论对话链（已有的评论上下文）
   comment: string         // 当前用户的评论内容
   crossFileContext: string // 跨文件引用上下文（依赖分析生成，注入到审查提示词）
+  analysisChain: string   // 分析链（逐步推理过程，由轻量模型生成，注入到审查提示词）
 
   constructor(
     systemMessage = '',
@@ -33,7 +34,8 @@ export class Inputs {
     diff = 'no diff',
     commentChain = 'no other comments on this patch',
     comment = 'no comment provided',
-    crossFileContext = ''
+    crossFileContext = '',
+    analysisChain = ''
   ) {
     this.systemMessage = systemMessage
     this.title = title
@@ -48,6 +50,7 @@ export class Inputs {
     this.commentChain = commentChain
     this.comment = comment
     this.crossFileContext = crossFileContext
+    this.analysisChain = analysisChain
   }
 
   /**
@@ -68,7 +71,8 @@ export class Inputs {
       this.diff,
       this.commentChain,
       this.comment,
-      this.crossFileContext
+      this.crossFileContext,
+      this.analysisChain
     )
   }
 
@@ -121,6 +125,11 @@ export class Inputs {
     content = content.replace(
       '$cross_file_context',
       this.crossFileContext || 'No cross-file references detected.'
+    )
+    // 分析链：无论是否有值，都替换占位符（避免模板残留）
+    content = content.replace(
+      '$analysis_chain',
+      this.analysisChain || 'No analysis chain available.'
     )
     return content
   }

@@ -117,6 +117,55 @@ Instructions:
 `
 
   /**
+   * 分析链提示词
+   *
+   * 在正式代码审查之前，引导 AI 对代码变更进行分步推理分析，
+   * 生成结构化的分析链，用于：
+   * 1. 作为 reviewFileDiff 的额外上下文，提升审查质量
+   * 2. 展示给开发者，提高审查透明度
+   */
+  analyzeFileDiff = `## GitHub PR Title
+
+\`$title\`
+
+## Description
+
+\`\`\`
+$description
+\`\`\`
+
+## Summary of changes
+
+\`\`\`
+$short_summary
+\`\`\`
+
+## Cross-file references (auto-detected)
+
+$cross_file_context
+
+## Changes made to \`$filename\` for analysis
+
+$patches
+
+## Instructions
+
+Analyze the code changes above step by step. Build a concise reasoning chain that will guide a thorough code review.
+
+**Step 1 — Understand the intent**: What is this change trying to do? What problem does it solve?
+
+**Step 2 — Identify risks**: What could go wrong? Consider: edge cases, null/undefined handling, concurrency issues, security concerns, performance implications.
+
+**Step 3 — Check logic correctness**: Are there any logical errors, off-by-one errors, incorrect conditions, or missing cases?
+
+**Step 4 — Verify cross-file impact**: Based on the cross-file references above, will this change break any callers or dependents?
+
+**Step 5 — Summarize findings**: List the key issues (if any) that need to be flagged in the review.
+
+Keep each step to 1-3 sentences. Do not write actual review comments here; just provide your analysis reasoning.
+`
+
+  /**
    * 代码审查提示词（核心）
    *
    * 指导 AI 对代码变更进行逐行审查，包括：
@@ -144,6 +193,10 @@ $short_summary
 ## Cross-file references (auto-detected)
 
 $cross_file_context
+
+## Analysis chain (pre-review reasoning)
+
+$analysis_chain
 
 ## IMPORTANT Instructions
 
@@ -388,6 +441,11 @@ use web search to find and reference current documentation.
   /** 渲染回复评论提示词 */
   renderComment(inputs: Inputs): string {
     return inputs.render(this.comment)
+  }
+
+  /** 渲染分析链提示词（用于轻量模型预分析） */
+  renderAnalyzeFileDiff(inputs: Inputs): string {
+    return inputs.render(this.analyzeFileDiff)
   }
 
   /** 渲染代码审查提示词 */
