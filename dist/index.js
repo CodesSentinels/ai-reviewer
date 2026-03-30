@@ -8685,10 +8685,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
         // 构建工具列表：local shell + web search（如果启用）
         const tools = [
             {
-                type: 'shell',
-                shell: {
-                    type: 'local'
-                }
+                type: 'local_shell'
             }
         ];
         if (this.enableWebSearch) {
@@ -8716,27 +8713,31 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
         // 多轮 shell 交互循环
         let rounds = 0;
         while (rounds < SHELL_MAX_ROUNDS) {
-            // 检查响应中是否有 shell_call
-            const shellCalls = (response?.output ?? []).filter((item) => item.type === 'shell_call');
+            // 检查响应中是否有 local_shell_call
+            const shellCalls = (response?.output ?? []).filter((item) => item.type === 'local_shell_call' || item.type === 'shell_call');
             if (shellCalls.length === 0) {
                 break; // 没有更多 shell 调用，模型已完成分析
             }
             rounds++;
-            // 构建 shell_call_output 列表
+            // 构建 shell 输出列表
             const outputs = [];
             for (const call of shellCalls) {
-                const commands = call.action?.commands ?? [];
-                const callOutputs = [];
+                // local_shell_call 用 action.command (数组), shell_call 用 action.commands
+                const commands = call.action?.command ?? call.action?.commands ?? [];
                 for (const cmd of commands) {
                     (0,core.info)(`[shell_call] round ${rounds}: ${cmd}`);
                     if (!isCommandAllowed(cmd)) {
                         const blocked = `Command blocked by safety filter: ${cmd}`;
                         (0,core.warning)(`[shell_call] ${blocked}`);
                         shellLog.push(`$ ${cmd}\n⚠️ ${blocked}`);
-                        callOutputs.push({
-                            stdout: '',
-                            stderr: blocked,
-                            outcome: { type: 'exit', exit_code: 1 }
+                        outputs.push({
+                            type: 'local_shell_call_output',
+                            id: call.call_id ?? call.id,
+                            output: JSON.stringify({
+                                stdout: '',
+                                stderr: blocked,
+                                exit_code: 1
+                            })
                         });
                         continue;
                     }
@@ -8751,19 +8752,17 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
                         logEntry += `\nstderr: ${result.stderr}`;
                     }
                     shellLog.push(logEntry);
-                    callOutputs.push({
-                        stdout: result.stdout,
-                        stderr: result.stderr,
-                        outcome: result.timedOut
-                            ? { type: 'timeout' }
-                            : { type: 'exit', exit_code: result.exitCode }
+                    outputs.push({
+                        type: 'local_shell_call_output',
+                        id: call.call_id ?? call.id,
+                        output: JSON.stringify({
+                            stdout: result.stdout,
+                            stderr: result.stderr,
+                            exit_code: result.exitCode,
+                            timed_out: result.timedOut
+                        })
                     });
                 }
-                outputs.push({
-                    type: 'shell_call_output',
-                    call_id: call.call_id ?? call.id,
-                    output: callOutputs
-                });
             }
             // 将 shell 结果发回给模型继续对话
             try {

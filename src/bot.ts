@@ -195,10 +195,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
     // 构建工具列表：local shell + web search（如果启用）
     const tools: any[] = [
       {
-        type: 'shell',
-        shell: {
-          type: 'local'
-        }
+        type: 'local_shell'
       }
     ]
     if (this.enableWebSearch) {
@@ -228,20 +225,22 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
     // 多轮 shell 交互循环
     let rounds = 0
     while (rounds < SHELL_MAX_ROUNDS) {
-      // 检查响应中是否有 shell_call
+      // 检查响应中是否有 local_shell_call
       const shellCalls = (response?.output ?? []).filter(
-        (item: any) => item.type === 'shell_call'
+        (item: any) =>
+          item.type === 'local_shell_call' || item.type === 'shell_call'
       )
       if (shellCalls.length === 0) {
         break // 没有更多 shell 调用，模型已完成分析
       }
       rounds++
 
-      // 构建 shell_call_output 列表
+      // 构建 shell 输出列表
       const outputs: any[] = []
       for (const call of shellCalls) {
-        const commands: string[] = call.action?.commands ?? []
-        const callOutputs: any[] = []
+        // local_shell_call 用 action.command (数组), shell_call 用 action.commands
+        const commands: string[] =
+          call.action?.command ?? call.action?.commands ?? []
 
         for (const cmd of commands) {
           info(`[shell_call] round ${rounds}: ${cmd}`)
@@ -250,10 +249,14 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
             const blocked = `Command blocked by safety filter: ${cmd}`
             warning(`[shell_call] ${blocked}`)
             shellLog.push(`$ ${cmd}\n⚠️ ${blocked}`)
-            callOutputs.push({
-              stdout: '',
-              stderr: blocked,
-              outcome: {type: 'exit', exit_code: 1}
+            outputs.push({
+              type: 'local_shell_call_output',
+              id: call.call_id ?? call.id,
+              output: JSON.stringify({
+                stdout: '',
+                stderr: blocked,
+                exit_code: 1
+              })
             })
             continue
           }
@@ -273,20 +276,17 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
           }
           shellLog.push(logEntry)
 
-          callOutputs.push({
-            stdout: result.stdout,
-            stderr: result.stderr,
-            outcome: result.timedOut
-              ? {type: 'timeout'}
-              : {type: 'exit', exit_code: result.exitCode}
+          outputs.push({
+            type: 'local_shell_call_output',
+            id: call.call_id ?? call.id,
+            output: JSON.stringify({
+              stdout: result.stdout,
+              stderr: result.stderr,
+              exit_code: result.exitCode,
+              timed_out: result.timedOut
+            })
           })
         }
-
-        outputs.push({
-          type: 'shell_call_output',
-          call_id: call.call_id ?? call.id,
-          output: callOutputs
-        })
       }
 
       // 将 shell 结果发回给模型继续对话
