@@ -15251,11 +15251,12 @@ ${commentChain}
             }
             // 如果成功打包了至少一个 patch，执行审查
             if (patchesPacked > 0) {
-                // 阶段 4a：使用轻量模型 + shell 工具生成分析链（代码探索式预分析）
+                // 阶段 4a：使用重量模型 + shell 工具生成分析链（代码探索式预分析）
+                // 注意：local_shell 工具仅支持高级模型（如 gpt-4.1），不支持 nano
                 let analysisChainText = '';
                 try {
                     const workDir = process.env.GITHUB_WORKSPACE ?? process.cwd();
-                    const [analysisResponse, chainLog] = await lightBot.chatWithShell(prompts.renderAnalyzeFileDiff(ins), workDir);
+                    const [analysisResponse, chainLog] = await heavyBot.chatWithShell(prompts.renderAnalyzeFileDiff(ins), workDir);
                     if (chainLog !== '') {
                         const chainTokens = (0,tokenizer/* getTokenCount */.V)(chainLog);
                         // 仅在 token 预算充足时注入分析链
