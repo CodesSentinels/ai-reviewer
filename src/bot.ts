@@ -9,10 +9,76 @@
  * 5. 可选的 web search 工具支持（用于验证 API 用法）
  */
 
+import {execFileSync} from 'child_process'
 import {info, setFailed, warning} from '@actions/core'
 import OpenAI, {APIError} from 'openai'
 import pRetry from 'p-retry'
 import {OpenAIOptions, Options} from './options'
+
+/** shell 执行结果 */
+interface ShellResult {
+  stdout: string
+  stderr: string
+  exitCode: number
+  timedOut: boolean
+}
+
+/** shell 分析链的配置常量 */
+const SHELL_MAX_OUTPUT_LENGTH = 4096
+const SHELL_TIMEOUT_MS = 30000
+const SHELL_MAX_ROUNDS = 10
+
+/** 允许执行的 shell 命令白名单（仅只读命令） */
+const SHELL_ALLOWED_COMMANDS = new Set([
+  'rg', 'ripgrep', 'grep', 'find', 'cat', 'head', 'tail',
+  'wc', 'ls', 'git', 'echo', 'pwd', 'stat', 'file',
+  'sort', 'uniq', 'awk', 'sed', 'cut', 'tr', 'xargs', 'jq'
+])
+
+/**
+ * 检查命令是否在白名单内，且参数中没有危险的 shell 元字符
+ */
+function isCommandAllowed(commandArray: string[]): boolean {
+  if (!commandArray || commandArray.length === 0) return false
+  const cmd = commandArray[0].split('/').pop() ?? ''
+  if (!SHELL_ALLOWED_COMMANDS.has(cmd)) return false
+  // 禁止参数中出现写操作相关的 shell 操作符
+  const dangerous = [';', '&&', '||', '$(', '`', '>&', '>>', '> ', '|&']
+  for (const arg of commandArray) {
+    if (dangerous.some(d => arg.includes(d))) return false
+  }
+  return true
+}
+
+/**
+ * 安全执行 shell 命令（使用 execFileSync，避免 shell 注入）
+ */
+function executeShellCommand(commandArray: string[], cwd: string): ShellResult {
+  try {
+    const stdout = execFileSync(commandArray[0], commandArray.slice(1), {
+      cwd,
+      timeout: SHELL_TIMEOUT_MS,
+      maxBuffer: 1024 * 1024,
+      encoding: 'utf8'
+    }) as string
+    return {
+      stdout: stdout.substring(0, SHELL_MAX_OUTPUT_LENGTH),
+      stderr: '',
+      exitCode: 0,
+      timedOut: false
+    }
+  } catch (e: any) {
+    if (e.killed) {
+      return {stdout: '', stderr: 'Command timed out', exitCode: 124, timedOut: true}
+    }
+    return {
+      stdout: ((e.stdout as string) ?? '').substring(0, SHELL_MAX_OUTPUT_LENGTH),
+      stderr: ((e.stderr as string) ?? e.message ?? '').substring(0, 1024),
+      exitCode: (e.status as number) ?? 1,
+      timedOut: false
+    }
+  }
+}
 
 /**
  * 对话 ID 接口，用于维护多轮对话的上下文关系
@@ -87,6 +153,112 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
       }
       return res
     }
+  }
+
+  /**
+   * 使用 local_shell 工具进行仓库探索式分析（Analysis chain）
+   *
+   * 流程：向模型发送提示词 → 模型请求执行 shell 命令 → 本地执行并返回结果 → 模型继续分析
+   * 循环直到模型不再请求 shell 命令或达到最大轮次限制。
+   *
+   * @param message - 分析提示词（含 diff 和上下文）
+   * @param cwd - 工作目录（GitHub Actions 中为 GITHUB_WORKSPACE）
+   * @returns [模型最终摘要文本, 完整 shell 执行日志]
+   */
+  chatWithShell = async (message: string, cwd: string): Promise<[string, string]> => {
+    if (this.client == null || !message) return ['', '']
+
+    const chainLog: string[] = []
+    let responseText = ''
+    let previousResponseId: string | undefined
+    const tools = [{type: 'local_shell'}] as unknown as OpenAI.Responses.Tool[]
+
+    // 第一轮用字符串 input，后续轮次用 shell 输出数组
+    let currentInput: string | OpenAI.Responses.ResponseInput[] = message
+
+    for (let round = 0; round < SHELL_MAX_ROUNDS; round++) {
+      const params = {
+        model: this.model,
+        instructions: this.systemMessage,
+        input: currentInput,
+        temperature: this.temperature,
+        max_output_tokens: this.maxOutputTokens,
+        tools,
+        ...(previousResponseId != null && {previous_response_id: previousResponseId})
+      } as OpenAI.Responses.ResponseCreateParams
+
+      let response: OpenAI.Responses.Response | undefined
+      try {
+        const raw = await pRetry(() => this.client!.responses.create(params), {
+          retries: this.options.openaiRetries
+        })
+        // responses.create can return a stream when stream:true — we don't use streaming here
+        response = raw as OpenAI.Responses.Response
+      } catch (e: any) {
+        warning(`chatWithShell round ${round}: API error: ${e as string}`)
+        break
+      }
+
+      if (response == null) break
+      previousResponseId = response.id
+
+      // 提取文本输出和 shell 调用请求
+      const shellCalls: any[] = []
+      for (const item of response.output ?? []) {
+        if ((item as any).type === 'local_shell_call') {
+          shellCalls.push(item)
+        }
+        if (item.type === 'message') {
+          for (const content of item.content) {
+            if (content.type === 'output_text') {
+              responseText = content.text
+            }
+          }
+        }
+      }
+
+      // 没有 shell 请求，模型已完成分析
+      if (shellCalls.length === 0) break
+
+      // 执行每个 shell 调用并收集输出
+      const shellOutputs: OpenAI.Responses.ResponseInput[] = []
+      for (const call of shellCalls) {
+        const commandArray: string[] = (call as any).action?.command ?? []
+        const commandStr = commandArray.join(' ')
+
+        let result: ShellResult
+        if (!isCommandAllowed(commandArray)) {
+          result = {
+            stdout: '',
+            stderr: `Command not allowed: ${commandStr}`,
+            exitCode: 1,
+            timedOut: false
+          }
+          chainLog.push(`\`$ ${commandStr}\`\n> [BLOCKED: command not in allowlist]`)
+        } else {
+          info(`[analysis_chain] executing: ${commandStr}`)
+          result = executeShellCommand(commandArray, cwd)
+          const output = result.stdout || (result.stderr ? `[stderr] ${result.stderr}` : '(no output)')
+          chainLog.push(`\`$ ${commandStr}\`\n\`\`\`\n${output}\n\`\`\``)
+        }
+
+        shellOutputs.push({
+          type: 'local_shell_call_output',
+          id: (call as any).call_id ?? (call as any).id,
+          output: JSON.stringify({
+            stdout: result.stdout,
+            stderr: result.stderr,
+            exit_code: result.exitCode,
+            timed_out: result.timedOut
+          })
+        } as unknown as OpenAI.Responses.ResponseInput)
+      }
+
+      currentInput = shellOutputs
+    }
+
+    const fullChainLog = chainLog.join('\n\n')
+    return [responseText, fullChainLog]
   }
 
   /**

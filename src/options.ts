@@ -49,8 +49,8 @@ export class Options {
     reviewCommentLGTM = false,
     pathFilters: string[] | null = null,
     systemMessage = '',
-    openaiLightModel = 'gpt-4.1-nano',
-    openaiHeavyModel = 'gpt-4.1-mini',
+    openaiLightModel = 'gpt-5.4-nano',
+    openaiHeavyModel = 'gpt-5.4-mini',
     openaiModelTemperature = '0.0',
     openaiRetries = '3',
     openaiTimeoutMS = '120000',
@@ -204,7 +204,7 @@ export class OpenAIOptions {
   enableWebSearch: boolean // 是否启用 web search
 
   constructor(
-    model = 'gpt-4.1-nano',
+    model = 'gpt-5.4-nano',
     tokenLimits: TokenLimits | null = null,
     enableWebSearch = false
   ) {

@@ -741,24 +741,27 @@ ${commentChain}
 
       // 如果成功打包了至少一个 patch，执行审查
       if (patchesPacked > 0) {
-        // 阶段 4a：使用轻量模型生成分析链（预分析推理）
-        let analysisChainText = ''
+        // 阶段 4a：使用重量模型 + local_shell 工具进行仓库探索式分析链生成
+        const workDir = process.env.GITHUB_WORKSPACE ?? process.cwd()
+        let analysisChainLog = ''   // shell 命令执行日志（展示给开发者）
+        let analysisSummary = ''    // 模型分析摘要（注入到审查上下文）
         try {
-          const [analysisResponse] = await lightBot.chat(
+          const [analysisResponse, chainLog] = await heavyBot.chatWithShell(
             prompts.renderAnalyzeFileDiff(ins),
-            {}
+            workDir
           )
-          if (analysisResponse !== '') {
+          if (analysisResponse !== '' || chainLog !== '') {
             const analysisTokens = getTokenCount(analysisResponse)
-            // 仅在 token 预算充足时注入分析链
+            // 仅在 token 预算充足时将分析摘要注入到审查上下文
             if (tokens + analysisTokens <= options.heavyTokenLimits.requestTokens) {
-              analysisChainText = analysisResponse
+              analysisSummary = analysisResponse
               ins.analysisChain = analysisResponse
               tokens += analysisTokens
               info(`analysis chain generated for ${filename}: ${analysisTokens} tokens`)
             } else {
               info(`analysis chain too large for ${filename}: ${analysisTokens} tokens, skipping injection`)
             }
+            analysisChainLog = chainLog
           }
         } catch (e: any) {
           warning(`Failed to generate analysis chain for ${filename}: ${e as string}`)
@@ -778,16 +781,21 @@ ${commentChain}
           // 解析 AI 响应，提取结构化的审查评论
           const reviews = parseReview(response, patches, options.debug)
 
-          // 将分析链以折叠块形式附加到第一条实质性评论
-          if (analysisChainText !== '' && reviews.length > 0) {
+          // 将分析链（shell 日志 + 摘要）以折叠块形式附加到第一条实质性评论
+          const hasAnalysis = analysisChainLog !== '' || analysisSummary !== ''
+          if (hasAnalysis && reviews.length > 0) {
             const firstSubstantive = reviews.find(
               r =>
                 !r.comment.includes('LGTM') &&
                 !r.comment.includes('looks good to me')
             )
             if (firstSubstantive != null) {
+              const chainContent = [
+                analysisChainLog,
+                analysisSummary ? `**Summary**\n\n${analysisSummary}` : ''
+              ].filter(Boolean).join('\n\n---\n\n')
               firstSubstantive.comment =
-                `<details>\n<summary>🧩 Analysis chain</summary>\n\n${analysisChainText}\n\n</details>\n\n` +
+                `<details>\n<summary>🧩 Analysis chain</summary>\n\n${chainContent}\n\n</details>\n\n` +
                 firstSubstantive.comment
             }
           }

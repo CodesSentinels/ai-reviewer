@@ -117,12 +117,13 @@ Instructions:
 `
 
   /**
-   * 分析链提示词
+   * 分析链提示词（shell 探索版本）
    *
-   * 在正式代码审查之前，引导 AI 对代码变更进行分步推理分析，
-   * 生成结构化的分析链，用于：
-   * 1. 作为 reviewFileDiff 的额外上下文，提升审查质量
-   * 2. 展示给开发者，提高审查透明度
+   * 利用 local_shell 工具主动探索代码仓库，模拟 CodeRabbit 的 Analysis chain 行为：
+   * - 搜索变更函数/变量的所有调用方
+   * - 查看相关测试文件
+   * - 检查依赖和导入关系
+   * - 最终给出结构化分析摘要注入到审查上下文
    */
   analyzeFileDiff = `## GitHub PR Title
 
@@ -144,25 +145,27 @@ $short_summary
 
 $cross_file_context
 
-## Changes made to \`$filename\` for analysis
+## Changes made to \`$filename\`
 
 $patches
 
 ## Instructions
 
-Analyze the code changes above step by step. Build a concise reasoning chain that will guide a thorough code review.
+You have access to shell tools. Use them to explore the repository and understand the impact of these changes.
 
-**Step 1 — Understand the intent**: What is this change trying to do? What problem does it solve?
+Suggested exploration steps:
+1. Use \`rg\` or \`grep\` to find all callers of changed functions/exports
+2. Use \`find\` or \`rg\` to locate related test files
+3. Use \`cat\` or \`head\` to read relevant files for context
+4. Use \`git\` to check recent history if helpful
 
-**Step 2 — Identify risks**: What could go wrong? Consider: edge cases, null/undefined handling, concurrency issues, security concerns, performance implications.
+After exploration, provide a concise analysis summary (under 300 words):
+- **Intent**: What does this change do?
+- **Callers affected**: Files and lines that call the changed API (from your shell search results)
+- **Risks**: Edge cases, null handling, security, performance concerns
+- **Key findings**: Critical issues the reviewer should focus on
 
-**Step 3 — Check logic correctness**: Are there any logical errors, off-by-one errors, incorrect conditions, or missing cases?
-
-**Step 4 — Verify cross-file impact**: Based on the cross-file references above, will this change break any callers or dependents?
-
-**Step 5 — Summarize findings**: List the key issues (if any) that need to be flagged in the review.
-
-Keep each step to 1-3 sentences. Do not write actual review comments here; just provide your analysis reasoning.
+Be specific and cite actual file paths and line numbers from your shell exploration.
 `
 
   /**
