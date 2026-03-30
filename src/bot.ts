@@ -192,10 +192,28 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
     const start = Date.now()
     const shellLog: string[] = [] // 记录所有 shell 调用（用于展示分析链）
 
-    // 构建工具列表：local shell + web search（如果启用）
+    // 构建工具列表：run_command function + web search（如果启用）
+    // 注意：local_shell / shell 工具仅支持 gpt-5.4+，gpt-4.1 系列不支持
+    // 因此使用 function calling 模拟 shell 能力，兼容所有模型
     const tools: any[] = [
       {
-        type: 'local_shell'
+        type: 'function',
+        name: 'run_command',
+        description:
+          'Execute a read-only shell command in the repository to explore the codebase. ' +
+          'Allowed commands: rg, grep, find, fd, cat, head, tail, wc, ls, tree, file, stat, du, echo, pwd. ' +
+          'Pipes (|) are allowed between these commands. No write operations.',
+        parameters: {
+          type: 'object',
+          properties: {
+            command: {
+              type: 'string',
+              description:
+                'The shell command to execute, e.g. "rg functionName src/" or "cat src/utils.ts | head -50"'
+            }
+          },
+          required: ['command']
+        }
       }
     ]
     if (this.enableWebSearch) {
@@ -222,74 +240,85 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
       return ['', '']
     }
 
-    // 多轮 shell 交互循环
+    // 多轮 function calling 交互循环
     let rounds = 0
     while (rounds < SHELL_MAX_ROUNDS) {
-      // 检查响应中是否有 local_shell_call
-      const shellCalls = (response?.output ?? []).filter(
+      // 检查响应中是否有 function_call（run_command）
+      const functionCalls = (response?.output ?? []).filter(
         (item: any) =>
-          item.type === 'local_shell_call' || item.type === 'shell_call'
+          item.type === 'function_call' && item.name === 'run_command'
       )
-      if (shellCalls.length === 0) {
-        break // 没有更多 shell 调用，模型已完成分析
+      if (functionCalls.length === 0) {
+        break // 没有更多工具调用，模型已完成分析
       }
       rounds++
 
-      // 构建 shell 输出列表
+      // 执行命令并构建 function_call_output 列表
       const outputs: any[] = []
-      for (const call of shellCalls) {
-        // local_shell_call 用 action.command (数组), shell_call 用 action.commands
-        const commands: string[] =
-          call.action?.command ?? call.action?.commands ?? []
-
-        for (const cmd of commands) {
-          info(`[shell_call] round ${rounds}: ${cmd}`)
-
-          if (!isCommandAllowed(cmd)) {
-            const blocked = `Command blocked by safety filter: ${cmd}`
-            warning(`[shell_call] ${blocked}`)
-            shellLog.push(`$ ${cmd}\n⚠️ ${blocked}`)
-            outputs.push({
-              type: 'local_shell_call_output',
-              id: call.call_id ?? call.id,
-              output: JSON.stringify({
-                stdout: '',
-                stderr: blocked,
-                exit_code: 1
-              })
-            })
-            continue
-          }
-
-          const result = executeShellCommand(cmd, cwd)
-          info(
-            `[shell_call] exit=${result.exitCode}, stdout=${result.stdout.length} chars`
-          )
-
-          // 记录到分析链日志
-          let logEntry = `$ ${cmd}`
-          if (result.stdout) {
-            logEntry += `\n${result.stdout}`
-          }
-          if (result.stderr && result.exitCode !== 0) {
-            logEntry += `\nstderr: ${result.stderr}`
-          }
-          shellLog.push(logEntry)
-
-          outputs.push({
-            type: 'local_shell_call_output',
-            id: call.call_id ?? call.id,
-            output: JSON.stringify({
-              stdout: result.stdout,
-              stderr: result.stderr,
-              exit_code: result.exitCode,
-              timed_out: result.timedOut
-            })
-          })
+      for (const call of functionCalls) {
+        let cmd = ''
+        try {
+          const args = JSON.parse(call.arguments ?? '{}')
+          cmd = args.command ?? ''
+        } catch {
+          cmd = ''
         }
+
+        if (!cmd) {
+          outputs.push({
+            type: 'function_call_output',
+            call_id: call.call_id,
+            output: 'Error: no command provided'
+          })
+          continue
+        }
+
+        info(`[shell_call] round ${rounds}: ${cmd}`)
+
+        if (!isCommandAllowed(cmd)) {
+          const blocked = `Command blocked by safety filter. Allowed: rg, grep, find, fd, cat, head, tail, wc, ls, tree, file, stat, du, echo, pwd`
+          warning(`[shell_call] blocked: ${cmd}`)
+          shellLog.push(`$ ${cmd}\n⚠️ ${blocked}`)
+          outputs.push({
+            type: 'function_call_output',
+            call_id: call.call_id,
+            output: blocked
+          })
+          continue
+        }
+
+        const result = executeShellCommand(cmd, cwd)
+        info(
+          `[shell_call] exit=${result.exitCode}, stdout=${result.stdout.length} chars`
+        )
+
+        // 记录到分析链日志
+        let logEntry = `$ ${cmd}`
+        if (result.stdout) {
+          logEntry += `\n${result.stdout}`
+        }
+        if (result.stderr && result.exitCode !== 0) {
+          logEntry += `\nstderr: ${result.stderr}`
+        }
+        shellLog.push(logEntry)
+
+        // 构建输出文本
+        let outputText = result.stdout
+        if (result.stderr && result.exitCode !== 0) {
+          outputText += `\nstderr: ${result.stderr}`
+        }
+        if (result.timedOut) {
+          outputText += '\n(command timed out)'
+        }
+
+        outputs.push({
+          type: 'function_call_output',
+          call_id: call.call_id,
+          output: outputText || '(no output)'
+        })
       }
 
-      // 将 shell 结果发回给模型继续对话
+      // 将命令结果发回给模型继续对话
       try {
         response = await pRetry(
           () =>
