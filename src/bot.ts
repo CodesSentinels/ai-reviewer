@@ -10,9 +10,90 @@
  */
 
 import {info, setFailed, warning} from '@actions/core'
+import {execSync} from 'child_process'
 import OpenAI, {APIError} from 'openai'
 import pRetry from 'p-retry'
 import {OpenAIOptions, Options} from './options'
+
+/** shell 命令执行的最大输出长度（字符数） */
+const SHELL_MAX_OUTPUT_LENGTH = 4096
+/** shell 命令执行的超时时间（毫秒） */
+const SHELL_TIMEOUT_MS = 30000
+/** 单次分析链中允许的最大 shell 调用轮数 */
+const SHELL_MAX_ROUNDS = 10
+/** 只允许执行的只读命令白名单前缀 */
+const SHELL_ALLOWED_COMMANDS = [
+  'rg ',
+  'grep ',
+  'find ',
+  'cat ',
+  'head ',
+  'tail ',
+  'wc ',
+  'ls ',
+  'tree ',
+  'file ',
+  'stat ',
+  'du ',
+  'fd ',
+  'echo ',
+  'pwd'
+]
+
+/**
+ * 检查 shell 命令是否在安全白名单中（只读命令）
+ */
+function isCommandAllowed(command: string): boolean {
+  const trimmed = command.trim()
+  // 禁止命令链操作符中的写操作
+  if (/[;&|]/.test(trimmed)) {
+    // 允许管道 | 但禁止 ; && || &
+    const parts = trimmed.split('|').map(p => p.trim())
+    return parts.every(part => {
+      return SHELL_ALLOWED_COMMANDS.some(prefix => part.startsWith(prefix))
+    })
+  }
+  return SHELL_ALLOWED_COMMANDS.some(prefix => trimmed.startsWith(prefix))
+}
+
+/**
+ * 在指定工作目录下执行 shell 命令，返回 stdout/stderr/exitCode
+ */
+function executeShellCommand(
+  command: string,
+  cwd: string
+): {stdout: string; stderr: string; exitCode: number; timedOut: boolean} {
+  try {
+    const stdout = execSync(command, {
+      cwd,
+      timeout: SHELL_TIMEOUT_MS,
+      maxBuffer: 1024 * 1024, // 1MB
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe']
+    })
+    return {
+      stdout: stdout.substring(0, SHELL_MAX_OUTPUT_LENGTH),
+      stderr: '',
+      exitCode: 0,
+      timedOut: false
+    }
+  } catch (e: any) {
+    if (e.killed) {
+      return {
+        stdout: (e.stdout ?? '').substring(0, SHELL_MAX_OUTPUT_LENGTH),
+        stderr: 'Command timed out',
+        exitCode: 124,
+        timedOut: true
+      }
+    }
+    return {
+      stdout: (e.stdout ?? '').substring(0, SHELL_MAX_OUTPUT_LENGTH),
+      stderr: (e.stderr ?? '').substring(0, SHELL_MAX_OUTPUT_LENGTH),
+      exitCode: e.status ?? 1,
+      timedOut: false
+    }
+  }
+}
 
 /**
  * 对话 ID 接口，用于维护多轮对话的上下文关系
@@ -87,6 +168,187 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
       }
       return res
     }
+  }
+
+  /**
+   * 带 shell 工具的对话方法（用于分析链）
+   *
+   * 模型可以发出 shell_call 请求来探索代码仓库，
+   * 我们在本地执行命令并返回结果，形成多轮交互循环。
+   * 最终返回模型的文本响应和所有执行过的命令记录（用于展示分析链）。
+   *
+   * @param message - 要发送的消息内容
+   * @param cwd - shell 命令的工作目录（仓库根目录）
+   * @returns [响应文本, 分析链记录]
+   */
+  chatWithShell = async (
+    message: string,
+    cwd: string
+  ): Promise<[string, string]> => {
+    if (!message || this.client == null) {
+      return ['', '']
+    }
+
+    const start = Date.now()
+    const shellLog: string[] = [] // 记录所有 shell 调用（用于展示分析链）
+
+    // 构建工具列表：local shell + web search（如果启用）
+    const tools: any[] = [
+      {
+        type: 'shell',
+        shell: {
+          type: 'local'
+        }
+      }
+    ]
+    if (this.enableWebSearch) {
+      tools.push({type: 'web_search', search_context_size: 'high'})
+    }
+
+    // 第一次请求
+    const params: any = {
+      model: this.model,
+      instructions: this.systemMessage,
+      input: message,
+      temperature: this.temperature,
+      max_output_tokens: this.maxOutputTokens,
+      tools
+    }
+
+    let response: any
+    try {
+      response = await pRetry(() => this.client!.responses.create(params), {
+        retries: this.options.openaiRetries
+      })
+    } catch (e: any) {
+      warning(`Failed to send analysis message: ${e}`)
+      return ['', '']
+    }
+
+    // 多轮 shell 交互循环
+    let rounds = 0
+    while (rounds < SHELL_MAX_ROUNDS) {
+      // 检查响应中是否有 shell_call
+      const shellCalls = (response?.output ?? []).filter(
+        (item: any) => item.type === 'shell_call'
+      )
+      if (shellCalls.length === 0) {
+        break // 没有更多 shell 调用，模型已完成分析
+      }
+      rounds++
+
+      // 构建 shell_call_output 列表
+      const outputs: any[] = []
+      for (const call of shellCalls) {
+        const commands: string[] = call.action?.commands ?? []
+        const callOutputs: any[] = []
+
+        for (const cmd of commands) {
+          info(`[shell_call] round ${rounds}: ${cmd}`)
+
+          if (!isCommandAllowed(cmd)) {
+            const blocked = `Command blocked by safety filter: ${cmd}`
+            warning(`[shell_call] ${blocked}`)
+            shellLog.push(`$ ${cmd}\n⚠️ ${blocked}`)
+            callOutputs.push({
+              stdout: '',
+              stderr: blocked,
+              outcome: {type: 'exit', exit_code: 1}
+            })
+            continue
+          }
+
+          const result = executeShellCommand(cmd, cwd)
+          info(
+            `[shell_call] exit=${result.exitCode}, stdout=${result.stdout.length} chars`
+          )
+
+          // 记录到分析链日志
+          let logEntry = `$ ${cmd}`
+          if (result.stdout) {
+            logEntry += `\n${result.stdout}`
+          }
+          if (result.stderr && result.exitCode !== 0) {
+            logEntry += `\nstderr: ${result.stderr}`
+          }
+          shellLog.push(logEntry)
+
+          callOutputs.push({
+            stdout: result.stdout,
+            stderr: result.stderr,
+            outcome: result.timedOut
+              ? {type: 'timeout'}
+              : {type: 'exit', exit_code: result.exitCode}
+          })
+        }
+
+        outputs.push({
+          type: 'shell_call_output',
+          call_id: call.call_id ?? call.id,
+          output: callOutputs
+        })
+      }
+
+      // 将 shell 结果发回给模型继续对话
+      try {
+        response = await pRetry(
+          () =>
+            this.client!.responses.create({
+              model: this.model,
+              instructions: this.systemMessage,
+              input: outputs,
+              temperature: this.temperature,
+              max_output_tokens: this.maxOutputTokens,
+              tools,
+              previous_response_id: response.id
+            }),
+          {retries: this.options.openaiRetries}
+        )
+      } catch (e: any) {
+        warning(`Failed to continue shell conversation: ${e}`)
+        break
+      }
+    }
+
+    if (rounds >= SHELL_MAX_ROUNDS) {
+      info(`[shell_call] reached max rounds (${SHELL_MAX_ROUNDS})`)
+    }
+
+    // 从最终响应中提取文本
+    let responseText = ''
+    if (response?.output) {
+      for (const item of response.output) {
+        if (item.type === 'message') {
+          for (const content of item.content) {
+            if (content.type === 'output_text') {
+              responseText += content.text
+            }
+          }
+        }
+      }
+    }
+
+    const end = Date.now()
+    info(
+      `[shell_call] analysis complete: ${rounds} shell rounds, ${
+        shellLog.length
+      } commands, ${end - start} ms`
+    )
+
+    // 构建分析链展示文本
+    const chainText =
+      shellLog.length > 0
+        ? shellLog
+            .map(entry => `\`\`\`\n${entry}\n\`\`\``)
+            .join('\n\n')
+        : ''
+
+    // 将模型的总结文本追加到链末尾
+    const fullChain = chainText
+      ? `${chainText}\n\n${responseText}`
+      : responseText
+
+    return [responseText, fullChain]
   }
 
   /**

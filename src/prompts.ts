@@ -117,12 +117,12 @@ Instructions:
 `
 
   /**
-   * 分析链提示词
+   * 分析链提示词（带 Shell 工具）
    *
-   * 在正式代码审查之前，引导 AI 对代码变更进行分步推理分析，
-   * 生成结构化的分析链，用于：
+   * 在正式代码审查之前，引导 AI 使用 shell 命令探索代码仓库，
+   * 生成基于实际代码探索的分析链，用于：
    * 1. 作为 reviewFileDiff 的额外上下文，提升审查质量
-   * 2. 展示给开发者，提高审查透明度
+   * 2. 展示给开发者，提高审查透明度（包含真实命令和输出）
    */
   analyzeFileDiff = `## GitHub PR Title
 
@@ -150,19 +150,20 @@ $patches
 
 ## Instructions
 
-Analyze the code changes above step by step. Build a concise reasoning chain that will guide a thorough code review.
+You have access to a shell tool to explore the codebase. Use it to investigate the code changes above and build a thorough analysis chain.
 
-**Step 1 — Understand the intent**: What is this change trying to do? What problem does it solve?
+**Your investigation process should include:**
 
-**Step 2 — Identify risks**: What could go wrong? Consider: edge cases, null/undefined handling, concurrency issues, security concerns, performance implications.
+1. **Verify the context**: Use \`rg\`, \`cat\`, or \`head\` to read related code that the diff touches. Understand the surrounding implementation.
+2. **Search for callers and dependents**: Use \`rg "functionName"\` or \`rg "import.*module"\` to find all files that use the changed code.
+3. **Check for similar patterns**: Search for similar implementations elsewhere in the codebase to identify inconsistencies.
+4. **Verify types and interfaces**: If the change modifies function signatures or types, check downstream usage for compatibility.
+5. **Look for tests**: Use \`find\` or \`rg\` to locate test files related to the changed code and check if they cover the changes.
 
-**Step 3 — Check logic correctness**: Are there any logical errors, off-by-one errors, incorrect conditions, or missing cases?
+**Available commands**: \`rg\`, \`grep\`, \`find\`, \`fd\`, \`cat\`, \`head\`, \`tail\`, \`wc\`, \`ls\`, \`tree\`, \`file\`, \`stat\`, \`du\`, \`echo\`, \`pwd\`
+**Restrictions**: Read-only commands only. No write operations, no \`rm\`, \`mv\`, \`cp\`, \`sed\`, \`awk\` with \`-i\`.
 
-**Step 4 — Verify cross-file impact**: Based on the cross-file references above, will this change break any callers or dependents?
-
-**Step 5 — Summarize findings**: List the key issues (if any) that need to be flagged in the review.
-
-Keep each step to 1-3 sentences. Do not write actual review comments here; just provide your analysis reasoning.
+After your investigation, provide a brief summary of your findings — key issues, risks, or confirmations that the code is correct. Do NOT write review comments here; just provide your analysis conclusions.
 `
 
   /**

@@ -13,6 +13,8 @@ __nccwpck_require__.d(__webpack_exports__, {
 
 // EXTERNAL MODULE: ./node_modules/.pnpm/@actions+core@1.11.1/node_modules/@actions/core/lib/core.js
 var core = __nccwpck_require__(1078);
+// EXTERNAL MODULE: external "child_process"
+var external_child_process_ = __nccwpck_require__(2081);
 ;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/tslib.mjs
 function __classPrivateFieldSet(receiver, state, value, kind, f) {
     if (kind === "m")
@@ -8525,6 +8527,82 @@ async function pRetry(input, options) {
 
 
 
+
+/** shell 命令执行的最大输出长度（字符数） */
+const SHELL_MAX_OUTPUT_LENGTH = 4096;
+/** shell 命令执行的超时时间（毫秒） */
+const SHELL_TIMEOUT_MS = 30000;
+/** 单次分析链中允许的最大 shell 调用轮数 */
+const SHELL_MAX_ROUNDS = 10;
+/** 只允许执行的只读命令白名单前缀 */
+const SHELL_ALLOWED_COMMANDS = [
+    'rg ',
+    'grep ',
+    'find ',
+    'cat ',
+    'head ',
+    'tail ',
+    'wc ',
+    'ls ',
+    'tree ',
+    'file ',
+    'stat ',
+    'du ',
+    'fd ',
+    'echo ',
+    'pwd'
+];
+/**
+ * 检查 shell 命令是否在安全白名单中（只读命令）
+ */
+function isCommandAllowed(command) {
+    const trimmed = command.trim();
+    // 禁止命令链操作符中的写操作
+    if (/[;&|]/.test(trimmed)) {
+        // 允许管道 | 但禁止 ; && || &
+        const parts = trimmed.split('|').map(p => p.trim());
+        return parts.every(part => {
+            return SHELL_ALLOWED_COMMANDS.some(prefix => part.startsWith(prefix));
+        });
+    }
+    return SHELL_ALLOWED_COMMANDS.some(prefix => trimmed.startsWith(prefix));
+}
+/**
+ * 在指定工作目录下执行 shell 命令，返回 stdout/stderr/exitCode
+ */
+function executeShellCommand(command, cwd) {
+    try {
+        const stdout = (0,external_child_process_.execSync)(command, {
+            cwd,
+            timeout: SHELL_TIMEOUT_MS,
+            maxBuffer: 1024 * 1024,
+            encoding: 'utf-8',
+            stdio: ['pipe', 'pipe', 'pipe']
+        });
+        return {
+            stdout: stdout.substring(0, SHELL_MAX_OUTPUT_LENGTH),
+            stderr: '',
+            exitCode: 0,
+            timedOut: false
+        };
+    }
+    catch (e) {
+        if (e.killed) {
+            return {
+                stdout: (e.stdout ?? '').substring(0, SHELL_MAX_OUTPUT_LENGTH),
+                stderr: 'Command timed out',
+                exitCode: 124,
+                timedOut: true
+            };
+        }
+        return {
+            stdout: (e.stdout ?? '').substring(0, SHELL_MAX_OUTPUT_LENGTH),
+            stderr: (e.stderr ?? '').substring(0, SHELL_MAX_OUTPUT_LENGTH),
+            exitCode: e.status ?? 1,
+            timedOut: false
+        };
+    }
+}
 /**
  * Bot 类 - AI 对话机器人
  *
@@ -8586,6 +8664,153 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
             }
             return res;
         }
+    };
+    /**
+     * 带 shell 工具的对话方法（用于分析链）
+     *
+     * 模型可以发出 shell_call 请求来探索代码仓库，
+     * 我们在本地执行命令并返回结果，形成多轮交互循环。
+     * 最终返回模型的文本响应和所有执行过的命令记录（用于展示分析链）。
+     *
+     * @param message - 要发送的消息内容
+     * @param cwd - shell 命令的工作目录（仓库根目录）
+     * @returns [响应文本, 分析链记录]
+     */
+    chatWithShell = async (message, cwd) => {
+        if (!message || this.client == null) {
+            return ['', ''];
+        }
+        const start = Date.now();
+        const shellLog = []; // 记录所有 shell 调用（用于展示分析链）
+        // 构建工具列表：local shell + web search（如果启用）
+        const tools = [
+            {
+                type: 'shell',
+                shell: {
+                    type: 'local'
+                }
+            }
+        ];
+        if (this.enableWebSearch) {
+            tools.push({ type: 'web_search', search_context_size: 'high' });
+        }
+        // 第一次请求
+        const params = {
+            model: this.model,
+            instructions: this.systemMessage,
+            input: message,
+            temperature: this.temperature,
+            max_output_tokens: this.maxOutputTokens,
+            tools
+        };
+        let response;
+        try {
+            response = await pRetry(() => this.client.responses.create(params), {
+                retries: this.options.openaiRetries
+            });
+        }
+        catch (e) {
+            (0,core.warning)(`Failed to send analysis message: ${e}`);
+            return ['', ''];
+        }
+        // 多轮 shell 交互循环
+        let rounds = 0;
+        while (rounds < SHELL_MAX_ROUNDS) {
+            // 检查响应中是否有 shell_call
+            const shellCalls = (response?.output ?? []).filter((item) => item.type === 'shell_call');
+            if (shellCalls.length === 0) {
+                break; // 没有更多 shell 调用，模型已完成分析
+            }
+            rounds++;
+            // 构建 shell_call_output 列表
+            const outputs = [];
+            for (const call of shellCalls) {
+                const commands = call.action?.commands ?? [];
+                const callOutputs = [];
+                for (const cmd of commands) {
+                    (0,core.info)(`[shell_call] round ${rounds}: ${cmd}`);
+                    if (!isCommandAllowed(cmd)) {
+                        const blocked = `Command blocked by safety filter: ${cmd}`;
+                        (0,core.warning)(`[shell_call] ${blocked}`);
+                        shellLog.push(`$ ${cmd}\n⚠️ ${blocked}`);
+                        callOutputs.push({
+                            stdout: '',
+                            stderr: blocked,
+                            outcome: { type: 'exit', exit_code: 1 }
+                        });
+                        continue;
+                    }
+                    const result = executeShellCommand(cmd, cwd);
+                    (0,core.info)(`[shell_call] exit=${result.exitCode}, stdout=${result.stdout.length} chars`);
+                    // 记录到分析链日志
+                    let logEntry = `$ ${cmd}`;
+                    if (result.stdout) {
+                        logEntry += `\n${result.stdout}`;
+                    }
+                    if (result.stderr && result.exitCode !== 0) {
+                        logEntry += `\nstderr: ${result.stderr}`;
+                    }
+                    shellLog.push(logEntry);
+                    callOutputs.push({
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                        outcome: result.timedOut
+                            ? { type: 'timeout' }
+                            : { type: 'exit', exit_code: result.exitCode }
+                    });
+                }
+                outputs.push({
+                    type: 'shell_call_output',
+                    call_id: call.call_id ?? call.id,
+                    output: callOutputs
+                });
+            }
+            // 将 shell 结果发回给模型继续对话
+            try {
+                response = await pRetry(() => this.client.responses.create({
+                    model: this.model,
+                    instructions: this.systemMessage,
+                    input: outputs,
+                    temperature: this.temperature,
+                    max_output_tokens: this.maxOutputTokens,
+                    tools,
+                    previous_response_id: response.id
+                }), { retries: this.options.openaiRetries });
+            }
+            catch (e) {
+                (0,core.warning)(`Failed to continue shell conversation: ${e}`);
+                break;
+            }
+        }
+        if (rounds >= SHELL_MAX_ROUNDS) {
+            (0,core.info)(`[shell_call] reached max rounds (${SHELL_MAX_ROUNDS})`);
+        }
+        // 从最终响应中提取文本
+        let responseText = '';
+        if (response?.output) {
+            for (const item of response.output) {
+                if (item.type === 'message') {
+                    for (const content of item.content) {
+                        if (content.type === 'output_text') {
+                            responseText += content.text;
+                        }
+                    }
+                }
+            }
+        }
+        const end = Date.now();
+        (0,core.info)(`[shell_call] analysis complete: ${rounds} shell rounds, ${shellLog.length} commands, ${end - start} ms`);
+        // 构建分析链展示文本
+        const chainText = shellLog.length > 0
+            ? shellLog
+                .map(entry => `\`\`\`\n${entry}\n\`\`\``)
+                .join('\n\n')
+            : '';
+        // 将模型的总结文本追加到链末尾
+        const fullChain = chainText
+            ? `${chainText}\n\n${responseText}`
+            : responseText;
+        return [responseText, fullChain];
     };
     /**
      * 发送消息到 OpenAI API（私有方法，包含实际的 API 调用逻辑）
@@ -12110,12 +12335,12 @@ Instructions:
 - The summary should not exceed 500 words.
 `;
     /**
-     * 分析链提示词
+     * 分析链提示词（带 Shell 工具）
      *
-     * 在正式代码审查之前，引导 AI 对代码变更进行分步推理分析，
-     * 生成结构化的分析链，用于：
+     * 在正式代码审查之前，引导 AI 使用 shell 命令探索代码仓库，
+     * 生成基于实际代码探索的分析链，用于：
      * 1. 作为 reviewFileDiff 的额外上下文，提升审查质量
-     * 2. 展示给开发者，提高审查透明度
+     * 2. 展示给开发者，提高审查透明度（包含真实命令和输出）
      */
     analyzeFileDiff = `## GitHub PR Title
 
@@ -12143,19 +12368,20 @@ $patches
 
 ## Instructions
 
-Analyze the code changes above step by step. Build a concise reasoning chain that will guide a thorough code review.
+You have access to a shell tool to explore the codebase. Use it to investigate the code changes above and build a thorough analysis chain.
 
-**Step 1 — Understand the intent**: What is this change trying to do? What problem does it solve?
+**Your investigation process should include:**
 
-**Step 2 — Identify risks**: What could go wrong? Consider: edge cases, null/undefined handling, concurrency issues, security concerns, performance implications.
+1. **Verify the context**: Use \`rg\`, \`cat\`, or \`head\` to read related code that the diff touches. Understand the surrounding implementation.
+2. **Search for callers and dependents**: Use \`rg "functionName"\` or \`rg "import.*module"\` to find all files that use the changed code.
+3. **Check for similar patterns**: Search for similar implementations elsewhere in the codebase to identify inconsistencies.
+4. **Verify types and interfaces**: If the change modifies function signatures or types, check downstream usage for compatibility.
+5. **Look for tests**: Use \`find\` or \`rg\` to locate test files related to the changed code and check if they cover the changes.
 
-**Step 3 — Check logic correctness**: Are there any logical errors, off-by-one errors, incorrect conditions, or missing cases?
+**Available commands**: \`rg\`, \`grep\`, \`find\`, \`fd\`, \`cat\`, \`head\`, \`tail\`, \`wc\`, \`ls\`, \`tree\`, \`file\`, \`stat\`, \`du\`, \`echo\`, \`pwd\`
+**Restrictions**: Read-only commands only. No write operations, no \`rm\`, \`mv\`, \`cp\`, \`sed\`, \`awk\` with \`-i\`.
 
-**Step 4 — Verify cross-file impact**: Based on the cross-file references above, will this change break any callers or dependents?
-
-**Step 5 — Summarize findings**: List the key issues (if any) that need to be flagged in the review.
-
-Keep each step to 1-3 sentences. Do not write actual review comments here; just provide your analysis reasoning.
+After your investigation, provide a brief summary of your findings — key issues, risks, or confirmations that the code is correct. Do NOT write review comments here; just provide your analysis conclusions.
 `;
     /**
      * 代码审查提示词（核心）
@@ -15026,21 +15252,22 @@ ${commentChain}
             }
             // 如果成功打包了至少一个 patch，执行审查
             if (patchesPacked > 0) {
-                // 阶段 4a：使用轻量模型生成分析链（预分析推理）
+                // 阶段 4a：使用轻量模型 + shell 工具生成分析链（代码探索式预分析）
                 let analysisChainText = '';
                 try {
-                    const [analysisResponse] = await lightBot.chat(prompts.renderAnalyzeFileDiff(ins), {});
-                    if (analysisResponse !== '') {
-                        const analysisTokens = (0,tokenizer/* getTokenCount */.V)(analysisResponse);
+                    const workDir = process.env.GITHUB_WORKSPACE ?? process.cwd();
+                    const [analysisResponse, chainLog] = await lightBot.chatWithShell(prompts.renderAnalyzeFileDiff(ins), workDir);
+                    if (chainLog !== '') {
+                        const chainTokens = (0,tokenizer/* getTokenCount */.V)(chainLog);
                         // 仅在 token 预算充足时注入分析链
-                        if (tokens + analysisTokens <= options.heavyTokenLimits.requestTokens) {
-                            analysisChainText = analysisResponse;
-                            ins.analysisChain = analysisResponse;
-                            tokens += analysisTokens;
-                            (0,core.info)(`analysis chain generated for ${filename}: ${analysisTokens} tokens`);
+                        if (tokens + chainTokens <= options.heavyTokenLimits.requestTokens) {
+                            analysisChainText = chainLog;
+                            ins.analysisChain = analysisResponse; // 模型总结文本注入到审查上下文
+                            tokens += chainTokens;
+                            (0,core.info)(`analysis chain generated for ${filename}: ${chainTokens} tokens, shell-based`);
                         }
                         else {
-                            (0,core.info)(`analysis chain too large for ${filename}: ${analysisTokens} tokens, skipping injection`);
+                            (0,core.info)(`analysis chain too large for ${filename}: ${chainTokens} tokens, skipping injection`);
                         }
                     }
                 }

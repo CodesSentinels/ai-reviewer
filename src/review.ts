@@ -741,23 +741,25 @@ ${commentChain}
 
       // 如果成功打包了至少一个 patch，执行审查
       if (patchesPacked > 0) {
-        // 阶段 4a：使用轻量模型生成分析链（预分析推理）
+        // 阶段 4a：使用轻量模型 + shell 工具生成分析链（代码探索式预分析）
         let analysisChainText = ''
         try {
-          const [analysisResponse] = await lightBot.chat(
-            prompts.renderAnalyzeFileDiff(ins),
-            {}
-          )
-          if (analysisResponse !== '') {
-            const analysisTokens = getTokenCount(analysisResponse)
+          const workDir = process.env.GITHUB_WORKSPACE ?? process.cwd()
+          const [analysisResponse, chainLog] =
+            await lightBot.chatWithShell(
+              prompts.renderAnalyzeFileDiff(ins),
+              workDir
+            )
+          if (chainLog !== '') {
+            const chainTokens = getTokenCount(chainLog)
             // 仅在 token 预算充足时注入分析链
-            if (tokens + analysisTokens <= options.heavyTokenLimits.requestTokens) {
-              analysisChainText = analysisResponse
-              ins.analysisChain = analysisResponse
-              tokens += analysisTokens
-              info(`analysis chain generated for ${filename}: ${analysisTokens} tokens`)
+            if (tokens + chainTokens <= options.heavyTokenLimits.requestTokens) {
+              analysisChainText = chainLog
+              ins.analysisChain = analysisResponse // 模型总结文本注入到审查上下文
+              tokens += chainTokens
+              info(`analysis chain generated for ${filename}: ${chainTokens} tokens, shell-based`)
             } else {
-              info(`analysis chain too large for ${filename}: ${analysisTokens} tokens, skipping injection`)
+              info(`analysis chain too large for ${filename}: ${chainTokens} tokens, skipping injection`)
             }
           }
         } catch (e: any) {
