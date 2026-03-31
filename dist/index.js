@@ -8583,14 +8583,48 @@ function isCommandAllowed(commandArray) {
 }
 /**
  * 安全执行 shell 命令（使用 execFileSync，避免 shell 注入）
+ * 用于数组形式的命令，如 ['rg', 'pattern', 'path']
  */
 function executeShellCommand(commandArray, cwd) {
     try {
-        const stdout = (0,external_child_process_.execFileSync)(commandArray[0], commandArray.slice(1), {
+        const stdout = execFileSync(commandArray[0], commandArray.slice(1), {
             cwd,
             timeout: SHELL_TIMEOUT_MS,
             maxBuffer: 1024 * 1024,
             encoding: 'utf8'
+        });
+        return {
+            stdout: stdout.substring(0, SHELL_MAX_OUTPUT_LENGTH),
+            stderr: '',
+            exitCode: 0,
+            timedOut: false
+        };
+    }
+    catch (e) {
+        if (e.killed) {
+            return { stdout: '', stderr: 'Command timed out', exitCode: 124, timedOut: true };
+        }
+        return {
+            stdout: (e.stdout ?? '').substring(0, SHELL_MAX_OUTPUT_LENGTH),
+            stderr: (e.stderr ?? e.message ?? '').substring(0, 1024),
+            exitCode: e.status ?? 1,
+            timedOut: false
+        };
+    }
+}
+/**
+ * 执行完整 shell 命令字符串（用于 shell tool 返回的 commands 字段）
+ * commands 是完整 shell 字符串如 "rg pattern src/"，需通过 shell 执行
+ */
+function executeShellCommandString(cmd, cwd) {
+    const { execSync } = __nccwpck_require__(2081);
+    try {
+        const stdout = execSync(cmd, {
+            cwd,
+            timeout: SHELL_TIMEOUT_MS,
+            maxBuffer: 1024 * 1024,
+            encoding: 'utf8',
+            shell: '/bin/sh'
         });
         return {
             stdout: stdout.substring(0, SHELL_MAX_OUTPUT_LENGTH),
@@ -8689,12 +8723,15 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
         const chainLog = [];
         let responseText = '';
         let previousResponseId;
-        const tools = [{ type: 'local_shell' }];
+        // 正确格式：{ type: 'shell', environment: { type: 'local' } }
+        // 仅 gpt-5.4（完整版）支持，mini/nano 不支持
+        const tools = [{ type: 'shell', environment: { type: 'local' } }];
+        const shellModel = 'gpt-5.4';
         // 第一轮用字符串 input，后续轮次用 shell 输出数组
         let currentInput = message;
         for (let round = 0; round < SHELL_MAX_ROUNDS; round++) {
             const params = {
-                model: this.model,
+                model: shellModel,
                 instructions: this.systemMessage,
                 input: currentInput,
                 temperature: this.temperature,
@@ -8707,7 +8744,6 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
                 const raw = await pRetry(() => this.client.responses.create(params), {
                     retries: this.options.openaiRetries
                 });
-                // responses.create can return a stream when stream:true — we don't use streaming here
                 response = raw;
             }
             catch (e) {
@@ -8717,10 +8753,10 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
             if (response == null)
                 break;
             previousResponseId = response.id;
-            // 提取文本输出和 shell 调用请求
+            // 提取文本输出和 shell 调用请求（type 是 'shell_call'，不是 'local_shell_call'）
             const shellCalls = [];
             for (const item of response.output ?? []) {
-                if (item.type === 'local_shell_call') {
+                if (item.type === 'shell_call') {
                     shellCalls.push(item);
                 }
                 if (item.type === 'message') {
@@ -8734,36 +8770,38 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
             // 没有 shell 请求，模型已完成分析
             if (shellCalls.length === 0)
                 break;
-            // 执行每个 shell 调用并收集输出
+            // 执行 shell 调用
+            // action.commands 是完整 shell 字符串数组，如 ["ls -l /src", "rg pattern"]
             const shellOutputs = [];
             for (const call of shellCalls) {
-                const commandArray = call.action?.command ?? [];
-                const commandStr = commandArray.join(' ');
-                let result;
-                if (!isCommandAllowed(commandArray)) {
-                    result = {
-                        stdout: '',
-                        stderr: `Command not allowed: ${commandStr}`,
-                        exitCode: 1,
-                        timedOut: false
-                    };
-                    chainLog.push(`\`$ ${commandStr}\`\n> [BLOCKED: command not in allowlist]`);
-                }
-                else {
-                    (0,core.info)(`[analysis_chain] executing: ${commandStr}`);
-                    result = executeShellCommand(commandArray, cwd);
-                    const output = result.stdout || (result.stderr ? `[stderr] ${result.stderr}` : '(no output)');
-                    chainLog.push(`\`$ ${commandStr}\`\n\`\`\`\n${output}\n\`\`\``);
-                }
-                shellOutputs.push({
-                    type: 'local_shell_call_output',
-                    id: call.call_id ?? call.id,
-                    output: JSON.stringify({
+                const commands = call.action?.commands ?? [];
+                const commandOutputs = [];
+                for (const cmd of commands) {
+                    const firstWord = cmd.trim().split(/\s+/)[0];
+                    let result;
+                    if (!isCommandAllowed([firstWord])) {
+                        result = { stdout: '', stderr: `Command not allowed: ${cmd}`, exitCode: 1, timedOut: false };
+                        chainLog.push(`\`$ ${cmd}\`\n> [BLOCKED: command not in allowlist]`);
+                    }
+                    else {
+                        (0,core.info)(`[analysis_chain] executing: ${cmd}`);
+                        result = executeShellCommandString(cmd, cwd);
+                        const output = result.stdout || (result.stderr ? `[stderr] ${result.stderr}` : '(no output)');
+                        chainLog.push(`\`$ ${cmd}\`\n\`\`\`\n${output}\n\`\`\``);
+                    }
+                    commandOutputs.push({
                         stdout: result.stdout,
                         stderr: result.stderr,
-                        exit_code: result.exitCode,
-                        timed_out: result.timedOut
-                    })
+                        outcome: result.timedOut
+                            ? { type: 'timeout' }
+                            : { type: 'exit', exit_code: result.exitCode }
+                    });
+                }
+                // 输出格式：{ type: 'shell_call_output', call_id, output: [{stdout, stderr, outcome}] }
+                shellOutputs.push({
+                    type: 'shell_call_output',
+                    call_id: call.call_id,
+                    output: commandOutputs
                 });
             }
             currentInput = shellOutputs;
