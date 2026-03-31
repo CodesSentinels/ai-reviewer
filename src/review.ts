@@ -12,6 +12,7 @@
  * 支持增量审查：通过在摘要评论中存储已审查的 commit ID，
  * 后续运行只审查新增的变更，避免重复审查。
  */
+import {execSync} from 'child_process'
 import {error, info, warning} from '@actions/core'
 // eslint-disable-next-line camelcase
 import {context as github_context} from '@actions/github'
@@ -746,8 +747,22 @@ ${commentChain}
         let analysisChainLog = ''   // shell 命令执行日志（展示给开发者）
         let analysisSummary = ''    // 模型分析摘要（注入到审查上下文）
         try {
+          // 预先获取仓库目录结构，注入 prompt 避免模型猜测路径
+          let repoStructure = ''
+          try {
+            repoStructure = execSync(
+              'find . -maxdepth 3 -type d -not -path "./.git*" -not -path "./node_modules*" -not -path "./dist*"',
+              {cwd: workDir, encoding: 'utf8', timeout: 10000}
+            ).trim()
+          } catch {
+            repoStructure = '(unable to list directories)'
+          }
+          const promptWithStructure =
+            `## Repository directory structure\n\`\`\`\n${repoStructure}\n\`\`\`\n\n` +
+            prompts.renderAnalyzeFileDiff(ins)
+
           const [analysisResponse, chainLog] = await heavyBot.chatWithShell(
-            prompts.renderAnalyzeFileDiff(ins),
+            promptWithStructure,
             workDir
           )
           if (analysisResponse !== '' || chainLog !== '') {

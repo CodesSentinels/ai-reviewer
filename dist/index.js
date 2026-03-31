@@ -8617,9 +8617,8 @@ function executeShellCommand(commandArray, cwd) {
  * commands 是完整 shell 字符串如 "rg pattern src/"，需通过 shell 执行
  */
 function executeShellCommandString(cmd, cwd) {
-    const { execSync } = __nccwpck_require__(2081);
     try {
-        const stdout = execSync(cmd, {
+        const stdout = (0,external_child_process_.execSync)(cmd, {
             cwd,
             timeout: SHELL_TIMEOUT_MS,
             maxBuffer: 1024 * 1024,
@@ -12383,11 +12382,13 @@ $patches
 
 You have access to shell tools. Use them to explore the repository and understand the impact of these changes.
 
-Suggested exploration steps:
-1. Use \`rg\` or \`grep\` to find all callers of changed functions/exports
-2. Use \`find\` or \`rg\` to locate related test files
-3. Use \`cat\` or \`head\` to read relevant files for context
-4. Use \`git\` to check recent history if helpful
+Exploration steps (follow this order):
+1. **First, understand the repo structure**: run \`find . -maxdepth 2 -type d -not -path './.git*'\` to see top-level directories before accessing any path
+2. Use \`grep -rn\` (or \`rg\` if available) to find all callers of changed functions/exports — always use paths that exist
+3. Use \`find\` to locate related test files
+4. Use \`cat\` or \`head\` to read relevant files for context
+
+IMPORTANT: Never guess directory or file paths. Always verify a path exists before accessing it.
 
 After exploration, provide a concise analysis summary (under 300 words):
 - **Intent**: What does this change do?
@@ -12866,6 +12867,8 @@ __nccwpck_require__.d(__webpack_exports__, {
   "z": () => (/* binding */ codeReview)
 });
 
+// EXTERNAL MODULE: external "child_process"
+var external_child_process_ = __nccwpck_require__(2081);
 // EXTERNAL MODULE: ./node_modules/.pnpm/@actions+core@1.11.1/node_modules/@actions/core/lib/core.js
 var core = __nccwpck_require__(1078);
 // EXTERNAL MODULE: ./node_modules/.pnpm/@actions+github@5.1.1/node_modules/@actions/github/lib/github.js
@@ -14736,6 +14739,7 @@ var tokenizer = __nccwpck_require__(7525);
  * 后续运行只审查新增的变更，避免重复审查。
  */
 
+
 // eslint-disable-next-line camelcase
 
 
@@ -15271,7 +15275,17 @@ ${commentChain}
                 let analysisChainLog = ''; // shell 命令执行日志（展示给开发者）
                 let analysisSummary = ''; // 模型分析摘要（注入到审查上下文）
                 try {
-                    const [analysisResponse, chainLog] = await heavyBot.chatWithShell(prompts.renderAnalyzeFileDiff(ins), workDir);
+                    // 预先获取仓库目录结构，注入 prompt 避免模型猜测路径
+                    let repoStructure = '';
+                    try {
+                        repoStructure = (0,external_child_process_.execSync)('find . -maxdepth 3 -type d -not -path "./.git*" -not -path "./node_modules*" -not -path "./dist*"', { cwd: workDir, encoding: 'utf8', timeout: 10000 }).trim();
+                    }
+                    catch {
+                        repoStructure = '(unable to list directories)';
+                    }
+                    const promptWithStructure = `## Repository directory structure\n\`\`\`\n${repoStructure}\n\`\`\`\n\n` +
+                        prompts.renderAnalyzeFileDiff(ins);
+                    const [analysisResponse, chainLog] = await heavyBot.chatWithShell(promptWithStructure, workDir);
                     if (analysisResponse !== '' || chainLog !== '') {
                         const analysisTokens = (0,tokenizer/* getTokenCount */.V)(analysisResponse);
                         // 仅在 token 预算充足时将分析摘要注入到审查上下文

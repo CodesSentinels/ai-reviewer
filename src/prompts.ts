@@ -153,11 +153,13 @@ $patches
 
 You have access to shell tools. Use them to explore the repository and understand the impact of these changes.
 
-Suggested exploration steps:
-1. Use \`rg\` or \`grep\` to find all callers of changed functions/exports
-2. Use \`find\` or \`rg\` to locate related test files
-3. Use \`cat\` or \`head\` to read relevant files for context
-4. Use \`git\` to check recent history if helpful
+Exploration steps (follow this order):
+1. **First, understand the repo structure**: run \`find . -maxdepth 2 -type d -not -path './.git*'\` to see top-level directories before accessing any path
+2. Use \`grep -rn\` (or \`rg\` if available) to find all callers of changed functions/exports — always use paths that exist
+3. Use \`find\` to locate related test files
+4. Use \`cat\` or \`head\` to read relevant files for context
+
+IMPORTANT: Never guess directory or file paths. Always verify a path exists before accessing it.
 
 After exploration, provide a concise analysis summary (under 300 words):
 - **Intent**: What does this change do?

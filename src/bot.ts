@@ -9,7 +9,7 @@
  * 5. 可选的 web search 工具支持（用于验证 API 用法）
  */
 
-import {execFileSync} from 'child_process'
+import {execFileSync, execSync} from 'child_process'
 import {info, setFailed, warning} from '@actions/core'
 import OpenAI, {APIError} from 'openai'
 import pRetry from 'p-retry'
@@ -86,7 +86,6 @@ function executeShellCommand(commandArray: string[], cwd: string): ShellResult {
  * commands 是完整 shell 字符串如 "rg pattern src/"，需通过 shell 执行
  */
 function executeShellCommandString(cmd: string, cwd: string): ShellResult {
-  const {execSync} = require('child_process') as typeof import('child_process')
   try {
     const stdout = execSync(cmd, {
       cwd,
