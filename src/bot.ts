@@ -9,7 +9,7 @@
  * 5. 可选的 web search 工具支持（用于验证 API 用法）
  */
 
-import {execFileSync, execSync} from 'child_process'
+import {execSync} from 'child_process'
 import {info, setFailed, warning} from '@actions/core'
 import OpenAI, {APIError} from 'openai'
 import pRetry from 'p-retry'
@@ -48,37 +48,6 @@ function isCommandAllowed(commandArray: string[]): boolean {
     if (dangerous.some(d => arg.includes(d))) return false
   }
   return true
-}
-
-/**
- * 安全执行 shell 命令（使用 execFileSync，避免 shell 注入）
- * 用于数组形式的命令，如 ['rg', 'pattern', 'path']
- */
-function executeShellCommand(commandArray: string[], cwd: string): ShellResult {
-  try {
-    const stdout = execFileSync(commandArray[0], commandArray.slice(1), {
-      cwd,
-      timeout: SHELL_TIMEOUT_MS,
-      maxBuffer: 1024 * 1024,
-      encoding: 'utf8'
-    }) as string
-    return {
-      stdout: stdout.substring(0, SHELL_MAX_OUTPUT_LENGTH),
-      stderr: '',
-      exitCode: 0,
-      timedOut: false
-    }
-  } catch (e: any) {
-    if (e.killed) {
-      return {stdout: '', stderr: 'Command timed out', exitCode: 124, timedOut: true}
-    }
-    return {
-      stdout: ((e.stdout as string) ?? '').substring(0, SHELL_MAX_OUTPUT_LENGTH),
-      stderr: ((e.stderr as string) ?? e.message ?? '').substring(0, 1024),
-      exitCode: (e.status as number) ?? 1,
-      timedOut: false
-    }
-  }
 }
 
 /**
