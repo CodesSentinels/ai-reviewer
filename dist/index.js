@@ -8739,6 +8739,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
     chatWithShell = async (message, cwd) => {
         if (this.client == null || !message)
             return ['', ''];
+        (0,core.info)(`[chatWithShell] start: cwd=${cwd}, messageLen=${message.length}`);
         const chainLog = [];
         let responseText = '';
         let previousResponseId;
@@ -8773,6 +8774,8 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
                 break;
             previousResponseId = response.id;
             // 提取文本输出和 shell 调用请求（type 是 'shell_call'，不是 'local_shell_call'）
+            const outputTypes = (response.output ?? []).map((item) => item.type);
+            (0,core.info)(`[chatWithShell] round ${round}: response.id=${response.id}, output types=[${outputTypes.join(', ')}]`);
             const shellCalls = [];
             for (const item of response.output ?? []) {
                 if (item.type === 'shell_call') {
@@ -8782,13 +8785,17 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
                     for (const content of item.content) {
                         if (content.type === 'output_text') {
                             responseText = content.text;
+                            (0,core.info)(`[chatWithShell] round ${round}: got output_text, len=${content.text.length}, preview="${content.text.substring(0, 100).replace(/\n/g, '\\n')}"`);
                         }
                     }
                 }
             }
+            (0,core.info)(`[chatWithShell] round ${round}: shellCalls=${shellCalls.length}, responseText.len=${responseText.length}`);
             // 没有 shell 请求，模型已完成分析
-            if (shellCalls.length === 0)
+            if (shellCalls.length === 0) {
+                (0,core.info)(`[chatWithShell] round ${round}: no shell calls, breaking loop`);
                 break;
+            }
             // 执行 shell 调用
             // action.commands 是完整 shell 字符串数组，如 ["ls -l /src", "rg pattern"]
             const shellOutputs = [];
@@ -8826,6 +8833,10 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
             currentInput = shellOutputs;
         }
         const fullChainLog = chainLog.join('\n\n');
+        (0,core.info)(`[chatWithShell] done: responseText.len=${responseText.length}, chainLog.entries=${chainLog.length}, fullChainLog.len=${fullChainLog.length}`);
+        if (responseText === '' && fullChainLog === '') {
+            (0,core.warning)(`[chatWithShell] both responseText and fullChainLog are empty — model may have failed or returned no output`);
+        }
         return [responseText, fullChainLog];
     };
     /**
@@ -9721,6 +9732,8 @@ ${commentBody}`;
 /* harmony export */ __nccwpck_require__.d(__webpack_exports__, {
 /* harmony export */   "k": () => (/* binding */ Inputs)
 /* harmony export */ });
+/* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(1078);
+/* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__nccwpck_require__.n(_actions_core__WEBPACK_IMPORTED_MODULE_0__);
 /**
  * inputs.ts - 提示词上下文数据容器
  *
@@ -9728,6 +9741,7 @@ ${commentBody}`;
  * 提供 render() 方法将模板中的 $variable 占位符替换为实际值。
  * 提供 clone() 方法用于并行处理时创建独立副本，避免数据竞争。
  */
+
 class Inputs {
     systemMessage; // 系统消息（定义 AI 的角色和行为准则）
     title; // PR 标题
@@ -9814,7 +9828,12 @@ class Inputs {
         // 跨文件上下文：无论是否有值，都替换占位符（避免模板残留）
         content = content.replace('$cross_file_context', this.crossFileContext || 'No cross-file references detected.');
         // 分析链：无论是否有值，都替换占位符（避免模板残留）
-        content = content.replace('$analysis_chain', this.analysisChain || 'No analysis chain available.');
+        const analysisChainValue = this.analysisChain || 'No analysis chain available.';
+        const hadPlaceholder = content.includes('$analysis_chain');
+        content = content.replace('$analysis_chain', analysisChainValue);
+        if (hadPlaceholder) {
+            (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`[render] $analysis_chain replaced: hasValue=${!!this.analysisChain}, valueLen=${analysisChainValue.length}, preview="${analysisChainValue.substring(0, 100).replace(/\n/g, '\\n')}"`);
+        }
         return content;
     }
 }
@@ -12713,9 +12732,9 @@ use web search to find and reference current documentation.
 /* harmony import */ var _actions_github__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(3695);
 /* harmony import */ var _actions_github__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__nccwpck_require__.n(_actions_github__WEBPACK_IMPORTED_MODULE_1__);
 /* harmony import */ var _commenter__WEBPACK_IMPORTED_MODULE_2__ = __nccwpck_require__(4558);
-/* harmony import */ var _inputs__WEBPACK_IMPORTED_MODULE_5__ = __nccwpck_require__(6305);
-/* harmony import */ var _octokit__WEBPACK_IMPORTED_MODULE_3__ = __nccwpck_require__(2247);
-/* harmony import */ var _tokenizer__WEBPACK_IMPORTED_MODULE_4__ = __nccwpck_require__(7525);
+/* harmony import */ var _inputs__WEBPACK_IMPORTED_MODULE_3__ = __nccwpck_require__(6305);
+/* harmony import */ var _octokit__WEBPACK_IMPORTED_MODULE_4__ = __nccwpck_require__(2247);
+/* harmony import */ var _tokenizer__WEBPACK_IMPORTED_MODULE_5__ = __nccwpck_require__(7525);
 /**
  * review-comment.ts - PR 审查评论回复处理模块
  *
@@ -12754,7 +12773,7 @@ const ASK_BOT = '@ai-reviewer';
  */
 const handleReviewComment = async (heavyBot, options, prompts) => {
     const commenter = new _commenter__WEBPACK_IMPORTED_MODULE_2__/* .Commenter */ .Es();
-    const inputs = new _inputs__WEBPACK_IMPORTED_MODULE_5__/* .Inputs */ .k();
+    const inputs = new _inputs__WEBPACK_IMPORTED_MODULE_3__/* .Inputs */ .k();
     // ===== 第一步：验证事件类型 =====
     if (context.eventName !== 'pull_request_review_comment') {
         (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Skipped: ${context.eventName} is not a pull_request_review_comment event`);
@@ -12809,7 +12828,7 @@ const handleReviewComment = async (heavyBot, options, prompts) => {
             let fileDiff = '';
             try {
                 // 获取文件的完整 diff（base 到 head 的对比）
-                const diffAll = await _octokit__WEBPACK_IMPORTED_MODULE_3__/* .octokit.repos.compareCommits */ .K.repos.compareCommits({
+                const diffAll = await _octokit__WEBPACK_IMPORTED_MODULE_4__/* .octokit.repos.compareCommits */ .K.repos.compareCommits({
                     owner: repo.owner,
                     repo: repo.repo,
                     base: context.payload.pull_request.base.sha,
@@ -12840,7 +12859,7 @@ const handleReviewComment = async (heavyBot, options, prompts) => {
                 }
             }
             // ===== 第六步：在 token 限制内打包上下文 =====
-            let tokens = (0,_tokenizer__WEBPACK_IMPORTED_MODULE_4__/* .getTokenCount */ .V)(prompts.renderComment(inputs));
+            let tokens = (0,_tokenizer__WEBPACK_IMPORTED_MODULE_5__/* .getTokenCount */ .V)(prompts.renderComment(inputs));
             // 检查基础提示词是否已超出 token 限制
             if (tokens > options.heavyTokenLimits.requestTokens) {
                 await commenter.reviewCommentReply(pullNumber, topLevelComment, 'Cannot reply to this comment as diff being commented is too large and exceeds the token limit.');
@@ -12849,7 +12868,7 @@ const handleReviewComment = async (heavyBot, options, prompts) => {
             // 尝试将完整文件 diff 加入上下文（如果 token 预算允许）
             if (fileDiff.length > 0) {
                 const fileDiffCount = prompts.comment.split('$file_diff').length - 1;
-                const fileDiffTokens = (0,_tokenizer__WEBPACK_IMPORTED_MODULE_4__/* .getTokenCount */ .V)(fileDiff);
+                const fileDiffTokens = (0,_tokenizer__WEBPACK_IMPORTED_MODULE_5__/* .getTokenCount */ .V)(fileDiff);
                 if (fileDiffCount > 0 &&
                     tokens + fileDiffTokens * fileDiffCount <=
                         options.heavyTokenLimits.requestTokens) {
@@ -12861,7 +12880,7 @@ const handleReviewComment = async (heavyBot, options, prompts) => {
             const summary = await commenter.findCommentWithTag(_commenter__WEBPACK_IMPORTED_MODULE_2__/* .SUMMARIZE_TAG */ .Rp, pullNumber);
             if (summary) {
                 const shortSummary = commenter.getShortSummary(summary.body);
-                const shortSummaryTokens = (0,_tokenizer__WEBPACK_IMPORTED_MODULE_4__/* .getTokenCount */ .V)(shortSummary);
+                const shortSummaryTokens = (0,_tokenizer__WEBPACK_IMPORTED_MODULE_5__/* .getTokenCount */ .V)(shortSummary);
                 if (tokens + shortSummaryTokens <=
                     options.heavyTokenLimits.requestTokens) {
                     tokens += shortSummaryTokens;
@@ -15309,20 +15328,28 @@ ${commentChain}
                     }
                     const promptWithStructure = `## Repository source files (use ONLY these paths — do not guess)\n\`\`\`\n${repoFileList}\n\`\`\`\n\n` +
                         prompts.renderAnalyzeFileDiff(ins);
+                    (0,core.info)(`[analysis_chain] calling chatWithShell for ${filename}`);
                     const [analysisResponse, chainLog] = await heavyBot.chatWithShell(promptWithStructure, workDir);
+                    (0,core.info)(`[analysis_chain] chatWithShell returned: analysisResponse.len=${analysisResponse.length}, chainLog.len=${chainLog.length}`);
                     if (analysisResponse !== '' || chainLog !== '') {
                         const analysisTokens = (0,tokenizer/* getTokenCount */.V)(analysisResponse);
+                        const tokenBudgetRemaining = options.heavyTokenLimits.requestTokens - tokens;
+                        (0,core.info)(`[analysis_chain] token budget: used=${tokens}, analysisTokens=${analysisTokens}, limit=${options.heavyTokenLimits.requestTokens}, remaining=${tokenBudgetRemaining}`);
                         // 仅在 token 预算充足时将分析摘要注入到审查上下文
                         if (tokens + analysisTokens <= options.heavyTokenLimits.requestTokens) {
                             analysisSummary = analysisResponse;
                             ins.analysisChain = analysisResponse;
                             tokens += analysisTokens;
-                            (0,core.info)(`analysis chain generated for ${filename}: ${analysisTokens} tokens`);
+                            (0,core.info)(`[analysis_chain] injected into ins.analysisChain for ${filename}: ${analysisTokens} tokens, preview="${analysisResponse.substring(0, 150).replace(/\n/g, '\\n')}"`);
                         }
                         else {
-                            (0,core.info)(`analysis chain too large for ${filename}: ${analysisTokens} tokens, skipping injection`);
+                            (0,core.info)(`[analysis_chain] skipped injection for ${filename}: analysisTokens=${analysisTokens} exceeds remaining budget=${tokenBudgetRemaining}`);
                         }
                         analysisChainLog = chainLog;
+                        (0,core.info)(`[analysis_chain] analysisChainLog set, len=${analysisChainLog.length}`);
+                    }
+                    else {
+                        (0,core.warning)(`[analysis_chain] chatWithShell returned empty for ${filename} — no analysis generated`);
                     }
                 }
                 catch (e) {
@@ -15340,18 +15367,27 @@ ${commentChain}
                     const reviews = parseReview(response, patches, options.debug);
                     // 将分析链（shell 日志 + 摘要）以折叠块形式附加到第一条实质性评论
                     const hasAnalysis = analysisChainLog !== '' || analysisSummary !== '';
+                    (0,core.info)(`[analysis_chain] attaching to comment: hasAnalysis=${hasAnalysis}, reviews.length=${reviews.length}, analysisChainLog.len=${analysisChainLog.length}, analysisSummary.len=${analysisSummary.length}`);
                     if (hasAnalysis && reviews.length > 0) {
                         const firstSubstantive = reviews.find(r => !r.comment.includes('LGTM') &&
                             !r.comment.includes('looks good to me'));
+                        (0,core.info)(`[analysis_chain] firstSubstantive found=${firstSubstantive != null}`);
                         if (firstSubstantive != null) {
                             const chainContent = [
                                 analysisChainLog,
                                 analysisSummary ? `**Summary**\n\n${analysisSummary}` : ''
                             ].filter(Boolean).join('\n\n---\n\n');
+                            (0,core.info)(`[analysis_chain] chainContent.len=${chainContent.length}, prepending to comment at line ${firstSubstantive.startLine}-${firstSubstantive.endLine}`);
                             firstSubstantive.comment =
                                 `<details>\n<summary>🧩 Analysis chain</summary>\n\n${chainContent}\n\n</details>\n\n` +
                                     firstSubstantive.comment;
                         }
+                        else {
+                            (0,core.info)(`[analysis_chain] all ${reviews.length} review(s) are LGTM — analysis chain not attached`);
+                        }
+                    }
+                    else if (!hasAnalysis) {
+                        (0,core.info)(`[analysis_chain] no analysis to attach (both chainLog and summary are empty)`);
                     }
                     for (const review of reviews) {
                         // 过滤 LGTM 评论（如果配置为不保留）
