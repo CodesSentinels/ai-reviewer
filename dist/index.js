@@ -15227,6 +15227,53 @@ ${summariesFailed.length > 0
         const reviewsFailed = [];
         let lgtmCount = 0; // LGTM 评论计数（被过滤掉的）
         let reviewCount = 0; // 实际发布的审查评论计数
+        // ---- 一次性初始化：确保工作目录已 checkout，预获取仓库文件列表 ----
+        const workDir = process.env.GITHUB_WORKSPACE ?? process.cwd();
+        const hasGitDir = (() => {
+            try {
+                (0,external_child_process_.execSync)('git rev-parse --git-dir', { cwd: workDir, encoding: 'utf8', timeout: 5000 });
+                return true;
+            }
+            catch {
+                return false;
+            }
+        })();
+        if (!hasGitDir) {
+            (0,core.info)(`[analysis_chain] no git repo found at ${workDir}, performing auto checkout...`);
+            try {
+                const repo = process.env.GITHUB_REPOSITORY ?? '';
+                const headRef = process.env.GITHUB_HEAD_REF ?? '';
+                const token = process.env.GITHUB_TOKEN ?? '';
+                if (repo && token) {
+                    (0,external_child_process_.execSync)(`git clone --depth=1 ${headRef ? `--branch ${headRef}` : ''} https://x-access-token:${token}@github.com/${repo}.git .`, { cwd: workDir, encoding: 'utf8', timeout: 60000 });
+                    (0,core.info)(`[analysis_chain] auto checkout completed for ${repo}${headRef ? `@${headRef}` : ''}`);
+                }
+                else {
+                    (0,core.warning)(`[analysis_chain] cannot auto checkout: GITHUB_REPOSITORY or GITHUB_TOKEN not set`);
+                }
+            }
+            catch (e) {
+                (0,core.warning)(`[analysis_chain] auto checkout failed: ${e.message ?? e}`);
+            }
+        }
+        else {
+            (0,core.info)(`[analysis_chain] git repo detected at ${workDir}`);
+        }
+        let repoFileList = '';
+        try {
+            repoFileList = (0,external_child_process_.execSync)('find . -maxdepth 5 -type f \\( -name "*.ts" -o -name "*.tsx" -o -name "*.vue" -o -name "*.js" -o -name "*.jsx" -o -name "*.py" -o -name "*.go" -o -name "*.java" -o -name "*.rs" \\) -not -path "./.git/*" -not -path "./node_modules/*" -not -path "./dist/*" | sed "s|^\\./||" | sort | head -300', { cwd: workDir, encoding: 'utf8', timeout: 10000 }).trim();
+        }
+        catch {
+            repoFileList = '(unable to list files)';
+        }
+        (0,core.info)(`[analysis_chain] workDir=${workDir}, repoFileList.len=${repoFileList.length}, files=${repoFileList ? repoFileList.split('\n').length : 0}`);
+        if (repoFileList.length > 0) {
+            (0,core.info)(`[analysis_chain] first 5 files: ${repoFileList.split('\n').slice(0, 5).join(', ')}`);
+        }
+        else {
+            (0,core.warning)(`[analysis_chain] repoFileList is EMPTY — find returned no source files in ${workDir}. Shell exploration will be ineffective.`);
+        }
+        // ---- 一次性初始化结束 ----
         /**
          * 对单个文件执行代码审查
          *
@@ -15329,56 +15376,10 @@ ${commentChain}
             // 如果成功打包了至少一个 patch，执行审查
             if (patchesPacked > 0) {
                 // 阶段 4a：使用重量模型 + local_shell 工具进行仓库探索式分析链生成
-                const workDir = process.env.GITHUB_WORKSPACE ?? process.cwd();
                 let analysisChainLog = ''; // shell 命令执行日志（展示给开发者）
                 let analysisSummary = ''; // 模型分析摘要（注入到审查上下文）
                 try {
-                    // 确保工作目录已 checkout 仓库代码（用户 workflow 可能未配置 actions/checkout）
-                    const hasGitDir = (() => {
-                        try {
-                            (0,external_child_process_.execSync)('git rev-parse --git-dir', { cwd: workDir, encoding: 'utf8', timeout: 5000 });
-                            return true;
-                        }
-                        catch {
-                            return false;
-                        }
-                    })();
-                    if (!hasGitDir) {
-                        (0,core.info)(`[analysis_chain] no git repo found at ${workDir}, performing auto checkout...`);
-                        try {
-                            const repo = process.env.GITHUB_REPOSITORY ?? '';
-                            const headRef = process.env.GITHUB_HEAD_REF ?? '';
-                            const token = process.env.GITHUB_TOKEN ?? '';
-                            if (repo && token) {
-                                (0,external_child_process_.execSync)(`git clone --depth=1 ${headRef ? `--branch ${headRef}` : ''} https://x-access-token:${token}@github.com/${repo}.git .`, { cwd: workDir, encoding: 'utf8', timeout: 60000 });
-                                (0,core.info)(`[analysis_chain] auto checkout completed for ${repo}${headRef ? `@${headRef}` : ''}`);
-                            }
-                            else {
-                                (0,core.warning)(`[analysis_chain] cannot auto checkout: GITHUB_REPOSITORY or GITHUB_TOKEN not set`);
-                            }
-                        }
-                        catch (e) {
-                            (0,core.warning)(`[analysis_chain] auto checkout failed: ${e.message ?? e}`);
-                        }
-                    }
-                    else {
-                        (0,core.info)(`[analysis_chain] git repo detected at ${workDir}`);
-                    }
-                    // 预先获取仓库文件列表，注入 prompt 避免模型猜测路径
-                    let repoFileList = '';
-                    try {
-                        repoFileList = (0,external_child_process_.execSync)('find . -maxdepth 5 -type f \\( -name "*.ts" -o -name "*.tsx" -o -name "*.vue" -o -name "*.js" -o -name "*.jsx" -o -name "*.py" -o -name "*.go" -o -name "*.java" -o -name "*.rs" \\) -not -path "./.git/*" -not -path "./node_modules/*" -not -path "./dist/*" | sed "s|^\\./||" | sort | head -300', { cwd: workDir, encoding: 'utf8', timeout: 10000 }).trim();
-                    }
-                    catch {
-                        repoFileList = '(unable to list files)';
-                    }
-                    (0,core.info)(`[analysis_chain] workDir=${workDir}, repoFileList.len=${repoFileList.length}, files=${repoFileList ? repoFileList.split('\n').length : 0}`);
-                    if (repoFileList.length > 0) {
-                        (0,core.info)(`[analysis_chain] first 5 files: ${repoFileList.split('\n').slice(0, 5).join(', ')}`);
-                    }
-                    else {
-                        (0,core.warning)(`[analysis_chain] repoFileList is EMPTY — find returned no source files in ${workDir}. Shell exploration will be ineffective.`);
-                    }
+                    // workDir 和 repoFileList 已在循环外一次性初始化
                     const promptWithStructure = `## Repository source files (use ONLY these paths — do not guess)\n\`\`\`\n${repoFileList}\n\`\`\`\n\n` +
                         prompts.renderAnalyzeFileDiff(ins);
                     (0,core.info)(`[analysis_chain] calling chatWithShell for ${filename}`);
