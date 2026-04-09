@@ -42,18 +42,17 @@ const SHELL_ALLOWED_COMMANDS = [
 
 /**
  * 检查 shell 命令是否在安全白名单中（只读命令）
+ * 只允许单个命令或通过管道 | 连接的只读命令，禁止 &&、||、; 等链式操作符
  */
 function isCommandAllowed(command: string): boolean {
   const trimmed = command.trim()
-  // 禁止命令链操作符中的写操作
-  if (/[;&|]/.test(trimmed)) {
-    // 允许管道 | 但禁止 ; && || &
-    const parts = trimmed.split('|').map(p => p.trim())
-    return parts.every(part => {
-      return SHELL_ALLOWED_COMMANDS.some(prefix => part.startsWith(prefix))
-    })
-  }
-  return SHELL_ALLOWED_COMMANDS.some(prefix => trimmed.startsWith(prefix))
+  // 先拦截所有链式操作符（&& || ; 后台 &）——只允许 | 管道
+  if (/&&|\|\||;|(?<!\|)&(?!\|)/.test(trimmed)) return false
+  // 按管道分段，每段都必须以白名单命令开头
+  const parts = trimmed.split('|').map(p => p.trim())
+  return parts.every(part =>
+    SHELL_ALLOWED_COMMANDS.some(prefix => part.startsWith(prefix))
+  )
 }
 
 /**
@@ -68,8 +67,8 @@ function executeShellCommand(
       cwd,
       timeout: SHELL_TIMEOUT_MS,
       maxBuffer: 1024 * 1024, // 1MB
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe']
+      encoding: 'utf8',
+      shell: '/bin/sh'
     })
     return {
       stdout: stdout.substring(0, SHELL_MAX_OUTPUT_LENGTH),
@@ -86,12 +85,29 @@ function executeShellCommand(
         timedOut: true
       }
     }
-    return {
-      stdout: (e.stdout ?? '').substring(0, SHELL_MAX_OUTPUT_LENGTH),
-      stderr: (e.stderr ?? '').substring(0, SHELL_MAX_OUTPUT_LENGTH),
-      exitCode: e.status ?? 1,
-      timedOut: false
+    const stderr: string = (e.stderr ?? '').substring(0, 1024)
+    const stdout: string = (e.stdout ?? '').substring(0, SHELL_MAX_OUTPUT_LENGTH)
+
+    // 路径不存在时，搜索相似文件名给模型提示正确路径
+    const noSuchFile = stderr.match(/cannot open '?([^':]+)'?.*No such file|No such file.*'([^']+)'/)
+    if (noSuchFile != null) {
+      const badPath = (noSuchFile[1] ?? noSuchFile[2] ?? '').trim()
+      const basename = badPath.split('/').pop() ?? ''
+      if (basename) {
+        try {
+          const similar = execSync(
+            `find . -type f -name "${basename}" -not -path "./.git/*" -not -path "./node_modules/*" -not -path "./dist/*"`,
+            {cwd, encoding: 'utf8', timeout: 5000, shell: '/bin/sh'}
+          ).trim()
+          const hint = similar
+            ? `Hint: '${badPath}' not found. Correct path(s): ${similar.split('\n').map(p => p.replace(/^\.\//, '')).join(', ')}`
+            : `Hint: '${badPath}' not found and no file with that name exists in this repo.`
+          return {stdout, stderr: `${stderr}\n${hint}`, exitCode: e.status ?? 1, timedOut: false}
+        } catch { /* ignore */ }
+      }
     }
+
+    return {stdout, stderr, exitCode: e.status ?? 1, timedOut: false}
   }
 }
 

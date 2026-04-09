@@ -12,6 +12,7 @@
  * 支持增量审查：通过在摘要评论中存储已审查的 commit ID，
  * 后续运行只审查新增的变更，避免重复审查。
  */
+import {execSync} from 'child_process'
 import {error, info, warning} from '@actions/core'
 // eslint-disable-next-line camelcase
 import {context as github_context} from '@actions/github'
@@ -746,9 +747,23 @@ ${commentChain}
         let analysisChainText = ''
         try {
           const workDir = process.env.GITHUB_WORKSPACE ?? process.cwd()
+
+          // 预先获取仓库文件列表注入 prompt，避免模型猜测路径
+          let repoFileList = ''
+          try {
+            repoFileList = execSync(
+              'find . -maxdepth 5 -type f \\( -name "*.ts" -o -name "*.tsx" -o -name "*.vue" -o -name "*.js" -o -name "*.jsx" -o -name "*.py" -o -name "*.go" -o -name "*.java" -o -name "*.rs" \\) -not -path "./.git/*" -not -path "./node_modules/*" -not -path "./dist/*" | sed "s|^\\./||" | sort | head -300',
+              {cwd: workDir, encoding: 'utf8', timeout: 10000, shell: '/bin/sh'}
+            ).trim()
+          } catch { /* ignore */ }
+          const promptWithFileList = repoFileList
+            ? `## Repository source files (ONLY use paths from this list)\n\`\`\`\n${repoFileList}\n\`\`\`\n\n` +
+              prompts.renderAnalyzeFileDiff(ins)
+            : prompts.renderAnalyzeFileDiff(ins)
+
           const [analysisResponse, chainLog] =
             await heavyBot.chatWithShell(
-              prompts.renderAnalyzeFileDiff(ins),
+              promptWithFileList,
               workDir
             )
           if (chainLog !== '') {
