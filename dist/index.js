@@ -15333,6 +15333,37 @@ ${commentChain}
                 let analysisChainLog = ''; // shell 命令执行日志（展示给开发者）
                 let analysisSummary = ''; // 模型分析摘要（注入到审查上下文）
                 try {
+                    // 确保工作目录已 checkout 仓库代码（用户 workflow 可能未配置 actions/checkout）
+                    const hasGitDir = (() => {
+                        try {
+                            (0,external_child_process_.execSync)('git rev-parse --git-dir', { cwd: workDir, encoding: 'utf8', timeout: 5000 });
+                            return true;
+                        }
+                        catch {
+                            return false;
+                        }
+                    })();
+                    if (!hasGitDir) {
+                        (0,core.info)(`[analysis_chain] no git repo found at ${workDir}, performing auto checkout...`);
+                        try {
+                            const repo = process.env.GITHUB_REPOSITORY ?? '';
+                            const headRef = process.env.GITHUB_HEAD_REF ?? '';
+                            const token = process.env.GITHUB_TOKEN ?? '';
+                            if (repo && token) {
+                                (0,external_child_process_.execSync)(`git clone --depth=1 ${headRef ? `--branch ${headRef}` : ''} https://x-access-token:${token}@github.com/${repo}.git .`, { cwd: workDir, encoding: 'utf8', timeout: 60000 });
+                                (0,core.info)(`[analysis_chain] auto checkout completed for ${repo}${headRef ? `@${headRef}` : ''}`);
+                            }
+                            else {
+                                (0,core.warning)(`[analysis_chain] cannot auto checkout: GITHUB_REPOSITORY or GITHUB_TOKEN not set`);
+                            }
+                        }
+                        catch (e) {
+                            (0,core.warning)(`[analysis_chain] auto checkout failed: ${e.message ?? e}`);
+                        }
+                    }
+                    else {
+                        (0,core.info)(`[analysis_chain] git repo detected at ${workDir}`);
+                    }
                     // 预先获取仓库文件列表，注入 prompt 避免模型猜测路径
                     let repoFileList = '';
                     try {
