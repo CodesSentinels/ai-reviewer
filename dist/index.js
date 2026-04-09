@@ -8621,17 +8621,23 @@ function executeShellCommand(command, cwd) {
         }
         const stderr = (e.stderr ?? '').substring(0, 1024);
         const stdout = (e.stdout ?? '').substring(0, SHELL_MAX_OUTPUT_LENGTH);
-        // 路径不存在时，搜索相似文件名给模型提示正确路径
-        const noSuchFile = stderr.match(/cannot open '?([^':]+)'?.*No such file|No such file.*'([^']+)'/);
-        if (noSuchFile != null) {
-            const badPath = (noSuchFile[1] ?? noSuchFile[2] ?? '').trim();
+        // 路径不存在时，搜索相似文件/目录给模型提示正确路径
+        // 匹配多种格式：
+        //   ls: cannot access 'src/composables/': No such file or directory
+        //   grep: utils/: No such file or directory
+        //   head: cannot open 'pages/search.vue' for reading: No such file or directory
+        const noSuchMatch = stderr.match(/cannot (?:open|access) '?([^':\n]+?)'?(?:\s+for \w+)?:\s*No such file/m) ??
+            stderr.match(/^\w+:\s+([^:\n]+?):\s+No such file/m);
+        if (noSuchMatch != null) {
+            const badPath = noSuchMatch[1].trim().replace(/\/$/, '');
             const basename = badPath.split('/').pop() ?? '';
             if (basename) {
                 try {
-                    const similar = (0,external_child_process_.execSync)(`find . -type f -name "${basename}" -not -path "./.git/*" -not -path "./node_modules/*" -not -path "./dist/*"`, { cwd, encoding: 'utf8', timeout: 5000, shell: '/bin/sh' }).trim();
+                    // 同时搜索文件和目录
+                    const similar = (0,external_child_process_.execSync)(`find . \\( -type f -o -type d \\) -name "${basename}" -not -path "./.git/*" -not -path "./node_modules/*" -not -path "./dist/*"`, { cwd, encoding: 'utf8', timeout: 5000, shell: '/bin/sh' }).trim();
                     const hint = similar
                         ? `Hint: '${badPath}' not found. Correct path(s): ${similar.split('\n').map(p => p.replace(/^\.\//, '')).join(', ')}`
-                        : `Hint: '${badPath}' not found and no file with that name exists in this repo.`;
+                        : `Hint: '${badPath}' not found. No file or directory with that name exists in this repo.`;
                     return { stdout, stderr: `${stderr}\n${hint}`, exitCode: e.status ?? 1, timedOut: false };
                 }
                 catch { /* ignore */ }
