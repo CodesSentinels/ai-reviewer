@@ -43,7 +43,8 @@ async function run(): Promise<void> {
     getInput('language'),
     getBooleanInput('enable_dependency_analysis'),
     getInput('max_dependency_files'),
-    getBooleanInput('enable_web_search')
+    getBooleanInput('enable_web_search'),
+    getBooleanInput('enable_shell')
   )
 
   // 打印所有配置项，方便调试
@@ -65,6 +66,7 @@ async function run(): Promise<void> {
       new OpenAIOptions(
         options.openaiLightModel,
         options.lightTokenLimits,
+        false,
         false
       )
     )

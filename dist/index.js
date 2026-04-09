@@ -13,6 +13,8 @@ __nccwpck_require__.d(__webpack_exports__, {
 
 // EXTERNAL MODULE: ./node_modules/.pnpm/@actions+core@1.11.1/node_modules/@actions/core/lib/core.js
 var core = __nccwpck_require__(1078);
+// EXTERNAL MODULE: external "child_process"
+var external_child_process_ = __nccwpck_require__(2081);
 ;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/internal/tslib.mjs
 function __classPrivateFieldSet(receiver, state, value, kind, f) {
     if (kind === "m")
@@ -8551,6 +8553,60 @@ async function pRetry(input, options) {
 
 
 
+
+const DEFAULT_LOCAL_SHELL_TIMEOUT_MS = 60_000;
+const DEFAULT_LOCAL_SHELL_MAX_OUTPUT_LENGTH = 4_096;
+const MAX_LOCAL_SHELL_TURNS = 8;
+const LOCAL_SHELL_OUTPUT_TRUNCATED = '\n... (truncated)';
+const LOCAL_SHELL_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
+const getLocalShellBinary = () => {
+    if (process.env.SHELL) {
+        return process.env.SHELL;
+    }
+    if (process.platform === 'win32') {
+        return process.env.ComSpec ?? 'cmd.exe';
+    }
+    return '/bin/bash';
+};
+const truncateText = (text, maxLength) => {
+    if (maxLength <= 0) {
+        return '';
+    }
+    if (text.length <= maxLength) {
+        return text;
+    }
+    if (maxLength <= LOCAL_SHELL_OUTPUT_TRUNCATED.length) {
+        return text.substring(0, maxLength);
+    }
+    return `${text.substring(0, maxLength - LOCAL_SHELL_OUTPUT_TRUNCATED.length)}${LOCAL_SHELL_OUTPUT_TRUNCATED}`;
+};
+const truncateShellStreams = (stdout, stderr, maxLength) => {
+    if (maxLength <= 0) {
+        return { stdout: '', stderr: '' };
+    }
+    const totalLength = stdout.length + stderr.length;
+    if (totalLength <= maxLength) {
+        return { stdout, stderr };
+    }
+    if (stdout.length === 0) {
+        return { stdout, stderr: truncateText(stderr, maxLength) };
+    }
+    if (stderr.length === 0) {
+        return { stdout: truncateText(stdout, maxLength), stderr };
+    }
+    let stdoutBudget = Math.max(1, Math.floor((maxLength * stdout.length) / totalLength));
+    let stderrBudget = Math.max(1, maxLength - stdoutBudget);
+    if (stdoutBudget + stderrBudget > maxLength) {
+        stderrBudget = Math.max(1, maxLength - stdoutBudget);
+    }
+    else if (stdoutBudget + stderrBudget < maxLength) {
+        stdoutBudget += maxLength - (stdoutBudget + stderrBudget);
+    }
+    return {
+        stdout: truncateText(stdout, stdoutBudget),
+        stderr: truncateText(stderr, stderrBudget)
+    };
+};
 /**
  * Bot 类 - AI 对话机器人
  *
@@ -8633,57 +8689,22 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
             return ['', {}, []];
         }
         if (this.client != null) {
-            // 构建工具列表（可选启用 web search）
-            const tools = [];
-            if (this.enableWebSearch) {
-                // search_context_size 是 OpenAI Responses API 中 web_search 工具的参数，用于控制网页搜索时获取的上下文量。
-                // 'low' — 搜索结果少，速度快，token 消耗低
-                // 'medium' — 默认值
-                // 'high' — 获取更多搜索结果和上下文，回答更全面，但 token 消耗更高
-                // 这里设为 'high' 是为了让模型在做 web search 时尽可能多地获取信息，提高回答质量。
-                tools.push({ type: 'web_search', search_context_size: 'high' });
-            }
-            if (this.enableShell) {
-                tools.push({ type: 'shell', environment: { type: 'local' } });
-            }
+            const tools = this.buildTools();
             (0,core.info)(`[web_search_debug] model=${this.model}, enableWebSearch=${this.enableWebSearch}, enableShell=${this.enableShell} , tools=${JSON.stringify(tools)}`);
-            // 构建 Responses API 请求参数
-            const params = {
-                model: this.model,
-                instructions: this.systemMessage,
-                input: message,
-                temperature: this.temperature,
-                max_output_tokens: this.maxOutputTokens,
-                ...(tools.length > 0 && { tools }),
-                ...(ids.previousResponseId && {
-                    previous_response_id: ids.previousResponseId
-                })
-            };
-            let response;
-            try {
-                // 使用 pRetry 发送消息，失败时自动重试（重试次数由配置决定）
-                response = await pRetry(() => this.client.responses.create(params), {
-                    retries: this.options.openaiRetries
-                });
-            }
-            catch (e) {
-                if (e instanceof APIError) {
-                    // info(
-                    //   `response: ${response}, failed to send message to openai: ${e}, backtrace: ${e.stack}`
-                    // )
-                }
-            }
-            // 记录响应时间
-            const end = Date.now();
-            // info(`response: ${JSON.stringify(response)}`)
-            (0,core.info)(`openai sendMessage (including retries) response time: ${end - start} ms`);
-            // 从响应输出中提取文本、分析步骤，并记录 web_search 和 reasoning 信息
             let responseText = '';
             const analysisSteps = [];
-            if (response?.output) {
+            let response = await this.createResponse(this.buildParams(message, ids.previousResponseId, tools));
+            for (let turn = 0; turn < MAX_LOCAL_SHELL_TURNS; turn++) {
+                if (response == null) {
+                    break;
+                }
+                if (response.output == null) {
+                    (0,core.warning)('openai response is null');
+                    break;
+                }
+                const pendingShellCalls = [];
                 const outputTypes = response.output.map((item) => item.type);
                 (0,core.info)(`[web_search_debug] response output types: ${JSON.stringify(outputTypes)}`);
-                // 逐项遍历 output，记录每个 item 的 type 和完整结构（用于调试）
                 for (let i = 0; i < response.output.length; i++) {
                     const item = response.output[i];
                     (0,core.info)(`[analysis_chain_debug] output[${i}] type="${item.type}", keys=${JSON.stringify(Object.keys(item))}`);
@@ -8697,32 +8718,13 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
                     if (item.type === 'shell_call') {
                         const shellItem = item;
                         (0,core.info)(`[analysis_chain_debug] shell_call found! id=${shellItem.id}, commands=${JSON.stringify(shellItem.action?.commands)}, status=${shellItem.status}`);
-                        analysisSteps.push({
-                            type: 'shell',
-                            commands: shellItem.action?.commands ?? []
-                        });
+                        this.ensureShellAnalysisStep(analysisSteps, shellItem);
+                        pendingShellCalls.push(shellItem);
                     }
                     if (item.type === 'shell_call_output') {
                         const shellOutput = item;
                         (0,core.info)(`[analysis_chain_debug] shell_call_output found! call_id=${shellOutput.call_id}, output_count=${shellOutput.output?.length ?? 0}`);
-                        // 将输出关联到最近的 shell 分析步骤
-                        const lastShellStep = [...analysisSteps].reverse().find(s => s.type === 'shell');
-                        if (lastShellStep && shellOutput.output) {
-                            for (const out of shellOutput.output) {
-                                (0,core.info)(`[analysis_chain_debug] shell output chunk: stdout_len=${out.stdout?.length ?? 0}, stderr_len=${out.stderr?.length ?? 0}, outcome=${JSON.stringify(out.outcome)}`);
-                                lastShellStep.stdout = (lastShellStep.stdout ?? '') + (out.stdout ?? '');
-                                lastShellStep.stderr = (lastShellStep.stderr ?? '') + (out.stderr ?? '');
-                                if (out.outcome?.type === 'exit') {
-                                    lastShellStep.exitCode = out.outcome.exit_code;
-                                }
-                                else if (out.outcome?.type === 'timeout') {
-                                    lastShellStep.timedOut = true;
-                                }
-                            }
-                        }
-                        else {
-                            (0,core.info)(`[analysis_chain_debug] shell_call_output but no matching shell step found or no output`);
-                        }
+                        this.attachShellOutput(analysisSteps, shellOutput.call_id, shellOutput.output);
                     }
                     if (item.type === 'message') {
                         for (const content of item.content) {
@@ -8735,9 +8737,15 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
                         }
                     }
                 }
-            }
-            else {
-                (0,core.warning)('openai response is null');
+                if (pendingShellCalls.length === 0) {
+                    break;
+                }
+                if (turn === MAX_LOCAL_SHELL_TURNS - 1) {
+                    (0,core.warning)(`Reached local shell turn limit (${MAX_LOCAL_SHELL_TURNS}) for response ${response.id}`);
+                    break;
+                }
+                const shellOutputs = await this.executeShellCalls(pendingShellCalls, analysisSteps);
+                response = await this.createResponse(this.buildParams(shellOutputs, response.id, tools));
             }
             (0,core.info)(`[analysis_chain] total analysis steps captured: ${analysisSteps.length}`);
             if (analysisSteps.length > 0) {
@@ -8763,6 +8771,176 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
             (0,core.setFailed)('The OpenAI API is not initialized');
         }
         return ['', {}, []];
+    };
+    buildTools = () => {
+        const tools = [];
+        if (this.enableWebSearch) {
+            tools.push({ type: 'web_search', search_context_size: 'high' });
+        }
+        if (this.enableShell) {
+            tools.push({ type: 'shell', environment: { type: 'local' } });
+        }
+        return tools;
+    };
+    buildParams = (input, previousResponseId, tools) => {
+        return {
+            model: this.model,
+            instructions: this.systemMessage,
+            input,
+            temperature: this.temperature,
+            max_output_tokens: this.maxOutputTokens,
+            ...(tools.length > 0 && { tools }),
+            ...(previousResponseId && {
+                previous_response_id: previousResponseId
+            })
+        };
+    };
+    createResponse = async (params) => {
+        const start = Date.now();
+        try {
+            const response = await pRetry(() => this.client.responses.create(params), {
+                retries: this.options.openaiRetries
+            });
+            (0,core.info)(`openai sendMessage (including retries) response time: ${Date.now() - start} ms`);
+            return response;
+        }
+        catch (e) {
+            (0,core.info)(`openai sendMessage (including retries) response time: ${Date.now() - start} ms`);
+            if (e instanceof APIError) {
+                (0,core.warning)(`Failed to send message to openai: ${e}, backtrace: ${e.stack}`);
+            }
+            return undefined;
+        }
+    };
+    ensureShellAnalysisStep = (analysisSteps, shellCall) => {
+        const existingStep = analysisSteps.find(step => step.type === 'shell' && step.callId === shellCall.call_id);
+        if (existingStep) {
+            existingStep.commands = shellCall.action?.commands ?? existingStep.commands;
+            existingStep.status = shellCall.status ?? existingStep.status;
+            return existingStep;
+        }
+        const step = {
+            type: 'shell',
+            callId: shellCall.call_id,
+            commands: shellCall.action?.commands ?? [],
+            status: shellCall.status ?? undefined
+        };
+        analysisSteps.push(step);
+        return step;
+    };
+    attachShellOutput = (analysisSteps, callId, output) => {
+        const shellStep = [...analysisSteps]
+            .reverse()
+            .find(step => step.type === 'shell' && step.callId === callId);
+        if (shellStep == null || output.length === 0) {
+            (0,core.info)('[analysis_chain_debug] shell_call_output but no matching shell step found or no output');
+            return;
+        }
+        for (const out of output) {
+            (0,core.info)(`[analysis_chain_debug] shell output chunk: stdout_len=${out.stdout?.length ?? 0}, stderr_len=${out.stderr?.length ?? 0}, outcome=${JSON.stringify(out.outcome)}`);
+            shellStep.stdout = (shellStep.stdout ?? '') + (out.stdout ?? '');
+            shellStep.stderr = (shellStep.stderr ?? '') + (out.stderr ?? '');
+            if (out.outcome.type === 'exit') {
+                shellStep.exitCode = out.outcome.exit_code;
+            }
+            else if (out.outcome.type === 'timeout') {
+                shellStep.timedOut = true;
+            }
+        }
+    };
+    executeShellCalls = async (shellCalls, analysisSteps) => {
+        const shellOutputs = [];
+        for (const shellCall of shellCalls) {
+            const step = this.ensureShellAnalysisStep(analysisSteps, shellCall);
+            const shellOutput = await this.runLocalShellCall(shellCall);
+            this.attachShellOutput(analysisSteps, shellCall.call_id, shellOutput.output);
+            step.status = 'completed';
+            shellOutputs.push(shellOutput);
+        }
+        return shellOutputs;
+    };
+    runLocalShellCall = async (shellCall) => {
+        const commands = shellCall.action?.commands ?? [];
+        const timeoutMs = shellCall.action?.timeout_ms ?? DEFAULT_LOCAL_SHELL_TIMEOUT_MS;
+        const requestedMaxOutputLength = shellCall.action?.max_output_length ?? null;
+        const effectiveMaxOutputLength = requestedMaxOutputLength ?? DEFAULT_LOCAL_SHELL_MAX_OUTPUT_LENGTH;
+        let remainingOutputBudget = effectiveMaxOutputLength;
+        const output = [];
+        for (let i = 0; i < commands.length; i++) {
+            const command = commands[i];
+            (0,core.info)(`[local_shell] executing command ${i + 1}/${commands.length} for call ${shellCall.call_id}: ${command}`);
+            const result = await this.runLocalShellCommand(command, timeoutMs, effectiveMaxOutputLength);
+            const commandsRemaining = commands.length - i;
+            const commandBudget = remainingOutputBudget > 0
+                ? Math.max(1, Math.floor(remainingOutputBudget / commandsRemaining))
+                : 0;
+            const truncatedOutput = truncateShellStreams(result.stdout, result.stderr, commandBudget);
+            remainingOutputBudget = Math.max(0, remainingOutputBudget -
+                truncatedOutput.stdout.length -
+                truncatedOutput.stderr.length);
+            output.push({
+                stdout: truncatedOutput.stdout,
+                stderr: truncatedOutput.stderr,
+                outcome: result.timedOut
+                    ? { type: 'timeout' }
+                    : {
+                        type: 'exit',
+                        exit_code: result.exitCode ?? 1
+                    }
+            });
+        }
+        return {
+            type: 'shell_call_output',
+            call_id: shellCall.call_id,
+            max_output_length: requestedMaxOutputLength,
+            output
+        };
+    };
+    runLocalShellCommand = async (command, timeoutMs, maxOutputLength) => {
+        const shell = getLocalShellBinary();
+        const maxBuffer = Math.max(1_024 * 1_024, Math.min(LOCAL_SHELL_MAX_BUFFER_BYTES, Math.max(maxOutputLength * 8, 1_024 * 1_024)));
+        try {
+            const { stdout, stderr } = await new Promise((resolve, reject) => {
+                (0,external_child_process_.exec)(command, {
+                    cwd: process.cwd(),
+                    timeout: timeoutMs,
+                    maxBuffer,
+                    ...(shell ? { shell } : {})
+                }, (error, stdout, stderr) => {
+                    if (error != null) {
+                        const enrichedError = error;
+                        enrichedError.stdout = stdout;
+                        enrichedError.stderr = stderr;
+                        reject(enrichedError);
+                        return;
+                    }
+                    resolve({ stdout, stderr });
+                });
+            });
+            return {
+                stdout,
+                stderr,
+                exitCode: 0,
+                timedOut: false
+            };
+        }
+        catch (error) {
+            const shellError = error;
+            const timedOut = shellError.signal === 'SIGTERM' &&
+                (shellError.killed === true || shellError.code === 'ETIMEDOUT');
+            const exitCode = typeof shellError.code === 'number'
+                ? shellError.code
+                : timedOut
+                    ? undefined
+                    : 1;
+            return {
+                stdout: shellError.stdout ?? '',
+                stderr: shellError.stderr ??
+                    (error instanceof Error ? error.message : String(error)),
+                exitCode,
+                timedOut
+            };
+        }
     };
 }
 
@@ -9698,7 +9876,7 @@ __nccwpck_require__.r(__webpack_exports__);
 
 async function run() {
     // 从 action.yml 中读取所有配置参数，构建 Options 配置对象
-    const options = new _options__WEBPACK_IMPORTED_MODULE_2__/* .Options */ .Ei((0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('debug'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('disable_review'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('disable_release_notes'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_files'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('review_simple_changes'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('review_comment_lgtm'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getMultilineInput)('path_filters'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('system_message'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_light_model'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_heavy_model'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_model_temperature'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_retries'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_timeout_ms'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_concurrency_limit'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('github_concurrency_limit'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_base_url'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('language'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_dependency_analysis'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_dependency_files'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_web_search'));
+    const options = new _options__WEBPACK_IMPORTED_MODULE_2__/* .Options */ .Ei((0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('debug'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('disable_review'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('disable_release_notes'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_files'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('review_simple_changes'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('review_comment_lgtm'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getMultilineInput)('path_filters'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('system_message'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_light_model'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_heavy_model'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_model_temperature'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_retries'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_timeout_ms'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_concurrency_limit'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('github_concurrency_limit'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_base_url'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('language'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_dependency_analysis'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_dependency_files'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_web_search'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_shell'));
     // 打印所有配置项，方便调试
     options.print();
     // 构建提示词模板对象，包含用户自定义的摘要和发布说明提示词
@@ -9707,7 +9885,7 @@ async function run() {
     // 初始化轻量模型 Bot（默认 gpt-5.4-nano），用于快速生成文件摘要
     let lightBot = null;
     try {
-        lightBot = new _bot__WEBPACK_IMPORTED_MODULE_1__/* .Bot */ .r(options, new _options__WEBPACK_IMPORTED_MODULE_2__/* .OpenAIOptions */ .i0(options.openaiLightModel, options.lightTokenLimits, false));
+        lightBot = new _bot__WEBPACK_IMPORTED_MODULE_1__/* .Bot */ .r(options, new _options__WEBPACK_IMPORTED_MODULE_2__/* .OpenAIOptions */ .i0(options.openaiLightModel, options.lightTokenLimits, false, false));
     }
     catch (e) {
         (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Skipped: failed to create summary bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`);

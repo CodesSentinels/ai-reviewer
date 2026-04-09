@@ -238,6 +238,13 @@ inputs:
       model can search the internet to verify API usage, check documentation,
       and validate behavior.'
     default: 'true'
+  enable_shell:
+    required: false
+    description:
+      'Enable local shell for the heavy review model. When enabled, the action
+      executes model-requested shell commands on the runner and sends the
+      output back to the model.'
+    default: 'true'
   language:
     required: false
     description: ISO code for the response language
