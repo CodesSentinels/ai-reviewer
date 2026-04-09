@@ -15293,6 +15293,7 @@ ${commentChain}
                     (0,core.info)(`[analysis_chain] ${filename}: formatted markdown length=${analysisChainMd.length}, empty=${analysisChainMd === ''}`);
                     // 解析 AI 响应，提取结构化的审查评论
                     const reviews = parseReview(response, patches, options.debug);
+                    let analysisChainAttached = false;
                     for (const review of reviews) {
                         // 过滤 LGTM 评论（如果配置为不保留）
                         if (!options.reviewCommentLGTM &&
@@ -15307,11 +15308,15 @@ ${commentChain}
                         }
                         try {
                             reviewCount += 1;
-                            // 将 Analysis chain 附加到审查评论末尾
-                            const commentWithChain = analysisChainMd
+                            // 每个文件只在第一条评论上附加一次 Analysis chain，避免重复刷屏
+                            const shouldAttachAnalysisChain = analysisChainMd !== '' && !analysisChainAttached;
+                            const commentWithChain = shouldAttachAnalysisChain
                                 ? `${review.comment}\n\n${analysisChainMd}`
                                 : review.comment;
-                            (0,core.info)(`[analysis_chain] ${filename}: comment line ${review.startLine}-${review.endLine}, hasChain=${!!analysisChainMd}, finalLen=${commentWithChain.length}`);
+                            if (shouldAttachAnalysisChain) {
+                                analysisChainAttached = true;
+                            }
+                            (0,core.info)(`[analysis_chain] ${filename}: comment line ${review.startLine}-${review.endLine}, hasChain=${shouldAttachAnalysisChain}, finalLen=${commentWithChain.length}`);
                             // 将审查评论加入缓冲区
                             await commenter.bufferReviewComment(filename, review.startLine, review.endLine, commentWithChain);
                         }
@@ -15400,6 +15405,12 @@ ${reviewsSkipped.length > 0
 // ==================== Analysis Chain 格式化 ====================
 /** 输出截断上限（字符数），避免评论过长 */
 const MAX_SHELL_OUTPUT_LENGTH = 800;
+function formatShellCommandForDisplay(command) {
+    return command
+        .replace(/\s+&&\s+/g, ' &&\n')
+        .replace(/\s+\|\|\s+/g, ' ||\n')
+        .replace(/\s+\|\s+/g, ' |\n');
+}
 /**
  * 将模型执行的分析步骤格式化为 CodeRabbit 风格的 Analysis chain
  *
@@ -15415,9 +15426,12 @@ function formatAnalysisChain(steps) {
         const step = steps[idx];
         (0,core.info)(`[formatAnalysisChain] step[${idx}]: type=${step.type}, commands=${JSON.stringify(step.commands)}, stdout_len=${step.stdout?.length ?? 0}`);
         if (step.type === 'shell') {
-            const cmds = step.commands?.join(' && ') ?? '';
             chain += '🏁 Shell executed:\n\n';
-            chain += `\`\`\`bash\n${cmds}\n\`\`\`\n\n`;
+            for (let cmdIdx = 0; cmdIdx < (step.commands?.length ?? 0); cmdIdx++) {
+                const command = step.commands?.[cmdIdx] ?? '';
+                chain += `Command ${cmdIdx + 1}:\n`;
+                chain += `\`\`\`bash\n${formatShellCommandForDisplay(command)}\n\`\`\`\n\n`;
+            }
             if (step.stdout) {
                 const truncated = step.stdout.length > MAX_SHELL_OUTPUT_LENGTH
                     ? `${step.stdout.substring(0, MAX_SHELL_OUTPUT_LENGTH)}\n... (truncated)`
