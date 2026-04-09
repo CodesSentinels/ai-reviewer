@@ -8812,7 +8812,22 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
                     else {
                         (0,core.info)(`[analysis_chain] executing: ${cmd}`);
                         result = executeShellCommandString(cmd, cwd);
-                        const output = result.stdout || (result.stderr ? `[stderr] ${result.stderr}` : '(no output)');
+                        (0,core.info)(`[analysis_chain] result: exitCode=${result.exitCode}, stdout.len=${result.stdout.length}, stderr.len=${result.stderr.length}`);
+                        let output;
+                        if (result.stdout) {
+                            output = result.stdout;
+                        }
+                        else if (result.exitCode === 1 && !result.stderr) {
+                            // grep 等命令在无匹配时 exit code = 1，stdout/stderr 都为空
+                            output = '(no matches found)';
+                            (0,core.info)(`[analysis_chain] command returned exit 1 with no output (likely grep no match)`);
+                        }
+                        else if (result.stderr) {
+                            output = `[stderr] ${result.stderr}`;
+                        }
+                        else {
+                            output = '(no output)';
+                        }
                         chainLog.push(`\`$ ${cmd}\`\n\`\`\`\n${output}\n\`\`\``);
                     }
                     commandOutputs.push({
@@ -15325,6 +15340,13 @@ ${commentChain}
                     }
                     catch {
                         repoFileList = '(unable to list files)';
+                    }
+                    (0,core.info)(`[analysis_chain] workDir=${workDir}, repoFileList.len=${repoFileList.length}, files=${repoFileList ? repoFileList.split('\n').length : 0}`);
+                    if (repoFileList.length > 0) {
+                        (0,core.info)(`[analysis_chain] first 5 files: ${repoFileList.split('\n').slice(0, 5).join(', ')}`);
+                    }
+                    else {
+                        (0,core.warning)(`[analysis_chain] repoFileList is EMPTY — find returned no source files in ${workDir}. Shell exploration will be ineffective.`);
                     }
                     const promptWithStructure = `## Repository source files (use ONLY these paths — do not guess)\n\`\`\`\n${repoFileList}\n\`\`\`\n\n` +
                         prompts.renderAnalyzeFileDiff(ins);

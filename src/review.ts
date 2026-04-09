@@ -757,6 +757,12 @@ ${commentChain}
           } catch {
             repoFileList = '(unable to list files)'
           }
+          info(`[analysis_chain] workDir=${workDir}, repoFileList.len=${repoFileList.length}, files=${repoFileList ? repoFileList.split('\n').length : 0}`)
+          if (repoFileList.length > 0) {
+            info(`[analysis_chain] first 5 files: ${repoFileList.split('\n').slice(0, 5).join(', ')}`)
+          } else {
+            warning(`[analysis_chain] repoFileList is EMPTY — find returned no source files in ${workDir}. Shell exploration will be ineffective.`)
+          }
           const promptWithStructure =
             `## Repository source files (use ONLY these paths — do not guess)\n\`\`\`\n${repoFileList}\n\`\`\`\n\n` +
             prompts.renderAnalyzeFileDiff(ins)

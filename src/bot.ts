@@ -306,7 +306,19 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
           } else {
             info(`[analysis_chain] executing: ${cmd}`)
             result = executeShellCommandString(cmd, cwd)
-            const output = result.stdout || (result.stderr ? `[stderr] ${result.stderr}` : '(no output)')
+            info(`[analysis_chain] result: exitCode=${result.exitCode}, stdout.len=${result.stdout.length}, stderr.len=${result.stderr.length}`)
+            let output: string
+            if (result.stdout) {
+              output = result.stdout
+            } else if (result.exitCode === 1 && !result.stderr) {
+              // grep 等命令在无匹配时 exit code = 1，stdout/stderr 都为空
+              output = '(no matches found)'
+              info(`[analysis_chain] command returned exit 1 with no output (likely grep no match)`)
+            } else if (result.stderr) {
+              output = `[stderr] ${result.stderr}`
+            } else {
+              output = '(no output)'
+            }
             chainLog.push(`\`$ ${cmd}\`\n\`\`\`\n${output}\n\`\`\``)
           }
 
