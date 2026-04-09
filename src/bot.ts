@@ -200,7 +200,10 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
             outputTypes
           )}`
         )
-        for (const item of response.output) {
+        // 逐项遍历 output，记录每个 item 的 type 和完整结构（用于调试）
+        for (let i = 0; i < response.output.length; i++) {
+          const item = response.output[i]
+          info(`[analysis_chain_debug] output[${i}] type="${item.type}", keys=${JSON.stringify(Object.keys(item))}`)
           if (item.type === 'web_search_call') {
             info(
               `[web_search] executed, id: ${(item as any).id}, status: ${
@@ -215,7 +218,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
           if (item.type === 'shell_call') {
             const shellItem = item as any
             info(
-              `[shell] executed, id: ${shellItem.id}, commands: ${JSON.stringify(shellItem.action?.commands)}`
+              `[analysis_chain_debug] shell_call found! id=${shellItem.id}, commands=${JSON.stringify(shellItem.action?.commands)}, status=${shellItem.status}`
             )
             analysisSteps.push({
               type: 'shell',
@@ -224,10 +227,14 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
           }
           if (item.type === 'shell_call_output') {
             const shellOutput = item as any
+            info(
+              `[analysis_chain_debug] shell_call_output found! call_id=${shellOutput.call_id}, output_count=${shellOutput.output?.length ?? 0}`
+            )
             // 将输出关联到最近的 shell 分析步骤
             const lastShellStep = [...analysisSteps].reverse().find(s => s.type === 'shell')
             if (lastShellStep && shellOutput.output) {
               for (const out of shellOutput.output) {
+                info(`[analysis_chain_debug] shell output chunk: stdout_len=${out.stdout?.length ?? 0}, stderr_len=${out.stderr?.length ?? 0}, outcome=${JSON.stringify(out.outcome)}`)
                 lastShellStep.stdout = (lastShellStep.stdout ?? '') + (out.stdout ?? '')
                 lastShellStep.stderr = (lastShellStep.stderr ?? '') + (out.stderr ?? '')
                 if (out.outcome?.type === 'exit') {
@@ -236,6 +243,8 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
                   lastShellStep.timedOut = true
                 }
               }
+            } else {
+              info(`[analysis_chain_debug] shell_call_output but no matching shell step found or no output`)
             }
           }
           if (item.type === 'message') {
@@ -253,8 +262,12 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
         warning('openai response is null')
       }
 
+      info(`[analysis_chain] total analysis steps captured: ${analysisSteps.length}`)
       if (analysisSteps.length > 0) {
-        info(`[analysis_chain] captured ${analysisSteps.length} analysis steps`)
+        for (let i = 0; i < analysisSteps.length; i++) {
+          const s = analysisSteps[i]
+          info(`[analysis_chain] step[${i}]: type=${s.type}, commands=${JSON.stringify(s.commands)}, stdout_len=${s.stdout?.length ?? 0}, stderr_len=${s.stderr?.length ?? 0}`)
+        }
       }
 
       // 移除响应中可能存在的多余前缀 "with "

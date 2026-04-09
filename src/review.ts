@@ -744,7 +744,9 @@ ${commentChain}
           }
 
           // 格式化 Analysis chain（模型执行的 shell / web_search 步骤）
+          info(`[analysis_chain] ${filename}: received ${analysisSteps.length} analysis steps from bot`)
           const analysisChainMd = formatAnalysisChain(analysisSteps)
+          info(`[analysis_chain] ${filename}: formatted markdown length=${analysisChainMd.length}, empty=${analysisChainMd === ''}`)
 
           // 解析 AI 响应，提取结构化的审查评论
           const reviews = parseReview(response, patches, options.debug)
@@ -769,6 +771,7 @@ ${commentChain}
               const commentWithChain = analysisChainMd
                 ? `${review.comment}\n\n${analysisChainMd}`
                 : review.comment
+              info(`[analysis_chain] ${filename}: comment line ${review.startLine}-${review.endLine}, hasChain=${!!analysisChainMd}, finalLen=${commentWithChain.length}`)
               // 将审查评论加入缓冲区
               await commenter.bufferReviewComment(
                 filename,
@@ -889,11 +892,14 @@ const MAX_SHELL_OUTPUT_LENGTH = 800
  * 展示模型在给出审查意见之前的推理/调查过程。
  */
 function formatAnalysisChain(steps: AnalysisStep[]): string {
+  info(`[formatAnalysisChain] called with ${steps.length} steps`)
   if (steps.length === 0) return ''
 
   let chain = '<details>\n<summary>🧩 Analysis chain</summary>\n\n'
 
-  for (const step of steps) {
+  for (let idx = 0; idx < steps.length; idx++) {
+    const step = steps[idx]
+    info(`[formatAnalysisChain] step[${idx}]: type=${step.type}, commands=${JSON.stringify(step.commands)}, stdout_len=${step.stdout?.length ?? 0}`)
     if (step.type === 'shell') {
       const cmds = step.commands?.join(' && ') ?? ''
       chain += '🏁 Shell executed:\n\n'
