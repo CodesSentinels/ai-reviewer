@@ -12,12 +12,11 @@
  * 支持增量审查：通过在摘要评论中存储已审查的 commit ID，
  * 后续运行只审查新增的变更，避免重复审查。
  */
-import {execSync} from 'child_process'
-import {error, info, warning} from '@actions/core'
+import { error, info, warning } from '@actions/core'
 // eslint-disable-next-line camelcase
-import {context as github_context} from '@actions/github'
+import { context as github_context } from '@actions/github'
 import pLimit from 'p-limit'
-import {type Bot} from './bot'
+import { type AnalysisStep, type Bot } from './bot'
 import {
   Commenter,
   COMMENT_REPLY_TAG,
@@ -33,12 +32,12 @@ import {
   formatDependencySummary,
   type DependencyContext
 } from './dependency-analyzer'
-import {Inputs} from './inputs'
-import {octokit} from './octokit'
-import {type Options} from './options'
-import {type Prompts} from './prompts'
-import {getRepoFileTree} from './repo-tree'
-import {getTokenCount} from './tokenizer'
+import { Inputs } from './inputs'
+import { octokit } from './octokit'
+import { type Options } from './options'
+import { type Prompts } from './prompts'
+import { getRepoFileTree } from './repo-tree'
+import { getTokenCount } from './tokenizer'
 
 // eslint-disable-next-line camelcase
 const context = github_context
@@ -141,8 +140,7 @@ export const codeReview = async (
   ) {
     // 首次审查或已是最新：从 base 分支开始
     info(
-      `Will review from the base commit: ${
-        context.payload.pull_request.base.sha as string
+      `Will review from the base commit: ${context.payload.pull_request.base.sha as string
       }`
     )
     highestReviewedCommitId = context.payload.pull_request.base.sha
@@ -249,8 +247,7 @@ export const codeReview = async (
           }
         } catch (e: any) {
           warning(
-            `Failed to get file contents: ${
-              e as string
+            `Failed to get file contents: ${e as string
             }. This is OK if it's a new file.`
           )
         }
@@ -339,13 +336,11 @@ ${hunks.oldHunk}
   // ==================== 构建状态消息 ====================
   let statusMsg = `<details>
 <summary>Commits</summary>
-Files that changed from the base of the PR and between ${highestReviewedCommitId} and ${
-    context.payload.pull_request.head.sha
-  } commits.
+Files that changed from the base of the PR and between ${highestReviewedCommitId} and ${context.payload.pull_request.head.sha
+    } commits.
 </details>
-${
-  filesAndChanges.length > 0
-    ? `
+${filesAndChanges.length > 0
+      ? `
 <details>
 <summary>Files selected (${filesAndChanges.length})</summary>
 
@@ -354,11 +349,10 @@ ${
         .join('\n* ')}
 </details>
 `
-    : ''
-}
-${
-  filterIgnoredFiles.length > 0
-    ? `
+      : ''
+    }
+${filterIgnoredFiles.length > 0
+      ? `
 <details>
 <summary>Files ignored due to filter (${filterIgnoredFiles.length})</summary>
 
@@ -366,8 +360,8 @@ ${
 
 </details>
 `
-    : ''
-}
+      : ''
+    }
 `
 
   // 更新摘要评论为"审查进行中"状态
@@ -559,34 +553,30 @@ AI Reviewer is an AI-powered code review tool that helps improve code quality.
 
   // 追加处理统计信息到状态消息
   statusMsg += `
-${
-  skippedFiles.length > 0
-    ? `
+${skippedFiles.length > 0
+      ? `
 <details>
-<summary>Files not processed due to max files limit (${
-        skippedFiles.length
+<summary>Files not processed due to max files limit (${skippedFiles.length
       })</summary>
 
 * ${skippedFiles.join('\n* ')}
 
 </details>
 `
-    : ''
-}
-${
-  summariesFailed.length > 0
-    ? `
+      : ''
+    }
+${summariesFailed.length > 0
+      ? `
 <details>
-<summary>Files not summarized due to errors (${
-        summariesFailed.length
+<summary>Files not summarized due to errors (${summariesFailed.length
       })</summary>
 
 * ${summariesFailed.join('\n* ')}
 
 </details>
 `
-    : ''
-}
+      : ''
+    }
 `
 
   // ==================== 阶段四：逐文件代码审查 ====================
@@ -613,55 +603,6 @@ ${
     const reviewsFailed: string[] = []
     let lgtmCount = 0    // LGTM 评论计数（被过滤掉的）
     let reviewCount = 0   // 实际发布的审查评论计数
-
-    // ---- 一次性初始化：确保工作目录已 checkout，预获取仓库文件列表 ----
-    const workDir = process.env.GITHUB_WORKSPACE ?? process.cwd()
-    const hasGitDir = (() => {
-      try {
-        execSync('git rev-parse --git-dir', {cwd: workDir, encoding: 'utf8', timeout: 5000})
-        return true
-      } catch {
-        return false
-      }
-    })()
-    if (!hasGitDir) {
-      info(`[analysis_chain] no git repo found at ${workDir}, performing auto checkout...`)
-      try {
-        const repo = process.env.GITHUB_REPOSITORY ?? ''
-        const headRef = process.env.GITHUB_HEAD_REF ?? ''
-        const token = process.env.GITHUB_TOKEN ?? ''
-        if (repo && token) {
-          execSync(
-            `git clone --depth=1 ${headRef ? `--branch ${headRef}` : ''} https://x-access-token:${token}@github.com/${repo}.git .`,
-            {cwd: workDir, encoding: 'utf8', timeout: 60000}
-          )
-          info(`[analysis_chain] auto checkout completed for ${repo}${headRef ? `@${headRef}` : ''}`)
-        } else {
-          warning(`[analysis_chain] cannot auto checkout: GITHUB_REPOSITORY or GITHUB_TOKEN not set`)
-        }
-      } catch (e: any) {
-        warning(`[analysis_chain] auto checkout failed: ${e.message ?? e}`)
-      }
-    } else {
-      info(`[analysis_chain] git repo detected at ${workDir}`)
-    }
-
-    let repoFileList = ''
-    try {
-      repoFileList = execSync(
-        'find . -maxdepth 5 -type f \\( -name "*.ts" -o -name "*.tsx" -o -name "*.vue" -o -name "*.js" -o -name "*.jsx" -o -name "*.py" -o -name "*.go" -o -name "*.java" -o -name "*.rs" \\) -not -path "./.git/*" -not -path "./node_modules/*" -not -path "./dist/*" | sed "s|^\\./||" | sort | head -300',
-        {cwd: workDir, encoding: 'utf8', timeout: 10000}
-      ).trim()
-    } catch {
-      repoFileList = '(unable to list files)'
-    }
-    info(`[analysis_chain] workDir=${workDir}, repoFileList.len=${repoFileList.length}, files=${repoFileList ? repoFileList.split('\n').length : 0}`)
-    if (repoFileList.length > 0) {
-      info(`[analysis_chain] first 5 files: ${repoFileList.split('\n').slice(0, 5).join(', ')}`)
-    } else {
-      warning(`[analysis_chain] repoFileList is EMPTY — find returned no source files in ${workDir}. Shell exploration will be ineffective.`)
-    }
-    // ---- 一次性初始化结束 ----
 
     /**
      * 对单个文件执行代码审查
@@ -753,8 +694,7 @@ ${
           }
         } catch (e: any) {
           warning(
-            `Failed to get comments: ${e as string}, skipping. backtrace: ${
-              e.stack as string
+            `Failed to get comments: ${e as string}, skipping. backtrace: ${e.stack as string
             }`
           )
         }
@@ -791,46 +731,9 @@ ${commentChain}
 
       // 如果成功打包了至少一个 patch，执行审查
       if (patchesPacked > 0) {
-        // 阶段 4a：使用重量模型 + local_shell 工具进行仓库探索式分析链生成
-        let analysisChainLog = ''   // shell 命令执行日志（展示给开发者）
-        let analysisSummary = ''    // 模型分析摘要（注入到审查上下文）
         try {
-          // workDir 和 repoFileList 已在循环外一次性初始化
-          const promptWithStructure =
-            `## Repository source files (use ONLY these paths — do not guess)\n\`\`\`\n${repoFileList}\n\`\`\`\n\n` +
-            prompts.renderAnalyzeFileDiff(ins)
-
-          info(`[analysis_chain] calling chatWithShell for ${filename}`)
-          const [analysisResponse, chainLog] = await heavyBot.chatWithShell(
-            promptWithStructure,
-            workDir
-          )
-          info(`[analysis_chain] chatWithShell returned: analysisResponse.len=${analysisResponse.length}, chainLog.len=${chainLog.length}`)
-          if (analysisResponse !== '' || chainLog !== '') {
-            const analysisTokens = getTokenCount(analysisResponse)
-            const tokenBudgetRemaining = options.heavyTokenLimits.requestTokens - tokens
-            info(`[analysis_chain] token budget: used=${tokens}, analysisTokens=${analysisTokens}, limit=${options.heavyTokenLimits.requestTokens}, remaining=${tokenBudgetRemaining}`)
-            // 仅在 token 预算充足时将分析摘要注入到审查上下文
-            if (tokens + analysisTokens <= options.heavyTokenLimits.requestTokens) {
-              analysisSummary = analysisResponse
-              ins.analysisChain = analysisResponse
-              tokens += analysisTokens
-              info(`[analysis_chain] injected into ins.analysisChain for ${filename}: ${analysisTokens} tokens, preview="${analysisResponse.substring(0, 150).replace(/\n/g, '\\n')}"`)
-            } else {
-              info(`[analysis_chain] skipped injection for ${filename}: analysisTokens=${analysisTokens} exceeds remaining budget=${tokenBudgetRemaining}`)
-            }
-            analysisChainLog = chainLog
-            info(`[analysis_chain] analysisChainLog set, len=${analysisChainLog.length}`)
-          } else {
-            warning(`[analysis_chain] chatWithShell returned empty for ${filename} — no analysis generated`)
-          }
-        } catch (e: any) {
-          warning(`Failed to generate analysis chain for ${filename}: ${e as string}`)
-        }
-
-        try {
-          // 阶段 4b：调用重量模型执行代码审查（注入分析链上下文）
-          const [response] = await heavyBot.chat(
+          // 调用重量模型执行代码审查
+          const [response, , analysisSteps] = await heavyBot.chat(
             prompts.renderReviewFileDiff(ins),
             {}
           )
@@ -839,35 +742,12 @@ ${commentChain}
             reviewsFailed.push(`${filename} (no response)`)
             return
           }
+
+          // 格式化 Analysis chain（模型执行的 shell / web_search 步骤）
+          const analysisChainMd = formatAnalysisChain(analysisSteps)
+
           // 解析 AI 响应，提取结构化的审查评论
           const reviews = parseReview(response, patches, options.debug)
-
-          // 将分析链（shell 日志 + 摘要）以折叠块形式附加到第一条实质性评论
-          const hasAnalysis = analysisChainLog !== '' || analysisSummary !== ''
-          info(`[analysis_chain] attaching to comment: hasAnalysis=${hasAnalysis}, reviews.length=${reviews.length}, analysisChainLog.len=${analysisChainLog.length}, analysisSummary.len=${analysisSummary.length}`)
-          if (hasAnalysis && reviews.length > 0) {
-            const firstSubstantive = reviews.find(
-              r =>
-                !r.comment.includes('LGTM') &&
-                !r.comment.includes('looks good to me')
-            )
-            info(`[analysis_chain] firstSubstantive found=${firstSubstantive != null}`)
-            if (firstSubstantive != null) {
-              const chainContent = [
-                analysisChainLog,
-                analysisSummary ? `**Summary**\n\n${analysisSummary}` : ''
-              ].filter(Boolean).join('\n\n---\n\n')
-              info(`[analysis_chain] chainContent.len=${chainContent.length}, prepending to comment at line ${firstSubstantive.startLine}-${firstSubstantive.endLine}`)
-              firstSubstantive.comment =
-                `<details>\n<summary>🧩 Analysis chain</summary>\n\n${chainContent}\n\n</details>\n\n` +
-                firstSubstantive.comment
-            } else {
-              info(`[analysis_chain] all ${reviews.length} review(s) are LGTM — analysis chain not attached`)
-            }
-          } else if (!hasAnalysis) {
-            info(`[analysis_chain] no analysis to attach (both chainLog and summary are empty)`)
-          }
-
           for (const review of reviews) {
             // 过滤 LGTM 评论（如果配置为不保留）
             if (
@@ -885,12 +765,16 @@ ${commentChain}
 
             try {
               reviewCount += 1
+              // 将 Analysis chain 附加到审查评论末尾
+              const commentWithChain = analysisChainMd
+                ? `${review.comment}\n\n${analysisChainMd}`
+                : review.comment
               // 将审查评论加入缓冲区
               await commenter.bufferReviewComment(
                 filename,
                 review.startLine,
                 review.endLine,
-                `${review.comment}`
+                commentWithChain
               )
             } catch (e: any) {
               reviewsFailed.push(`${filename} comment failed (${e as string})`)
@@ -898,8 +782,7 @@ ${commentChain}
           }
         } catch (e: any) {
           warning(
-            `Failed to review: ${e as string}, skipping. backtrace: ${
-              e.stack as string
+            `Failed to review: ${e as string}, skipping. backtrace: ${e.stack as string
             }`
           )
           reviewsFailed.push(`${filename} (${e as string})`)
@@ -927,30 +810,27 @@ ${commentChain}
 
     // 追加审查统计信息到状态消息
     statusMsg += `
-${
-  reviewsFailed.length > 0
-    ? `<details>
+${reviewsFailed.length > 0
+        ? `<details>
 <summary>Files not reviewed due to errors (${reviewsFailed.length})</summary>
 
 * ${reviewsFailed.join('\n* ')}
 
 </details>
 `
-    : ''
-}
-${
-  reviewsSkipped.length > 0
-    ? `<details>
-<summary>Files skipped from review due to trivial changes (${
-        reviewsSkipped.length
-      })</summary>
+        : ''
+      }
+${reviewsSkipped.length > 0
+        ? `<details>
+<summary>Files skipped from review due to trivial changes (${reviewsSkipped.length
+        })</summary>
 
 * ${reviewsSkipped.join('\n* ')}
 
 </details>
 `
-    : ''
-}
+        : ''
+      }
 <details>
 <summary>Review comments generated (${reviewCount + lgtmCount})</summary>
 
@@ -997,6 +877,51 @@ ${
 
 // ==================== Diff 解析辅助函数 ====================
 
+// ==================== Analysis Chain 格式化 ====================
+
+/** 输出截断上限（字符数），避免评论过长 */
+const MAX_SHELL_OUTPUT_LENGTH = 800
+
+/**
+ * 将模型执行的分析步骤格式化为 CodeRabbit 风格的 Analysis chain
+ *
+ * 生成可折叠的 `<details>` 块，包含每个 shell 命令及其输出、web search 调用等，
+ * 展示模型在给出审查意见之前的推理/调查过程。
+ */
+function formatAnalysisChain(steps: AnalysisStep[]): string {
+  if (steps.length === 0) return ''
+
+  let chain = '<details>\n<summary>🧩 Analysis chain</summary>\n\n'
+
+  for (const step of steps) {
+    if (step.type === 'shell') {
+      const cmds = step.commands?.join(' && ') ?? ''
+      chain += '🏁 Shell executed:\n\n'
+      chain += `\`\`\`bash\n${cmds}\n\`\`\`\n\n`
+      if (step.stdout) {
+        const truncated =
+          step.stdout.length > MAX_SHELL_OUTPUT_LENGTH
+            ? `${step.stdout.substring(0, MAX_SHELL_OUTPUT_LENGTH)}\n... (truncated)`
+            : step.stdout
+        chain += `Output:\n\`\`\`\n${truncated}\n\`\`\`\n\n`
+        chain += `Length of output: ${step.stdout.length}\n\n`
+      }
+      if (step.stderr) {
+        chain += `Stderr:\n\`\`\`\n${step.stderr.substring(0, MAX_SHELL_OUTPUT_LENGTH)}\n\`\`\`\n\n`
+      }
+      if (step.timedOut) {
+        chain += '⏱️ Command timed out.\n\n'
+      }
+      chain += '---\n\n'
+    } else if (step.type === 'web_search') {
+      chain += `🔍 Web search executed (status: ${step.status ?? 'unknown'})\n\n---\n\n`
+    }
+  }
+
+  chain += '</details>'
+  return chain
+}
+
 /**
  * 将完整的 patch 字符串按 @@ hunk 标头拆分为独立的 hunk 数组
  * 每个 hunk 以 @@ -a,b +c,d @@ 开头
@@ -1034,8 +959,8 @@ const splitPatch = (patch: string | null | undefined): string[] => {
 const patchStartEndLine = (
   patch: string
 ): {
-  oldHunk: {startLine: number; endLine: number}
-  newHunk: {startLine: number; endLine: number}
+  oldHunk: { startLine: number; endLine: number }
+  newHunk: { startLine: number; endLine: number }
 } | null => {
   const pattern = /(^@@ -(\d+),(\d+) \+(\d+),(\d+) @@)/gm
   const match = pattern.exec(patch)
@@ -1069,7 +994,7 @@ const patchStartEndLine = (
  */
 const parsePatch = (
   patch: string
-): {oldHunk: string; newHunk: string} | null => {
+): { oldHunk: string; newHunk: string } | null => {
   const hunkInfo = patchStartEndLine(patch)
   if (hunkInfo == null) {
     return null
@@ -1267,9 +1192,9 @@ ${review.comment}`
       codeBlockStartIndex = comment.indexOf(
         codeBlockStart,
         codeBlockStartIndex +
-          codeBlockStart.length +
-          sanitizedBlock.length +
-          codeBlockEnd.length
+        codeBlockStart.length +
+        sanitizedBlock.length +
+        codeBlockEnd.length
       )
     }
 

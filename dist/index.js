@@ -11,8 +11,6 @@ __nccwpck_require__.d(__webpack_exports__, {
   "r": () => (/* binding */ Bot)
 });
 
-// EXTERNAL MODULE: external "child_process"
-var external_child_process_ = __nccwpck_require__(2081);
 // EXTERNAL MODULE: ./node_modules/.pnpm/@actions+core@1.11.1/node_modules/@actions/core/lib/core.js
 var core = __nccwpck_require__(1078);
 ;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/internal/tslib.mjs
@@ -8553,117 +8551,6 @@ async function pRetry(input, options) {
 
 
 
-
-/** shell 分析链的配置常量 */
-const SHELL_MAX_OUTPUT_LENGTH = 4096;
-const SHELL_TIMEOUT_MS = 30000;
-const SHELL_MAX_ROUNDS = 10;
-/** 允许执行的 shell 命令白名单（仅只读命令） */
-const SHELL_ALLOWED_COMMANDS = new Set([
-    'rg', 'ripgrep', 'grep', 'find', 'cat', 'head', 'tail',
-    'wc', 'ls', 'git', 'echo', 'pwd', 'stat', 'file',
-    'sort', 'uniq', 'awk', 'sed', 'cut', 'tr', 'xargs', 'jq'
-]);
-/**
- * 检查命令是否在白名单内，且参数中没有危险的 shell 元字符
- */
-function isCommandAllowed(commandArray) {
-    if (!commandArray || commandArray.length === 0)
-        return false;
-    const cmd = commandArray[0].split('/').pop() ?? '';
-    if (!SHELL_ALLOWED_COMMANDS.has(cmd))
-        return false;
-    // 禁止参数中出现写操作相关的 shell 操作符
-    const dangerous = [';', '&&', '||', '$(', '`', '>&', '>>', '> ', '|&'];
-    for (const arg of commandArray) {
-        if (dangerous.some(d => arg.includes(d)))
-            return false;
-    }
-    return true;
-}
-/**
- * 安全执行 shell 命令（使用 execFileSync，避免 shell 注入）
- * 用于数组形式的命令，如 ['rg', 'pattern', 'path']
- */
-function executeShellCommand(commandArray, cwd) {
-    try {
-        const stdout = execFileSync(commandArray[0], commandArray.slice(1), {
-            cwd,
-            timeout: SHELL_TIMEOUT_MS,
-            maxBuffer: 1024 * 1024,
-            encoding: 'utf8'
-        });
-        return {
-            stdout: stdout.substring(0, SHELL_MAX_OUTPUT_LENGTH),
-            stderr: '',
-            exitCode: 0,
-            timedOut: false
-        };
-    }
-    catch (e) {
-        if (e.killed) {
-            return { stdout: '', stderr: 'Command timed out', exitCode: 124, timedOut: true };
-        }
-        return {
-            stdout: (e.stdout ?? '').substring(0, SHELL_MAX_OUTPUT_LENGTH),
-            stderr: (e.stderr ?? e.message ?? '').substring(0, 1024),
-            exitCode: e.status ?? 1,
-            timedOut: false
-        };
-    }
-}
-/**
- * 执行完整 shell 命令字符串（用于 shell tool 返回的 commands 字段）
- * commands 是完整 shell 字符串如 "rg pattern src/"，需通过 shell 执行
- */
-function executeShellCommandString(cmd, cwd) {
-    try {
-        const stdout = (0,external_child_process_.execSync)(cmd, {
-            cwd,
-            timeout: SHELL_TIMEOUT_MS,
-            maxBuffer: 1024 * 1024,
-            encoding: 'utf8',
-            shell: '/bin/sh'
-        });
-        return {
-            stdout: stdout.substring(0, SHELL_MAX_OUTPUT_LENGTH),
-            stderr: '',
-            exitCode: 0,
-            timedOut: false
-        };
-    }
-    catch (e) {
-        if (e.killed) {
-            return { stdout: '', stderr: 'Command timed out', exitCode: 124, timedOut: true };
-        }
-        const stderr = (e.stderr ?? e.message ?? '').substring(0, 1024);
-        const stdout = (e.stdout ?? '').substring(0, SHELL_MAX_OUTPUT_LENGTH);
-        // 若报 "No such file or directory"，自动搜索相似文件名给模型提示
-        const noSuchFile = stderr.match(/cannot open ['"]?([^'":\s]+)['"]? for reading|No such file or directory.*['"]([^'"]+)['"]/);
-        if (noSuchFile != null) {
-            const badPath = noSuchFile[1] ?? noSuchFile[2] ?? '';
-            const basename = badPath.split('/').pop() ?? '';
-            if (basename) {
-                try {
-                    const similar = (0,external_child_process_.execSync)(`find . -type f -name "${basename}" -not -path "./.git/*" -not -path "./node_modules/*" -not -path "./dist/*"`, { cwd, encoding: 'utf8', timeout: 5000 }).trim();
-                    const hint = similar
-                        ? `Hint: '${badPath}' not found. Similar files: ${similar.split('\n').map(p => p.replace(/^\.\//, '')).join(', ')}`
-                        : `Hint: '${badPath}' not found and no similar file exists in this repo.`;
-                    return { stdout, stderr: `${stderr}\n${hint}`, exitCode: e.status ?? 1, timedOut: false };
-                }
-                catch {
-                    // ignore hint errors
-                }
-            }
-        }
-        return {
-            stdout,
-            stderr,
-            exitCode: e.status ?? 1,
-            timedOut: false
-        };
-    }
-}
 /**
  * Bot 类 - AI 对话机器人
  *
@@ -8677,6 +8564,7 @@ class Bot {
     temperature; // 温度参数
     maxOutputTokens; // 最大输出 token 数
     enableWebSearch; // 是否启用 web search
+    enableShell; // 是否启用 enableShell
     options; // 全局配置选项
     constructor(options, openaiOptions) {
         this.options = options;
@@ -8684,6 +8572,7 @@ class Bot {
         this.temperature = options.openaiModelTemperature;
         this.maxOutputTokens = openaiOptions.tokenLimits.responseTokens;
         this.enableWebSearch = openaiOptions.enableWebSearch;
+        this.enableShell = openaiOptions.enableShell;
         if (process.env.OPENAI_API_KEY) {
             // 构建系统消息：包含自定义系统消息 + 知识截止日期 + 当前日期 + 语言要求
             const currentDate = new Date().toISOString().split('T')[0];
@@ -8714,7 +8603,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
      * @returns [响应文本, 新的对话 ID] 元组
      */
     chat = async (message, ids) => {
-        let res = ['', {}];
+        let res = ['', {}, []];
         try {
             res = await this.chat_(message, ids);
             return res;
@@ -8725,134 +8614,6 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
             }
             return res;
         }
-    };
-    /**
-     * 使用 local_shell 工具进行仓库探索式分析（Analysis chain）
-     *
-     * 流程：向模型发送提示词 → 模型请求执行 shell 命令 → 本地执行并返回结果 → 模型继续分析
-     * 循环直到模型不再请求 shell 命令或达到最大轮次限制。
-     *
-     * @param message - 分析提示词（含 diff 和上下文）
-     * @param cwd - 工作目录（GitHub Actions 中为 GITHUB_WORKSPACE）
-     * @returns [模型最终摘要文本, 完整 shell 执行日志]
-     */
-    chatWithShell = async (message, cwd) => {
-        if (this.client == null || !message)
-            return ['', ''];
-        (0,core.info)(`[chatWithShell] start: cwd=${cwd}, messageLen=${message.length}`);
-        const chainLog = [];
-        let responseText = '';
-        let previousResponseId;
-        // 正确格式：{ type: 'shell', environment: { type: 'local' } }
-        // 仅 gpt-5.4（完整版）支持，mini/nano 不支持
-        const tools = [{ type: 'shell', environment: { type: 'local' } }];
-        const shellModel = 'gpt-5.4';
-        // 第一轮用字符串 input，后续轮次用 shell 输出数组
-        let currentInput = message;
-        for (let round = 0; round < SHELL_MAX_ROUNDS; round++) {
-            const params = {
-                model: shellModel,
-                instructions: this.systemMessage,
-                input: currentInput,
-                temperature: this.temperature,
-                max_output_tokens: this.maxOutputTokens,
-                tools,
-                ...(previousResponseId != null && { previous_response_id: previousResponseId })
-            };
-            let response;
-            try {
-                const raw = await pRetry(() => this.client.responses.create(params), {
-                    retries: this.options.openaiRetries
-                });
-                response = raw;
-            }
-            catch (e) {
-                (0,core.warning)(`chatWithShell round ${round}: API error: ${e}`);
-                break;
-            }
-            if (response == null)
-                break;
-            previousResponseId = response.id;
-            // 提取文本输出和 shell 调用请求（type 是 'shell_call'，不是 'local_shell_call'）
-            const outputTypes = (response.output ?? []).map((item) => item.type);
-            (0,core.info)(`[chatWithShell] round ${round}: response.id=${response.id}, output types=[${outputTypes.join(', ')}]`);
-            const shellCalls = [];
-            for (const item of response.output ?? []) {
-                if (item.type === 'shell_call') {
-                    shellCalls.push(item);
-                }
-                if (item.type === 'message') {
-                    for (const content of item.content) {
-                        if (content.type === 'output_text') {
-                            responseText = content.text;
-                            (0,core.info)(`[chatWithShell] round ${round}: got output_text, len=${content.text.length}, preview="${content.text.substring(0, 100).replace(/\n/g, '\\n')}"`);
-                        }
-                    }
-                }
-            }
-            (0,core.info)(`[chatWithShell] round ${round}: shellCalls=${shellCalls.length}, responseText.len=${responseText.length}`);
-            // 没有 shell 请求，模型已完成分析
-            if (shellCalls.length === 0) {
-                (0,core.info)(`[chatWithShell] round ${round}: no shell calls, breaking loop`);
-                break;
-            }
-            // 执行 shell 调用
-            // action.commands 是完整 shell 字符串数组，如 ["ls -l /src", "rg pattern"]
-            const shellOutputs = [];
-            for (const call of shellCalls) {
-                const commands = call.action?.commands ?? [];
-                const commandOutputs = [];
-                for (const cmd of commands) {
-                    const firstWord = cmd.trim().split(/\s+/)[0];
-                    let result;
-                    if (!isCommandAllowed([firstWord])) {
-                        result = { stdout: '', stderr: `Command not allowed: ${cmd}`, exitCode: 1, timedOut: false };
-                        chainLog.push(`\`$ ${cmd}\`\n> [BLOCKED: command not in allowlist]`);
-                    }
-                    else {
-                        (0,core.info)(`[analysis_chain] executing: ${cmd}`);
-                        result = executeShellCommandString(cmd, cwd);
-                        (0,core.info)(`[analysis_chain] result: exitCode=${result.exitCode}, stdout.len=${result.stdout.length}, stderr.len=${result.stderr.length}`);
-                        let output;
-                        if (result.stdout) {
-                            output = result.stdout;
-                        }
-                        else if (result.exitCode === 1 && !result.stderr) {
-                            // grep 等命令在无匹配时 exit code = 1，stdout/stderr 都为空
-                            output = '(no matches found)';
-                            (0,core.info)(`[analysis_chain] command returned exit 1 with no output (likely grep no match)`);
-                        }
-                        else if (result.stderr) {
-                            output = `[stderr] ${result.stderr}`;
-                        }
-                        else {
-                            output = '(no output)';
-                        }
-                        chainLog.push(`\`$ ${cmd}\`\n\`\`\`\n${output}\n\`\`\``);
-                    }
-                    commandOutputs.push({
-                        stdout: result.stdout,
-                        stderr: result.stderr,
-                        outcome: result.timedOut
-                            ? { type: 'timeout' }
-                            : { type: 'exit', exit_code: result.exitCode }
-                    });
-                }
-                // 输出格式：{ type: 'shell_call_output', call_id, output: [{stdout, stderr, outcome}] }
-                shellOutputs.push({
-                    type: 'shell_call_output',
-                    call_id: call.call_id,
-                    output: commandOutputs
-                });
-            }
-            currentInput = shellOutputs;
-        }
-        const fullChainLog = chainLog.join('\n\n');
-        (0,core.info)(`[chatWithShell] done: responseText.len=${responseText.length}, chainLog.entries=${chainLog.length}, fullChainLog.len=${fullChainLog.length}`);
-        if (responseText === '' && fullChainLog === '') {
-            (0,core.warning)(`[chatWithShell] both responseText and fullChainLog are empty — model may have failed or returned no output`);
-        }
-        return [responseText, fullChainLog];
     };
     /**
      * 发送消息到 OpenAI API（私有方法，包含实际的 API 调用逻辑）
@@ -8869,7 +8630,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
         // 记录请求开始时间，用于计算响应耗时
         const start = Date.now();
         if (!message) {
-            return ['', {}];
+            return ['', {}, []];
         }
         if (this.client != null) {
             // 构建工具列表（可选启用 web search）
@@ -8882,7 +8643,10 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
                 // 这里设为 'high' 是为了让模型在做 web search 时尽可能多地获取信息，提高回答质量。
                 tools.push({ type: 'web_search', search_context_size: 'high' });
             }
-            (0,core.info)(`[web_search_debug] model=${this.model}, enableWebSearch=${this.enableWebSearch}, tools=${JSON.stringify(tools)}`);
+            if (this.enableShell) {
+                tools.push({ type: 'shell', environment: { type: 'local' } });
+            }
+            (0,core.info)(`[web_search_debug] model=${this.model}, enableWebSearch=${this.enableWebSearch}, enableShell=${this.enableShell} , tools=${JSON.stringify(tools)}`);
             // 构建 Responses API 请求参数
             const params = {
                 model: this.model,
@@ -8904,21 +8668,53 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
             }
             catch (e) {
                 if (e instanceof APIError) {
-                    (0,core.info)(`response: ${response}, failed to send message to openai: ${e}, backtrace: ${e.stack}`);
+                    // info(
+                    //   `response: ${response}, failed to send message to openai: ${e}, backtrace: ${e.stack}`
+                    // )
                 }
             }
             // 记录响应时间
             const end = Date.now();
-            (0,core.info)(`response: ${JSON.stringify(response)}`);
+            // info(`response: ${JSON.stringify(response)}`)
             (0,core.info)(`openai sendMessage (including retries) response time: ${end - start} ms`);
-            // 从响应输出中提取文本，并记录 web_search 和 reasoning 信息
+            // 从响应输出中提取文本、分析步骤，并记录 web_search 和 reasoning 信息
             let responseText = '';
+            const analysisSteps = [];
             if (response?.output) {
                 const outputTypes = response.output.map((item) => item.type);
                 (0,core.info)(`[web_search_debug] response output types: ${JSON.stringify(outputTypes)}`);
                 for (const item of response.output) {
                     if (item.type === 'web_search_call') {
                         (0,core.info)(`[web_search] executed, id: ${item.id}, status: ${item.status}`);
+                        analysisSteps.push({
+                            type: 'web_search',
+                            status: item.status
+                        });
+                    }
+                    if (item.type === 'shell_call') {
+                        const shellItem = item;
+                        (0,core.info)(`[shell] executed, id: ${shellItem.id}, commands: ${JSON.stringify(shellItem.action?.commands)}`);
+                        analysisSteps.push({
+                            type: 'shell',
+                            commands: shellItem.action?.commands ?? []
+                        });
+                    }
+                    if (item.type === 'shell_call_output') {
+                        const shellOutput = item;
+                        // 将输出关联到最近的 shell 分析步骤
+                        const lastShellStep = [...analysisSteps].reverse().find(s => s.type === 'shell');
+                        if (lastShellStep && shellOutput.output) {
+                            for (const out of shellOutput.output) {
+                                lastShellStep.stdout = (lastShellStep.stdout ?? '') + (out.stdout ?? '');
+                                lastShellStep.stderr = (lastShellStep.stderr ?? '') + (out.stderr ?? '');
+                                if (out.outcome?.type === 'exit') {
+                                    lastShellStep.exitCode = out.outcome.exit_code;
+                                }
+                                else if (out.outcome?.type === 'timeout') {
+                                    lastShellStep.timedOut = true;
+                                }
+                            }
+                        }
                     }
                     if (item.type === 'message') {
                         for (const content of item.content) {
@@ -8935,23 +8731,26 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
             else {
                 (0,core.warning)('openai response is null');
             }
+            if (analysisSteps.length > 0) {
+                (0,core.info)(`[analysis_chain] captured ${analysisSteps.length} analysis steps`);
+            }
             // 移除响应中可能存在的多余前缀 "with "
             if (responseText.startsWith('with ')) {
                 responseText = responseText.substring(5);
             }
             if (this.options.debug) {
-                (0,core.info)(`openai responses: ${responseText}`);
+                // info(`openai responses: ${responseText}`)
             }
             // 构建新的对话 ID，用于后续多轮对话
             const newIds = {
                 previousResponseId: response?.id
             };
-            return [responseText, newIds];
+            return [responseText, newIds, analysisSteps];
         }
         else {
             (0,core.setFailed)('The OpenAI API is not initialized');
         }
-        return ['', {}];
+        return ['', {}, []];
     };
 }
 
@@ -9905,7 +9704,7 @@ async function run() {
     // 初始化重量模型 Bot（默认 gpt-5.4-mini），用于深度代码审查和最终摘要生成
     let heavyBot = null;
     try {
-        heavyBot = new _bot__WEBPACK_IMPORTED_MODULE_1__/* .Bot */ .r(options, new _options__WEBPACK_IMPORTED_MODULE_2__/* .OpenAIOptions */ .i0(options.openaiHeavyModel, options.heavyTokenLimits, options.enableWebSearch));
+        heavyBot = new _bot__WEBPACK_IMPORTED_MODULE_1__/* .Bot */ .r(options, new _options__WEBPACK_IMPORTED_MODULE_2__/* .OpenAIOptions */ .i0(options.openaiHeavyModel, options.heavyTokenLimits, options.enableWebSearch, options.enableShell));
     }
     catch (e) {
         (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Skipped: failed to create review bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`);
@@ -12145,7 +11944,8 @@ class Options {
     enableDependencyAnalysis; // 是否启用跨文件依赖分析
     maxDependencyFiles; // 依赖分析最大扫描文件数
     enableWebSearch; // 是否启用 web search（用于验证 API）
-    constructor(debug, disableReview, disableReleaseNotes, maxFiles = '0', reviewSimpleChanges = false, reviewCommentLGTM = false, pathFilters = null, systemMessage = '', openaiLightModel = 'gpt-5.4-nano', openaiHeavyModel = 'gpt-5.4-mini', openaiModelTemperature = '0.0', openaiRetries = '3', openaiTimeoutMS = '120000', openaiConcurrencyLimit = '6', githubConcurrencyLimit = '6', apiBaseUrl = 'https://api.openai.com/v1', language = 'en-US', enableDependencyAnalysis = true, maxDependencyFiles = '50', enableWebSearch = true) {
+    enableShell; // 是否启用 shell
+    constructor(debug, disableReview, disableReleaseNotes, maxFiles = '0', reviewSimpleChanges = false, reviewCommentLGTM = false, pathFilters = null, systemMessage = '', openaiLightModel = 'gpt-5.4-nano', openaiHeavyModel = 'gpt-5.4-mini', openaiModelTemperature = '0.0', openaiRetries = '3', openaiTimeoutMS = '120000', openaiConcurrencyLimit = '6', githubConcurrencyLimit = '6', apiBaseUrl = 'https://api.openai.com/v1', language = 'en-US', enableDependencyAnalysis = true, maxDependencyFiles = '50', enableWebSearch = true, enableShell = true) {
         this.debug = debug;
         this.disableReview = disableReview;
         this.disableReleaseNotes = disableReleaseNotes;
@@ -12168,6 +11968,7 @@ class Options {
         this.enableDependencyAnalysis = enableDependencyAnalysis;
         this.maxDependencyFiles = parseInt(maxDependencyFiles);
         this.enableWebSearch = enableWebSearch;
+        this.enableShell = enableShell;
     }
     /** 打印所有配置项到日志，方便调试 */
     print() {
@@ -12193,6 +11994,7 @@ class Options {
         (0,core.info)(`enable_dependency_analysis: ${this.enableDependencyAnalysis}`);
         (0,core.info)(`max_dependency_files: ${this.maxDependencyFiles}`);
         (0,core.info)(`enable_web_search: ${this.enableWebSearch}`);
+        (0,core.info)(`enable_shell: ${this.enableShell}`);
     }
     /**
      * 检查文件路径是否通过过滤规则
@@ -12277,7 +12079,8 @@ class OpenAIOptions {
     model; // 模型名称（如 "gpt-4"、"gpt-3.5-turbo"）
     tokenLimits; // 该模型的 token 限制配置
     enableWebSearch; // 是否启用 web search
-    constructor(model = 'gpt-5.4-nano', tokenLimits = null, enableWebSearch = false) {
+    enableShell; // 是否启用 shell
+    constructor(model = 'gpt-5.4-nano', tokenLimits = null, enableWebSearch = false, enableShell = true) {
         this.model = model;
         if (tokenLimits != null) {
             this.tokenLimits = tokenLimits;
@@ -12286,6 +12089,7 @@ class OpenAIOptions {
             this.tokenLimits = new TokenLimits(model);
         }
         this.enableWebSearch = enableWebSearch;
+        this.enableShell = enableShell;
     }
 }
 
@@ -12398,63 +12202,6 @@ Instructions:
 - Do not mention that files need a through review or caution about potential issues.
 - Do not mention that these changes affect the logic or functionality of the code.
 - The summary should not exceed 500 words.
-`;
-    /**
-     * 分析链提示词（shell 探索版本）
-     *
-     * 利用 local_shell 工具主动探索代码仓库，模拟 CodeRabbit 的 Analysis chain 行为：
-     * - 搜索变更函数/变量的所有调用方
-     * - 查看相关测试文件
-     * - 检查依赖和导入关系
-     * - 最终给出结构化分析摘要注入到审查上下文
-     */
-    analyzeFileDiff = `## GitHub PR Title
-
-\`$title\`
-
-## Description
-
-\`\`\`
-$description
-\`\`\`
-
-## Summary of changes
-
-\`\`\`
-$short_summary
-\`\`\`
-
-## Cross-file references (auto-detected)
-
-$cross_file_context
-
-## Changes made to \`$filename\`
-
-$patches
-
-## Instructions
-
-You have access to shell tools. Use them to explore the repository and understand the impact of these changes.
-
-Exploration rules (MUST follow):
-- The file list above shows EVERY source file in this repo. Only access paths from that list.
-- Issue ONE simple command per request. Do NOT chain commands with \`&&\`, \`;\`, \`||\`, or for-loops.
-- Use \`grep -rn "pattern" .\` to find callers/usages of changed symbols.
-- Use \`cat path/to/file\` or \`head -50 path/to/file\` to read a file — only if the path is in the list above.
-- Use \`grep -rn "pattern" . --include="*.test.*"\` to find test files.
-
-Suggested sequence (one command at a time):
-1. \`grep -rn "FunctionName" .\` — find all callers of the changed function
-2. \`cat path/to/related/file\` — read a related file (from the list above)
-3. \`grep -rn "import.*ChangedModule" .\` — find all imports of the changed module
-
-After exploration, provide a concise analysis summary (under 300 words):
-- **Intent**: What does this change do?
-- **Callers affected**: Files and lines that call the changed API (from your shell search results)
-- **Risks**: Edge cases, null handling, security, performance concerns
-- **Key findings**: Critical issues the reviewer should focus on
-
-Be specific and cite actual file paths and line numbers from your shell exploration.
 `;
     /**
      * 代码审查提示词（核心）
@@ -12722,10 +12469,6 @@ use web search to find and reference current documentation.
     renderComment(inputs) {
         return inputs.render(this.comment);
     }
-    /** 渲染分析链提示词（用于轻量模型预分析） */
-    renderAnalyzeFileDiff(inputs) {
-        return inputs.render(this.analyzeFileDiff);
-    }
     /** 渲染代码审查提示词 */
     renderReviewFileDiff(inputs) {
         return inputs.render(this.reviewFileDiff);
@@ -12925,8 +12668,6 @@ __nccwpck_require__.d(__webpack_exports__, {
   "z": () => (/* binding */ codeReview)
 });
 
-// EXTERNAL MODULE: external "child_process"
-var external_child_process_ = __nccwpck_require__(2081);
 // EXTERNAL MODULE: ./node_modules/.pnpm/@actions+core@1.11.1/node_modules/@actions/core/lib/core.js
 var core = __nccwpck_require__(1078);
 // EXTERNAL MODULE: ./node_modules/.pnpm/@actions+github@5.1.1/node_modules/@actions/github/lib/github.js
@@ -14797,7 +14538,6 @@ var tokenizer = __nccwpck_require__(7525);
  * 后续运行只审查新增的变更，避免重复审查。
  */
 
-
 // eslint-disable-next-line camelcase
 
 
@@ -15227,53 +14967,6 @@ ${summariesFailed.length > 0
         const reviewsFailed = [];
         let lgtmCount = 0; // LGTM 评论计数（被过滤掉的）
         let reviewCount = 0; // 实际发布的审查评论计数
-        // ---- 一次性初始化：确保工作目录已 checkout，预获取仓库文件列表 ----
-        const workDir = process.env.GITHUB_WORKSPACE ?? process.cwd();
-        const hasGitDir = (() => {
-            try {
-                (0,external_child_process_.execSync)('git rev-parse --git-dir', { cwd: workDir, encoding: 'utf8', timeout: 5000 });
-                return true;
-            }
-            catch {
-                return false;
-            }
-        })();
-        if (!hasGitDir) {
-            (0,core.info)(`[analysis_chain] no git repo found at ${workDir}, performing auto checkout...`);
-            try {
-                const repo = process.env.GITHUB_REPOSITORY ?? '';
-                const headRef = process.env.GITHUB_HEAD_REF ?? '';
-                const token = process.env.GITHUB_TOKEN ?? '';
-                if (repo && token) {
-                    (0,external_child_process_.execSync)(`git clone --depth=1 ${headRef ? `--branch ${headRef}` : ''} https://x-access-token:${token}@github.com/${repo}.git .`, { cwd: workDir, encoding: 'utf8', timeout: 60000 });
-                    (0,core.info)(`[analysis_chain] auto checkout completed for ${repo}${headRef ? `@${headRef}` : ''}`);
-                }
-                else {
-                    (0,core.warning)(`[analysis_chain] cannot auto checkout: GITHUB_REPOSITORY or GITHUB_TOKEN not set`);
-                }
-            }
-            catch (e) {
-                (0,core.warning)(`[analysis_chain] auto checkout failed: ${e.message ?? e}`);
-            }
-        }
-        else {
-            (0,core.info)(`[analysis_chain] git repo detected at ${workDir}`);
-        }
-        let repoFileList = '';
-        try {
-            repoFileList = (0,external_child_process_.execSync)('find . -maxdepth 5 -type f \\( -name "*.ts" -o -name "*.tsx" -o -name "*.vue" -o -name "*.js" -o -name "*.jsx" -o -name "*.py" -o -name "*.go" -o -name "*.java" -o -name "*.rs" \\) -not -path "./.git/*" -not -path "./node_modules/*" -not -path "./dist/*" | sed "s|^\\./||" | sort | head -300', { cwd: workDir, encoding: 'utf8', timeout: 10000 }).trim();
-        }
-        catch {
-            repoFileList = '(unable to list files)';
-        }
-        (0,core.info)(`[analysis_chain] workDir=${workDir}, repoFileList.len=${repoFileList.length}, files=${repoFileList ? repoFileList.split('\n').length : 0}`);
-        if (repoFileList.length > 0) {
-            (0,core.info)(`[analysis_chain] first 5 files: ${repoFileList.split('\n').slice(0, 5).join(', ')}`);
-        }
-        else {
-            (0,core.warning)(`[analysis_chain] repoFileList is EMPTY — find returned no source files in ${workDir}. Shell exploration will be ineffective.`);
-        }
-        // ---- 一次性初始化结束 ----
         /**
          * 对单个文件执行代码审查
          *
@@ -15375,74 +15068,18 @@ ${commentChain}
             }
             // 如果成功打包了至少一个 patch，执行审查
             if (patchesPacked > 0) {
-                // 阶段 4a：使用重量模型 + local_shell 工具进行仓库探索式分析链生成
-                let analysisChainLog = ''; // shell 命令执行日志（展示给开发者）
-                let analysisSummary = ''; // 模型分析摘要（注入到审查上下文）
                 try {
-                    // workDir 和 repoFileList 已在循环外一次性初始化
-                    const promptWithStructure = `## Repository source files (use ONLY these paths — do not guess)\n\`\`\`\n${repoFileList}\n\`\`\`\n\n` +
-                        prompts.renderAnalyzeFileDiff(ins);
-                    (0,core.info)(`[analysis_chain] calling chatWithShell for ${filename}`);
-                    const [analysisResponse, chainLog] = await heavyBot.chatWithShell(promptWithStructure, workDir);
-                    (0,core.info)(`[analysis_chain] chatWithShell returned: analysisResponse.len=${analysisResponse.length}, chainLog.len=${chainLog.length}`);
-                    if (analysisResponse !== '' || chainLog !== '') {
-                        const analysisTokens = (0,tokenizer/* getTokenCount */.V)(analysisResponse);
-                        const tokenBudgetRemaining = options.heavyTokenLimits.requestTokens - tokens;
-                        (0,core.info)(`[analysis_chain] token budget: used=${tokens}, analysisTokens=${analysisTokens}, limit=${options.heavyTokenLimits.requestTokens}, remaining=${tokenBudgetRemaining}`);
-                        // 仅在 token 预算充足时将分析摘要注入到审查上下文
-                        if (tokens + analysisTokens <= options.heavyTokenLimits.requestTokens) {
-                            analysisSummary = analysisResponse;
-                            ins.analysisChain = analysisResponse;
-                            tokens += analysisTokens;
-                            (0,core.info)(`[analysis_chain] injected into ins.analysisChain for ${filename}: ${analysisTokens} tokens, preview="${analysisResponse.substring(0, 150).replace(/\n/g, '\\n')}"`);
-                        }
-                        else {
-                            (0,core.info)(`[analysis_chain] skipped injection for ${filename}: analysisTokens=${analysisTokens} exceeds remaining budget=${tokenBudgetRemaining}`);
-                        }
-                        analysisChainLog = chainLog;
-                        (0,core.info)(`[analysis_chain] analysisChainLog set, len=${analysisChainLog.length}`);
-                    }
-                    else {
-                        (0,core.warning)(`[analysis_chain] chatWithShell returned empty for ${filename} — no analysis generated`);
-                    }
-                }
-                catch (e) {
-                    (0,core.warning)(`Failed to generate analysis chain for ${filename}: ${e}`);
-                }
-                try {
-                    // 阶段 4b：调用重量模型执行代码审查（注入分析链上下文）
-                    const [response] = await heavyBot.chat(prompts.renderReviewFileDiff(ins), {});
+                    // 调用重量模型执行代码审查
+                    const [response, , analysisSteps] = await heavyBot.chat(prompts.renderReviewFileDiff(ins), {});
                     if (response === '') {
                         (0,core.info)('review: nothing obtained from openai');
                         reviewsFailed.push(`${filename} (no response)`);
                         return;
                     }
+                    // 格式化 Analysis chain（模型执行的 shell / web_search 步骤）
+                    const analysisChainMd = formatAnalysisChain(analysisSteps);
                     // 解析 AI 响应，提取结构化的审查评论
                     const reviews = parseReview(response, patches, options.debug);
-                    // 将分析链（shell 日志 + 摘要）以折叠块形式附加到第一条实质性评论
-                    const hasAnalysis = analysisChainLog !== '' || analysisSummary !== '';
-                    (0,core.info)(`[analysis_chain] attaching to comment: hasAnalysis=${hasAnalysis}, reviews.length=${reviews.length}, analysisChainLog.len=${analysisChainLog.length}, analysisSummary.len=${analysisSummary.length}`);
-                    if (hasAnalysis && reviews.length > 0) {
-                        const firstSubstantive = reviews.find(r => !r.comment.includes('LGTM') &&
-                            !r.comment.includes('looks good to me'));
-                        (0,core.info)(`[analysis_chain] firstSubstantive found=${firstSubstantive != null}`);
-                        if (firstSubstantive != null) {
-                            const chainContent = [
-                                analysisChainLog,
-                                analysisSummary ? `**Summary**\n\n${analysisSummary}` : ''
-                            ].filter(Boolean).join('\n\n---\n\n');
-                            (0,core.info)(`[analysis_chain] chainContent.len=${chainContent.length}, prepending to comment at line ${firstSubstantive.startLine}-${firstSubstantive.endLine}`);
-                            firstSubstantive.comment =
-                                `<details>\n<summary>🧩 Analysis chain</summary>\n\n${chainContent}\n\n</details>\n\n` +
-                                    firstSubstantive.comment;
-                        }
-                        else {
-                            (0,core.info)(`[analysis_chain] all ${reviews.length} review(s) are LGTM — analysis chain not attached`);
-                        }
-                    }
-                    else if (!hasAnalysis) {
-                        (0,core.info)(`[analysis_chain] no analysis to attach (both chainLog and summary are empty)`);
-                    }
                     for (const review of reviews) {
                         // 过滤 LGTM 评论（如果配置为不保留）
                         if (!options.reviewCommentLGTM &&
@@ -15457,8 +15094,12 @@ ${commentChain}
                         }
                         try {
                             reviewCount += 1;
+                            // 将 Analysis chain 附加到审查评论末尾
+                            const commentWithChain = analysisChainMd
+                                ? `${review.comment}\n\n${analysisChainMd}`
+                                : review.comment;
                             // 将审查评论加入缓冲区
-                            await commenter.bufferReviewComment(filename, review.startLine, review.endLine, `${review.comment}`);
+                            await commenter.bufferReviewComment(filename, review.startLine, review.endLine, commentWithChain);
                         }
                         catch (e) {
                             reviewsFailed.push(`${filename} comment failed (${e})`);
@@ -15542,6 +15183,46 @@ ${reviewsSkipped.length > 0
     await commenter.comment(`${summarizeComment}`, lib_commenter/* SUMMARIZE_TAG */.Rp, 'replace');
 };
 // ==================== Diff 解析辅助函数 ====================
+// ==================== Analysis Chain 格式化 ====================
+/** 输出截断上限（字符数），避免评论过长 */
+const MAX_SHELL_OUTPUT_LENGTH = 800;
+/**
+ * 将模型执行的分析步骤格式化为 CodeRabbit 风格的 Analysis chain
+ *
+ * 生成可折叠的 `<details>` 块，包含每个 shell 命令及其输出、web search 调用等，
+ * 展示模型在给出审查意见之前的推理/调查过程。
+ */
+function formatAnalysisChain(steps) {
+    if (steps.length === 0)
+        return '';
+    let chain = '<details>\n<summary>🧩 Analysis chain</summary>\n\n';
+    for (const step of steps) {
+        if (step.type === 'shell') {
+            const cmds = step.commands?.join(' && ') ?? '';
+            chain += '🏁 Shell executed:\n\n';
+            chain += `\`\`\`bash\n${cmds}\n\`\`\`\n\n`;
+            if (step.stdout) {
+                const truncated = step.stdout.length > MAX_SHELL_OUTPUT_LENGTH
+                    ? `${step.stdout.substring(0, MAX_SHELL_OUTPUT_LENGTH)}\n... (truncated)`
+                    : step.stdout;
+                chain += `Output:\n\`\`\`\n${truncated}\n\`\`\`\n\n`;
+                chain += `Length of output: ${step.stdout.length}\n\n`;
+            }
+            if (step.stderr) {
+                chain += `Stderr:\n\`\`\`\n${step.stderr.substring(0, MAX_SHELL_OUTPUT_LENGTH)}\n\`\`\`\n\n`;
+            }
+            if (step.timedOut) {
+                chain += '⏱️ Command timed out.\n\n';
+            }
+            chain += '---\n\n';
+        }
+        else if (step.type === 'web_search') {
+            chain += `🔍 Web search executed (status: ${step.status ?? 'unknown'})\n\n---\n\n`;
+        }
+    }
+    chain += '</details>';
+    return chain;
+}
 /**
  * 将完整的 patch 字符串按 @@ hunk 标头拆分为独立的 hunk 数组
  * 每个 hunk 以 @@ -a,b +c,d @@ 开头

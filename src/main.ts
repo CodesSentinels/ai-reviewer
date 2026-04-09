@@ -83,7 +83,8 @@ async function run(): Promise<void> {
       new OpenAIOptions(
         options.openaiHeavyModel,
         options.heavyTokenLimits,
-        options.enableWebSearch
+        options.enableWebSearch,
+        options.enableShell
       )
     )
   } catch (e: any) {

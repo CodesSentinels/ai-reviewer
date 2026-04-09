@@ -117,64 +117,6 @@ Instructions:
 `
 
   /**
-   * 分析链提示词（shell 探索版本）
-   *
-   * 利用 local_shell 工具主动探索代码仓库，模拟 CodeRabbit 的 Analysis chain 行为：
-   * - 搜索变更函数/变量的所有调用方
-   * - 查看相关测试文件
-   * - 检查依赖和导入关系
-   * - 最终给出结构化分析摘要注入到审查上下文
-   */
-  analyzeFileDiff = `## GitHub PR Title
-
-\`$title\`
-
-## Description
-
-\`\`\`
-$description
-\`\`\`
-
-## Summary of changes
-
-\`\`\`
-$short_summary
-\`\`\`
-
-## Cross-file references (auto-detected)
-
-$cross_file_context
-
-## Changes made to \`$filename\`
-
-$patches
-
-## Instructions
-
-You have access to shell tools. Use them to explore the repository and understand the impact of these changes.
-
-Exploration rules (MUST follow):
-- The file list above shows EVERY source file in this repo. Only access paths from that list.
-- Issue ONE simple command per request. Do NOT chain commands with \`&&\`, \`;\`, \`||\`, or for-loops.
-- Use \`grep -rn "pattern" .\` to find callers/usages of changed symbols.
-- Use \`cat path/to/file\` or \`head -50 path/to/file\` to read a file — only if the path is in the list above.
-- Use \`grep -rn "pattern" . --include="*.test.*"\` to find test files.
-
-Suggested sequence (one command at a time):
-1. \`grep -rn "FunctionName" .\` — find all callers of the changed function
-2. \`cat path/to/related/file\` — read a related file (from the list above)
-3. \`grep -rn "import.*ChangedModule" .\` — find all imports of the changed module
-
-After exploration, provide a concise analysis summary (under 300 words):
-- **Intent**: What does this change do?
-- **Callers affected**: Files and lines that call the changed API (from your shell search results)
-- **Risks**: Edge cases, null handling, security, performance concerns
-- **Key findings**: Critical issues the reviewer should focus on
-
-Be specific and cite actual file paths and line numbers from your shell exploration.
-`
-
-  /**
    * 代码审查提示词（核心）
    *
    * 指导 AI 对代码变更进行逐行审查，包括：
@@ -450,11 +392,6 @@ use web search to find and reference current documentation.
   /** 渲染回复评论提示词 */
   renderComment(inputs: Inputs): string {
     return inputs.render(this.comment)
-  }
-
-  /** 渲染分析链提示词（用于轻量模型预分析） */
-  renderAnalyzeFileDiff(inputs: Inputs): string {
-    return inputs.render(this.analyzeFileDiff)
   }
 
   /** 渲染代码审查提示词 */
