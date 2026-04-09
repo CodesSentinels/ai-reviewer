@@ -225,6 +225,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
   chatWithShell = async (message: string, cwd: string): Promise<[string, string]> => {
     if (this.client == null || !message) return ['', '']
 
+    info(`[chatWithShell] start: cwd=${cwd}, messageLen=${message.length}`)
     const chainLog: string[] = []
     let responseText = ''
     let previousResponseId: string | undefined
@@ -263,6 +264,9 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
       previousResponseId = response.id
 
       // 提取文本输出和 shell 调用请求（type 是 'shell_call'，不是 'local_shell_call'）
+      const outputTypes = (response.output ?? []).map((item: any) => item.type)
+      info(`[chatWithShell] round ${round}: response.id=${response.id}, output types=[${outputTypes.join(', ')}]`)
+
       const shellCalls: any[] = []
       for (const item of response.output ?? []) {
         if ((item as any).type === 'shell_call') {
@@ -272,13 +276,18 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
           for (const content of item.content) {
             if (content.type === 'output_text') {
               responseText = content.text
+              info(`[chatWithShell] round ${round}: got output_text, len=${content.text.length}, preview="${content.text.substring(0, 100).replace(/\n/g, '\\n')}"`)
             }
           }
         }
       }
 
+      info(`[chatWithShell] round ${round}: shellCalls=${shellCalls.length}, responseText.len=${responseText.length}`)
       // 没有 shell 请求，模型已完成分析
-      if (shellCalls.length === 0) break
+      if (shellCalls.length === 0) {
+        info(`[chatWithShell] round ${round}: no shell calls, breaking loop`)
+        break
+      }
 
       // 执行 shell 调用
       // action.commands 是完整 shell 字符串数组，如 ["ls -l /src", "rg pattern"]
@@ -322,6 +331,10 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
     }
 
     const fullChainLog = chainLog.join('\n\n')
+    info(`[chatWithShell] done: responseText.len=${responseText.length}, chainLog.entries=${chainLog.length}, fullChainLog.len=${fullChainLog.length}`)
+    if (responseText === '' && fullChainLog === '') {
+      warning(`[chatWithShell] both responseText and fullChainLog are empty — model may have failed or returned no output`)
+    }
     return [responseText, fullChainLog]
   }
 

@@ -5,6 +5,7 @@
  * 提供 render() 方法将模板中的 $variable 占位符替换为实际值。
  * 提供 clone() 方法用于并行处理时创建独立副本，避免数据竞争。
  */
+import {info} from '@actions/core'
 export class Inputs {
   systemMessage: string   // 系统消息（定义 AI 的角色和行为准则）
   title: string           // PR 标题
@@ -127,10 +128,12 @@ export class Inputs {
       this.crossFileContext || 'No cross-file references detected.'
     )
     // 分析链：无论是否有值，都替换占位符（避免模板残留）
-    content = content.replace(
-      '$analysis_chain',
-      this.analysisChain || 'No analysis chain available.'
-    )
+    const analysisChainValue = this.analysisChain || 'No analysis chain available.'
+    const hadPlaceholder = content.includes('$analysis_chain')
+    content = content.replace('$analysis_chain', analysisChainValue)
+    if (hadPlaceholder) {
+      info(`[render] $analysis_chain replaced: hasValue=${!!this.analysisChain}, valueLen=${analysisChainValue.length}, preview="${analysisChainValue.substring(0, 100).replace(/\n/g, '\\n')}"`)
+    }
     return content
   }
 }

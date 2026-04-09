@@ -761,22 +761,29 @@ ${commentChain}
             `## Repository source files (use ONLY these paths — do not guess)\n\`\`\`\n${repoFileList}\n\`\`\`\n\n` +
             prompts.renderAnalyzeFileDiff(ins)
 
+          info(`[analysis_chain] calling chatWithShell for ${filename}`)
           const [analysisResponse, chainLog] = await heavyBot.chatWithShell(
             promptWithStructure,
             workDir
           )
+          info(`[analysis_chain] chatWithShell returned: analysisResponse.len=${analysisResponse.length}, chainLog.len=${chainLog.length}`)
           if (analysisResponse !== '' || chainLog !== '') {
             const analysisTokens = getTokenCount(analysisResponse)
+            const tokenBudgetRemaining = options.heavyTokenLimits.requestTokens - tokens
+            info(`[analysis_chain] token budget: used=${tokens}, analysisTokens=${analysisTokens}, limit=${options.heavyTokenLimits.requestTokens}, remaining=${tokenBudgetRemaining}`)
             // 仅在 token 预算充足时将分析摘要注入到审查上下文
             if (tokens + analysisTokens <= options.heavyTokenLimits.requestTokens) {
               analysisSummary = analysisResponse
               ins.analysisChain = analysisResponse
               tokens += analysisTokens
-              info(`analysis chain generated for ${filename}: ${analysisTokens} tokens`)
+              info(`[analysis_chain] injected into ins.analysisChain for ${filename}: ${analysisTokens} tokens, preview="${analysisResponse.substring(0, 150).replace(/\n/g, '\\n')}"`)
             } else {
-              info(`analysis chain too large for ${filename}: ${analysisTokens} tokens, skipping injection`)
+              info(`[analysis_chain] skipped injection for ${filename}: analysisTokens=${analysisTokens} exceeds remaining budget=${tokenBudgetRemaining}`)
             }
             analysisChainLog = chainLog
+            info(`[analysis_chain] analysisChainLog set, len=${analysisChainLog.length}`)
+          } else {
+            warning(`[analysis_chain] chatWithShell returned empty for ${filename} — no analysis generated`)
           }
         } catch (e: any) {
           warning(`Failed to generate analysis chain for ${filename}: ${e as string}`)
@@ -798,21 +805,28 @@ ${commentChain}
 
           // 将分析链（shell 日志 + 摘要）以折叠块形式附加到第一条实质性评论
           const hasAnalysis = analysisChainLog !== '' || analysisSummary !== ''
+          info(`[analysis_chain] attaching to comment: hasAnalysis=${hasAnalysis}, reviews.length=${reviews.length}, analysisChainLog.len=${analysisChainLog.length}, analysisSummary.len=${analysisSummary.length}`)
           if (hasAnalysis && reviews.length > 0) {
             const firstSubstantive = reviews.find(
               r =>
                 !r.comment.includes('LGTM') &&
                 !r.comment.includes('looks good to me')
             )
+            info(`[analysis_chain] firstSubstantive found=${firstSubstantive != null}`)
             if (firstSubstantive != null) {
               const chainContent = [
                 analysisChainLog,
                 analysisSummary ? `**Summary**\n\n${analysisSummary}` : ''
               ].filter(Boolean).join('\n\n---\n\n')
+              info(`[analysis_chain] chainContent.len=${chainContent.length}, prepending to comment at line ${firstSubstantive.startLine}-${firstSubstantive.endLine}`)
               firstSubstantive.comment =
                 `<details>\n<summary>🧩 Analysis chain</summary>\n\n${chainContent}\n\n</details>\n\n` +
                 firstSubstantive.comment
+            } else {
+              info(`[analysis_chain] all ${reviews.length} review(s) are LGTM — analysis chain not attached`)
             }
+          } else if (!hasAnalysis) {
+            info(`[analysis_chain] no analysis to attach (both chainLog and summary are empty)`)
           }
 
           for (const review of reviews) {
