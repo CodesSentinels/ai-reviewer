@@ -8636,9 +8636,29 @@ function executeShellCommandString(cmd, cwd) {
         if (e.killed) {
             return { stdout: '', stderr: 'Command timed out', exitCode: 124, timedOut: true };
         }
+        const stderr = (e.stderr ?? e.message ?? '').substring(0, 1024);
+        const stdout = (e.stdout ?? '').substring(0, SHELL_MAX_OUTPUT_LENGTH);
+        // 若报 "No such file or directory"，自动搜索相似文件名给模型提示
+        const noSuchFile = stderr.match(/cannot open ['"]?([^'":\s]+)['"]? for reading|No such file or directory.*['"]([^'"]+)['"]/);
+        if (noSuchFile != null) {
+            const badPath = noSuchFile[1] ?? noSuchFile[2] ?? '';
+            const basename = badPath.split('/').pop() ?? '';
+            if (basename) {
+                try {
+                    const similar = (0,external_child_process_.execSync)(`find . -type f -name "${basename}" -not -path "./.git/*" -not -path "./node_modules/*" -not -path "./dist/*"`, { cwd, encoding: 'utf8', timeout: 5000 }).trim();
+                    const hint = similar
+                        ? `Hint: '${badPath}' not found. Similar files: ${similar.split('\n').map(p => p.replace(/^\.\//, '')).join(', ')}`
+                        : `Hint: '${badPath}' not found and no similar file exists in this repo.`;
+                    return { stdout, stderr: `${stderr}\n${hint}`, exitCode: e.status ?? 1, timedOut: false };
+                }
+                catch {
+                    // ignore hint errors
+                }
+            }
+        }
         return {
-            stdout: (e.stdout ?? '').substring(0, SHELL_MAX_OUTPUT_LENGTH),
-            stderr: (e.stderr ?? e.message ?? '').substring(0, 1024),
+            stdout,
+            stderr,
             exitCode: e.status ?? 1,
             timedOut: false
         };
@@ -12382,13 +12402,17 @@ $patches
 
 You have access to shell tools. Use them to explore the repository and understand the impact of these changes.
 
-Exploration steps (follow this order):
-1. **First, understand the repo structure**: run \`find . -maxdepth 2 -type d -not -path './.git*'\` to see top-level directories before accessing any path
-2. Use \`grep -rn\` (or \`rg\` if available) to find all callers of changed functions/exports — always use paths that exist
-3. Use \`find\` to locate related test files
-4. Use \`cat\` or \`head\` to read relevant files for context
+Exploration rules (MUST follow):
+- The file list above shows EVERY source file in this repo. Only access paths from that list.
+- Issue ONE simple command per request. Do NOT chain commands with \`&&\`, \`;\`, \`||\`, or for-loops.
+- Use \`grep -rn "pattern" .\` to find callers/usages of changed symbols.
+- Use \`cat path/to/file\` or \`head -50 path/to/file\` to read a file — only if the path is in the list above.
+- Use \`grep -rn "pattern" . --include="*.test.*"\` to find test files.
 
-IMPORTANT: Never guess directory or file paths. Always verify a path exists before accessing it.
+Suggested sequence (one command at a time):
+1. \`grep -rn "FunctionName" .\` — find all callers of the changed function
+2. \`cat path/to/related/file\` — read a related file (from the list above)
+3. \`grep -rn "import.*ChangedModule" .\` — find all imports of the changed module
 
 After exploration, provide a concise analysis summary (under 300 words):
 - **Intent**: What does this change do?
@@ -15275,15 +15299,15 @@ ${commentChain}
                 let analysisChainLog = ''; // shell 命令执行日志（展示给开发者）
                 let analysisSummary = ''; // 模型分析摘要（注入到审查上下文）
                 try {
-                    // 预先获取仓库目录结构，注入 prompt 避免模型猜测路径
-                    let repoStructure = '';
+                    // 预先获取仓库文件列表，注入 prompt 避免模型猜测路径
+                    let repoFileList = '';
                     try {
-                        repoStructure = (0,external_child_process_.execSync)('find . -maxdepth 3 -type d -not -path "./.git*" -not -path "./node_modules*" -not -path "./dist*"', { cwd: workDir, encoding: 'utf8', timeout: 10000 }).trim();
+                        repoFileList = (0,external_child_process_.execSync)('find . -maxdepth 5 -type f \\( -name "*.ts" -o -name "*.tsx" -o -name "*.vue" -o -name "*.js" -o -name "*.jsx" -o -name "*.py" -o -name "*.go" -o -name "*.java" -o -name "*.rs" \\) -not -path "./.git/*" -not -path "./node_modules/*" -not -path "./dist/*" | sed "s|^\\./||" | sort | head -300', { cwd: workDir, encoding: 'utf8', timeout: 10000 }).trim();
                     }
                     catch {
-                        repoStructure = '(unable to list directories)';
+                        repoFileList = '(unable to list files)';
                     }
-                    const promptWithStructure = `## Repository directory structure\n\`\`\`\n${repoStructure}\n\`\`\`\n\n` +
+                    const promptWithStructure = `## Repository source files (use ONLY these paths — do not guess)\n\`\`\`\n${repoFileList}\n\`\`\`\n\n` +
                         prompts.renderAnalyzeFileDiff(ins);
                     const [analysisResponse, chainLog] = await heavyBot.chatWithShell(promptWithStructure, workDir);
                     if (analysisResponse !== '' || chainLog !== '') {

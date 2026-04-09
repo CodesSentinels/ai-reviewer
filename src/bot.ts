@@ -104,9 +104,33 @@ function executeShellCommandString(cmd: string, cwd: string): ShellResult {
     if (e.killed) {
       return {stdout: '', stderr: 'Command timed out', exitCode: 124, timedOut: true}
     }
+    const stderr: string = ((e.stderr as string) ?? e.message ?? '').substring(0, 1024)
+    const stdout: string = ((e.stdout as string) ?? '').substring(0, SHELL_MAX_OUTPUT_LENGTH)
+
+    // 若报 "No such file or directory"，自动搜索相似文件名给模型提示
+    const noSuchFile = stderr.match(/cannot open ['"]?([^'":\s]+)['"]? for reading|No such file or directory.*['"]([^'"]+)['"]/)
+    if (noSuchFile != null) {
+      const badPath = noSuchFile[1] ?? noSuchFile[2] ?? ''
+      const basename = badPath.split('/').pop() ?? ''
+      if (basename) {
+        try {
+          const similar = execSync(
+            `find . -type f -name "${basename}" -not -path "./.git/*" -not -path "./node_modules/*" -not -path "./dist/*"`,
+            {cwd, encoding: 'utf8', timeout: 5000}
+          ).trim()
+          const hint = similar
+            ? `Hint: '${badPath}' not found. Similar files: ${similar.split('\n').map(p => p.replace(/^\.\//, '')).join(', ')}`
+            : `Hint: '${badPath}' not found and no similar file exists in this repo.`
+          return {stdout, stderr: `${stderr}\n${hint}`, exitCode: (e.status as number) ?? 1, timedOut: false}
+        } catch {
+          // ignore hint errors
+        }
+      }
+    }
+
     return {
-      stdout: ((e.stdout as string) ?? '').substring(0, SHELL_MAX_OUTPUT_LENGTH),
-      stderr: ((e.stderr as string) ?? e.message ?? '').substring(0, 1024),
+      stdout,
+      stderr,
       exitCode: (e.status as number) ?? 1,
       timedOut: false
     }

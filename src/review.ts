@@ -747,18 +747,18 @@ ${commentChain}
         let analysisChainLog = ''   // shell 命令执行日志（展示给开发者）
         let analysisSummary = ''    // 模型分析摘要（注入到审查上下文）
         try {
-          // 预先获取仓库目录结构，注入 prompt 避免模型猜测路径
-          let repoStructure = ''
+          // 预先获取仓库文件列表，注入 prompt 避免模型猜测路径
+          let repoFileList = ''
           try {
-            repoStructure = execSync(
-              'find . -maxdepth 3 -type d -not -path "./.git*" -not -path "./node_modules*" -not -path "./dist*"',
+            repoFileList = execSync(
+              'find . -maxdepth 5 -type f \\( -name "*.ts" -o -name "*.tsx" -o -name "*.vue" -o -name "*.js" -o -name "*.jsx" -o -name "*.py" -o -name "*.go" -o -name "*.java" -o -name "*.rs" \\) -not -path "./.git/*" -not -path "./node_modules/*" -not -path "./dist/*" | sed "s|^\\./||" | sort | head -300',
               {cwd: workDir, encoding: 'utf8', timeout: 10000}
             ).trim()
           } catch {
-            repoStructure = '(unable to list directories)'
+            repoFileList = '(unable to list files)'
           }
           const promptWithStructure =
-            `## Repository directory structure\n\`\`\`\n${repoStructure}\n\`\`\`\n\n` +
+            `## Repository source files (use ONLY these paths — do not guess)\n\`\`\`\n${repoFileList}\n\`\`\`\n\n` +
             prompts.renderAnalyzeFileDiff(ins)
 
           const [analysisResponse, chainLog] = await heavyBot.chatWithShell(
