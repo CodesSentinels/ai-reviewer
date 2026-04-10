@@ -12,11 +12,12 @@
  * 支持增量审查：通过在摘要评论中存储已审查的 commit ID，
  * 后续运行只审查新增的变更，避免重复审查。
  */
-import {error, info, warning} from '@actions/core'
+import { error, info, warning } from '@actions/core'
+import { execFileSync } from 'child_process'
 // eslint-disable-next-line camelcase
-import {context as github_context} from '@actions/github'
+import { context as github_context } from '@actions/github'
 import pLimit from 'p-limit'
-import {type Bot} from './bot'
+import { type AnalysisStep, type Bot } from './bot'
 import {
   Commenter,
   COMMENT_REPLY_TAG,
@@ -32,12 +33,12 @@ import {
   formatDependencySummary,
   type DependencyContext
 } from './dependency-analyzer'
-import {Inputs} from './inputs'
-import {octokit} from './octokit'
-import {type Options} from './options'
-import {type Prompts} from './prompts'
-import {getRepoFileTree} from './repo-tree'
-import {getTokenCount} from './tokenizer'
+import { Inputs } from './inputs'
+import { octokit } from './octokit'
+import { type Options } from './options'
+import { type Prompts } from './prompts'
+import { getRepoFileTree } from './repo-tree'
+import { getTokenCount } from './tokenizer'
 
 // eslint-disable-next-line camelcase
 const context = github_context
@@ -140,8 +141,7 @@ export const codeReview = async (
   ) {
     // 首次审查或已是最新：从 base 分支开始
     info(
-      `Will review from the base commit: ${
-        context.payload.pull_request.base.sha as string
+      `Will review from the base commit: ${context.payload.pull_request.base.sha as string
       }`
     )
     highestReviewedCommitId = context.payload.pull_request.base.sha
@@ -248,8 +248,7 @@ export const codeReview = async (
           }
         } catch (e: any) {
           warning(
-            `Failed to get file contents: ${
-              e as string
+            `Failed to get file contents: ${e as string
             }. This is OK if it's a new file.`
           )
         }
@@ -338,13 +337,11 @@ ${hunks.oldHunk}
   // ==================== 构建状态消息 ====================
   let statusMsg = `<details>
 <summary>Commits</summary>
-Files that changed from the base of the PR and between ${highestReviewedCommitId} and ${
-    context.payload.pull_request.head.sha
-  } commits.
+Files that changed from the base of the PR and between ${highestReviewedCommitId} and ${context.payload.pull_request.head.sha
+    } commits.
 </details>
-${
-  filesAndChanges.length > 0
-    ? `
+${filesAndChanges.length > 0
+      ? `
 <details>
 <summary>Files selected (${filesAndChanges.length})</summary>
 
@@ -353,11 +350,10 @@ ${
         .join('\n* ')}
 </details>
 `
-    : ''
-}
-${
-  filterIgnoredFiles.length > 0
-    ? `
+      : ''
+    }
+${filterIgnoredFiles.length > 0
+      ? `
 <details>
 <summary>Files ignored due to filter (${filterIgnoredFiles.length})</summary>
 
@@ -365,8 +361,8 @@ ${
 
 </details>
 `
-    : ''
-}
+      : ''
+    }
 `
 
   // 更新摘要评论为"审查进行中"状态
@@ -558,34 +554,30 @@ AI Reviewer is an AI-powered code review tool that helps improve code quality.
 
   // 追加处理统计信息到状态消息
   statusMsg += `
-${
-  skippedFiles.length > 0
-    ? `
+${skippedFiles.length > 0
+      ? `
 <details>
-<summary>Files not processed due to max files limit (${
-        skippedFiles.length
+<summary>Files not processed due to max files limit (${skippedFiles.length
       })</summary>
 
 * ${skippedFiles.join('\n* ')}
 
 </details>
 `
-    : ''
-}
-${
-  summariesFailed.length > 0
-    ? `
+      : ''
+    }
+${summariesFailed.length > 0
+      ? `
 <details>
-<summary>Files not summarized due to errors (${
-        summariesFailed.length
+<summary>Files not summarized due to errors (${summariesFailed.length
       })</summary>
 
 * ${summariesFailed.join('\n* ')}
 
 </details>
 `
-    : ''
-}
+      : ''
+    }
 `
 
   // ==================== 阶段四：逐文件代码审查 ====================
@@ -703,8 +695,7 @@ ${
           }
         } catch (e: any) {
           warning(
-            `Failed to get comments: ${e as string}, skipping. backtrace: ${
-              e.stack as string
+            `Failed to get comments: ${e as string}, skipping. backtrace: ${e.stack as string
             }`
           )
         }
@@ -743,7 +734,7 @@ ${commentChain}
       if (patchesPacked > 0) {
         try {
           // 调用重量模型执行代码审查
-          const [response] = await heavyBot.chat(
+          const [response, , analysisSteps] = await heavyBot.chat(
             prompts.renderReviewFileDiff(ins),
             {}
           )
@@ -752,8 +743,18 @@ ${commentChain}
             reviewsFailed.push(`${filename} (no response)`)
             return
           }
+
+          // 格式化 Analysis chain（模型执行的 shell / web_search 步骤）
+          info(`[analysis_chain] ${filename}: received ${analysisSteps.length} analysis steps from bot`)
+          const analysisChainMd = formatAnalysisChain(
+            analysisSteps,
+            resolveAnalysisRepositoryUrl()
+          )
+          info(`[analysis_chain] ${filename}: formatted markdown length=${analysisChainMd.length}, empty=${analysisChainMd === ''}`)
+
           // 解析 AI 响应，提取结构化的审查评论
           const reviews = parseReview(response, patches, options.debug)
+          let analysisChainAttached = false
           for (const review of reviews) {
             // 过滤 LGTM 评论（如果配置为不保留）
             if (
@@ -771,12 +772,22 @@ ${commentChain}
 
             try {
               reviewCount += 1
+              // 每个文件只在第一条评论上附加一次 Analysis chain，避免重复刷屏
+              const shouldAttachAnalysisChain =
+                analysisChainMd !== '' && !analysisChainAttached
+              const commentWithChain = shouldAttachAnalysisChain
+                ? `${review.comment}\n\n${analysisChainMd}`
+                : review.comment
+              if (shouldAttachAnalysisChain) {
+                analysisChainAttached = true
+              }
+              info(`[analysis_chain] ${filename}: comment line ${review.startLine}-${review.endLine}, hasChain=${shouldAttachAnalysisChain}, finalLen=${commentWithChain.length}`)
               // 将审查评论加入缓冲区
               await commenter.bufferReviewComment(
                 filename,
                 review.startLine,
                 review.endLine,
-                `${review.comment}`
+                commentWithChain
               )
             } catch (e: any) {
               reviewsFailed.push(`${filename} comment failed (${e as string})`)
@@ -784,8 +795,7 @@ ${commentChain}
           }
         } catch (e: any) {
           warning(
-            `Failed to review: ${e as string}, skipping. backtrace: ${
-              e.stack as string
+            `Failed to review: ${e as string}, skipping. backtrace: ${e.stack as string
             }`
           )
           reviewsFailed.push(`${filename} (${e as string})`)
@@ -813,30 +823,27 @@ ${commentChain}
 
     // 追加审查统计信息到状态消息
     statusMsg += `
-${
-  reviewsFailed.length > 0
-    ? `<details>
+${reviewsFailed.length > 0
+        ? `<details>
 <summary>Files not reviewed due to errors (${reviewsFailed.length})</summary>
 
 * ${reviewsFailed.join('\n* ')}
 
 </details>
 `
-    : ''
-}
-${
-  reviewsSkipped.length > 0
-    ? `<details>
-<summary>Files skipped from review due to trivial changes (${
-        reviewsSkipped.length
-      })</summary>
+        : ''
+      }
+${reviewsSkipped.length > 0
+        ? `<details>
+<summary>Files skipped from review due to trivial changes (${reviewsSkipped.length
+        })</summary>
 
 * ${reviewsSkipped.join('\n* ')}
 
 </details>
 `
-    : ''
-}
+        : ''
+      }
 <details>
 <summary>Review comments generated (${reviewCount + lgtmCount})</summary>
 
@@ -883,6 +890,139 @@ ${
 
 // ==================== Diff 解析辅助函数 ====================
 
+// ==================== Analysis Chain 格式化 ====================
+
+function formatShellCommandForDisplay(command: string): string {
+  return command
+    .replace(/\s+&&\s+/g, ' &&\n')
+    .replace(/\s+\|\|\s+/g, ' ||\n')
+    .replace(/\s+\|\s+/g, ' |\n')
+}
+
+/**
+ * 将模型执行的分析步骤格式化为 CodeRabbit 风格的 Analysis chain
+ *
+ * 生成可折叠的 `<details>` 块，包含每个 shell 命令及其输出、web search 调用等，
+ * 展示模型在给出审查意见之前的推理/调查过程。
+ */
+function resolveAnalysisRepositoryUrl(): string {
+  const payload = context.payload as Record<string, any>
+  const candidates = [
+    context.payload.repository?.html_url,
+    payload.project?.web_url,
+    payload.project?.homepage,
+    payload.repository?.homepage,
+    process.env.CI_PROJECT_URL,
+    process.env.CI_REPOSITORY_URL,
+    buildGithubRepositoryUrl(),
+    readOriginRemoteUrl()
+  ]
+
+  return (
+    candidates
+      .map(candidate => normalizeRepositoryUrl(candidate))
+      .find((candidate): candidate is string => candidate != null) ?? ''
+  )
+}
+
+function buildGithubRepositoryUrl(): string | undefined {
+  const serverUrl = process.env.GITHUB_SERVER_URL?.trim()
+  if (
+    serverUrl == null ||
+    serverUrl === '' ||
+    repo.owner === '' ||
+    repo.repo === ''
+  ) {
+    return undefined
+  }
+
+  return `${serverUrl.replace(/\/+$/, '')}/${repo.owner}/${repo.repo}`
+}
+
+function readOriginRemoteUrl(): string | undefined {
+  try {
+    const originUrl = execFileSync('git', ['config', '--get', 'remote.origin.url'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore']
+    }).trim()
+    return originUrl === '' ? undefined : originUrl
+  } catch {
+    return undefined
+  }
+}
+
+function normalizeRepositoryUrl(rawUrl: string | undefined): string | undefined {
+  if (rawUrl == null) return undefined
+
+  const trimmed = rawUrl.trim()
+  if (trimmed === '') return undefined
+
+  const sshLikeMatch = trimmed.match(/^(?:ssh:\/\/)?git@([^/:]+)[:/]([^\s]+)$/)
+  if (sshLikeMatch != null) {
+    const [, host, path] = sshLikeMatch
+    return `https://${host}/${normalizeRepositoryPath(path)}`
+  }
+
+  try {
+    const parsed = new URL(trimmed)
+    const path = normalizeRepositoryPath(parsed.pathname)
+    if (path === '') return undefined
+
+    const protocol =
+      parsed.protocol === 'http:' || parsed.protocol === 'https:'
+        ? parsed.protocol
+        : 'https:'
+
+    return `${protocol}//${parsed.host}/${path}`
+  } catch {
+    return undefined
+  }
+}
+
+function normalizeRepositoryPath(path: string): string {
+  return path
+    .trim()
+    .replace(/^\/+/, '')
+    .replace(/\/+$/, '')
+    .replace(/\.git$/, '')
+}
+
+function formatAnalysisChain(
+  steps: AnalysisStep[],
+  repositoryUrl: string
+): string {
+  info(`[formatAnalysisChain] called with ${steps.length} steps`)
+  if (steps.length === 0) return ''
+
+  let chain = '<details>\n<summary>🧩 Analysis chain</summary>\n\n'
+
+  for (let idx = 0; idx < steps.length; idx++) {
+    const step = steps[idx]
+    // info(`[formatAnalysisChain] step[${idx}]: type=${step.type}, commands=${JSON.stringify(step.commands)}, stdout_len=${step.stdoutLength ?? 0}`)
+    if (step.type === 'shell') {
+      info(`[formatAnalysisChain] ${JSON.stringify(step)}`)
+      for (let cmdIdx = 0; cmdIdx < (step.commands?.length ?? 0); cmdIdx++) {
+        const command = step.commands?.[cmdIdx] ?? ''
+        const commandOutput = step.commandOutputs?.[cmdIdx]
+        chain += `\n🏁 Shell executed:\n`
+        chain += `\`\`\`bash\n${formatShellCommandForDisplay(command)}\n\`\`\`\n\n`
+        chain += `Repository: ${repositoryUrl}\n`
+        if (commandOutput != null) {
+          chain += `\nLength of output: ${commandOutput.stdoutLength}\n`
+          chain += '\n'
+        }
+        chain += '---\n\n'
+      }
+      
+    } else if (step.type === 'web_search') {
+      chain += `🔍 Web search executed (status: ${step.status ?? 'unknown'})\n\n---\n\n`
+    }
+  }
+
+  chain += '</details>'
+  return chain
+}
+
 /**
  * 将完整的 patch 字符串按 @@ hunk 标头拆分为独立的 hunk 数组
  * 每个 hunk 以 @@ -a,b +c,d @@ 开头
@@ -920,8 +1060,8 @@ const splitPatch = (patch: string | null | undefined): string[] => {
 const patchStartEndLine = (
   patch: string
 ): {
-  oldHunk: {startLine: number; endLine: number}
-  newHunk: {startLine: number; endLine: number}
+  oldHunk: { startLine: number; endLine: number }
+  newHunk: { startLine: number; endLine: number }
 } | null => {
   const pattern = /(^@@ -(\d+),(\d+) \+(\d+),(\d+) @@)/gm
   const match = pattern.exec(patch)
@@ -955,7 +1095,7 @@ const patchStartEndLine = (
  */
 const parsePatch = (
   patch: string
-): {oldHunk: string; newHunk: string} | null => {
+): { oldHunk: string; newHunk: string } | null => {
   const hunkInfo = patchStartEndLine(patch)
   if (hunkInfo == null) {
     return null
@@ -1153,9 +1293,9 @@ ${review.comment}`
       codeBlockStartIndex = comment.indexOf(
         codeBlockStart,
         codeBlockStartIndex +
-          codeBlockStart.length +
-          sanitizedBlock.length +
-          codeBlockEnd.length
+        codeBlockStart.length +
+        sanitizedBlock.length +
+        codeBlockEnd.length
       )
     }
 
