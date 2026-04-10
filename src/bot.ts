@@ -348,13 +348,13 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
         )
       }
 
-      info(`[analysis_chain] total analysis steps captured: ${analysisSteps.length}`)
-      if (analysisSteps.length > 0) {
-        for (let i = 0; i < analysisSteps.length; i++) {
-          const s = analysisSteps[i]
-          info(`[analysis_chain] step[${i}]: type=${s.type}, commands=${JSON.stringify(s.commands)}, stdout_len=${s.stdoutLength ?? 0}, stderr_len=${s.stderrLength ?? 0}`)
-        }
-      }
+      // info(`[analysis_chain] total analysis steps captured: ${analysisSteps.length}`)
+      // if (analysisSteps.length > 0) {
+      //   for (let i = 0; i < analysisSteps.length; i++) {
+      //     const s = analysisSteps[i]
+      //     info(`[analysis_chain] step[${i}]: type=${s.type}, commands=${JSON.stringify(s.commands)}, stdout_len=${s.stdoutLength ?? 0}, stderr_len=${s.stderrLength ?? 0}`)
+      //   }
+      // }
 
       // 移除响应中可能存在的多余前缀 "with "
       if (responseText.startsWith('with ')) {
