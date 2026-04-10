@@ -13,6 +13,7 @@
  * 后续运行只审查新增的变更，避免重复审查。
  */
 import { error, info, warning } from '@actions/core'
+import { execFileSync } from 'child_process'
 // eslint-disable-next-line camelcase
 import { context as github_context } from '@actions/github'
 import pLimit from 'p-limit'
@@ -745,7 +746,10 @@ ${commentChain}
 
           // 格式化 Analysis chain（模型执行的 shell / web_search 步骤）
           info(`[analysis_chain] ${filename}: received ${analysisSteps.length} analysis steps from bot`)
-          const analysisChainMd = formatAnalysisChain(analysisSteps)
+          const analysisChainMd = formatAnalysisChain(
+            analysisSteps,
+            resolveAnalysisRepositoryUrl()
+          )
           info(`[analysis_chain] ${filename}: formatted markdown length=${analysisChainMd.length}, empty=${analysisChainMd === ''}`)
 
           // 解析 AI 响应，提取结构化的审查评论
@@ -888,9 +892,6 @@ ${reviewsSkipped.length > 0
 
 // ==================== Analysis Chain 格式化 ====================
 
-/** 输出截断上限（字符数），避免评论过长 */
-const MAX_SHELL_OUTPUT_LENGTH = 800
-
 function formatShellCommandForDisplay(command: string): string {
   return command
     .replace(/\s+&&\s+/g, ' &&\n')
@@ -904,35 +905,118 @@ function formatShellCommandForDisplay(command: string): string {
  * 生成可折叠的 `<details>` 块，包含每个 shell 命令及其输出、web search 调用等，
  * 展示模型在给出审查意见之前的推理/调查过程。
  */
-function formatAnalysisChain(steps: AnalysisStep[]): string {
+function resolveAnalysisRepositoryUrl(): string {
+  const payload = context.payload as Record<string, any>
+  const candidates = [
+    context.payload.repository?.html_url,
+    payload.project?.web_url,
+    payload.project?.homepage,
+    payload.repository?.homepage,
+    process.env.CI_PROJECT_URL,
+    process.env.CI_REPOSITORY_URL,
+    buildGithubRepositoryUrl(),
+    readOriginRemoteUrl()
+  ]
+
+  return (
+    candidates
+      .map(candidate => normalizeRepositoryUrl(candidate))
+      .find((candidate): candidate is string => candidate != null) ?? ''
+  )
+}
+
+function buildGithubRepositoryUrl(): string | undefined {
+  const serverUrl = process.env.GITHUB_SERVER_URL?.trim()
+  if (
+    serverUrl == null ||
+    serverUrl === '' ||
+    repo.owner === '' ||
+    repo.repo === ''
+  ) {
+    return undefined
+  }
+
+  return `${serverUrl.replace(/\/+$/, '')}/${repo.owner}/${repo.repo}`
+}
+
+function readOriginRemoteUrl(): string | undefined {
+  try {
+    const originUrl = execFileSync('git', ['config', '--get', 'remote.origin.url'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore']
+    }).trim()
+    return originUrl === '' ? undefined : originUrl
+  } catch {
+    return undefined
+  }
+}
+
+function normalizeRepositoryUrl(rawUrl: string | undefined): string | undefined {
+  if (rawUrl == null) return undefined
+
+  const trimmed = rawUrl.trim()
+  if (trimmed === '') return undefined
+
+  const sshLikeMatch = trimmed.match(/^(?:ssh:\/\/)?git@([^/:]+)[:/]([^\s]+)$/)
+  if (sshLikeMatch != null) {
+    const [, host, path] = sshLikeMatch
+    return `https://${host}/${normalizeRepositoryPath(path)}`
+  }
+
+  try {
+    const parsed = new URL(trimmed)
+    const path = normalizeRepositoryPath(parsed.pathname)
+    if (path === '') return undefined
+
+    const protocol =
+      parsed.protocol === 'http:' || parsed.protocol === 'https:'
+        ? parsed.protocol
+        : 'https:'
+
+    return `${protocol}//${parsed.host}/${path}`
+  } catch {
+    return undefined
+  }
+}
+
+function normalizeRepositoryPath(path: string): string {
+  return path
+    .trim()
+    .replace(/^\/+/, '')
+    .replace(/\/+$/, '')
+    .replace(/\.git$/, '')
+}
+
+function formatAnalysisChain(
+  steps: AnalysisStep[],
+  repositoryUrl: string
+): string {
   info(`[formatAnalysisChain] called with ${steps.length} steps`)
   if (steps.length === 0) return ''
 
   let chain = '<details>\n<summary>🧩 Analysis chain</summary>\n\n'
+  chain += `Repository: ${repositoryUrl}\n\n`
 
   for (let idx = 0; idx < steps.length; idx++) {
     const step = steps[idx]
-    // info(`[formatAnalysisChain] step[${idx}]: type=${step.type}, commands=${JSON.stringify(step.commands)}, stdout_len=${step.stdout?.length ?? 0}`)
+    // info(`[formatAnalysisChain] step[${idx}]: type=${step.type}, commands=${JSON.stringify(step.commands)}, stdout_len=${step.stdoutLength ?? 0}`)
     if (step.type === 'shell') {
       info(`[formatAnalysisChain] ${JSON.stringify(step)}`)
       for (let cmdIdx = 0; cmdIdx < (step.commands?.length ?? 0); cmdIdx++) {
         const command = step.commands?.[cmdIdx] ?? ''
+        const commandOutput = step.commandOutputs?.[cmdIdx]
         chain += `\n🏁 Shell executed:\n`
         chain += `\`\`\`bash\n${formatShellCommandForDisplay(command)}\n\`\`\`\n\n`
-      }
-      if (step.stdout) {
-        const truncated =
-          step.stdout.length > MAX_SHELL_OUTPUT_LENGTH
-            ? `${step.stdout.substring(0, MAX_SHELL_OUTPUT_LENGTH)}\n... (truncated)`
-            : step.stdout
-        chain += `Output:\n\`\`\`\n${truncated}\n\`\`\`\n\n`
-        chain += `Length of output: ${step.stdout.length}\n\n`
-      }
-      if (step.stderr) {
-        chain += `Stderr:\n\`\`\`\n${step.stderr.substring(0, MAX_SHELL_OUTPUT_LENGTH)}\n\`\`\`\n\n`
-      }
-      if (step.timedOut) {
-        chain += '⏱️ Command timed out.\n\n'
+        if (commandOutput != null) {
+          chain += `Length of stdout: ${commandOutput.stdoutLength}\n`
+          chain += `Length of stderr: ${commandOutput.stderrLength}\n`
+          if (commandOutput.timedOut) {
+            chain += 'Outcome: timeout\n'
+          } else {
+            chain += `Exit code: ${commandOutput.exitCode ?? 'unknown'}\n`
+          }
+          chain += '\n'
+        }
       }
       chain += '---\n\n'
     } else if (step.type === 'web_search') {

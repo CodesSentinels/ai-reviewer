@@ -8751,7 +8751,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
             if (analysisSteps.length > 0) {
                 for (let i = 0; i < analysisSteps.length; i++) {
                     const s = analysisSteps[i];
-                    (0,core.info)(`[analysis_chain] step[${i}]: type=${s.type}, commands=${JSON.stringify(s.commands)}, stdout_len=${s.stdout?.length ?? 0}, stderr_len=${s.stderr?.length ?? 0}`);
+                    (0,core.info)(`[analysis_chain] step[${i}]: type=${s.type}, commands=${JSON.stringify(s.commands)}, stdout_len=${s.stdoutLength ?? 0}, stderr_len=${s.stderrLength ?? 0}`);
                 }
             }
             // 移除响应中可能存在的多余前缀 "with "
@@ -8836,17 +8836,36 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
             (0,core.info)('[analysis_chain_debug] shell_call_output but no matching shell step found or no output');
             return;
         }
+        const commandOutputs = [];
+        let stdoutLength = 0;
+        let stderrLength = 0;
+        let timedOut = false;
+        let exitCode;
         for (const out of output) {
             (0,core.info)(`[analysis_chain_debug] shell output chunk: stdout_len=${out.stdout?.length ?? 0}, stderr_len=${out.stderr?.length ?? 0}, outcome=${JSON.stringify(out.outcome)}`);
-            shellStep.stdout = (shellStep.stdout ?? '') + (out.stdout ?? '');
-            shellStep.stderr = (shellStep.stderr ?? '') + (out.stderr ?? '');
+            const stdoutChunkLength = out.stdout?.length ?? 0;
+            const stderrChunkLength = out.stderr?.length ?? 0;
+            stdoutLength += stdoutChunkLength;
+            stderrLength += stderrChunkLength;
+            const commandOutput = {
+                stdoutLength: stdoutChunkLength,
+                stderrLength: stderrChunkLength
+            };
             if (out.outcome.type === 'exit') {
-                shellStep.exitCode = out.outcome.exit_code;
+                commandOutput.exitCode = out.outcome.exit_code;
+                exitCode = out.outcome.exit_code;
             }
             else if (out.outcome.type === 'timeout') {
-                shellStep.timedOut = true;
+                commandOutput.timedOut = true;
+                timedOut = true;
             }
+            commandOutputs.push(commandOutput);
         }
+        shellStep.commandOutputs = commandOutputs;
+        shellStep.stdoutLength = stdoutLength;
+        shellStep.stderrLength = stderrLength;
+        shellStep.exitCode = exitCode;
+        shellStep.timedOut = timedOut;
     };
     executeShellCalls = async (shellCalls, analysisSteps) => {
         const shellOutputs = [];
@@ -12881,6 +12900,8 @@ __nccwpck_require__.d(__webpack_exports__, {
 
 // EXTERNAL MODULE: ./node_modules/.pnpm/@actions+core@1.11.1/node_modules/@actions/core/lib/core.js
 var core = __nccwpck_require__(1078);
+// EXTERNAL MODULE: external "child_process"
+var external_child_process_ = __nccwpck_require__(2081);
 // EXTERNAL MODULE: ./node_modules/.pnpm/@actions+github@5.1.1/node_modules/@actions/github/lib/github.js
 var github = __nccwpck_require__(3695);
 ;// CONCATENATED MODULE: ./node_modules/.pnpm/yocto-queue@1.2.2/node_modules/yocto-queue/index.js
@@ -14749,6 +14770,7 @@ var tokenizer = __nccwpck_require__(7525);
  * 后续运行只审查新增的变更，避免重复审查。
  */
 
+
 // eslint-disable-next-line camelcase
 
 
@@ -15289,7 +15311,7 @@ ${commentChain}
                     }
                     // 格式化 Analysis chain（模型执行的 shell / web_search 步骤）
                     (0,core.info)(`[analysis_chain] ${filename}: received ${analysisSteps.length} analysis steps from bot`);
-                    const analysisChainMd = formatAnalysisChain(analysisSteps);
+                    const analysisChainMd = formatAnalysisChain(analysisSteps, resolveAnalysisRepositoryUrl());
                     (0,core.info)(`[analysis_chain] ${filename}: formatted markdown length=${analysisChainMd.length}, empty=${analysisChainMd === ''}`);
                     // 解析 AI 响应，提取结构化的审查评论
                     const reviews = parseReview(response, patches, options.debug);
@@ -15403,8 +15425,6 @@ ${reviewsSkipped.length > 0
 };
 // ==================== Diff 解析辅助函数 ====================
 // ==================== Analysis Chain 格式化 ====================
-/** 输出截断上限（字符数），避免评论过长 */
-const MAX_SHELL_OUTPUT_LENGTH = 800;
 function formatShellCommandForDisplay(command) {
     return command
         .replace(/\s+&&\s+/g, ' &&\n')
@@ -15417,33 +15437,103 @@ function formatShellCommandForDisplay(command) {
  * 生成可折叠的 `<details>` 块，包含每个 shell 命令及其输出、web search 调用等，
  * 展示模型在给出审查意见之前的推理/调查过程。
  */
-function formatAnalysisChain(steps) {
+function resolveAnalysisRepositoryUrl() {
+    const payload = review_context.payload;
+    const candidates = [
+        review_context.payload.repository?.html_url,
+        payload.project?.web_url,
+        payload.project?.homepage,
+        payload.repository?.homepage,
+        process.env.CI_PROJECT_URL,
+        process.env.CI_REPOSITORY_URL,
+        buildGithubRepositoryUrl(),
+        readOriginRemoteUrl()
+    ];
+    return (candidates
+        .map(candidate => normalizeRepositoryUrl(candidate))
+        .find((candidate) => candidate != null) ?? '');
+}
+function buildGithubRepositoryUrl() {
+    const serverUrl = process.env.GITHUB_SERVER_URL?.trim();
+    if (serverUrl == null ||
+        serverUrl === '' ||
+        review_repo.owner === '' ||
+        review_repo.repo === '') {
+        return undefined;
+    }
+    return `${serverUrl.replace(/\/+$/, '')}/${review_repo.owner}/${review_repo.repo}`;
+}
+function readOriginRemoteUrl() {
+    try {
+        const originUrl = (0,external_child_process_.execFileSync)('git', ['config', '--get', 'remote.origin.url'], {
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'ignore']
+        }).trim();
+        return originUrl === '' ? undefined : originUrl;
+    }
+    catch {
+        return undefined;
+    }
+}
+function normalizeRepositoryUrl(rawUrl) {
+    if (rawUrl == null)
+        return undefined;
+    const trimmed = rawUrl.trim();
+    if (trimmed === '')
+        return undefined;
+    const sshLikeMatch = trimmed.match(/^(?:ssh:\/\/)?git@([^/:]+)[:/]([^\s]+)$/);
+    if (sshLikeMatch != null) {
+        const [, host, path] = sshLikeMatch;
+        return `https://${host}/${normalizeRepositoryPath(path)}`;
+    }
+    try {
+        const parsed = new URL(trimmed);
+        const path = normalizeRepositoryPath(parsed.pathname);
+        if (path === '')
+            return undefined;
+        const protocol = parsed.protocol === 'http:' || parsed.protocol === 'https:'
+            ? parsed.protocol
+            : 'https:';
+        return `${protocol}//${parsed.host}/${path}`;
+    }
+    catch {
+        return undefined;
+    }
+}
+function normalizeRepositoryPath(path) {
+    return path
+        .trim()
+        .replace(/^\/+/, '')
+        .replace(/\/+$/, '')
+        .replace(/\.git$/, '');
+}
+function formatAnalysisChain(steps, repositoryUrl) {
     (0,core.info)(`[formatAnalysisChain] called with ${steps.length} steps`);
     if (steps.length === 0)
         return '';
     let chain = '<details>\n<summary>🧩 Analysis chain</summary>\n\n';
+    chain += `Repository: ${repositoryUrl}\n\n`;
     for (let idx = 0; idx < steps.length; idx++) {
         const step = steps[idx];
-        // info(`[formatAnalysisChain] step[${idx}]: type=${step.type}, commands=${JSON.stringify(step.commands)}, stdout_len=${step.stdout?.length ?? 0}`)
+        // info(`[formatAnalysisChain] step[${idx}]: type=${step.type}, commands=${JSON.stringify(step.commands)}, stdout_len=${step.stdoutLength ?? 0}`)
         if (step.type === 'shell') {
             (0,core.info)(`[formatAnalysisChain] ${JSON.stringify(step)}`);
             for (let cmdIdx = 0; cmdIdx < (step.commands?.length ?? 0); cmdIdx++) {
                 const command = step.commands?.[cmdIdx] ?? '';
+                const commandOutput = step.commandOutputs?.[cmdIdx];
                 chain += `\n🏁 Shell executed:\n`;
                 chain += `\`\`\`bash\n${formatShellCommandForDisplay(command)}\n\`\`\`\n\n`;
-            }
-            if (step.stdout) {
-                const truncated = step.stdout.length > MAX_SHELL_OUTPUT_LENGTH
-                    ? `${step.stdout.substring(0, MAX_SHELL_OUTPUT_LENGTH)}\n... (truncated)`
-                    : step.stdout;
-                chain += `Output:\n\`\`\`\n${truncated}\n\`\`\`\n\n`;
-                chain += `Length of output: ${step.stdout.length}\n\n`;
-            }
-            if (step.stderr) {
-                chain += `Stderr:\n\`\`\`\n${step.stderr.substring(0, MAX_SHELL_OUTPUT_LENGTH)}\n\`\`\`\n\n`;
-            }
-            if (step.timedOut) {
-                chain += '⏱️ Command timed out.\n\n';
+                if (commandOutput != null) {
+                    chain += `Length of stdout: ${commandOutput.stdoutLength}\n`;
+                    chain += `Length of stderr: ${commandOutput.stderrLength}\n`;
+                    if (commandOutput.timedOut) {
+                        chain += 'Outcome: timeout\n';
+                    }
+                    else {
+                        chain += `Exit code: ${commandOutput.exitCode ?? 'unknown'}\n`;
+                    }
+                    chain += '\n';
+                }
             }
             chain += '---\n\n';
         }

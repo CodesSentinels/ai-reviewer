@@ -33,16 +33,25 @@ export interface AnalysisStep {
   callId?: string
   /** shell 命令列表 */
   commands?: string[]
-  /** shell 执行的 stdout 输出 */
-  stdout?: string
-  /** shell 执行的 stderr 输出 */
-  stderr?: string
+  /** shell 每条命令的输出摘要 */
+  commandOutputs?: AnalysisCommandOutput[]
+  /** shell 聚合后的 stdout 长度 */
+  stdoutLength?: number
+  /** shell 聚合后的 stderr 长度 */
+  stderrLength?: number
   /** shell 退出码 */
   exitCode?: number
   /** 是否超时 */
   timedOut?: boolean
   /** web_search 的状态 */
   status?: string
+}
+
+export interface AnalysisCommandOutput {
+  stdoutLength: number
+  stderrLength: number
+  exitCode?: number
+  timedOut?: boolean
 }
 
 interface ShellCallItem {
@@ -343,7 +352,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
       if (analysisSteps.length > 0) {
         for (let i = 0; i < analysisSteps.length; i++) {
           const s = analysisSteps[i]
-          info(`[analysis_chain] step[${i}]: type=${s.type}, commands=${JSON.stringify(s.commands)}, stdout_len=${s.stdout?.length ?? 0}, stderr_len=${s.stderr?.length ?? 0}`)
+          info(`[analysis_chain] step[${i}]: type=${s.type}, commands=${JSON.stringify(s.commands)}, stdout_len=${s.stdoutLength ?? 0}, stderr_len=${s.stderrLength ?? 0}`)
         }
       }
 
@@ -465,18 +474,40 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
       return
     }
 
+    const commandOutputs: AnalysisCommandOutput[] = []
+    let stdoutLength = 0
+    let stderrLength = 0
+    let timedOut = false
+    let exitCode: number | undefined
+
     for (const out of output) {
       info(
         `[analysis_chain_debug] shell output chunk: stdout_len=${out.stdout?.length ?? 0}, stderr_len=${out.stderr?.length ?? 0}, outcome=${JSON.stringify(out.outcome)}`
       )
-      shellStep.stdout = (shellStep.stdout ?? '') + (out.stdout ?? '')
-      shellStep.stderr = (shellStep.stderr ?? '') + (out.stderr ?? '')
-      if (out.outcome.type === 'exit') {
-        shellStep.exitCode = out.outcome.exit_code
-      } else if (out.outcome.type === 'timeout') {
-        shellStep.timedOut = true
+      const stdoutChunkLength = out.stdout?.length ?? 0
+      const stderrChunkLength = out.stderr?.length ?? 0
+      stdoutLength += stdoutChunkLength
+      stderrLength += stderrChunkLength
+
+      const commandOutput: AnalysisCommandOutput = {
+        stdoutLength: stdoutChunkLength,
+        stderrLength: stderrChunkLength
       }
+      if (out.outcome.type === 'exit') {
+        commandOutput.exitCode = out.outcome.exit_code
+        exitCode = out.outcome.exit_code
+      } else if (out.outcome.type === 'timeout') {
+        commandOutput.timedOut = true
+        timedOut = true
+      }
+      commandOutputs.push(commandOutput)
     }
+
+    shellStep.commandOutputs = commandOutputs
+    shellStep.stdoutLength = stdoutLength
+    shellStep.stderrLength = stderrLength
+    shellStep.exitCode = exitCode
+    shellStep.timedOut = timedOut
   }
 
   private readonly executeShellCalls = async (
