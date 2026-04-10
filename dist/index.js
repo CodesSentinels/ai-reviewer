@@ -15524,7 +15524,7 @@ function formatAnalysisChain(steps, repositoryUrl) {
                 chain += `\`\`\`bash\n${formatShellCommandForDisplay(command)}\n\`\`\`\n\n`;
                 chain += `Repository: ${repositoryUrl}\n`;
                 if (commandOutput != null) {
-                    chain += `Length of stdout: ${commandOutput.stdoutLength}\n`;
+                    chain += `\nLength of output: ${commandOutput.stdoutLength}\n`;
                     chain += '\n';
                 }
                 chain += '---\n\n';
