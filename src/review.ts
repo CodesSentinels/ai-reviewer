@@ -914,10 +914,9 @@ function formatAnalysisChain(steps: AnalysisStep[]): string {
     const step = steps[idx]
     info(`[formatAnalysisChain] step[${idx}]: type=${step.type}, commands=${JSON.stringify(step.commands)}, stdout_len=${step.stdout?.length ?? 0}`)
     if (step.type === 'shell') {
-      info(`[formatAnalysisChain] ${step}`)
       for (let cmdIdx = 0; cmdIdx < (step.commands?.length ?? 0); cmdIdx++) {
         const command = step.commands?.[cmdIdx] ?? ''
-        chain += `\n🏁 Shell executed:\n🏁 Shell executed:\n`
+        chain += `\n🏁 Shell executed:\n`
         chain += `\`\`\`bash\n${formatShellCommandForDisplay(command)}\n\`\`\`\n\n`
       }
       if (step.stdout) {
