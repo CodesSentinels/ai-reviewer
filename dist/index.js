@@ -15512,7 +15512,6 @@ function formatAnalysisChain(steps, repositoryUrl) {
     if (steps.length === 0)
         return '';
     let chain = '<details>\n<summary>🧩 Analysis chain</summary>\n\n';
-    chain += `Repository: ${repositoryUrl}\n\n`;
     for (let idx = 0; idx < steps.length; idx++) {
         const step = steps[idx];
         // info(`[formatAnalysisChain] step[${idx}]: type=${step.type}, commands=${JSON.stringify(step.commands)}, stdout_len=${step.stdoutLength ?? 0}`)
@@ -15523,19 +15522,13 @@ function formatAnalysisChain(steps, repositoryUrl) {
                 const commandOutput = step.commandOutputs?.[cmdIdx];
                 chain += `\n🏁 Shell executed:\n`;
                 chain += `\`\`\`bash\n${formatShellCommandForDisplay(command)}\n\`\`\`\n\n`;
+                chain += `Repository: ${repositoryUrl}\n`;
                 if (commandOutput != null) {
                     chain += `Length of stdout: ${commandOutput.stdoutLength}\n`;
-                    chain += `Length of stderr: ${commandOutput.stderrLength}\n`;
-                    if (commandOutput.timedOut) {
-                        chain += 'Outcome: timeout\n';
-                    }
-                    else {
-                        chain += `Exit code: ${commandOutput.exitCode ?? 'unknown'}\n`;
-                    }
                     chain += '\n';
                 }
+                chain += '---\n\n';
             }
-            chain += '---\n\n';
         }
         else if (step.type === 'web_search') {
             chain += `🔍 Web search executed (status: ${step.status ?? 'unknown'})\n\n---\n\n`;
