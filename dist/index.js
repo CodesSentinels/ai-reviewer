@@ -15424,12 +15424,12 @@ function formatAnalysisChain(steps) {
     let chain = '<details>\n<summary>🧩 Analysis chain</summary>\n\n';
     for (let idx = 0; idx < steps.length; idx++) {
         const step = steps[idx];
-        (0,core.info)(`[formatAnalysisChain] step[${idx}]: type=${step.type}, commands=${JSON.stringify(step.commands)}, stdout_len=${step.stdout?.length ?? 0}`);
+        // info(`[formatAnalysisChain] step[${idx}]: type=${step.type}, commands=${JSON.stringify(step.commands)}, stdout_len=${step.stdout?.length ?? 0}`)
         if (step.type === 'shell') {
-            (0,core.info)(`[formatAnalysisChain] ${step}`);
+            (0,core.info)(`[formatAnalysisChain] ${JSON.stringify(step)}`);
             for (let cmdIdx = 0; cmdIdx < (step.commands?.length ?? 0); cmdIdx++) {
                 const command = step.commands?.[cmdIdx] ?? '';
-                chain += `\n🏁 Shell executed:\n🏁 Shell executed:\n`;
+                chain += `\n🏁 Shell executed:\n`;
                 chain += `\`\`\`bash\n${formatShellCommandForDisplay(command)}\n\`\`\`\n\n`;
             }
             if (step.stdout) {
