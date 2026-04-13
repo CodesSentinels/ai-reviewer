@@ -8608,6 +8608,11 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
             // 构建工具列表（可选启用 web search）
             const tools = [];
             if (this.enableWebSearch) {
+                // search_context_size 是 OpenAI Responses API 中 web_search 工具的参数，用于控制网页搜索时获取的上下文量。
+                // 'low' — 搜索结果少，速度快，token 消耗低
+                // 'medium' — 默认值
+                // 'high' — 获取更多搜索结果和上下文，回答更全面，但 token 消耗更高
+                // 这里设为 'high' 是为了让模型在做 web search 时尽可能多地获取信息，提高回答质量。
                 tools.push({ type: 'web_search', search_context_size: 'high' });
             }
             (0,core.info)(`[web_search_debug] model=${this.model}, enableWebSearch=${this.enableWebSearch}, tools=${JSON.stringify(tools)}`);
@@ -8681,6 +8686,1112 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
         }
         return ['', {}];
     };
+}
+
+
+/***/ }),
+
+/***/ 9215:
+/***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
+
+"use strict";
+
+// EXPORTS
+__nccwpck_require__.d(__webpack_exports__, {
+  "_": () => (/* binding */ handleCommentEvent)
+});
+
+// EXTERNAL MODULE: ./node_modules/.pnpm/@actions+core@1.11.1/node_modules/@actions/core/lib/core.js
+var core = __nccwpck_require__(1078);
+// EXTERNAL MODULE: ./node_modules/.pnpm/@actions+github@5.1.1/node_modules/@actions/github/lib/github.js
+var github = __nccwpck_require__(3695);
+;// CONCATENATED MODULE: ./lib/commands/registry.js
+class CommandRegistry {
+    handlers = new Map();
+    /** 规范名 → 注册顺序，help 命令按注册顺序输出 */
+    order = [];
+    register(handler) {
+        const primary = handler.name.toLowerCase();
+        if (this.handlers.has(primary)) {
+            throw new Error(`Command already registered: ${primary}`);
+        }
+        this.handlers.set(primary, handler);
+        this.order.push(primary);
+        for (const alias of handler.aliases ?? []) {
+            const a = alias.toLowerCase();
+            if (this.handlers.has(a)) {
+                throw new Error(`Command alias collides with existing command: ${a}`);
+            }
+            this.handlers.set(a, handler);
+        }
+    }
+    get(name) {
+        return this.handlers.get(name.toLowerCase());
+    }
+    has(name) {
+        return this.handlers.has(name.toLowerCase());
+    }
+    /** 仅返回主名 + 别名，用于 parser 命中检测 */
+    getRegisteredNames() {
+        return new Set(this.handlers.keys());
+    }
+    /** 按注册顺序返回所有主命令（不含别名），供 help 使用 */
+    listCommands() {
+        return this.order
+            .map(n => this.handlers.get(n))
+            .filter((h) => h !== undefined);
+    }
+    /** 仅供测试使用 */
+    _reset() {
+        this.handlers.clear();
+        this.order.length = 0;
+    }
+}
+const globalRegistry = new CommandRegistry();
+function registerCommand(handler) {
+    globalRegistry.register(handler);
+}
+function registry_getRegistry() {
+    return globalRegistry;
+}
+
+
+;// CONCATENATED MODULE: ./lib/commands/handlers/help.js
+
+/**
+ * 纯函数：根据命令列表生成 help Markdown。
+ * 提取出来便于单元测试（不依赖 registry 单例）。
+ */
+function buildHelpMessage(commands) {
+    const lines = [];
+    lines.push('## 支持的命令');
+    lines.push('');
+    lines.push('| 命令 | 描述 | 最低权限 |');
+    lines.push('| :--- | :--- | :------- |');
+    // help 自身也要出现在列表里，但排在最后
+    const ordered = [...commands].sort((a, b) => {
+        if (a.name === 'help')
+            return 1;
+        if (b.name === 'help')
+            return -1;
+        return 0;
+    });
+    for (const c of ordered) {
+        const perm = c.minPermission ?? 'write';
+        const usage = c.usage ?? `@ai-reviewer ${c.name}`;
+        lines.push(`| \`${usage}\` | ${c.description} | \`${perm}\` |`);
+    }
+    if (ordered.some(c => (c.aliases?.length ?? 0) > 0)) {
+        lines.push('');
+        lines.push('### 别名');
+        for (const c of ordered) {
+            if (c.aliases && c.aliases.length > 0) {
+                lines.push(`- \`${c.name}\` → ${c.aliases.map(a => `\`${a}\``).join(', ')}`);
+            }
+        }
+    }
+    lines.push('');
+    lines.push('> 🤖 Bot 同时支持 `@ai-reviewer` 与 `@codesentinel` 两个 mention。');
+    return lines.join('\n');
+}
+const helpHandler = {
+    name: 'help',
+    description: '显示所有支持的命令及用法',
+    usage: '@ai-reviewer help',
+    needsAck: false,
+    minPermission: 'read',
+    async execute(_ctx) {
+        const cmds = registry_getRegistry().listCommands();
+        return { message: buildHelpMessage(cmds) };
+    }
+};
+
+;// CONCATENATED MODULE: ./lib/commands/handlers/stubs.js
+function notImplemented(name) {
+    return async (_ctx) => {
+        // 调度器会把抛出的标记型错误转成 NOT_IMPLEMENTED 反馈
+        const e = new Error(`Command not implemented: ${name}`);
+        e.code = 'NOT_IMPLEMENTED';
+        throw e;
+    };
+}
+/** 成员 B */
+const resolveStub = {
+    name: 'resolve',
+    description: '批量将所有 CodeSentinel 审查意见标记为已解决',
+    usage: '@ai-reviewer resolve',
+    needsAck: true,
+    minPermission: 'write',
+    execute: notImplemented('resolve')
+};
+/** 成员 C */
+const reviewStub = {
+    name: 'review',
+    description: '触发增量审查（仅审查自上次审查以来的新增变更）',
+    usage: '@ai-reviewer review',
+    needsAck: true,
+    minPermission: 'write',
+    execute: notImplemented('review')
+};
+const fullReviewStub = {
+    name: 'full review',
+    description: '触发全量审查（从 base 到 HEAD 的完整 diff）',
+    usage: '@ai-reviewer full review',
+    needsAck: true,
+    minPermission: 'write',
+    execute: notImplemented('full review')
+};
+const summaryStub = {
+    name: 'summary',
+    description: '基于当前最新代码重新生成 PR 摘要',
+    usage: '@ai-reviewer summary',
+    needsAck: true,
+    minPermission: 'write',
+    execute: notImplemented('summary')
+};
+const pauseStub = {
+    name: 'pause',
+    description: '暂停对当前 PR 的自动审查',
+    usage: '@ai-reviewer pause',
+    needsAck: false,
+    minPermission: 'write',
+    execute: notImplemented('pause')
+};
+const resumeStub = {
+    name: 'resume',
+    description: '恢复对当前 PR 的自动审查',
+    usage: '@ai-reviewer resume',
+    needsAck: false,
+    minPermission: 'write',
+    execute: notImplemented('resume')
+};
+const configurationStub = {
+    name: 'configuration',
+    description: '显示当前仓库的审查配置',
+    usage: '@ai-reviewer configuration',
+    needsAck: false,
+    minPermission: 'read',
+    execute: notImplemented('configuration')
+};
+const ALL_STUBS = [
+    reviewStub,
+    fullReviewStub,
+    resolveStub,
+    summaryStub,
+    pauseStub,
+    resumeStub,
+    configurationStub
+];
+
+;// CONCATENATED MODULE: ./lib/commands/bootstrap.js
+/**
+ * commands/bootstrap.ts - 命令框架启动注册
+ *
+ * 统一在应用启动时把所有 handler 注册到 registry。
+ * 后续 B/C/D 接入真实 handler 时，将对应的 stub 替换为正式实现即可。
+ *
+ * 注意: 注册表是单例，且 register 在重复注册时抛异常。
+ * 因此 bootstrap 必须保证只被调用一次（用模块级 flag 保护）。
+ */
+
+
+
+let bootstrapped = false;
+function bootstrapCommands() {
+    if (bootstrapped)
+        return;
+    const reg = registry_getRegistry();
+    reg.register(helpHandler);
+    for (const h of ALL_STUBS) {
+        reg.register(h);
+    }
+    bootstrapped = true;
+}
+/** 仅供测试: 清空注册表并允许再次 bootstrap */
+function _resetBootstrap() {
+    getRegistry()._reset();
+    bootstrapped = false;
+}
+
+;// CONCATENATED MODULE: ./lib/commands/parser.js
+/** 默认支持的 bot mention 别名（小写，已带 @） */
+const DEFAULT_BOT_MENTIONS = ['@ai-reviewer', '@codesentinel'];
+/** 命令行长度上限 */
+const MAX_COMMAND_LINE_LENGTH = 512;
+/** 单个 arg 长度上限 */
+const MAX_ARG_LENGTH = 128;
+/** 参数个数上限 */
+const MAX_ARGS_COUNT = 16;
+/** 允许的参数字符集 */
+const SAFE_TOKEN_RE = /^[A-Za-z0-9_\-./:=]+$/;
+/** shell 元字符黑名单（补充检查，用于生成更明确的错误信息） */
+const SHELL_METACHARS_RE = /[`$(){}|&;<>\\'"]/;
+/**
+ * 主解析入口
+ */
+function parse(body, opts) {
+    if (typeof body !== 'string' || body.length === 0) {
+        return { kind: 'none' };
+    }
+    const mentions = (opts.botMentions ?? DEFAULT_BOT_MENTIONS).map(m => m.toLowerCase());
+    // 1. 找到第一个 bot mention 出现的位置（忽略大小写）
+    const lower = body.toLowerCase();
+    let mentionIdx = -1;
+    let mentionLen = 0;
+    for (const m of mentions) {
+        const idx = lower.indexOf(m);
+        if (idx !== -1 && (mentionIdx === -1 || idx < mentionIdx)) {
+            // 要求 mention 前是行首/空白/标点，避免匹配到 foo@ai-reviewer
+            const prev = idx === 0 ? ' ' : body[idx - 1];
+            if (/\s|[,.;:，。；：]/.test(prev) || idx === 0) {
+                mentionIdx = idx;
+                mentionLen = m.length;
+            }
+        }
+    }
+    if (mentionIdx === -1) {
+        return { kind: 'none' };
+    }
+    // 2. 提取 mention 之后的剩余内容
+    let rest = body.slice(mentionIdx + mentionLen);
+    // 允许 mention 后紧跟标点分隔符
+    rest = rest.replace(/^[,:;，：；]+/, '');
+    // 按第一个换行切分：第一行是命令体，其余是 rawAfter
+    const firstNewline = rest.indexOf('\n');
+    const firstLineRaw = firstNewline === -1 ? rest : rest.slice(0, firstNewline);
+    const rawAfter = firstNewline === -1 ? '' : rest.slice(firstNewline + 1).trim();
+    // 3. 命令行长度校验
+    if (firstLineRaw.length > MAX_COMMAND_LINE_LENGTH) {
+        return {
+            kind: 'command',
+            error: {
+                code: 'INVALID_ARGS',
+                detail: `命令长度超过上限 (${MAX_COMMAND_LINE_LENGTH})`
+            }
+        };
+    }
+    const firstLine = firstLineRaw.trim();
+    if (firstLine.length === 0) {
+        // 仅 @bot 单独出现 → 视为对话触发
+        return { kind: 'conversation' };
+    }
+    // 4. 分词（空白分隔）
+    const tokens = firstLine.split(/\s+/);
+    // 5. 尝试匹配命令名（最长前缀匹配，最多看前 3 个 token）
+    const matched = matchCommandName(tokens, opts.registeredCommands);
+    if (!matched) {
+        // 未命中命令但有 @bot → 交给对话 fallback
+        return { kind: 'conversation' };
+    }
+    const { name, consumed } = matched;
+    const argTokens = tokens.slice(consumed);
+    // 6. 参数数量校验
+    if (argTokens.length > MAX_ARGS_COUNT) {
+        return {
+            kind: 'command',
+            error: {
+                code: 'INVALID_ARGS',
+                detail: `参数个数超过上限 (${MAX_ARGS_COUNT})`
+            },
+            command: { name, raw: firstLine, args: [], kv: {}, rawAfter }
+        };
+    }
+    // 7. 参数字符集校验
+    for (const t of argTokens) {
+        if (t.length > MAX_ARG_LENGTH) {
+            return {
+                kind: 'command',
+                error: {
+                    code: 'INVALID_ARGS',
+                    detail: `参数过长: \`${truncate(t, 32)}\``
+                },
+                command: { name, raw: firstLine, args: [], kv: {}, rawAfter }
+            };
+        }
+        if (SHELL_METACHARS_RE.test(t)) {
+            return {
+                kind: 'command',
+                error: {
+                    code: 'INVALID_ARGS',
+                    detail: `参数包含非法字符: \`${truncate(t, 32)}\``
+                },
+                command: { name, raw: firstLine, args: [], kv: {}, rawAfter }
+            };
+        }
+        if (!SAFE_TOKEN_RE.test(t)) {
+            return {
+                kind: 'command',
+                error: {
+                    code: 'INVALID_ARGS',
+                    detail: `参数包含不允许的字符: \`${truncate(t, 32)}\``
+                },
+                command: { name, raw: firstLine, args: [], kv: {}, rawAfter }
+            };
+        }
+    }
+    // 8. 拆分 kv
+    const args = [];
+    const kv = {};
+    for (const t of argTokens) {
+        const eq = t.indexOf('=');
+        if (eq > 0 && eq < t.length - 1) {
+            const k = t.slice(0, eq);
+            const v = t.slice(eq + 1);
+            kv[k] = v;
+        }
+        args.push(t);
+    }
+    const command = {
+        name,
+        raw: firstLine,
+        args,
+        kv,
+        rawAfter
+    };
+    return { kind: 'command', command };
+}
+/**
+ * 在已注册命令集合中对 token 序列做最长前缀匹配
+ *
+ * 例如: registered = {"review", "full review"}
+ * tokens = ["full", "review"] → 匹配到 "full review"
+ * tokens = ["review"]         → 匹配到 "review"
+ * tokens = ["full"]           → 不匹配（full 未注册）→ 返回 null
+ */
+function matchCommandName(tokens, registered) {
+    const maxDepth = Math.min(tokens.length, 3);
+    // 从最长开始尝试
+    for (let depth = maxDepth; depth >= 1; depth--) {
+        const candidate = tokens
+            .slice(0, depth)
+            .map(t => t.toLowerCase())
+            .join(' ');
+        if (registered.has(candidate)) {
+            return { name: candidate, consumed: depth };
+        }
+    }
+    return null;
+}
+function truncate(s, n) {
+    return s.length > n ? `${s.slice(0, n)}...` : s;
+}
+
+// EXTERNAL MODULE: ./lib/octokit.js
+var octokit = __nccwpck_require__(2247);
+;// CONCATENATED MODULE: ./lib/commands/types.js
+/** 权限等级的比较用数值 */
+const PERMISSION_RANK = {
+    none: 0,
+    read: 1,
+    triage: 2,
+    write: 3,
+    maintain: 4,
+    admin: 5
+};
+/** 判断 actual >= required */
+function permissionAtLeast(actual, required) {
+    return PERMISSION_RANK[actual] >= PERMISSION_RANK[required];
+}
+
+;// CONCATENATED MODULE: ./lib/commands/permission.js
+/**
+ * commands/permission.ts - 命令权限校验
+ *
+ * 职责:
+ * - 查询评论者对仓库的权限等级
+ * - 提供命令级权限检查
+ * - 进程内缓存，避免在单次 Actions run 中重复查询
+ * - PR 作者豁免逻辑
+ *
+ * 对 GitHub API 的依赖:
+ *   octokit.repos.getCollaboratorPermissionLevel({owner, repo, username})
+ *   返回 permission ∈ {admin, maintain, write, triage, read, none}
+ */
+
+
+
+/** 进程内缓存: `${owner}/${repo}/${username}` → permission */
+const cache = new Map();
+/**
+ * 查询评论者权限，带缓存。
+ * 查询失败时回退为 'none'，并记录 warning（不抛异常）。
+ */
+async function getPermission(q) {
+    const key = `${q.owner}/${q.repo}/${q.username}`;
+    const cached = cache.get(key);
+    if (cached)
+        return cached;
+    try {
+        const res = await octokit/* octokit.repos.getCollaboratorPermissionLevel */.K.repos.getCollaboratorPermissionLevel({
+            owner: q.owner,
+            repo: q.repo,
+            username: q.username
+        });
+        // API 返回的 permission 字符串已经是我们需要的枚举之一
+        const perm = (res.data?.permission ?? 'none');
+        cache.set(key, perm);
+        return perm;
+    }
+    catch (e) {
+        (0,core.warning)(`getCollaboratorPermissionLevel failed for ${key}: ${String(e)} — ` +
+            `falling back to 'none'`);
+        cache.set(key, 'none');
+        return 'none';
+    }
+}
+/**
+ * 命令级权限检查
+ *
+ * @param handler    要检查的命令
+ * @param actual     评论者权限等级
+ * @param isPrAuthor 是否 PR 作者（作者对自己 PR 有部分豁免）
+ */
+function canExecute(handler, actual, isPrAuthor) {
+    const required = handler.minPermission ?? 'write';
+    if (permissionAtLeast(actual, required))
+        return true;
+    // PR 作者豁免：对自己 PR 调用这些"无副作用/仅影响自身 PR"的命令
+    if (isPrAuthor) {
+        const selfSafe = new Set(['help', 'review', 'full review', 'summary']);
+        if (selfSafe.has(handler.name.toLowerCase())) {
+            return true;
+        }
+    }
+    return false;
+}
+/** 仅供测试 */
+function _resetPermissionCache() {
+    cache.clear();
+}
+
+;// CONCATENATED MODULE: ./lib/commands/rate-limit.js
+/**
+ * commands/rate-limit.ts - 命令速率限制
+ *
+ * 简单的进程内令牌桶: 同一 actor 在 WINDOW_MS 内最多 MAX_PER_WINDOW 条命令。
+ *
+ * 注意: Actions 是无状态环境，跨 run 无法限流；本实现仅在单次 run 内有效。
+ * 这足以防止同一次 webhook 抖动下的重复处理，但不防"攻击者分多次提交评论"。
+ * 后者需要在更上层做（例如 GitHub 自身的 abuse detection）。
+ */
+const WINDOW_MS = 60_000;
+const MAX_PER_WINDOW = 10;
+const buckets = new Map();
+function checkRateLimit(actor, now = Date.now()) {
+    let bucket = buckets.get(actor);
+    if (!bucket) {
+        bucket = { timestamps: [] };
+        buckets.set(actor, bucket);
+    }
+    // 清理窗口外的记录
+    const cutoff = now - WINDOW_MS;
+    while (bucket.timestamps.length && bucket.timestamps[0] < cutoff) {
+        bucket.timestamps.shift();
+    }
+    if (bucket.timestamps.length >= MAX_PER_WINDOW) {
+        const earliest = bucket.timestamps[0];
+        return {
+            allowed: false,
+            retryAfterMs: Math.max(0, earliest + WINDOW_MS - now)
+        };
+    }
+    bucket.timestamps.push(now);
+    return { allowed: true };
+}
+/** 仅供测试 */
+function _resetRateLimit() {
+    buckets.clear();
+}
+const _RATE_LIMIT_CONSTANTS = { WINDOW_MS, MAX_PER_WINDOW };
+
+;// CONCATENATED MODULE: ./lib/commands/reply.js
+/**
+ * commands/reply.ts - 统一评论回复工具
+ *
+ * 所有命令的输出必须经过此层，确保:
+ * - 格式一致（Greeting + tag + body）
+ * - 幂等标签（PROCESSED_TAG）统一注入
+ * - ACK / 成功 / 失败 / 进度 四种状态通过 create+update 串联
+ * - 错误码 → 用户可读文案的映射集中维护
+ *
+ * 设计要点:
+ * - ack() 返回 ackId（新建的评论 id），失败时返回 null（降级为直接 reply）
+ * - success/error 若收到 ackId 则 updateComment，否则 createComment
+ * - error 文案带错误码，便于日志与用户排查
+ */
+
+
+/** Bot 问候图标（与 commenter.ts 对齐，但避免循环依赖） */
+const GREETING = '🤖 AI Reviewer';
+/** 命令回复评论的幂等标签前缀 */
+const CMD_REPLY_TAG_PREFIX = '<!-- codesentinel-cmd-reply';
+/** 组装幂等 tag */
+function buildCmdReplyTag(originalCommentId, commandName) {
+    return `${CMD_REPLY_TAG_PREFIX}:${originalCommentId}:${commandName} -->`;
+}
+/** 错误码 → 用户可读文案 */
+function formatErrorMessage(code, detail) {
+    const base = ERROR_MESSAGES[code] ?? '命令执行出错';
+    return detail ? `${base}\n\n详情: ${detail}` : base;
+}
+const ERROR_MESSAGES = {
+    UNKNOWN_COMMAND: '❓ **未知命令**。发送 `@ai-reviewer help` 查看支持的命令列表。',
+    INVALID_ARGS: '⚠️ **参数不合法**。命令参数仅接受字母、数字以及 `._-/:=` 字符。',
+    FORBIDDEN: '🚫 **权限不足**。执行该命令需要仓库 `write` 及以上权限。',
+    BOT_FORBIDDEN: '🚫 **Bot 权限不足**。请检查 workflow `permissions` 配置（pull-requests: write / contents: read）。',
+    NOT_IMPLEMENTED: '🚧 **命令暂未实现**。该命令已在路线图中，等待实现。',
+    RATE_LIMITED: '⏱️ **请求过于频繁**。同一用户在 60 秒内最多执行 10 条命令，请稍后再试。',
+    DUPLICATE: 'ℹ️ **命令已处理**（重复事件已去重）。',
+    INTERNAL: '💥 **命令执行失败**。错误已记录，请联系维护者。'
+};
+/**
+ * Reply 实现
+ */
+class Reply {
+    ctx;
+    constructor(ctx) {
+        this.ctx = ctx;
+    }
+    async ack(message) {
+        const body = this.wrap(`⏳ ${message}`);
+        try {
+            const res = await octokit/* octokit.issues.createComment */.K.issues.createComment({
+                owner: this.ctx.owner,
+                repo: this.ctx.repo,
+                issue_number: this.ctx.issueNumber,
+                body
+            });
+            return res.data.id;
+        }
+        catch (e) {
+            (0,core.warning)(`reply.ack failed: ${String(e)}`);
+            return null;
+        }
+    }
+    async success(message, ackId) {
+        const body = this.wrap(message);
+        await this.publish(body, ackId);
+    }
+    async error(code, detail, ackId) {
+        const body = this.wrap(`${formatErrorMessage(code, detail)}\n\n\`错误码: ${code}\``);
+        await this.publish(body, ackId);
+        (0,core.info)(`command error [${code}] ${detail ?? ''}`);
+    }
+    async progress(message, ackId) {
+        const body = this.wrap(`⏳ ${message}`);
+        try {
+            await octokit/* octokit.issues.updateComment */.K.issues.updateComment({
+                owner: this.ctx.owner,
+                repo: this.ctx.repo,
+                comment_id: ackId,
+                body
+            });
+        }
+        catch (e) {
+            (0,core.warning)(`reply.progress update failed: ${String(e)}`);
+        }
+    }
+    /** 新建或更新评论 */
+    async publish(body, ackId) {
+        if (ackId != null) {
+            try {
+                await octokit/* octokit.issues.updateComment */.K.issues.updateComment({
+                    owner: this.ctx.owner,
+                    repo: this.ctx.repo,
+                    comment_id: ackId,
+                    body
+                });
+                return;
+            }
+            catch (e) {
+                (0,core.warning)(`reply.publish update failed, falling back to create: ${String(e)}`);
+            }
+        }
+        try {
+            await octokit/* octokit.issues.createComment */.K.issues.createComment({
+                owner: this.ctx.owner,
+                repo: this.ctx.repo,
+                issue_number: this.ctx.issueNumber,
+                body
+            });
+        }
+        catch (e) {
+            (0,core.warning)(`reply.publish create failed: ${String(e)}`);
+        }
+    }
+    wrap(message) {
+        const tag = buildCmdReplyTag(this.ctx.originalCommentId, this.ctx.commandName);
+        return `${tag}\n${GREETING} · \`${this.ctx.commandName}\`\n\n${message}`;
+    }
+}
+/**
+ * 扫描 issue 已有评论，判断该 (commentId, commandName) 是否已被处理过。
+ * 用于 dispatcher 的幂等检查。
+ */
+async function hasBeenProcessed(owner, repo, issueNumber, originalCommentId, commandName) {
+    const tag = buildCmdReplyTag(originalCommentId, commandName);
+    try {
+        // 用 paginate 扫描（一期最多 100 条足够）
+        const res = await octokit/* octokit.issues.listComments */.K.issues.listComments({
+            owner,
+            repo,
+            issue_number: issueNumber,
+            per_page: 100
+        });
+        for (const c of res.data) {
+            if (typeof c.body === 'string' && c.body.includes(tag)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    catch (e) {
+        (0,core.warning)(`hasBeenProcessed failed: ${String(e)} — treating as not processed`);
+        return false;
+    }
+}
+
+;// CONCATENATED MODULE: ./lib/commands/dispatcher.js
+/**
+ * commands/dispatcher.ts - 命令调度主流程
+ *
+ * 设计文档对应: 04-iteration-02-member-a-design.md §4.1
+ *
+ * 流程:
+ *   1. 事件类型校验 (issue_comment / pull_request_review_comment, action=created)
+ *   2. 提取 PR number / 评论信息
+ *   3. bot 自评论过滤
+ *   4. 命令解析 (parser.parse)
+ *      - none → 忽略
+ *      - conversation → 透传对话 fallback
+ *      - command → 继续
+ *   5. 幂等检查 (reply.hasBeenProcessed)
+ *   6. 速率限制 (rate-limit)
+ *   7. 权限查询 + 命令权限校验
+ *   8. ACK 回复（如 needsAck）
+ *   9. 执行 handler.execute
+ *   10. 成功/失败反馈
+ *
+ * 对外导出:
+ *   - dispatchCommentEvent(deps): 主入口，被 command-handler.ts 调用
+ *   - DispatchOutcome: 用于测试的明确返回值
+ */
+
+// eslint-disable-next-line camelcase
+
+
+
+
+
+
+
+// eslint-disable-next-line camelcase
+const context = github.context;
+/**
+ * 主调度入口。
+ * 调用方 (command-handler.ts) 负责:
+ *   - 当返回 'fallback_conversation' 时，调用旧的 handleReviewComment
+ */
+async function dispatchCommentEvent(deps) {
+    const eventName = context.eventName;
+    if (eventName !== 'issue_comment' &&
+        eventName !== 'pull_request_review_comment') {
+        return { kind: 'ignored', reason: `unsupported event: ${eventName}` };
+    }
+    const payload = context.payload;
+    if (!payload || payload.action !== 'created') {
+        return { kind: 'ignored', reason: `action not created` };
+    }
+    // 提取 PR number & 评论 —— 两种事件的 payload 形态不同
+    let prNumber;
+    let comment;
+    let headSha = '';
+    let baseSha = '';
+    let prAuthor = '';
+    let commentNodeId;
+    let threadNodeId;
+    if (eventName === 'issue_comment') {
+        if (!payload.issue?.pull_request) {
+            return { kind: 'ignored', reason: 'issue_comment on non-PR issue' };
+        }
+        prNumber = payload.issue.number;
+        comment = payload.comment;
+        // issue_comment 的 payload 没有 head/base SHA，需由 handler 自行查
+        prAuthor = payload.issue.user?.login ?? '';
+    }
+    else {
+        if (!payload.pull_request) {
+            return { kind: 'ignored', reason: 'review_comment missing pull_request' };
+        }
+        prNumber = payload.pull_request.number;
+        comment = payload.comment;
+        headSha = payload.pull_request.head?.sha ?? '';
+        baseSha = payload.pull_request.base?.sha ?? '';
+        prAuthor = payload.pull_request.user?.login ?? '';
+        commentNodeId = comment?.node_id;
+        // review_thread 的 nodeId 需要另查 GraphQL；此处置空由 B 在 handler 中补齐
+    }
+    if (!comment || typeof comment.body !== 'string' || !prNumber) {
+        return { kind: 'ignored', reason: 'missing comment body or pr number' };
+    }
+    // 过滤 bot 自身（避免自我触发）
+    const actorLogin = comment.user?.login ?? '';
+    const actorIsBot = comment.user?.type === 'Bot' || /\[bot\]$/i.test(actorLogin);
+    if (actorIsBot) {
+        return { kind: 'ignored', reason: 'comment from bot' };
+    }
+    // 命令解析
+    const registry = registry_getRegistry();
+    const parseOpts = {
+        registeredCommands: registry.getRegisteredNames(),
+        botMentions: deps.botMentions ?? DEFAULT_BOT_MENTIONS
+    };
+    const outcome = parse(comment.body, parseOpts);
+    if (outcome.kind === 'none') {
+        return { kind: 'ignored', reason: 'no bot mention' };
+    }
+    if (outcome.kind === 'conversation') {
+        return { kind: 'fallback_conversation' };
+    }
+    // outcome.kind === 'command'
+    // 即便解析出错，也尽量构造 reply 以反馈用户
+    const owner = context.repo.owner;
+    const repoName = context.repo.repo;
+    const cmdNameForReply = outcome.command?.name ?? 'unknown';
+    const reply = new Reply({
+        owner,
+        repo: repoName,
+        issueNumber: prNumber,
+        originalCommentId: comment.id,
+        commandName: cmdNameForReply
+    });
+    if (outcome.error) {
+        await reply.error(outcome.error.code, outcome.error.detail);
+        return {
+            kind: 'executed',
+            command: cmdNameForReply,
+            ok: false,
+            error: outcome.error.code
+        };
+    }
+    const parsed = outcome.command;
+    // 幂等检查: 同一 commentId × 同一 command 是否已有回复
+    const processed = await hasBeenProcessed(owner, repoName, prNumber, comment.id, parsed.name);
+    if (processed) {
+        (0,core.info)(`command dispatcher: skip duplicate commentId=${comment.id} cmd=${parsed.name}`);
+        return { kind: 'executed', command: parsed.name, ok: false, error: 'DUPLICATE' };
+    }
+    // 速率限制
+    const rl = checkRateLimit(actorLogin);
+    if (!rl.allowed) {
+        await reply.error('RATE_LIMITED', `请 ${Math.ceil((rl.retryAfterMs ?? 0) / 1000)} 秒后再试`);
+        return {
+            kind: 'executed',
+            command: parsed.name,
+            ok: false,
+            error: 'RATE_LIMITED'
+        };
+    }
+    // 查找 handler
+    const handler = registry.get(parsed.name);
+    if (!handler) {
+        await reply.error('UNKNOWN_COMMAND', `\`${parsed.name}\``);
+        return {
+            kind: 'executed',
+            command: parsed.name,
+            ok: false,
+            error: 'UNKNOWN_COMMAND'
+        };
+    }
+    // 权限: 查询 + 校验
+    const permission = await getPermission({
+        owner,
+        repo: repoName,
+        username: actorLogin
+    });
+    const isPrAuthor = actorLogin === prAuthor;
+    if (!canExecute(handler, permission, isPrAuthor)) {
+        await reply.error('FORBIDDEN', `用户 \`${actorLogin}\` 当前权限: \`${permission}\``);
+        return {
+            kind: 'executed',
+            command: parsed.name,
+            ok: false,
+            error: 'FORBIDDEN'
+        };
+    }
+    const actor = {
+        login: actorLogin,
+        permission,
+        isPrAuthor,
+        isBot: false
+    };
+    const ctx = {
+        command: parsed,
+        eventName,
+        action: 'created',
+        owner,
+        repo: repoName,
+        prNumber,
+        headSha,
+        baseSha,
+        actor,
+        commentId: comment.id,
+        commentBody: comment.body,
+        commentNodeId,
+        threadNodeId,
+        reply,
+        options: deps.options
+    };
+    // ACK
+    let ackId = null;
+    if (handler.needsAck) {
+        ackId = await reply.ack(`正在执行 \`${parsed.name}\` …`);
+    }
+    // 执行
+    try {
+        const result = await handler.execute(ctx);
+        const message = result?.message ?? `✅ 命令 \`${parsed.name}\` 执行完成`;
+        await reply.success(message, ackId);
+        return { kind: 'executed', command: parsed.name, ok: true };
+    }
+    catch (e) {
+        const code = extractErrorCode(e);
+        const detail = e instanceof Error ? e.message : String(e);
+        await reply.error(code, detail, ackId);
+        (0,core.warning)(`command handler failed: name=${parsed.name} code=${code} ${detail}`);
+        return {
+            kind: 'executed',
+            command: parsed.name,
+            ok: false,
+            error: code
+        };
+    }
+}
+function extractErrorCode(e) {
+    if (e && typeof e === 'object' && 'code' in e) {
+        const c = e.code;
+        if (typeof c === 'string') {
+            if ([
+                'UNKNOWN_COMMAND',
+                'INVALID_ARGS',
+                'FORBIDDEN',
+                'BOT_FORBIDDEN',
+                'NOT_IMPLEMENTED',
+                'RATE_LIMITED',
+                'DUPLICATE',
+                'INTERNAL'
+            ].includes(c)) {
+                return c;
+            }
+        }
+    }
+    return 'INTERNAL';
+}
+
+// EXTERNAL MODULE: ./lib/commenter.js
+var lib_commenter = __nccwpck_require__(4558);
+// EXTERNAL MODULE: ./lib/inputs.js
+var lib_inputs = __nccwpck_require__(6305);
+// EXTERNAL MODULE: ./lib/tokenizer.js
+var tokenizer = __nccwpck_require__(7525);
+;// CONCATENATED MODULE: ./lib/review-comment.js
+/**
+ * review-comment.ts - PR 审查评论回复处理模块
+ *
+ * 处理 pull_request_review_comment 事件，即用户在 PR 的代码审查评论中发表回复。
+ *
+ * 触发条件（满足任一）：
+ * 1. 评论对话链中已有 bot 的评论（继续对话）
+ * 2. 评论内容中 @ai-reviewer（主动召唤 bot）
+ *
+ * 处理流程：
+ * 1. 验证事件类型和 payload 数据
+ * 2. 过滤 bot 自身发出的评论（避免自我回复循环）
+ * 3. 获取评论对话链上下文
+ * 4. 收集文件 diff、PR 摘要等辅助上下文
+ * 5. 在 token 限制内打包所有上下文
+ * 6. 调用 AI 生成回复并发布
+ */
+
+// eslint-disable-next-line camelcase
+
+
+
+
+
+// eslint-disable-next-line camelcase
+const review_comment_context = github.context;
+const repo = review_comment_context.repo;
+/** 用户在评论中 @ bot 的关键词 */
+const ASK_BOT = '@ai-reviewer';
+/**
+ * 处理 PR 审查评论回复事件的主函数
+ *
+ * @param heavyBot - 重量级 AI 模型（用于生成高质量回复）
+ * @param options - 全局配置选项
+ * @param prompts - 提示词模板
+ */
+const handleReviewComment = async (heavyBot, options, prompts) => {
+    const commenter = new lib_commenter/* Commenter */.Es();
+    const inputs = new lib_inputs/* Inputs */.k();
+    // ===== 第一步：验证事件类型 =====
+    if (review_comment_context.eventName !== 'pull_request_review_comment') {
+        (0,core.warning)(`Skipped: ${review_comment_context.eventName} is not a pull_request_review_comment event`);
+        return;
+    }
+    if (!review_comment_context.payload) {
+        (0,core.warning)(`Skipped: ${review_comment_context.eventName} event is missing payload`);
+        return;
+    }
+    const comment = review_comment_context.payload.comment;
+    if (comment == null) {
+        (0,core.warning)(`Skipped: ${review_comment_context.eventName} event is missing comment`);
+        return;
+    }
+    if (review_comment_context.payload.pull_request == null ||
+        review_comment_context.payload.repository == null) {
+        (0,core.warning)(`Skipped: ${review_comment_context.eventName} event is missing pull_request`);
+        return;
+    }
+    // 填充 PR 基本信息到 inputs
+    inputs.title = review_comment_context.payload.pull_request.title;
+    if (review_comment_context.payload.pull_request.body) {
+        inputs.description = commenter.getDescription(review_comment_context.payload.pull_request.body);
+    }
+    // ===== 第二步：只处理新创建的评论 =====
+    if (review_comment_context.payload.action !== 'created') {
+        (0,core.warning)(`Skipped: ${review_comment_context.eventName} event is not created`);
+        return;
+    }
+    // ===== 第三步：过滤 bot 自身的评论（避免自我回复循环） =====
+    if (!comment.body.includes(lib_commenter/* COMMENT_TAG */.Rs) &&
+        !comment.body.includes(lib_commenter/* COMMENT_REPLY_TAG */.aD)) {
+        const pullNumber = review_comment_context.payload.pull_request.number;
+        // 填充评论相关信息
+        inputs.comment = `${comment.user.login}: ${comment.body}`;
+        inputs.diff = comment.diff_hunk; // 评论所在的 diff 片段
+        inputs.filename = comment.path; // 评论所在的文件路径
+        // 获取完整的评论对话链
+        const { chain: commentChain, topLevelComment } = await commenter.getCommentChain(pullNumber, comment);
+        if (!topLevelComment) {
+            (0,core.warning)('Failed to find the top-level comment to reply to');
+            return;
+        }
+        inputs.commentChain = commentChain;
+        // ===== 第四步：判断是否需要 AI 回复 =====
+        // 条件：对话链中已有 bot 评论（COMMENT_TAG/COMMENT_REPLY_TAG），
+        //       或用户主动 @ai-reviewer
+        if (commentChain.includes(lib_commenter/* COMMENT_TAG */.Rs) ||
+            commentChain.includes(lib_commenter/* COMMENT_REPLY_TAG */.aD) ||
+            comment.body.includes(ASK_BOT)) {
+            // ===== 第五步：收集文件 diff 上下文 =====
+            let fileDiff = '';
+            try {
+                // 获取文件的完整 diff（base 到 head 的对比）
+                const diffAll = await octokit/* octokit.repos.compareCommits */.K.repos.compareCommits({
+                    owner: repo.owner,
+                    repo: repo.repo,
+                    base: review_comment_context.payload.pull_request.base.sha,
+                    head: review_comment_context.payload.pull_request.head.sha
+                });
+                if (diffAll.data) {
+                    const files = diffAll.data.files;
+                    if (files != null) {
+                        const file = files.find(f => f.filename === comment.path);
+                        if (file != null && file.patch) {
+                            fileDiff = file.patch;
+                        }
+                    }
+                }
+            }
+            catch (error) {
+                (0,core.warning)(`Failed to get file diff: ${error}, skipping.`);
+            }
+            // 如果评论中没有 diff 片段，使用完整的文件 diff 替代
+            if (inputs.diff.length === 0) {
+                if (fileDiff.length > 0) {
+                    inputs.diff = fileDiff;
+                    fileDiff = '';
+                }
+                else {
+                    await commenter.reviewCommentReply(pullNumber, topLevelComment, 'Cannot reply to this comment as diff could not be found.');
+                    return;
+                }
+            }
+            // ===== 第六步：在 token 限制内打包上下文 =====
+            let tokens = (0,tokenizer/* getTokenCount */.V)(prompts.renderComment(inputs));
+            // 检查基础提示词是否已超出 token 限制
+            if (tokens > options.heavyTokenLimits.requestTokens) {
+                await commenter.reviewCommentReply(pullNumber, topLevelComment, 'Cannot reply to this comment as diff being commented is too large and exceeds the token limit.');
+                return;
+            }
+            // 尝试将完整文件 diff 加入上下文（如果 token 预算允许）
+            if (fileDiff.length > 0) {
+                const fileDiffCount = prompts.comment.split('$file_diff').length - 1;
+                const fileDiffTokens = (0,tokenizer/* getTokenCount */.V)(fileDiff);
+                if (fileDiffCount > 0 &&
+                    tokens + fileDiffTokens * fileDiffCount <=
+                        options.heavyTokenLimits.requestTokens) {
+                    tokens += fileDiffTokens * fileDiffCount;
+                    inputs.fileDiff = fileDiff;
+                }
+            }
+            // 尝试将 PR 精简摘要加入上下文（如果 token 预算允许）
+            const summary = await commenter.findCommentWithTag(lib_commenter/* SUMMARIZE_TAG */.Rp, pullNumber);
+            if (summary) {
+                const shortSummary = commenter.getShortSummary(summary.body);
+                const shortSummaryTokens = (0,tokenizer/* getTokenCount */.V)(shortSummary);
+                if (tokens + shortSummaryTokens <=
+                    options.heavyTokenLimits.requestTokens) {
+                    tokens += shortSummaryTokens;
+                    inputs.shortSummary = shortSummary;
+                }
+            }
+            // ===== 第七步：调用 AI 生成回复并发布 =====
+            const [reply] = await heavyBot.chat(prompts.renderComment(inputs), {});
+            await commenter.reviewCommentReply(pullNumber, topLevelComment, reply);
+        }
+    }
+    else {
+        (0,core.info)(`Skipped: ${review_comment_context.eventName} event is from the bot itself`);
+    }
+};
+
+;// CONCATENATED MODULE: ./lib/command-handler.js
+/**
+ * command-handler.ts - 评论事件的顶层入口
+ *
+ * 被 main.ts 调用，用于处理 issue_comment 与 pull_request_review_comment 事件。
+ *
+ * 职责:
+ *   1. 启动命令注册表（只需一次）
+ *   2. 调用 dispatcher 处理事件
+ *   3. 当 dispatcher 判定为 "fallback_conversation" 时，
+ *      透传给既有的 handleReviewComment（对话式追问），
+ *      但仅当事件是 pull_request_review_comment 时才透传
+ *      （issue_comment 场景的对话由迭代二成员 D 后续扩展）。
+ */
+
+// eslint-disable-next-line camelcase
+
+
+
+
+// eslint-disable-next-line camelcase
+const command_handler_context = github.context;
+async function handleCommentEvent(deps) {
+    bootstrapCommands();
+    const outcome = await dispatchCommentEvent({ options: deps.options });
+    (0,core.info)(`commentEvent dispatcher outcome: ${JSON.stringify(outcome)}`);
+    if (outcome.kind === 'fallback_conversation') {
+        // 既有对话式追问仅支持 pull_request_review_comment
+        if (command_handler_context.eventName === 'pull_request_review_comment') {
+            await handleReviewComment(deps.heavyBot, deps.options, deps.prompts);
+        }
+        else {
+            (0,core.info)('commentEvent: conversation fallback skipped (issue_comment 对话由后续迭代支持)');
+        }
+    }
 }
 
 
@@ -9581,10 +10692,10 @@ __nccwpck_require__.r(__webpack_exports__);
 /* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(1078);
 /* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__nccwpck_require__.n(_actions_core__WEBPACK_IMPORTED_MODULE_0__);
 /* harmony import */ var _bot__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(4936);
-/* harmony import */ var _options__WEBPACK_IMPORTED_MODULE_2__ = __nccwpck_require__(5341);
+/* harmony import */ var _command_handler__WEBPACK_IMPORTED_MODULE_2__ = __nccwpck_require__(9215);
+/* harmony import */ var _options__WEBPACK_IMPORTED_MODULE_3__ = __nccwpck_require__(5341);
 /* harmony import */ var _prompts__WEBPACK_IMPORTED_MODULE_5__ = __nccwpck_require__(2379);
-/* harmony import */ var _review__WEBPACK_IMPORTED_MODULE_3__ = __nccwpck_require__(6439);
-/* harmony import */ var _review_comment__WEBPACK_IMPORTED_MODULE_4__ = __nccwpck_require__(3458);
+/* harmony import */ var _review__WEBPACK_IMPORTED_MODULE_4__ = __nccwpck_require__(6439);
 /**
  * main.ts - GitHub Action 入口文件
  *
@@ -9603,7 +10714,7 @@ __nccwpck_require__.r(__webpack_exports__);
 
 async function run() {
     // 从 action.yml 中读取所有配置参数，构建 Options 配置对象
-    const options = new _options__WEBPACK_IMPORTED_MODULE_2__/* .Options */ .Ei((0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('debug'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('disable_review'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('disable_release_notes'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_files'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('review_simple_changes'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('review_comment_lgtm'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getMultilineInput)('path_filters'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('system_message'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_light_model'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_heavy_model'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_model_temperature'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_retries'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_timeout_ms'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_concurrency_limit'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('github_concurrency_limit'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_base_url'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('language'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_dependency_analysis'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_dependency_files'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_web_search'));
+    const options = new _options__WEBPACK_IMPORTED_MODULE_3__/* .Options */ .Ei((0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('debug'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('disable_review'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('disable_release_notes'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_files'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('review_simple_changes'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('review_comment_lgtm'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getMultilineInput)('path_filters'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('system_message'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_light_model'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_heavy_model'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_model_temperature'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_retries'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_timeout_ms'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_concurrency_limit'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('github_concurrency_limit'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_base_url'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('language'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_dependency_analysis'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_dependency_files'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_web_search'));
     // 打印所有配置项，方便调试
     options.print();
     // 构建提示词模板对象，包含用户自定义的摘要和发布说明提示词
@@ -9612,7 +10723,7 @@ async function run() {
     // 初始化轻量模型 Bot（默认 gpt-4.1-nano），用于快速生成文件摘要
     let lightBot = null;
     try {
-        lightBot = new _bot__WEBPACK_IMPORTED_MODULE_1__/* .Bot */ .r(options, new _options__WEBPACK_IMPORTED_MODULE_2__/* .OpenAIOptions */ .i0(options.openaiLightModel, options.lightTokenLimits, false));
+        lightBot = new _bot__WEBPACK_IMPORTED_MODULE_1__/* .Bot */ .r(options, new _options__WEBPACK_IMPORTED_MODULE_3__/* .OpenAIOptions */ .i0(options.openaiLightModel, options.lightTokenLimits, false));
     }
     catch (e) {
         (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Skipped: failed to create summary bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`);
@@ -9621,7 +10732,7 @@ async function run() {
     // 初始化重量模型 Bot（默认 gpt-4.1-mini），用于深度代码审查和最终摘要生成
     let heavyBot = null;
     try {
-        heavyBot = new _bot__WEBPACK_IMPORTED_MODULE_1__/* .Bot */ .r(options, new _options__WEBPACK_IMPORTED_MODULE_2__/* .OpenAIOptions */ .i0(options.openaiHeavyModel, options.heavyTokenLimits, options.enableWebSearch));
+        heavyBot = new _bot__WEBPACK_IMPORTED_MODULE_1__/* .Bot */ .r(options, new _options__WEBPACK_IMPORTED_MODULE_3__/* .OpenAIOptions */ .i0(options.openaiHeavyModel, options.heavyTokenLimits, options.enableWebSearch));
     }
     catch (e) {
         (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Skipped: failed to create review bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`);
@@ -9632,11 +10743,13 @@ async function run() {
         if (process.env.GITHUB_EVENT_NAME === 'pull_request' ||
             process.env.GITHUB_EVENT_NAME === 'pull_request_target') {
             // PR 事件：执行完整的代码审查流程（摘要 + 逐文件审查）
-            await (0,_review__WEBPACK_IMPORTED_MODULE_3__/* .codeReview */ .z)(lightBot, heavyBot, options, prompts);
+            await (0,_review__WEBPACK_IMPORTED_MODULE_4__/* .codeReview */ .z)(lightBot, heavyBot, options, prompts);
         }
-        else if (process.env.GITHUB_EVENT_NAME === 'pull_request_review_comment') {
-            // 审查评论事件：处理用户在 review comment 中 @ai-reviewer 的回复
-            await (0,_review_comment__WEBPACK_IMPORTED_MODULE_4__/* .handleReviewComment */ .V)(heavyBot, options, prompts);
+        else if (process.env.GITHUB_EVENT_NAME === 'pull_request_review_comment' ||
+            process.env.GITHUB_EVENT_NAME === 'issue_comment') {
+            // 评论事件（顶层 issue_comment 或 review comment）
+            // 先走命令调度，未命中命令时再透传给既有的对话式追问
+            await (0,_command_handler__WEBPACK_IMPORTED_MODULE_2__/* .handleCommentEvent */ ._)({ heavyBot, lightBot, options, prompts });
         }
         else {
             (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)('Skipped: this action only works on push events or pull_request');
@@ -12159,24 +13272,25 @@ For fixes, use \`diff\` code blocks, marking changes with \`+\` or \`-\`. The li
   6. Explain whether existing callers will break or still work, and why.
 - When reviewing code that uses external libraries, SDKs, APIs, frameworks,
   browser Web APIs (e.g. AbortSignal, fetch, Intl, IntersectionObserver),
-  or Node.js built-in modules (e.g. crypto, fs, stream), you MUST use
-  web search to verify:
-  1. Every method/function call exists in the library's current API
-  2. Chained method names are correct (e.g. ORM query builders, SDK fluent APIs)
-  3. Parameters and their types match the official documentation
-  4. The API is not deprecated or removed in the current version
-  5. Browser/runtime compatibility is adequate
-  Always search even if you believe you already know the answer — your
-  training data may be outdated and library APIs change between versions.
-  Include a link to the official documentation (e.g. MDN, Node.js docs,
-  npm package docs, SDK reference) in your comment regardless of whether
-  the API usage is correct or not.
+  or Node.js built-in modules (e.g. crypto, fs, stream):
+  1. If the API usage looks standard and you are confident it is correct
+     for a widely-used, stable API, you may skip web search.
+  2. You MUST use web search to verify when:
+     a. The library version is very recent (released after your training cutoff)
+     b. The API call looks unusual, deprecated, or unfamiliar
+     c. Chained/fluent API patterns where method names are easy to confuse
+        (e.g. ORM query builders, SDK fluent APIs)
+     d. You have any uncertainty about parameter types or signatures
+     e. Browser/runtime compatibility is in question
+  3. When you do search, include a link to the official documentation
+     (e.g. MDN, Node.js docs, npm package docs, SDK reference) in your comment.
 
-If code uses any external library, SDK, or API (including method calls on third-party
-objects), you MUST NOT mark it as LGTM until you have performed a web search to verify
-the API usage. After verification, if the usage is correct, include the documentation
-link and then respond with LGTM. If no external API is involved and there are no issues
-found on a line range, you MUST respond with the text \`LGTM!\` for that line range.
+If code uses any external library, SDK, or API and you are uncertain about the
+API usage, you MUST perform a web search before marking it as LGTM. After
+verification, include the documentation link and then respond with LGTM.
+If no external API is involved or you are confident the API usage is correct
+and there are no issues found on a line range, you MUST respond with the
+text \`LGTM!\` for that line range.
 
 ## Example
 
@@ -12366,186 +13480,6 @@ use web search to find and reference current documentation.
         return inputs.render(this.reviewFileDiff);
     }
 }
-
-
-/***/ }),
-
-/***/ 3458:
-/***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
-
-"use strict";
-/* harmony export */ __nccwpck_require__.d(__webpack_exports__, {
-/* harmony export */   "V": () => (/* binding */ handleReviewComment)
-/* harmony export */ });
-/* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(1078);
-/* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__nccwpck_require__.n(_actions_core__WEBPACK_IMPORTED_MODULE_0__);
-/* harmony import */ var _actions_github__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(3695);
-/* harmony import */ var _actions_github__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__nccwpck_require__.n(_actions_github__WEBPACK_IMPORTED_MODULE_1__);
-/* harmony import */ var _commenter__WEBPACK_IMPORTED_MODULE_2__ = __nccwpck_require__(4558);
-/* harmony import */ var _inputs__WEBPACK_IMPORTED_MODULE_5__ = __nccwpck_require__(6305);
-/* harmony import */ var _octokit__WEBPACK_IMPORTED_MODULE_3__ = __nccwpck_require__(2247);
-/* harmony import */ var _tokenizer__WEBPACK_IMPORTED_MODULE_4__ = __nccwpck_require__(7525);
-/**
- * review-comment.ts - PR 审查评论回复处理模块
- *
- * 处理 pull_request_review_comment 事件，即用户在 PR 的代码审查评论中发表回复。
- *
- * 触发条件（满足任一）：
- * 1. 评论对话链中已有 bot 的评论（继续对话）
- * 2. 评论内容中 @ai-reviewer（主动召唤 bot）
- *
- * 处理流程：
- * 1. 验证事件类型和 payload 数据
- * 2. 过滤 bot 自身发出的评论（避免自我回复循环）
- * 3. 获取评论对话链上下文
- * 4. 收集文件 diff、PR 摘要等辅助上下文
- * 5. 在 token 限制内打包所有上下文
- * 6. 调用 AI 生成回复并发布
- */
-
-// eslint-disable-next-line camelcase
-
-
-
-
-
-// eslint-disable-next-line camelcase
-const context = _actions_github__WEBPACK_IMPORTED_MODULE_1__.context;
-const repo = context.repo;
-/** 用户在评论中 @ bot 的关键词 */
-const ASK_BOT = '@ai-reviewer';
-/**
- * 处理 PR 审查评论回复事件的主函数
- *
- * @param heavyBot - 重量级 AI 模型（用于生成高质量回复）
- * @param options - 全局配置选项
- * @param prompts - 提示词模板
- */
-const handleReviewComment = async (heavyBot, options, prompts) => {
-    const commenter = new _commenter__WEBPACK_IMPORTED_MODULE_2__/* .Commenter */ .Es();
-    const inputs = new _inputs__WEBPACK_IMPORTED_MODULE_5__/* .Inputs */ .k();
-    // ===== 第一步：验证事件类型 =====
-    if (context.eventName !== 'pull_request_review_comment') {
-        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Skipped: ${context.eventName} is not a pull_request_review_comment event`);
-        return;
-    }
-    if (!context.payload) {
-        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Skipped: ${context.eventName} event is missing payload`);
-        return;
-    }
-    const comment = context.payload.comment;
-    if (comment == null) {
-        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Skipped: ${context.eventName} event is missing comment`);
-        return;
-    }
-    if (context.payload.pull_request == null ||
-        context.payload.repository == null) {
-        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Skipped: ${context.eventName} event is missing pull_request`);
-        return;
-    }
-    // 填充 PR 基本信息到 inputs
-    inputs.title = context.payload.pull_request.title;
-    if (context.payload.pull_request.body) {
-        inputs.description = commenter.getDescription(context.payload.pull_request.body);
-    }
-    // ===== 第二步：只处理新创建的评论 =====
-    if (context.payload.action !== 'created') {
-        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Skipped: ${context.eventName} event is not created`);
-        return;
-    }
-    // ===== 第三步：过滤 bot 自身的评论（避免自我回复循环） =====
-    if (!comment.body.includes(_commenter__WEBPACK_IMPORTED_MODULE_2__/* .COMMENT_TAG */ .Rs) &&
-        !comment.body.includes(_commenter__WEBPACK_IMPORTED_MODULE_2__/* .COMMENT_REPLY_TAG */ .aD)) {
-        const pullNumber = context.payload.pull_request.number;
-        // 填充评论相关信息
-        inputs.comment = `${comment.user.login}: ${comment.body}`;
-        inputs.diff = comment.diff_hunk; // 评论所在的 diff 片段
-        inputs.filename = comment.path; // 评论所在的文件路径
-        // 获取完整的评论对话链
-        const { chain: commentChain, topLevelComment } = await commenter.getCommentChain(pullNumber, comment);
-        if (!topLevelComment) {
-            (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)('Failed to find the top-level comment to reply to');
-            return;
-        }
-        inputs.commentChain = commentChain;
-        // ===== 第四步：判断是否需要 AI 回复 =====
-        // 条件：对话链中已有 bot 评论（COMMENT_TAG/COMMENT_REPLY_TAG），
-        //       或用户主动 @ai-reviewer
-        if (commentChain.includes(_commenter__WEBPACK_IMPORTED_MODULE_2__/* .COMMENT_TAG */ .Rs) ||
-            commentChain.includes(_commenter__WEBPACK_IMPORTED_MODULE_2__/* .COMMENT_REPLY_TAG */ .aD) ||
-            comment.body.includes(ASK_BOT)) {
-            // ===== 第五步：收集文件 diff 上下文 =====
-            let fileDiff = '';
-            try {
-                // 获取文件的完整 diff（base 到 head 的对比）
-                const diffAll = await _octokit__WEBPACK_IMPORTED_MODULE_3__/* .octokit.repos.compareCommits */ .K.repos.compareCommits({
-                    owner: repo.owner,
-                    repo: repo.repo,
-                    base: context.payload.pull_request.base.sha,
-                    head: context.payload.pull_request.head.sha
-                });
-                if (diffAll.data) {
-                    const files = diffAll.data.files;
-                    if (files != null) {
-                        const file = files.find(f => f.filename === comment.path);
-                        if (file != null && file.patch) {
-                            fileDiff = file.patch;
-                        }
-                    }
-                }
-            }
-            catch (error) {
-                (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Failed to get file diff: ${error}, skipping.`);
-            }
-            // 如果评论中没有 diff 片段，使用完整的文件 diff 替代
-            if (inputs.diff.length === 0) {
-                if (fileDiff.length > 0) {
-                    inputs.diff = fileDiff;
-                    fileDiff = '';
-                }
-                else {
-                    await commenter.reviewCommentReply(pullNumber, topLevelComment, 'Cannot reply to this comment as diff could not be found.');
-                    return;
-                }
-            }
-            // ===== 第六步：在 token 限制内打包上下文 =====
-            let tokens = (0,_tokenizer__WEBPACK_IMPORTED_MODULE_4__/* .getTokenCount */ .V)(prompts.renderComment(inputs));
-            // 检查基础提示词是否已超出 token 限制
-            if (tokens > options.heavyTokenLimits.requestTokens) {
-                await commenter.reviewCommentReply(pullNumber, topLevelComment, 'Cannot reply to this comment as diff being commented is too large and exceeds the token limit.');
-                return;
-            }
-            // 尝试将完整文件 diff 加入上下文（如果 token 预算允许）
-            if (fileDiff.length > 0) {
-                const fileDiffCount = prompts.comment.split('$file_diff').length - 1;
-                const fileDiffTokens = (0,_tokenizer__WEBPACK_IMPORTED_MODULE_4__/* .getTokenCount */ .V)(fileDiff);
-                if (fileDiffCount > 0 &&
-                    tokens + fileDiffTokens * fileDiffCount <=
-                        options.heavyTokenLimits.requestTokens) {
-                    tokens += fileDiffTokens * fileDiffCount;
-                    inputs.fileDiff = fileDiff;
-                }
-            }
-            // 尝试将 PR 精简摘要加入上下文（如果 token 预算允许）
-            const summary = await commenter.findCommentWithTag(_commenter__WEBPACK_IMPORTED_MODULE_2__/* .SUMMARIZE_TAG */ .Rp, pullNumber);
-            if (summary) {
-                const shortSummary = commenter.getShortSummary(summary.body);
-                const shortSummaryTokens = (0,_tokenizer__WEBPACK_IMPORTED_MODULE_4__/* .getTokenCount */ .V)(shortSummary);
-                if (tokens + shortSummaryTokens <=
-                    options.heavyTokenLimits.requestTokens) {
-                    tokens += shortSummaryTokens;
-                    inputs.shortSummary = shortSummary;
-                }
-            }
-            // ===== 第七步：调用 AI 生成回复并发布 =====
-            const [reply] = await heavyBot.chat(prompts.renderComment(inputs), {});
-            await commenter.reviewCommentReply(pullNumber, topLevelComment, reply);
-        }
-    }
-    else {
-        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`Skipped: ${context.eventName} event is from the bot itself`);
-    }
-};
 
 
 /***/ }),
