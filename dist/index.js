@@ -13,6 +13,8 @@ __nccwpck_require__.d(__webpack_exports__, {
 
 // EXTERNAL MODULE: ./node_modules/.pnpm/@actions+core@1.11.1/node_modules/@actions/core/lib/core.js
 var core = __nccwpck_require__(1078);
+// EXTERNAL MODULE: external "child_process"
+var external_child_process_ = __nccwpck_require__(2081);
 ;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/tslib.mjs
 function __classPrivateFieldSet(receiver, state, value, kind, f) {
     if (kind === "m")
@@ -8525,6 +8527,60 @@ async function pRetry(input, options) {
 
 
 
+
+const DEFAULT_LOCAL_SHELL_TIMEOUT_MS = 60_000;
+const DEFAULT_LOCAL_SHELL_MAX_OUTPUT_LENGTH = 4_096;
+const MAX_LOCAL_SHELL_TURNS = 8;
+const LOCAL_SHELL_OUTPUT_TRUNCATED = '\n... (truncated)';
+const LOCAL_SHELL_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
+const getLocalShellBinary = () => {
+    if (process.env.SHELL) {
+        return process.env.SHELL;
+    }
+    if (process.platform === 'win32') {
+        return process.env.ComSpec ?? 'cmd.exe';
+    }
+    return '/bin/bash';
+};
+const truncateText = (text, maxLength) => {
+    if (maxLength <= 0) {
+        return '';
+    }
+    if (text.length <= maxLength) {
+        return text;
+    }
+    if (maxLength <= LOCAL_SHELL_OUTPUT_TRUNCATED.length) {
+        return text.substring(0, maxLength);
+    }
+    return `${text.substring(0, maxLength - LOCAL_SHELL_OUTPUT_TRUNCATED.length)}${LOCAL_SHELL_OUTPUT_TRUNCATED}`;
+};
+const truncateShellStreams = (stdout, stderr, maxLength) => {
+    if (maxLength <= 0) {
+        return { stdout: '', stderr: '' };
+    }
+    const totalLength = stdout.length + stderr.length;
+    if (totalLength <= maxLength) {
+        return { stdout, stderr };
+    }
+    if (stdout.length === 0) {
+        return { stdout, stderr: truncateText(stderr, maxLength) };
+    }
+    if (stderr.length === 0) {
+        return { stdout: truncateText(stdout, maxLength), stderr };
+    }
+    let stdoutBudget = Math.max(1, Math.floor((maxLength * stdout.length) / totalLength));
+    let stderrBudget = Math.max(1, maxLength - stdoutBudget);
+    if (stdoutBudget + stderrBudget > maxLength) {
+        stderrBudget = Math.max(1, maxLength - stdoutBudget);
+    }
+    else if (stdoutBudget + stderrBudget < maxLength) {
+        stdoutBudget += maxLength - (stdoutBudget + stderrBudget);
+    }
+    return {
+        stdout: truncateText(stdout, stdoutBudget),
+        stderr: truncateText(stderr, stderrBudget)
+    };
+};
 /**
  * Bot 类 - AI 对话机器人
  *
@@ -8538,6 +8594,7 @@ class Bot {
     temperature; // 温度参数
     maxOutputTokens; // 最大输出 token 数
     enableWebSearch; // 是否启用 web search
+    enableShell; // 是否启用 enableShell
     options; // 全局配置选项
     constructor(options, openaiOptions) {
         this.options = options;
@@ -8545,6 +8602,7 @@ class Bot {
         this.temperature = options.openaiModelTemperature;
         this.maxOutputTokens = openaiOptions.tokenLimits.responseTokens;
         this.enableWebSearch = openaiOptions.enableWebSearch;
+        this.enableShell = openaiOptions.enableShell;
         if (process.env.OPENAI_API_KEY) {
             // 构建系统消息：包含自定义系统消息 + 知识截止日期 + 当前日期 + 语言要求
             const currentDate = new Date().toISOString().split('T')[0];
@@ -8575,7 +8633,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
      * @returns [响应文本, 新的对话 ID] 元组
      */
     chat = async (message, ids) => {
-        let res = ['', {}];
+        let res = ['', {}, []];
         try {
             res = await this.chat_(message, ids);
             return res;
@@ -8602,56 +8660,45 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
         // 记录请求开始时间，用于计算响应耗时
         const start = Date.now();
         if (!message) {
-            return ['', {}];
+            return ['', {}, []];
         }
         if (this.client != null) {
-            // 构建工具列表（可选启用 web search）
-            const tools = [];
-            if (this.enableWebSearch) {
-                // search_context_size 是 OpenAI Responses API 中 web_search 工具的参数，用于控制网页搜索时获取的上下文量。
-                // 'low' — 搜索结果少，速度快，token 消耗低
-                // 'medium' — 默认值
-                // 'high' — 获取更多搜索结果和上下文，回答更全面，但 token 消耗更高
-                // 这里设为 'high' 是为了让模型在做 web search 时尽可能多地获取信息，提高回答质量。
-                tools.push({ type: 'web_search', search_context_size: 'high' });
-            }
-            (0,core.info)(`[web_search_debug] model=${this.model}, enableWebSearch=${this.enableWebSearch}, tools=${JSON.stringify(tools)}`);
-            // 构建 Responses API 请求参数
-            const params = {
-                model: this.model,
-                instructions: this.systemMessage,
-                input: message,
-                temperature: this.temperature,
-                max_output_tokens: this.maxOutputTokens,
-                ...(tools.length > 0 && { tools }),
-                ...(ids.previousResponseId && {
-                    previous_response_id: ids.previousResponseId
-                })
-            };
-            let response;
-            try {
-                // 使用 pRetry 发送消息，失败时自动重试（重试次数由配置决定）
-                response = await pRetry(() => this.client.responses.create(params), {
-                    retries: this.options.openaiRetries
-                });
-            }
-            catch (e) {
-                if (e instanceof APIError) {
-                    (0,core.info)(`response: ${response}, failed to send message to openai: ${e}, backtrace: ${e.stack}`);
-                }
-            }
-            // 记录响应时间
-            const end = Date.now();
-            (0,core.info)(`response: ${JSON.stringify(response)}`);
-            (0,core.info)(`openai sendMessage (including retries) response time: ${end - start} ms`);
-            // 从响应输出中提取文本，并记录 web_search 和 reasoning 信息
+            const tools = this.buildTools();
+            (0,core.info)(`[web_search_debug] model=${this.model}, enableWebSearch=${this.enableWebSearch}, enableShell=${this.enableShell} , tools=${JSON.stringify(tools)}`);
             let responseText = '';
-            if (response?.output) {
+            const analysisSteps = [];
+            let response = await this.createResponse(this.buildParams(message, ids.previousResponseId, tools));
+            for (let turn = 0; turn < MAX_LOCAL_SHELL_TURNS; turn++) {
+                if (response == null) {
+                    break;
+                }
+                if (response.output == null) {
+                    (0,core.warning)('openai response is null');
+                    break;
+                }
+                const pendingShellCalls = [];
                 const outputTypes = response.output.map((item) => item.type);
                 (0,core.info)(`[web_search_debug] response output types: ${JSON.stringify(outputTypes)}`);
-                for (const item of response.output) {
+                for (let i = 0; i < response.output.length; i++) {
+                    const item = response.output[i];
+                    (0,core.info)(`[analysis_chain_debug] output[${i}] type="${item.type}", keys=${JSON.stringify(Object.keys(item))}`);
                     if (item.type === 'web_search_call') {
                         (0,core.info)(`[web_search] executed, id: ${item.id}, status: ${item.status}`);
+                        analysisSteps.push({
+                            type: 'web_search',
+                            status: item.status
+                        });
+                    }
+                    if (item.type === 'shell_call') {
+                        const shellItem = item;
+                        (0,core.info)(`[analysis_chain_debug] shell_call found! id=${shellItem.id}, commands=${JSON.stringify(shellItem.action?.commands)}, status=${shellItem.status}`);
+                        this.ensureShellAnalysisStep(analysisSteps, shellItem);
+                        pendingShellCalls.push(shellItem);
+                    }
+                    if (item.type === 'shell_call_output') {
+                        const shellOutput = item;
+                        (0,core.info)(`[analysis_chain_debug] shell_call_output found! call_id=${shellOutput.call_id}, output_count=${shellOutput.output?.length ?? 0}`);
+                        this.attachShellOutput(analysisSteps, shellOutput.call_id, shellOutput.output);
                     }
                     if (item.type === 'message') {
                         for (const content of item.content) {
@@ -8664,27 +8711,229 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
                         }
                     }
                 }
+                if (pendingShellCalls.length === 0) {
+                    break;
+                }
+                if (turn === MAX_LOCAL_SHELL_TURNS - 1) {
+                    (0,core.warning)(`Reached local shell turn limit (${MAX_LOCAL_SHELL_TURNS}) for response ${response.id}`);
+                    break;
+                }
+                const shellOutputs = await this.executeShellCalls(pendingShellCalls, analysisSteps);
+                response = await this.createResponse(this.buildParams(shellOutputs, response.id, tools));
             }
-            else {
-                (0,core.warning)('openai response is null');
-            }
+            // info(`[analysis_chain] total analysis steps captured: ${analysisSteps.length}`)
+            // if (analysisSteps.length > 0) {
+            //   for (let i = 0; i < analysisSteps.length; i++) {
+            //     const s = analysisSteps[i]
+            //     info(`[analysis_chain] step[${i}]: type=${s.type}, commands=${JSON.stringify(s.commands)}, stdout_len=${s.stdoutLength ?? 0}, stderr_len=${s.stderrLength ?? 0}`)
+            //   }
+            // }
             // 移除响应中可能存在的多余前缀 "with "
             if (responseText.startsWith('with ')) {
                 responseText = responseText.substring(5);
             }
             if (this.options.debug) {
-                (0,core.info)(`openai responses: ${responseText}`);
+                // info(`openai responses: ${responseText}`)
             }
             // 构建新的对话 ID，用于后续多轮对话
             const newIds = {
                 previousResponseId: response?.id
             };
-            return [responseText, newIds];
+            return [responseText, newIds, analysisSteps];
         }
         else {
             (0,core.setFailed)('The OpenAI API is not initialized');
         }
-        return ['', {}];
+        return ['', {}, []];
+    };
+    buildTools = () => {
+        const tools = [];
+        if (this.enableWebSearch) {
+            tools.push({ type: 'web_search', search_context_size: 'high' });
+        }
+        if (this.enableShell) {
+            tools.push({ type: 'shell', environment: { type: 'local' } });
+        }
+        return tools;
+    };
+    buildParams = (input, previousResponseId, tools) => {
+        return {
+            model: this.model,
+            instructions: this.systemMessage,
+            input,
+            temperature: this.temperature,
+            max_output_tokens: this.maxOutputTokens,
+            ...(tools.length > 0 && { tools }),
+            ...(previousResponseId && {
+                previous_response_id: previousResponseId
+            })
+        };
+    };
+    createResponse = async (params) => {
+        const start = Date.now();
+        try {
+            const response = await pRetry(() => this.client.responses.create(params), {
+                retries: this.options.openaiRetries
+            });
+            (0,core.info)(`openai sendMessage (including retries) response time: ${Date.now() - start} ms`);
+            return response;
+        }
+        catch (e) {
+            (0,core.info)(`openai sendMessage (including retries) response time: ${Date.now() - start} ms`);
+            if (e instanceof APIError) {
+                (0,core.warning)(`Failed to send message to openai: ${e}, backtrace: ${e.stack}`);
+            }
+            return undefined;
+        }
+    };
+    ensureShellAnalysisStep = (analysisSteps, shellCall) => {
+        const existingStep = analysisSteps.find(step => step.type === 'shell' && step.callId === shellCall.call_id);
+        if (existingStep) {
+            existingStep.commands = shellCall.action?.commands ?? existingStep.commands;
+            existingStep.status = shellCall.status ?? existingStep.status;
+            return existingStep;
+        }
+        const step = {
+            type: 'shell',
+            callId: shellCall.call_id,
+            commands: shellCall.action?.commands ?? [],
+            status: shellCall.status ?? undefined
+        };
+        analysisSteps.push(step);
+        return step;
+    };
+    attachShellOutput = (analysisSteps, callId, output) => {
+        const shellStep = [...analysisSteps]
+            .reverse()
+            .find(step => step.type === 'shell' && step.callId === callId);
+        if (shellStep == null || output.length === 0) {
+            (0,core.info)('[analysis_chain_debug] shell_call_output but no matching shell step found or no output');
+            return;
+        }
+        const commandOutputs = [];
+        let stdoutLength = 0;
+        let stderrLength = 0;
+        let timedOut = false;
+        let exitCode;
+        for (const out of output) {
+            (0,core.info)(`[analysis_chain_debug] shell output chunk: stdout_len=${out.stdout?.length ?? 0}, stderr_len=${out.stderr?.length ?? 0}, outcome=${JSON.stringify(out.outcome)}`);
+            const stdoutChunkLength = out.stdout?.length ?? 0;
+            const stderrChunkLength = out.stderr?.length ?? 0;
+            stdoutLength += stdoutChunkLength;
+            stderrLength += stderrChunkLength;
+            const commandOutput = {
+                stdoutLength: stdoutChunkLength,
+                stderrLength: stderrChunkLength
+            };
+            if (out.outcome.type === 'exit') {
+                commandOutput.exitCode = out.outcome.exit_code;
+                exitCode = out.outcome.exit_code;
+            }
+            else if (out.outcome.type === 'timeout') {
+                commandOutput.timedOut = true;
+                timedOut = true;
+            }
+            commandOutputs.push(commandOutput);
+        }
+        shellStep.commandOutputs = commandOutputs;
+        shellStep.stdoutLength = stdoutLength;
+        shellStep.stderrLength = stderrLength;
+        shellStep.exitCode = exitCode;
+        shellStep.timedOut = timedOut;
+    };
+    executeShellCalls = async (shellCalls, analysisSteps) => {
+        const shellOutputs = [];
+        for (const shellCall of shellCalls) {
+            const step = this.ensureShellAnalysisStep(analysisSteps, shellCall);
+            const shellOutput = await this.runLocalShellCall(shellCall);
+            this.attachShellOutput(analysisSteps, shellCall.call_id, shellOutput.output);
+            step.status = 'completed';
+            shellOutputs.push(shellOutput);
+        }
+        return shellOutputs;
+    };
+    runLocalShellCall = async (shellCall) => {
+        const commands = shellCall.action?.commands ?? [];
+        const timeoutMs = shellCall.action?.timeout_ms ?? DEFAULT_LOCAL_SHELL_TIMEOUT_MS;
+        const requestedMaxOutputLength = shellCall.action?.max_output_length ?? null;
+        const effectiveMaxOutputLength = requestedMaxOutputLength ?? DEFAULT_LOCAL_SHELL_MAX_OUTPUT_LENGTH;
+        let remainingOutputBudget = effectiveMaxOutputLength;
+        const output = [];
+        for (let i = 0; i < commands.length; i++) {
+            const command = commands[i];
+            (0,core.info)(`[local_shell] executing command ${i + 1}/${commands.length} for call ${shellCall.call_id}: ${command}`);
+            const result = await this.runLocalShellCommand(command, timeoutMs, effectiveMaxOutputLength);
+            const commandsRemaining = commands.length - i;
+            const commandBudget = remainingOutputBudget > 0
+                ? Math.max(1, Math.floor(remainingOutputBudget / commandsRemaining))
+                : 0;
+            const truncatedOutput = truncateShellStreams(result.stdout, result.stderr, commandBudget);
+            remainingOutputBudget = Math.max(0, remainingOutputBudget -
+                truncatedOutput.stdout.length -
+                truncatedOutput.stderr.length);
+            output.push({
+                stdout: truncatedOutput.stdout,
+                stderr: truncatedOutput.stderr,
+                outcome: result.timedOut
+                    ? { type: 'timeout' }
+                    : {
+                        type: 'exit',
+                        exit_code: result.exitCode ?? 1
+                    }
+            });
+        }
+        return {
+            type: 'shell_call_output',
+            call_id: shellCall.call_id,
+            max_output_length: requestedMaxOutputLength,
+            output
+        };
+    };
+    runLocalShellCommand = async (command, timeoutMs, maxOutputLength) => {
+        const shell = getLocalShellBinary();
+        const maxBuffer = Math.max(1_024 * 1_024, Math.min(LOCAL_SHELL_MAX_BUFFER_BYTES, Math.max(maxOutputLength * 8, 1_024 * 1_024)));
+        try {
+            const { stdout, stderr } = await new Promise((resolve, reject) => {
+                (0,external_child_process_.exec)(command, {
+                    cwd: process.cwd(),
+                    timeout: timeoutMs,
+                    maxBuffer,
+                    ...(shell ? { shell } : {})
+                }, (error, stdout, stderr) => {
+                    if (error != null) {
+                        const enrichedError = error;
+                        enrichedError.stdout = stdout;
+                        enrichedError.stderr = stderr;
+                        reject(enrichedError);
+                        return;
+                    }
+                    resolve({ stdout, stderr });
+                });
+            });
+            return {
+                stdout,
+                stderr,
+                exitCode: 0,
+                timedOut: false
+            };
+        }
+        catch (error) {
+            const shellError = error;
+            const timedOut = shellError.signal === 'SIGTERM' &&
+                (shellError.killed === true || shellError.code === 'ETIMEDOUT');
+            const exitCode = typeof shellError.code === 'number'
+                ? shellError.code
+                : timedOut
+                    ? undefined
+                    : 1;
+            return {
+                stdout: shellError.stdout ?? '',
+                stderr: shellError.stderr ??
+                    (error instanceof Error ? error.message : String(error)),
+                exitCode,
+                timedOut
+            };
+        }
     };
 }
 
@@ -10586,6 +10835,8 @@ ${commentBody}`;
 /* harmony export */ __nccwpck_require__.d(__webpack_exports__, {
 /* harmony export */   "k": () => (/* binding */ Inputs)
 /* harmony export */ });
+/* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(1078);
+/* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__nccwpck_require__.n(_actions_core__WEBPACK_IMPORTED_MODULE_0__);
 /**
  * inputs.ts - 提示词上下文数据容器
  *
@@ -10593,6 +10844,7 @@ ${commentBody}`;
  * 提供 render() 方法将模板中的 $variable 占位符替换为实际值。
  * 提供 clone() 方法用于并行处理时创建独立副本，避免数据竞争。
  */
+
 class Inputs {
     systemMessage; // 系统消息（定义 AI 的角色和行为准则）
     title; // PR 标题
@@ -10607,7 +10859,8 @@ class Inputs {
     commentChain; // 评论对话链（已有的评论上下文）
     comment; // 当前用户的评论内容
     crossFileContext; // 跨文件引用上下文（依赖分析生成，注入到审查提示词）
-    constructor(systemMessage = '', title = 'no title provided', description = 'no description provided', rawSummary = '', shortSummary = '', filename = '', fileContent = 'file contents cannot be provided', fileDiff = 'file diff cannot be provided', patches = '', diff = 'no diff', commentChain = 'no other comments on this patch', comment = 'no comment provided', crossFileContext = '') {
+    analysisChain; // 分析链（逐步推理过程，由轻量模型生成，注入到审查提示词）
+    constructor(systemMessage = '', title = 'no title provided', description = 'no description provided', rawSummary = '', shortSummary = '', filename = '', fileContent = 'file contents cannot be provided', fileDiff = 'file diff cannot be provided', patches = '', diff = 'no diff', commentChain = 'no other comments on this patch', comment = 'no comment provided', crossFileContext = '', analysisChain = '') {
         this.systemMessage = systemMessage;
         this.title = title;
         this.description = description;
@@ -10621,13 +10874,14 @@ class Inputs {
         this.commentChain = commentChain;
         this.comment = comment;
         this.crossFileContext = crossFileContext;
+        this.analysisChain = analysisChain;
     }
     /**
      * 创建当前对象的深拷贝
      * 用于并行处理多个文件时，每个任务持有独立的 Inputs 副本
      */
     clone() {
-        return new Inputs(this.systemMessage, this.title, this.description, this.rawSummary, this.shortSummary, this.filename, this.fileContent, this.fileDiff, this.patches, this.diff, this.commentChain, this.comment, this.crossFileContext);
+        return new Inputs(this.systemMessage, this.title, this.description, this.rawSummary, this.shortSummary, this.filename, this.fileContent, this.fileDiff, this.patches, this.diff, this.commentChain, this.comment, this.crossFileContext, this.analysisChain);
     }
     /**
      * 渲染提示词模板：将模板中的 $variable 占位符替换为实际值
@@ -10676,6 +10930,13 @@ class Inputs {
         }
         // 跨文件上下文：无论是否有值，都替换占位符（避免模板残留）
         content = content.replace('$cross_file_context', this.crossFileContext || 'No cross-file references detected.');
+        // 分析链：无论是否有值，都替换占位符（避免模板残留）
+        const analysisChainValue = this.analysisChain || 'No analysis chain available.';
+        const hadPlaceholder = content.includes('$analysis_chain');
+        content = content.replace('$analysis_chain', analysisChainValue);
+        if (hadPlaceholder) {
+            (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`[render] $analysis_chain replaced: hasValue=${!!this.analysisChain}, valueLen=${analysisChainValue.length}, preview="${analysisChainValue.substring(0, 100).replace(/\n/g, '\\n')}"`);
+        }
         return content;
     }
 }
@@ -10714,25 +10975,25 @@ __nccwpck_require__.r(__webpack_exports__);
 
 async function run() {
     // 从 action.yml 中读取所有配置参数，构建 Options 配置对象
-    const options = new _options__WEBPACK_IMPORTED_MODULE_3__/* .Options */ .Ei((0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('debug'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('disable_review'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('disable_release_notes'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_files'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('review_simple_changes'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('review_comment_lgtm'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getMultilineInput)('path_filters'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('system_message'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_light_model'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_heavy_model'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_model_temperature'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_retries'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_timeout_ms'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_concurrency_limit'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('github_concurrency_limit'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_base_url'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('language'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_dependency_analysis'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_dependency_files'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_web_search'));
+    const options = new _options__WEBPACK_IMPORTED_MODULE_3__/* .Options */ .Ei((0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('debug'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('disable_review'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('disable_release_notes'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_files'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('review_simple_changes'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('review_comment_lgtm'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getMultilineInput)('path_filters'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('system_message'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_light_model'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_heavy_model'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_model_temperature'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_retries'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_timeout_ms'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_concurrency_limit'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('github_concurrency_limit'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_base_url'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('language'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_dependency_analysis'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_dependency_files'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_web_search'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_shell'));
     // 打印所有配置项，方便调试
     options.print();
     // 构建提示词模板对象，包含用户自定义的摘要和发布说明提示词
     const prompts = new _prompts__WEBPACK_IMPORTED_MODULE_5__/* .Prompts */ .j((0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('summarize'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('summarize_release_notes'));
     // 创建两个 Bot 实例：轻量 Bot 用于文件摘要，重量 Bot 用于深度代码审查
-    // 初始化轻量模型 Bot（默认 gpt-4.1-nano），用于快速生成文件摘要
+    // 初始化轻量模型 Bot（默认 gpt-5.4-nano），用于快速生成文件摘要
     let lightBot = null;
     try {
-        lightBot = new _bot__WEBPACK_IMPORTED_MODULE_1__/* .Bot */ .r(options, new _options__WEBPACK_IMPORTED_MODULE_3__/* .OpenAIOptions */ .i0(options.openaiLightModel, options.lightTokenLimits, false));
+        lightBot = new _bot__WEBPACK_IMPORTED_MODULE_1__/* .Bot */ .r(options, new _options__WEBPACK_IMPORTED_MODULE_3__/* .OpenAIOptions */ .i0(options.openaiLightModel, options.lightTokenLimits, false, false));
     }
     catch (e) {
         (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Skipped: failed to create summary bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`);
         return;
     }
-    // 初始化重量模型 Bot（默认 gpt-4.1-mini），用于深度代码审查和最终摘要生成
+    // 初始化重量模型 Bot（默认 gpt-5.4-mini），用于深度代码审查和最终摘要生成
     let heavyBot = null;
     try {
-        heavyBot = new _bot__WEBPACK_IMPORTED_MODULE_1__/* .Bot */ .r(options, new _options__WEBPACK_IMPORTED_MODULE_3__/* .OpenAIOptions */ .i0(options.openaiHeavyModel, options.heavyTokenLimits, options.enableWebSearch));
+        heavyBot = new _bot__WEBPACK_IMPORTED_MODULE_1__/* .Bot */ .r(options, new _options__WEBPACK_IMPORTED_MODULE_3__/* .OpenAIOptions */ .i0(options.openaiHeavyModel, options.heavyTokenLimits, options.enableWebSearch, options.enableShell));
     }
     catch (e) {
         (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Skipped: failed to create review bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`);
@@ -12826,10 +13087,12 @@ minimatch.unescape = unescape_unescape;
  * - requestTokens: 可用于请求提示词的 token 数（= maxTokens - responseTokens - 100 缓冲）
  *
  * 支持的模型（按推荐优先级）：
- * - gpt-4.1: 最强非推理模型，1M 上下文，32K 输出，适合深度代码审查（heavyBot 推荐）
- * - gpt-4.1-mini: 高性价比模型，1M 上下文，32K 输出，适合摘要生成（lightBot 推荐）
- * - gpt-4.1-nano: 超低成本模型，1M 上下文，32K 输出，适合简单分类
- * - gpt-4o: 上一代旗舰模型，128K 上下文，16K 输出
+ * - gpt-5.4: 最强模型，支持 local_shell 工具，1M 上下文，32K 输出，适合深度代码审查（heavyBot 推荐）
+ * - gpt-5.4-mini: 高性价比模型，支持 local_shell，1M 上下文，32K 输出，适合摘要生成（lightBot 推荐）
+ * - gpt-5.4-nano: 超低成本模型，支持 local_shell，1M 上下文，32K 输出，适合简单分类
+ * - gpt-4.1: 上一代旗舰模型，1M 上下文，32K 输出（不支持 local_shell）
+ * - gpt-4.1-mini/nano: 上一代轻量模型
+ * - gpt-4o: 旧模型，128K 上下文，16K 输出
  * - gpt-4o-mini: 上一代轻量模型，128K 上下文，16K 输出
  * - gpt-4-turbo: 128K 上下文的 GPT-4 增强版
  * - 旧模型（gpt-4, gpt-4-32k, gpt-3.5-turbo 等）：保留向后兼容
@@ -12839,29 +13102,42 @@ class TokenLimits {
     requestTokens; // 请求可用 token 数（发送给模型的提示词上限）
     responseTokens; // 响应预留 token 数（模型回复的上限）
     knowledgeCutOff; // 模型知识截止日期
-    constructor(model = 'gpt-4.1-nano') {
-        // ==================== 最新模型（推荐使用） ====================
-        if (model === 'gpt-4.1' || model.startsWith('gpt-4.1-2')) {
-            // GPT-4.1: 最强非推理模型，1M 上下文，32K 最大输出
-            // 价格：$2.00/1M input, $8.00/1M output
+    constructor(model = 'gpt-5.4-nano') {
+        // ==================== 最新模型（推荐使用，支持 local_shell） ====================
+        if (model === 'gpt-5.4' || model.startsWith('gpt-5.4-2')) {
+            // GPT-5.4: 最强模型，支持 local_shell 工具，1M 上下文，32K 最大输出
+            this.knowledgeCutOff = '2025-03-01';
+            this.maxTokens = 1047576;
+            this.responseTokens = 32768;
+        }
+        else if (model === 'gpt-5.4-mini' || model.startsWith('gpt-5.4-mini-')) {
+            // GPT-5.4-mini: 高性价比模型，支持 local_shell，1M 上下文，32K 最大输出
+            this.knowledgeCutOff = '2025-03-01';
+            this.maxTokens = 1047576;
+            this.responseTokens = 32768;
+        }
+        else if (model === 'gpt-5.4-nano' || model.startsWith('gpt-5.4-nano-')) {
+            // GPT-5.4-nano: 超低成本模型，支持 local_shell，1M 上下文，32K 最大输出
+            this.knowledgeCutOff = '2025-03-01';
+            this.maxTokens = 1047576;
+            this.responseTokens = 32768;
+            // ==================== 上一代模型（gpt-4.1 系列，不支持 local_shell） ====================
+        }
+        else if (model === 'gpt-4.1' || model.startsWith('gpt-4.1-2')) {
             this.knowledgeCutOff = '2024-06-01';
             this.maxTokens = 1047576;
             this.responseTokens = 32768;
         }
         else if (model === 'gpt-4.1-mini' || model.startsWith('gpt-4.1-mini-')) {
-            // GPT-4.1-mini: 高性价比模型，1M 上下文，32K 最大输出
-            // 价格：$0.40/1M input, $1.60/1M output
             this.knowledgeCutOff = '2024-06-01';
             this.maxTokens = 1047576;
             this.responseTokens = 32768;
         }
         else if (model === 'gpt-4.1-nano' || model.startsWith('gpt-4.1-nano-')) {
-            // GPT-4.1-nano: 超低成本模型，1M 上下文，32K 最大输出
-            // 价格：$0.10/1M input, $0.40/1M output
             this.knowledgeCutOff = '2024-06-01';
             this.maxTokens = 1047576;
             this.responseTokens = 32768;
-            // ==================== 上一代模型 ====================
+            // ==================== 旧模型 ====================
         }
         else if (model === 'gpt-4o' || model.startsWith('gpt-4o-2')) {
             // GPT-4o: 上一代旗舰模型，128K 上下文，16K 最大输出
@@ -12905,8 +13181,8 @@ class TokenLimits {
             this.responseTokens = 1000;
         }
         else {
-            // 未知模型：使用保守的默认值（与 gpt-4.1-mini 相同）
-            this.knowledgeCutOff = '2024-06-01';
+            // 未知模型：使用保守的默认值（与 gpt-5.4-mini 相同）
+            this.knowledgeCutOff = '2025-03-01';
             this.maxTokens = 1047576;
             this.responseTokens = 32768;
         }
@@ -12959,7 +13235,8 @@ class Options {
     enableDependencyAnalysis; // 是否启用跨文件依赖分析
     maxDependencyFiles; // 依赖分析最大扫描文件数
     enableWebSearch; // 是否启用 web search（用于验证 API）
-    constructor(debug, disableReview, disableReleaseNotes, maxFiles = '0', reviewSimpleChanges = false, reviewCommentLGTM = false, pathFilters = null, systemMessage = '', openaiLightModel = 'gpt-4.1-nano', openaiHeavyModel = 'gpt-4.1-mini', openaiModelTemperature = '0.0', openaiRetries = '3', openaiTimeoutMS = '120000', openaiConcurrencyLimit = '6', githubConcurrencyLimit = '6', apiBaseUrl = 'https://api.openai.com/v1', language = 'en-US', enableDependencyAnalysis = true, maxDependencyFiles = '50', enableWebSearch = true) {
+    enableShell; // 是否启用 shell
+    constructor(debug, disableReview, disableReleaseNotes, maxFiles = '0', reviewSimpleChanges = false, reviewCommentLGTM = false, pathFilters = null, systemMessage = '', openaiLightModel = 'gpt-5.4-nano', openaiHeavyModel = 'gpt-5.4-mini', openaiModelTemperature = '0.0', openaiRetries = '3', openaiTimeoutMS = '120000', openaiConcurrencyLimit = '6', githubConcurrencyLimit = '6', apiBaseUrl = 'https://api.openai.com/v1', language = 'en-US', enableDependencyAnalysis = true, maxDependencyFiles = '50', enableWebSearch = true, enableShell = true) {
         this.debug = debug;
         this.disableReview = disableReview;
         this.disableReleaseNotes = disableReleaseNotes;
@@ -12982,6 +13259,7 @@ class Options {
         this.enableDependencyAnalysis = enableDependencyAnalysis;
         this.maxDependencyFiles = parseInt(maxDependencyFiles);
         this.enableWebSearch = enableWebSearch;
+        this.enableShell = enableShell;
     }
     /** 打印所有配置项到日志，方便调试 */
     print() {
@@ -13007,6 +13285,7 @@ class Options {
         (0,core.info)(`enable_dependency_analysis: ${this.enableDependencyAnalysis}`);
         (0,core.info)(`max_dependency_files: ${this.maxDependencyFiles}`);
         (0,core.info)(`enable_web_search: ${this.enableWebSearch}`);
+        (0,core.info)(`enable_shell: ${this.enableShell}`);
     }
     /**
      * 检查文件路径是否通过过滤规则
@@ -13091,7 +13370,8 @@ class OpenAIOptions {
     model; // 模型名称（如 "gpt-4"、"gpt-3.5-turbo"）
     tokenLimits; // 该模型的 token 限制配置
     enableWebSearch; // 是否启用 web search
-    constructor(model = 'gpt-4.1-nano', tokenLimits = null, enableWebSearch = false) {
+    enableShell; // 是否启用 shell
+    constructor(model = 'gpt-5.4-nano', tokenLimits = null, enableWebSearch = false, enableShell = true) {
         this.model = model;
         if (tokenLimits != null) {
             this.tokenLimits = tokenLimits;
@@ -13100,6 +13380,7 @@ class OpenAIOptions {
             this.tokenLimits = new TokenLimits(model);
         }
         this.enableWebSearch = enableWebSearch;
+        this.enableShell = enableShell;
     }
 }
 
@@ -13242,11 +13523,36 @@ $short_summary
 
 $cross_file_context
 
+## Analysis chain (pre-review reasoning)
+
+$analysis_chain
+
+## Pre-review investigation (MANDATORY)
+
+Before writing any review comments, you MUST use the available tools to investigate the code:
+
+1. **Use shell commands** to read related source files, check how changed functions/variables are
+   used elsewhere, verify imports, and understand the broader context. Examples:
+   - \`cat <file>\` or \`head -n <N> <file>\` to read files referenced in the diff
+   - \`grep -rn "<symbol>" --include="*.ts" --include="*.js"\` to find usages of changed exports
+   - \`ls <directory>\` to understand project structure
+   - Any other shell command that helps you understand the code context
+
+2. **Use web search** when the code uses external libraries, APIs, or SDKs and you need to
+   verify correct usage, check for deprecations, or confirm parameter signatures.
+
+You should perform at least one shell investigation per file being reviewed. The tool call
+history will be automatically captured and displayed as an "Analysis chain" in the review
+comments, showing your reasoning process to the PR author.
+
+Do NOT skip this step — even if the diff looks straightforward, verify your assumptions
+by reading the actual code in the repository.
+
 ## IMPORTANT Instructions
 
 Input: New hunks annotated with line numbers and old hunks (replaced code). Hunks represent incomplete code fragments.
 Additional Context: PR title, description, summaries, comment chains, and cross-file references.
-Task: Review new hunks for substantive issues using provided context and respond with comments if necessary.
+Task: Investigate using shell/web_search tools first, then review new hunks for substantive issues using provided context and respond with comments if necessary.
 Output: Review comments in markdown with exact line number ranges in new hunks. Start and end line numbers must be within the same hunk. For single-line comments, start=end line number. Must use example response format below.
 Use fenced code blocks using the relevant language identifier where applicable.
 Don't annotate code snippets with line numbers. Format and indent code correctly.
@@ -13496,6 +13802,8 @@ __nccwpck_require__.d(__webpack_exports__, {
 
 // EXTERNAL MODULE: ./node_modules/.pnpm/@actions+core@1.11.1/node_modules/@actions/core/lib/core.js
 var core = __nccwpck_require__(1078);
+// EXTERNAL MODULE: external "child_process"
+var external_child_process_ = __nccwpck_require__(2081);
 // EXTERNAL MODULE: ./node_modules/.pnpm/@actions+github@5.1.1/node_modules/@actions/github/lib/github.js
 var github = __nccwpck_require__(3695);
 ;// CONCATENATED MODULE: ./node_modules/.pnpm/yocto-queue@1.2.2/node_modules/yocto-queue/index.js
@@ -15364,6 +15672,7 @@ var tokenizer = __nccwpck_require__(7525);
  * 后续运行只审查新增的变更，避免重复审查。
  */
 
+
 // eslint-disable-next-line camelcase
 
 
@@ -15896,14 +16205,19 @@ ${commentChain}
             if (patchesPacked > 0) {
                 try {
                     // 调用重量模型执行代码审查
-                    const [response] = await heavyBot.chat(prompts.renderReviewFileDiff(ins), {});
+                    const [response, , analysisSteps] = await heavyBot.chat(prompts.renderReviewFileDiff(ins), {});
                     if (response === '') {
                         (0,core.info)('review: nothing obtained from openai');
                         reviewsFailed.push(`${filename} (no response)`);
                         return;
                     }
+                    // 格式化 Analysis chain（模型执行的 shell / web_search 步骤）
+                    (0,core.info)(`[analysis_chain] ${filename}: received ${analysisSteps.length} analysis steps from bot`);
+                    const analysisChainMd = formatAnalysisChain(analysisSteps, resolveAnalysisRepositoryUrl());
+                    (0,core.info)(`[analysis_chain] ${filename}: formatted markdown length=${analysisChainMd.length}, empty=${analysisChainMd === ''}`);
                     // 解析 AI 响应，提取结构化的审查评论
                     const reviews = parseReview(response, patches, options.debug);
+                    let analysisChainAttached = false;
                     for (const review of reviews) {
                         // 过滤 LGTM 评论（如果配置为不保留）
                         if (!options.reviewCommentLGTM &&
@@ -15918,8 +16232,17 @@ ${commentChain}
                         }
                         try {
                             reviewCount += 1;
+                            // 每个文件只在第一条评论上附加一次 Analysis chain，避免重复刷屏
+                            const shouldAttachAnalysisChain = analysisChainMd !== '' && !analysisChainAttached;
+                            const commentWithChain = shouldAttachAnalysisChain
+                                ? `${review.comment}\n\n${analysisChainMd}`
+                                : review.comment;
+                            if (shouldAttachAnalysisChain) {
+                                analysisChainAttached = true;
+                            }
+                            (0,core.info)(`[analysis_chain] ${filename}: comment line ${review.startLine}-${review.endLine}, hasChain=${shouldAttachAnalysisChain}, finalLen=${commentWithChain.length}`);
                             // 将审查评论加入缓冲区
-                            await commenter.bufferReviewComment(filename, review.startLine, review.endLine, `${review.comment}`);
+                            await commenter.bufferReviewComment(filename, review.startLine, review.endLine, commentWithChain);
                         }
                         catch (e) {
                             reviewsFailed.push(`${filename} comment failed (${e})`);
@@ -16003,6 +16326,119 @@ ${reviewsSkipped.length > 0
     await commenter.comment(`${summarizeComment}`, lib_commenter/* SUMMARIZE_TAG */.Rp, 'replace');
 };
 // ==================== Diff 解析辅助函数 ====================
+// ==================== Analysis Chain 格式化 ====================
+function formatShellCommandForDisplay(command) {
+    return command
+        .replace(/\s+&&\s+/g, ' &&\n')
+        .replace(/\s+\|\|\s+/g, ' ||\n')
+        .replace(/\s+\|\s+/g, ' |\n');
+}
+/**
+ * 将模型执行的分析步骤格式化为 CodeRabbit 风格的 Analysis chain
+ *
+ * 生成可折叠的 `<details>` 块，包含每个 shell 命令及其输出、web search 调用等，
+ * 展示模型在给出审查意见之前的推理/调查过程。
+ */
+function resolveAnalysisRepositoryUrl() {
+    const payload = review_context.payload;
+    const candidates = [
+        review_context.payload.repository?.html_url,
+        payload.project?.web_url,
+        payload.project?.homepage,
+        payload.repository?.homepage,
+        process.env.CI_PROJECT_URL,
+        process.env.CI_REPOSITORY_URL,
+        buildGithubRepositoryUrl(),
+        readOriginRemoteUrl()
+    ];
+    return (candidates
+        .map(candidate => normalizeRepositoryUrl(candidate))
+        .find((candidate) => candidate != null) ?? '');
+}
+function buildGithubRepositoryUrl() {
+    const serverUrl = process.env.GITHUB_SERVER_URL?.trim();
+    if (serverUrl == null ||
+        serverUrl === '' ||
+        review_repo.owner === '' ||
+        review_repo.repo === '') {
+        return undefined;
+    }
+    return `${serverUrl.replace(/\/+$/, '')}/${review_repo.owner}/${review_repo.repo}`;
+}
+function readOriginRemoteUrl() {
+    try {
+        const originUrl = (0,external_child_process_.execFileSync)('git', ['config', '--get', 'remote.origin.url'], {
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'ignore']
+        }).trim();
+        return originUrl === '' ? undefined : originUrl;
+    }
+    catch {
+        return undefined;
+    }
+}
+function normalizeRepositoryUrl(rawUrl) {
+    if (rawUrl == null)
+        return undefined;
+    const trimmed = rawUrl.trim();
+    if (trimmed === '')
+        return undefined;
+    const sshLikeMatch = trimmed.match(/^(?:ssh:\/\/)?git@([^/:]+)[:/]([^\s]+)$/);
+    if (sshLikeMatch != null) {
+        const [, host, path] = sshLikeMatch;
+        return `https://${host}/${normalizeRepositoryPath(path)}`;
+    }
+    try {
+        const parsed = new URL(trimmed);
+        const path = normalizeRepositoryPath(parsed.pathname);
+        if (path === '')
+            return undefined;
+        const protocol = parsed.protocol === 'http:' || parsed.protocol === 'https:'
+            ? parsed.protocol
+            : 'https:';
+        return `${protocol}//${parsed.host}/${path}`;
+    }
+    catch {
+        return undefined;
+    }
+}
+function normalizeRepositoryPath(path) {
+    return path
+        .trim()
+        .replace(/^\/+/, '')
+        .replace(/\/+$/, '')
+        .replace(/\.git$/, '');
+}
+function formatAnalysisChain(steps, repositoryUrl) {
+    (0,core.info)(`[formatAnalysisChain] called with ${steps.length} steps`);
+    if (steps.length === 0)
+        return '';
+    let chain = '<details>\n<summary>🧩 Analysis chain</summary>\n\n';
+    for (let idx = 0; idx < steps.length; idx++) {
+        const step = steps[idx];
+        // info(`[formatAnalysisChain] step[${idx}]: type=${step.type}, commands=${JSON.stringify(step.commands)}, stdout_len=${step.stdoutLength ?? 0}`)
+        if (step.type === 'shell') {
+            (0,core.info)(`[formatAnalysisChain] ${JSON.stringify(step)}`);
+            for (let cmdIdx = 0; cmdIdx < (step.commands?.length ?? 0); cmdIdx++) {
+                const command = step.commands?.[cmdIdx] ?? '';
+                const commandOutput = step.commandOutputs?.[cmdIdx];
+                chain += `\n🏁 Shell executed:\n`;
+                chain += `\`\`\`bash\n${formatShellCommandForDisplay(command)}\n\`\`\`\n\n`;
+                chain += `Repository: ${repositoryUrl}\n`;
+                if (commandOutput != null) {
+                    chain += `\nLength of output: ${commandOutput.stdoutLength}\n`;
+                    chain += '\n';
+                }
+                chain += '---\n\n';
+            }
+        }
+        else if (step.type === 'web_search') {
+            chain += `🔍 Web search executed (status: ${step.status ?? 'unknown'})\n\n---\n\n`;
+        }
+    }
+    chain += '</details>';
+    return chain;
+}
 /**
  * 将完整的 patch 字符串按 @@ hunk 标头拆分为独立的 hunk 数组
  * 每个 hunk 以 @@ -a,b +c,d @@ 开头

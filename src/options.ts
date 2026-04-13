@@ -39,6 +39,7 @@ export class Options {
   enableDependencyAnalysis: boolean // 是否启用跨文件依赖分析
   maxDependencyFiles: number // 依赖分析最大扫描文件数
   enableWebSearch: boolean // 是否启用 web search（用于验证 API）
+  enableShell: boolean // 是否启用 shell
 
   constructor(
     debug: boolean,
@@ -49,8 +50,8 @@ export class Options {
     reviewCommentLGTM = false,
     pathFilters: string[] | null = null,
     systemMessage = '',
-    openaiLightModel = 'gpt-4.1-nano',
-    openaiHeavyModel = 'gpt-4.1-mini',
+    openaiLightModel = 'gpt-5.4-nano',
+    openaiHeavyModel = 'gpt-5.4-mini',
     openaiModelTemperature = '0.0',
     openaiRetries = '3',
     openaiTimeoutMS = '120000',
@@ -60,7 +61,8 @@ export class Options {
     language = 'en-US',
     enableDependencyAnalysis = true,
     maxDependencyFiles = '50',
-    enableWebSearch = true
+    enableWebSearch = true,
+    enableShell = true
   ) {
     this.debug = debug
     this.disableReview = disableReview
@@ -84,6 +86,7 @@ export class Options {
     this.enableDependencyAnalysis = enableDependencyAnalysis
     this.maxDependencyFiles = parseInt(maxDependencyFiles)
     this.enableWebSearch = enableWebSearch
+    this.enableShell = enableShell
   }
 
   /** 打印所有配置项到日志，方便调试 */
@@ -110,6 +113,7 @@ export class Options {
     info(`enable_dependency_analysis: ${this.enableDependencyAnalysis}`)
     info(`max_dependency_files: ${this.maxDependencyFiles}`)
     info(`enable_web_search: ${this.enableWebSearch}`)
+    info(`enable_shell: ${this.enableShell}`)
   }
 
   /**
@@ -202,11 +206,13 @@ export class OpenAIOptions {
   model: string // 模型名称（如 "gpt-4"、"gpt-3.5-turbo"）
   tokenLimits: TokenLimits // 该模型的 token 限制配置
   enableWebSearch: boolean // 是否启用 web search
+  enableShell: boolean // 是否启用 shell
 
   constructor(
-    model = 'gpt-4.1-nano',
+    model = 'gpt-5.4-nano',
     tokenLimits: TokenLimits | null = null,
-    enableWebSearch = false
+    enableWebSearch = false,
+    enableShell = true
   ) {
     this.model = model
     if (tokenLimits != null) {
@@ -215,5 +221,6 @@ export class OpenAIOptions {
       this.tokenLimits = new TokenLimits(model)
     }
     this.enableWebSearch = enableWebSearch
+    this.enableShell = enableShell
   }
 }

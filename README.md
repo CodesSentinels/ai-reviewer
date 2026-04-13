@@ -7,7 +7,7 @@ AI-based PR reviewer and summarizer.
 ## Overview
 
 `ai-reviewer` is an AI-based code reviewer and summarizer for GitHub pull
-requests using OpenAI's `gpt-4.1-nano` and `gpt-4.1-mini` models. It is designed to be
+requests using OpenAI's `gpt-5.4-nano` and `gpt-5.4-mini` models. It is designed to be
 used as a GitHub Action and can be configured to run on every pull request and
 review comments
 
@@ -26,7 +26,7 @@ review comments
 │                       main.ts (入口文件)                            │
 │  ┌─────────────┐  ┌──────────────┐  ┌────────────┐  ┌───────────┐ │
 │  │ Options 配置 │  │ Prompts 模板  │  │ lightBot    │  │ heavyBot  │ │
-│  │ (options.ts) │  │ (prompts.ts) │  │(gpt-4.1-nano)│  │(gpt-4.1-mini)│ │
+│  │ (options.ts) │  │ (prompts.ts) │  │(gpt-5.4-nano)│  │(gpt-5.4-mini)│ │
 │  └──────┬──────┘  └──────┬───────┘  └─────┬──────┘  └─────┬─────┘ │
 │         │                │                 │               │       │
 │         └────────────────┼─────────────────┼───────────────┘       │
@@ -86,9 +86,9 @@ review comments
                                ▼
                     ┌─────────────────────┐
                     │ 创建 lightBot       │
-                    │ (gpt-4.1-nano)      │
+                    │ (gpt-5.4-nano)      │
                     │ 创建 heavyBot       │
-                    │ (gpt-4.1-mini)      │
+                    │ (gpt-5.4-mini)      │
                     └──────────┬──────────┘
                                ▼
                ┌───────────────────────────────┐
@@ -258,8 +258,8 @@ review comments
   and reduce noise by tracking changed files between commits and the base of the
   pull request.
 - **"Light" model for summary**: Designed to be used with a "light"
-  summarization model (e.g. `gpt-4.1-nano`) and a "heavy" review model (e.g.
-  `gpt-4.1-mini`). _`gpt-4.1-mini` 在多项 benchmark 上超越 gpt-4o，是代码审查的最优性价比选择。_
+  summarization model (e.g. `gpt-5.4-nano`) and a "heavy" review model (e.g.
+  `gpt-5.4-mini`). _`gpt-5.4-mini` 在多项 benchmark 上超越 gpt-4o，是代码审查的最优性价比选择。_
 - **Chat with bot**: Supports conversation with the bot in the context of lines
   of code or entire files, useful for providing context, generating test cases,
   and reducing code complexity.
@@ -333,12 +333,12 @@ jobs:
   OpenAI API if you have multiple. Please add this key to your GitHub Action
   secrets.
 
-### Models: `gpt-4.1-mini` and `gpt-4.1-nano`
+### Models: `gpt-5.4-mini` and `gpt-5.4-nano`
 
-Recommend using `gpt-4.1-nano` for lighter tasks such as summarizing the
-changes (`openai_light_model` in configuration) and `gpt-4.1-mini` for more complex
+Recommend using `gpt-5.4-nano` for lighter tasks such as summarizing the
+changes (`openai_light_model` in configuration) and `gpt-5.4-mini` for more complex
 review and commenting tasks (`openai_heavy_model` in configuration). Both models
-support 1M context window and 32K max output tokens. `gpt-4.1-mini` surpasses
+support 1M context window and 32K max output tokens. `gpt-5.4-mini` surpasses
 gpt-4o on many benchmarks at 80% lower cost, making it the best value for code review.
 
 ### Prompts & Configuration

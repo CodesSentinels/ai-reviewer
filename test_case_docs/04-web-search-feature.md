@@ -18,8 +18,8 @@
 
 | Bot 实例 | 模型 | Web Search | 使用阶段 |
 |----------|------|-----------|---------|
-| **lightBot** | gpt-4.1-nano | **禁用**（硬编码 `false`） | Phase 1: 文件摘要 |
-| **heavyBot** | gpt-4.1-mini | **启用**（跟随配置） | Phase 2-4: 合并/汇总/审查 |
+| **lightBot** | gpt-5.4-nano | **禁用**（硬编码 `false`） | Phase 1: 文件摘要 |
+| **heavyBot** | gpt-5.4-mini | **启用**（跟随配置） | Phase 2-4: 合并/汇总/审查 |
 
 关键代码路径：`main.ts:63-88` — lightBot 始终 `false`，heavyBot 传入 `options.enableWebSearch`。
 
