@@ -16,10 +16,10 @@ import {
   warning
 } from '@actions/core'
 import {Bot} from './bot'
+import {handleCommentEvent} from './command-handler'
 import {OpenAIOptions, Options} from './options'
 import {Prompts} from './prompts'
 import {codeReview} from './review'
-import {handleReviewComment} from './review-comment'
 
 async function run(): Promise<void> {
   // 从 action.yml 中读取所有配置参数，构建 Options 配置对象
@@ -102,10 +102,12 @@ async function run(): Promise<void> {
       // PR 事件：执行完整的代码审查流程（摘要 + 逐文件审查）
       await codeReview(lightBot, heavyBot, options, prompts)
     } else if (
-      process.env.GITHUB_EVENT_NAME === 'pull_request_review_comment'
+      process.env.GITHUB_EVENT_NAME === 'pull_request_review_comment' ||
+      process.env.GITHUB_EVENT_NAME === 'issue_comment'
     ) {
-      // 审查评论事件：处理用户在 review comment 中 @ai-reviewer 的回复
-      await handleReviewComment(heavyBot, options, prompts)
+      // 评论事件（顶层 issue_comment 或 review comment）
+      // 先走命令调度，未命中命令时再透传给既有的对话式追问
+      await handleCommentEvent({heavyBot, lightBot, options, prompts})
     } else {
       warning('Skipped: this action only works on push events or pull_request')
     }
