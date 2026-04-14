@@ -239,7 +239,7 @@ inputs:
       'Enable web search for the AI model during code review. When enabled, the
       model can search the internet to verify API usage, check documentation,
       and validate behavior.'
-    default: 'false'
+    default: 'true'
   enable_shell:
     required: false
     description:
@@ -257,7 +257,7 @@ inputs:
     description:
       'Enable cross-file dependency analysis to track references to modified
       exported functions/variables in other files.'
-    default: 'false'
+    default: 'true'
   max_dependency_files:
     required: false
     description:
