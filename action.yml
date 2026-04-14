@@ -152,13 +152,15 @@ inputs:
     required: false
     description:
       'Model to use for simple tasks like summarizing diff on a file.
-      Recommended: gpt-5.4-nano (fastest, cheapest, 1M context, 32K output, supports local_shell).'
+      Recommended: gpt-5.4-nano (fastest, cheapest, 1M context, 32K output,
+      supports local_shell).'
     default: 'gpt-5.4-nano'
   openai_heavy_model:
     required: false
     description:
       'Model to use for complex tasks such as code reviews. Recommended:
-      gpt-5.4-mini (high intelligence, 1M context, 32K output, supports local_shell).'
+      gpt-5.4-mini (high intelligence, 1M context, 32K output, supports
+      local_shell).'
     default: 'gpt-5.4-mini'
   openai_model_temperature:
     required: false
@@ -237,13 +239,13 @@ inputs:
       'Enable web search for the AI model during code review. When enabled, the
       model can search the internet to verify API usage, check documentation,
       and validate behavior.'
-    default: 'true'
+    default: 'false'
   enable_shell:
     required: false
     description:
       'Enable local shell for the heavy review model. When enabled, the action
-      executes model-requested shell commands on the runner and sends the
-      output back to the model.'
+      executes model-requested shell commands on the runner and sends the output
+      back to the model.'
     default: 'true'
   language:
     required: false
@@ -255,7 +257,7 @@ inputs:
     description:
       'Enable cross-file dependency analysis to track references to modified
       exported functions/variables in other files.'
-    default: 'true'
+    default: 'false'
   max_dependency_files:
     required: false
     description:
