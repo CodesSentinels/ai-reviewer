@@ -8940,7 +8940,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
 
 /***/ }),
 
-/***/ 9215:
+/***/ 7342:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
 "use strict";
@@ -9453,6 +9453,81 @@ function _resetRateLimit() {
 }
 const _RATE_LIMIT_CONSTANTS = { WINDOW_MS, MAX_PER_WINDOW };
 
+;// CONCATENATED MODULE: ./lib/commands/reaction.js
+/**
+ * commands/reaction.ts - 命令 ACK 表情反应
+ *
+ * 当 dispatcher 识别到 `@bot <cmd>` 时，会在用户原评论上打一个表情反应
+ * （默认 👀），以在正文回复之前先给一个可见的 "收到" 信号。
+ *
+ * 设计要点：
+ * - content 值来自 action input `command_ack_reaction`，通过 options 透传
+ * - 空字符串 / 'off' / 'none' 视为禁用
+ * - 非法值会被丢弃并给 warning，不阻塞命令执行
+ * - issue_comment 与 pull_request_review_comment 走不同 endpoint
+ * - 任何失败都只打 warning，不让命令主流程受影响
+ */
+
+
+const VALID_REACTIONS = [
+    '+1',
+    '-1',
+    'laugh',
+    'confused',
+    'heart',
+    'hooray',
+    'rocket',
+    'eyes'
+];
+/**
+ * 把 raw 配置归一化为合法的 ReactionContent；不合法或禁用时返回 null。
+ */
+function normalizeReaction(raw) {
+    if (raw == null)
+        return null;
+    const trimmed = raw.trim().toLowerCase();
+    if (trimmed === '' || trimmed === 'off' || trimmed === 'none' || trimmed === 'false') {
+        return null;
+    }
+    if (VALID_REACTIONS.includes(trimmed)) {
+        return trimmed;
+    }
+    (0,core.warning)(`command_ack_reaction "${raw}" is not a valid GitHub reaction ` +
+        `(expected one of ${VALID_REACTIONS.join(', ')}); ACK reaction will be skipped.`);
+    return null;
+}
+/**
+ * 在触发命令的用户评论上加表情反应。失败只 warning，不抛错。
+ */
+async function addAckReaction(params) {
+    const content = normalizeReaction(params.rawReaction);
+    if (content == null) {
+        return;
+    }
+    try {
+        if (params.eventName === 'pull_request_review_comment') {
+            await octokit/* octokit.reactions.createForPullRequestReviewComment */.K.reactions.createForPullRequestReviewComment({
+                owner: params.owner,
+                repo: params.repo,
+                comment_id: params.commentId,
+                content
+            });
+        }
+        else {
+            await octokit/* octokit.reactions.createForIssueComment */.K.reactions.createForIssueComment({
+                owner: params.owner,
+                repo: params.repo,
+                comment_id: params.commentId,
+                content
+            });
+        }
+        (0,core.info)(`ack reaction "${content}" added on ${params.eventName} commentId=${params.commentId}`);
+    }
+    catch (e) {
+        (0,core.warning)(`addAckReaction failed (content=${content}, commentId=${params.commentId}): ${String(e)}`);
+    }
+}
+
 ;// CONCATENATED MODULE: ./lib/commands/reply.js
 /**
  * commands/reply.ts - 统一评论回复工具
@@ -9634,6 +9709,7 @@ async function hasBeenProcessed(owner, repo, issueNumber, originalCommentId, com
 
 
 
+
 // eslint-disable-next-line camelcase
 const context = github.context;
 /**
@@ -9713,6 +9789,15 @@ async function dispatchCommentEvent(deps) {
         issueNumber: prNumber,
         originalCommentId: comment.id,
         commandName: cmdNameForReply
+    });
+    // 命令被识别后第一时间给一个表情反应，作为"收到"的即时信号（可通过
+    // command_ack_reaction 配置；失败不阻塞命令执行）
+    void addAckReaction({
+        owner,
+        repo: repoName,
+        commentId: comment.id,
+        eventName,
+        rawReaction: deps.options.commandAckReaction
     });
     if (outcome.error) {
         await reply.error(outcome.error.code, outcome.error.detail);
@@ -10953,7 +11038,7 @@ __nccwpck_require__.r(__webpack_exports__);
 /* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(1078);
 /* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__nccwpck_require__.n(_actions_core__WEBPACK_IMPORTED_MODULE_0__);
 /* harmony import */ var _bot__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(4936);
-/* harmony import */ var _command_handler__WEBPACK_IMPORTED_MODULE_2__ = __nccwpck_require__(9215);
+/* harmony import */ var _command_handler__WEBPACK_IMPORTED_MODULE_2__ = __nccwpck_require__(7342);
 /* harmony import */ var _options__WEBPACK_IMPORTED_MODULE_3__ = __nccwpck_require__(5341);
 /* harmony import */ var _prompts__WEBPACK_IMPORTED_MODULE_5__ = __nccwpck_require__(2379);
 /* harmony import */ var _review__WEBPACK_IMPORTED_MODULE_4__ = __nccwpck_require__(6439);
@@ -10975,7 +11060,7 @@ __nccwpck_require__.r(__webpack_exports__);
 
 async function run() {
     // 从 action.yml 中读取所有配置参数，构建 Options 配置对象
-    const options = new _options__WEBPACK_IMPORTED_MODULE_3__/* .Options */ .Ei((0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('debug'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('disable_review'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('disable_release_notes'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_files'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('review_simple_changes'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('review_comment_lgtm'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getMultilineInput)('path_filters'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('system_message'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_light_model'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_heavy_model'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_model_temperature'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_retries'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_timeout_ms'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_concurrency_limit'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('github_concurrency_limit'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_base_url'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('language'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_dependency_analysis'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_dependency_files'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_web_search'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_shell'));
+    const options = new _options__WEBPACK_IMPORTED_MODULE_3__/* .Options */ .Ei((0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('debug'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('disable_review'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('disable_release_notes'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_files'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('review_simple_changes'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('review_comment_lgtm'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getMultilineInput)('path_filters'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('system_message'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_light_model'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_heavy_model'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_model_temperature'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_retries'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_timeout_ms'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_concurrency_limit'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('github_concurrency_limit'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_base_url'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('language'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_dependency_analysis'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_dependency_files'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_web_search'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_shell'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('command_ack_reaction'));
     // 打印所有配置项，方便调试
     options.print();
     // 构建提示词模板对象，包含用户自定义的摘要和发布说明提示词
@@ -13236,7 +13321,8 @@ class Options {
     maxDependencyFiles; // 依赖分析最大扫描文件数
     enableWebSearch; // 是否启用 web search（用于验证 API）
     enableShell; // 是否启用 shell
-    constructor(debug, disableReview, disableReleaseNotes, maxFiles = '0', reviewSimpleChanges = false, reviewCommentLGTM = false, pathFilters = null, systemMessage = '', openaiLightModel = 'gpt-5.4-nano', openaiHeavyModel = 'gpt-5.4-mini', openaiModelTemperature = '0.0', openaiRetries = '3', openaiTimeoutMS = '120000', openaiConcurrencyLimit = '6', githubConcurrencyLimit = '6', apiBaseUrl = 'https://api.openai.com/v1', language = 'en-US', enableDependencyAnalysis = true, maxDependencyFiles = '50', enableWebSearch = true, enableShell = true) {
+    commandAckReaction; // 命令识别后在用户评论上打的表情（空/off/none 表示禁用）
+    constructor(debug, disableReview, disableReleaseNotes, maxFiles = '0', reviewSimpleChanges = false, reviewCommentLGTM = false, pathFilters = null, systemMessage = '', openaiLightModel = 'gpt-5.4-nano', openaiHeavyModel = 'gpt-5.4-mini', openaiModelTemperature = '0.0', openaiRetries = '3', openaiTimeoutMS = '120000', openaiConcurrencyLimit = '6', githubConcurrencyLimit = '6', apiBaseUrl = 'https://api.openai.com/v1', language = 'en-US', enableDependencyAnalysis = true, maxDependencyFiles = '50', enableWebSearch = true, enableShell = true, commandAckReaction = 'eyes') {
         this.debug = debug;
         this.disableReview = disableReview;
         this.disableReleaseNotes = disableReleaseNotes;
@@ -13260,6 +13346,7 @@ class Options {
         this.maxDependencyFiles = parseInt(maxDependencyFiles);
         this.enableWebSearch = enableWebSearch;
         this.enableShell = enableShell;
+        this.commandAckReaction = commandAckReaction;
     }
     /** 打印所有配置项到日志，方便调试 */
     print() {
@@ -13286,6 +13373,7 @@ class Options {
         (0,core.info)(`max_dependency_files: ${this.maxDependencyFiles}`);
         (0,core.info)(`enable_web_search: ${this.enableWebSearch}`);
         (0,core.info)(`enable_shell: ${this.enableShell}`);
+        (0,core.info)(`command_ack_reaction: ${this.commandAckReaction}`);
     }
     /**
      * 检查文件路径是否通过过滤规则
