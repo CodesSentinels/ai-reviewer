@@ -44,7 +44,8 @@ async function run(): Promise<void> {
     getBooleanInput('enable_dependency_analysis'),
     getInput('max_dependency_files'),
     getBooleanInput('enable_web_search'),
-    getBooleanInput('enable_shell')
+    getBooleanInput('enable_shell'),
+    getInput('command_ack_reaction')
   )
 
   // 打印所有配置项，方便调试
