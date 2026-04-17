@@ -275,8 +275,7 @@ inputs:
   bot_icon:
     required: false
     description: 'The icon for the bot'
-    bot_icon: '🦉'
-    # default: '🤖'
+    default: '🦉'
   bot_name:
     required: false
     description:

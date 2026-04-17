@@ -6,6 +6,7 @@
  * - 按注册顺序输出命令名、描述、用法
  * - 提供 buildHelpMessage() 纯函数，便于单测
  */
+import {getInput} from '@actions/core'
 import type {CommandHandler, CommandResult, CommandContext} from '../types'
 import {getRegistry} from '../registry'
 
@@ -47,7 +48,7 @@ export function buildHelpMessage(commands: CommandHandler[]): string {
 
   lines.push('')
   lines.push(
-    '> 🤖 Bot 同时支持 `@ai-reviewer` 与 `@codesentinel` 两个 mention。'
+    `> ${getInput('bot_icon') || '🤖'} Bot 同时支持 \`@ai-reviewer\` 与 \`@codesentinel\` 两个 mention。`
   )
   return lines.join('\n')
 }

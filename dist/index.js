@@ -9006,6 +9006,15 @@ function registry_getRegistry() {
 
 
 ;// CONCATENATED MODULE: ./lib/commands/handlers/help.js
+/**
+ * commands/handlers/help.ts - help 命令的参考实现（成员 A 交付）
+ *
+ * 功能:
+ * - 自动聚合 registry 中已注册的所有命令
+ * - 按注册顺序输出命令名、描述、用法
+ * - 提供 buildHelpMessage() 纯函数，便于单测
+ */
+
 
 /**
  * 纯函数：根据命令列表生成 help Markdown。
@@ -9040,7 +9049,7 @@ function buildHelpMessage(commands) {
         }
     }
     lines.push('');
-    lines.push('> 🤖 Bot 同时支持 `@ai-reviewer` 与 `@codesentinel` 两个 mention。');
+    lines.push(`> ${(0,core.getInput)('bot_icon') || '🤖'} Bot 同时支持 \`@ai-reviewer\` 与 \`@codesentinel\` 两个 mention。`);
     return lines.join('\n');
 }
 const helpHandler = {
@@ -10175,7 +10184,7 @@ const repo = context.repo;
 // ==================== 标签常量 ====================
 // 这些 HTML 注释标签用于标识和定位 bot 生成的各类评论
 /** 评论顶部的问候语（包含 bot 图标 + 可配置名称） */
-const COMMENT_GREETING = `${(0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('bot_icon')}   ${(0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('bot_name') || 'AI Reviewer'}`;
+const COMMENT_GREETING = `${(0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('bot_icon') || '🤖'}   ${(0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('bot_name') || 'AI Reviewer'}`;
 /** 标识 bot 自动生成的代码审查评论 */
 const COMMENT_TAG = '<!-- This is an auto-generated comment by AI Reviewer -->';
 /** 标识 bot 自动生成的回复评论 */
