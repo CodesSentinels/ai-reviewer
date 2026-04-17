@@ -9545,8 +9545,8 @@ async function addAckReaction(params) {
  */
 
 
-/** Bot 问候图标（与 commenter.ts 对齐，但避免循环依赖） */
-const GREETING = '🤖 AI Reviewer';
+/** Bot 问候图标 + 可配置名称（与 commenter.ts 对齐，但避免循环依赖） */
+const GREETING = `${(0,core.getInput)('bot_icon') || '🤖'} ${(0,core.getInput)('bot_name') || 'AI Reviewer'}`;
 /** 命令回复评论的幂等标签前缀 */
 const CMD_REPLY_TAG_PREFIX = '<!-- codesentinel-cmd-reply';
 /** 组装幂等 tag */
@@ -10174,8 +10174,8 @@ const context = _actions_github__WEBPACK_IMPORTED_MODULE_1__.context;
 const repo = context.repo;
 // ==================== 标签常量 ====================
 // 这些 HTML 注释标签用于标识和定位 bot 生成的各类评论
-/** 评论顶部的问候语（包含 bot 图标） */
-const COMMENT_GREETING = `${(0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('bot_icon')}   AI Reviewer`;
+/** 评论顶部的问候语（包含 bot 图标 + 可配置名称） */
+const COMMENT_GREETING = `${(0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('bot_icon')}   ${(0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('bot_name') || 'AI Reviewer'}`;
 /** 标识 bot 自动生成的代码审查评论 */
 const COMMENT_TAG = '<!-- This is an auto-generated comment by AI Reviewer -->';
 /** 标识 bot 自动生成的回复评论 */
@@ -16115,6 +16115,7 @@ ${filename}: ${summary}
     if (summarizeFinalResponse === '') {
         (0,core.info)('summarize: nothing obtained from openai');
     }
+    const botName = (0,core.getInput)('bot_name') || 'AI Reviewer';
     // 生成发布说明并写入 PR 描述
     if (options.disableReleaseNotes === false) {
         const [releaseNotesResponse] = await heavyBot.chat(prompts.renderSummarizeReleaseNotes(inputs), {});
@@ -16122,7 +16123,7 @@ ${filename}: ${summary}
             (0,core.info)('release notes: nothing obtained from openai');
         }
         else {
-            let message = '### Summary by AI Reviewer\n\n';
+            let message = `### Summary by ${botName}\n\n`;
             message += releaseNotesResponse;
             try {
                 await commenter.updateDescription(review_context.payload.pull_request.number, message);
@@ -16147,9 +16148,9 @@ ${dependencyContext != null ? `\n${formatDependencySummary(dependencyContext)}` 
 ---
 
 <details>
-<summary>About AI Reviewer</summary>
+<summary>About ${botName}</summary>
 
-AI Reviewer is an AI-powered code review tool that helps improve code quality.
+${botName} is an AI-powered code review tool that helps improve code quality.
 
 </details>
 `;
@@ -16392,7 +16393,7 @@ ${reviewsSkipped.length > 0
 <details>
 <summary>Tips</summary>
 
-### Chat with AI Reviewer Bot (\`@ai-reviewer\`)
+### Chat with ${botName} Bot (\`@ai-reviewer\`)
 - Reply on review comments left by this bot to ask follow-up questions. A review comment is a comment on a diff or a file.
 - Invite the bot into a review comment chain by tagging \`@ai-reviewer\` in a reply.
 

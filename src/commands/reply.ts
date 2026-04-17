@@ -12,12 +12,12 @@
  * - success/error 若收到 ackId 则 updateComment，否则 createComment
  * - error 文案带错误码，便于日志与用户排查
  */
-import {info, warning} from '@actions/core'
+import {getInput, info, warning} from '@actions/core'
 import {octokit} from '../octokit'
 import type {ErrorCode, Reply as IReply} from './types'
 
-/** Bot 问候图标（与 commenter.ts 对齐，但避免循环依赖） */
-const GREETING = '🤖 AI Reviewer'
+/** Bot 问候图标 + 可配置名称（与 commenter.ts 对齐，但避免循环依赖） */
+const GREETING = `${getInput('bot_icon') || '🤖'} ${getInput('bot_name') || 'AI Reviewer'}`
 
 /** 命令回复评论的幂等标签前缀 */
 export const CMD_REPLY_TAG_PREFIX = '<!-- codesentinel-cmd-reply'

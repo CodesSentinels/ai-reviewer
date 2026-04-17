@@ -275,7 +275,14 @@ inputs:
   bot_icon:
     required: false
     description: 'The icon for the bot'
-    default: '🤖'
+    bot_icon: '🦉'
+    # default: '🤖'
+  bot_name:
+    required: false
+    description:
+      'Display name of the bot shown in review comments and summaries'
+    # default: 'AI Reviewer'
+    default: 'CodeSentinel'
 runs:
   using: 'node20'
   main: 'dist/index.js'

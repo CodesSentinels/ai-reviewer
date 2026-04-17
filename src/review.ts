@@ -12,7 +12,7 @@
  * 支持增量审查：通过在摘要评论中存储已审查的 commit ID，
  * 后续运行只审查新增的变更，避免重复审查。
  */
-import { error, info, warning } from '@actions/core'
+import { error, getInput, info, warning } from '@actions/core'
 import { execFileSync } from 'child_process'
 // eslint-disable-next-line camelcase
 import { context as github_context } from '@actions/github'
@@ -504,6 +504,8 @@ ${filename}: ${summary}
     info('summarize: nothing obtained from openai')
   }
 
+  const botName = getInput('bot_name') || 'AI Reviewer'
+
   // 生成发布说明并写入 PR 描述
   if (options.disableReleaseNotes === false) {
     const [releaseNotesResponse] = await heavyBot.chat(
@@ -513,7 +515,7 @@ ${filename}: ${summary}
     if (releaseNotesResponse === '') {
       info('release notes: nothing obtained from openai')
     } else {
-      let message = '### Summary by AI Reviewer\n\n'
+      let message = `### Summary by ${botName}\n\n`
       message += releaseNotesResponse
       try {
         await commenter.updateDescription(
@@ -545,9 +547,9 @@ ${dependencyContext != null ? `\n${formatDependencySummary(dependencyContext)}` 
 ---
 
 <details>
-<summary>About AI Reviewer</summary>
+<summary>About ${botName}</summary>
 
-AI Reviewer is an AI-powered code review tool that helps improve code quality.
+${botName} is an AI-powered code review tool that helps improve code quality.
 
 </details>
 `
@@ -857,7 +859,7 @@ ${reviewsSkipped.length > 0
 <details>
 <summary>Tips</summary>
 
-### Chat with AI Reviewer Bot (\`@ai-reviewer\`)
+### Chat with ${botName} Bot (\`@ai-reviewer\`)
 - Reply on review comments left by this bot to ask follow-up questions. A review comment is a comment on a diff or a file.
 - Invite the bot into a review comment chain by tagging \`@ai-reviewer\` in a reply.
 
