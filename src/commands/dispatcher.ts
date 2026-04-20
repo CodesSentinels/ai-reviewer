@@ -31,7 +31,6 @@ import {parse, type ParserOptions, DEFAULT_BOT_MENTIONS} from './parser'
 import {getPermission} from './permission'
 import {canExecute} from './permission'
 import {checkRateLimit} from './rate-limit'
-import {addAckReaction} from './reaction'
 import {hasBeenProcessed, Reply} from './reply'
 import type {
   ActorInfo,
@@ -145,16 +144,6 @@ export async function dispatchCommentEvent(
     issueNumber: prNumber,
     originalCommentId: comment.id,
     commandName: cmdNameForReply
-  })
-
-  // 命令被识别后第一时间给一个表情反应，作为"收到"的即时信号（可通过
-  // command_ack_reaction 配置；失败不阻塞命令执行）
-  void addAckReaction({
-    owner,
-    repo: repoName,
-    commentId: comment.id,
-    eventName,
-    rawReaction: deps.options.commandAckReaction
   })
 
   if (outcome.error) {

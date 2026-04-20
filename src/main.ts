@@ -17,6 +17,7 @@ import {
 } from '@actions/core'
 import {Bot} from './bot'
 import {handleCommentEvent} from './command-handler'
+import {tryEarlyReaction} from './commands/early-reaction'
 import {OpenAIOptions, Options} from './options'
 import {Prompts} from './prompts'
 import {codeReview} from './review'
@@ -50,6 +51,14 @@ async function run(): Promise<void> {
 
   // 打印所有配置项，方便调试
   options.print()
+
+  // 评论事件：在 Bot 初始化前尽快给用户评论打 ACK 表情
+  if (
+    process.env.GITHUB_EVENT_NAME === 'issue_comment' ||
+    process.env.GITHUB_EVENT_NAME === 'pull_request_review_comment'
+  ) {
+    await tryEarlyReaction(options.commandAckReaction)
+  }
 
   // 构建提示词模板对象，包含用户自定义的摘要和发布说明提示词
   const prompts: Prompts = new Prompts(
