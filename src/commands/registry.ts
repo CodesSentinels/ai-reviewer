@@ -17,6 +17,14 @@ class CommandRegistry {
   /** 规范名 → 注册顺序，help 命令按注册顺序输出 */
   private readonly order: string[] = []
 
+  // {
+  //   name: "review",
+  //   aliases: ['r', 're']
+  // }
+  // {
+  //   name: 'review',
+  // }
+
   register(handler: CommandHandler): void {
     const primary = handler.name.toLowerCase()
     if (this.handlers.has(primary)) {
@@ -28,12 +36,17 @@ class CommandRegistry {
     for (const alias of handler.aliases ?? []) {
       const a = alias.toLowerCase()
       if (this.handlers.has(a)) {
-        throw new Error(
-          `Command alias collides with existing command: ${a}`
-        )
+        throw new Error(`Command alias collides with existing command: ${a}`)
       }
       this.handlers.set(a, handler)
     }
+
+    console.log(
+      '[Registered command]:',
+      handler.name,
+      'aliases:',
+      handler.aliases ?? []
+    )
   }
 
   get(name: string): CommandHandler | undefined {
