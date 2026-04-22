@@ -11248,6 +11248,7 @@ async function run() {
     }
     try {
         // 根据 GitHub 事件类型分发处理逻辑
+        console.log(`GitHub event: ${process.env.GITHUB_EVENT_NAME}`);
         if (process.env.GITHUB_EVENT_NAME === 'pull_request' ||
             process.env.GITHUB_EVENT_NAME === 'pull_request_target') {
             // PR 事件：执行完整的代码审查流程（摘要 + 逐文件审查）

@@ -108,6 +108,7 @@ async function run(): Promise<void> {
 
   try {
     // 根据 GitHub 事件类型分发处理逻辑
+    console.log(`GitHub event: ${process.env.GITHUB_EVENT_NAME}`)
     if (
       process.env.GITHUB_EVENT_NAME === 'pull_request' ||
       process.env.GITHUB_EVENT_NAME === 'pull_request_target'
