@@ -174,23 +174,34 @@ export class Reply implements IReply {
     isError: boolean
   ): Promise<void> {
     if (this.ctx.sourceEvent !== 'pull_request_review_comment') {
+      info(
+        `postInlineAnchor: skip (sourceEvent=${String(this.ctx.sourceEvent)})`
+      )
       return
     }
     if (!this.ctx.reviewCommentId || !this.ctx.pullNumber || !htmlUrl) {
+      info(
+        `postInlineAnchor: skip (reviewCommentId=${String(this.ctx.reviewCommentId)} pullNumber=${String(this.ctx.pullNumber)} htmlUrl=${htmlUrl ? 'ok' : 'null'})`
+      )
       return
     }
     const label = isError ? '查看错误详情' : '查看完整回复'
     const body = `${GREETING} · \`${this.ctx.commandName}\`\n\n🔗 已在会话区回复 → [${label}](${htmlUrl})`
     try {
-      await octokit.pulls.createReplyForReviewComment({
+      const res = await octokit.pulls.createReplyForReviewComment({
         owner: this.ctx.owner,
         repo: this.ctx.repo,
         pull_number: this.ctx.pullNumber,
         comment_id: this.ctx.reviewCommentId,
         body
       })
+      info(
+        `postInlineAnchor: posted reply id=${res?.data?.id} url=${res?.data?.html_url ?? ''}`
+      )
     } catch (e) {
-      warning(`reply.postInlineAnchor failed: ${String(e)}`)
+      warning(
+        `postInlineAnchor failed (pull_number=${this.ctx.pullNumber} comment_id=${this.ctx.reviewCommentId}): ${String(e)}`
+      )
     }
   }
 
