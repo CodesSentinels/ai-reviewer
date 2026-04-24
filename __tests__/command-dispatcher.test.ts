@@ -36,7 +36,8 @@ const octokitState: Record<string, any> = {
   listComments: jest.fn(),
   createComment: jest.fn(),
   updateComment: jest.fn(),
-  getCollaboratorPermissionLevel: jest.fn()
+  getCollaboratorPermissionLevel: jest.fn(),
+  createReplyForReviewComment: jest.fn()
 }
 
 jest.mock('../src/octokit', () => ({
@@ -45,6 +46,10 @@ jest.mock('../src/octokit', () => ({
       createComment: (...a: any[]) => octokitState.createComment(...a),
       updateComment: (...a: any[]) => octokitState.updateComment(...a),
       listComments: (...a: any[]) => octokitState.listComments(...a)
+    },
+    pulls: {
+      createReplyForReviewComment: (...a: any[]) =>
+        octokitState.createReplyForReviewComment(...a)
     },
     repos: {
       getCollaboratorPermissionLevel: (...a: any[]) =>
@@ -116,11 +121,17 @@ beforeEach(() => {
   octokitState.createComment.mockReset()
   octokitState.updateComment.mockReset()
   octokitState.getCollaboratorPermissionLevel.mockReset()
+  octokitState.createReplyForReviewComment.mockReset()
 
   // 默认: 不存在已处理标记
   octokitState.listComments.mockResolvedValue({data: []})
-  octokitState.createComment.mockResolvedValue({data: {id: 9000}})
-  octokitState.updateComment.mockResolvedValue({data: {id: 9000}})
+  octokitState.createComment.mockResolvedValue({
+    data: {id: 9000, html_url: 'https://github.com/octo/demo/pull/42#issuecomment-9000'}
+  })
+  octokitState.updateComment.mockResolvedValue({
+    data: {id: 9000, html_url: 'https://github.com/octo/demo/pull/42#issuecomment-9000'}
+  })
+  octokitState.createReplyForReviewComment.mockResolvedValue({data: {id: 9100}})
   // 默认: alice 有 write 权限
   octokitState.getCollaboratorPermissionLevel.mockResolvedValue({
     data: {permission: 'write'}
@@ -188,6 +199,8 @@ describe('dispatcher — 命令执行', () => {
     // help handler 的响应 body 应包含 "支持的命令"
     const createCall: any = octokitState.createComment.mock.calls[0][0]
     expect(createCall.body).toMatch(/支持的命令/)
+    // issue_comment 触发时不应在行级线程回帖
+    expect(octokitState.createReplyForReviewComment).not.toHaveBeenCalled()
   })
 
   test('stub handler 抛 NOT_IMPLEMENTED', async () => {
@@ -203,13 +216,28 @@ describe('dispatcher — 命令执行', () => {
     expect(octokitState.updateComment).toHaveBeenCalled()
   })
 
-  test('review_comment 上的 help 命令', async () => {
+  test('review_comment 上的 help 命令 + 行级锚点指针', async () => {
     setEvent(
       'pull_request_review_comment',
       buildReviewCommentPayload('@ai-reviewer help')
     )
     const r = await dispatchCommentEvent({options: stubOptions})
     expect(r.kind).toBe('executed')
+    // 主回复仍落在会话区
+    expect(octokitState.createComment).toHaveBeenCalled()
+    // 行级线程追加一条锚点指针，指向会话区 html_url
+    expect(octokitState.createReplyForReviewComment).toHaveBeenCalledTimes(1)
+    const anchorCall: any =
+      octokitState.createReplyForReviewComment.mock.calls[0][0]
+    expect(anchorCall).toMatchObject({
+      owner: 'octo',
+      repo: 'demo',
+      pull_number: 42,
+      comment_id: 2002
+    })
+    expect(anchorCall.body).toContain(
+      'https://github.com/octo/demo/pull/42#issuecomment-9000'
+    )
   })
 
   test('非法参数 → INVALID_ARGS', async () => {
