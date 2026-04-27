@@ -16,10 +16,11 @@ import {
   warning
 } from '@actions/core'
 import {Bot} from './bot'
+import {handleCommentEvent} from './command-handler'
+import {tryEarlyReaction} from './commands/early-reaction'
 import {OpenAIOptions, Options} from './options'
 import {Prompts} from './prompts'
 import {codeReview} from './review'
-import {handleReviewComment} from './review-comment'
 
 async function run(): Promise<void> {
   // 从 action.yml 中读取所有配置参数，构建 Options 配置对象
@@ -44,11 +45,20 @@ async function run(): Promise<void> {
     getBooleanInput('enable_dependency_analysis'),
     getInput('max_dependency_files'),
     getBooleanInput('enable_web_search'),
-    getBooleanInput('enable_shell')
+    getBooleanInput('enable_shell'),
+    getInput('command_ack_reaction')
   )
 
   // 打印所有配置项，方便调试
   options.print()
+
+  // 评论事件：在 Bot 初始化前尽快给用户评论打 ACK 表情
+  if (
+    process.env.GITHUB_EVENT_NAME === 'issue_comment' ||
+    process.env.GITHUB_EVENT_NAME === 'pull_request_review_comment'
+  ) {
+    await tryEarlyReaction(options.commandAckReaction)
+  }
 
   // 构建提示词模板对象，包含用户自定义的摘要和发布说明提示词
   const prompts: Prompts = new Prompts(
@@ -98,6 +108,7 @@ async function run(): Promise<void> {
 
   try {
     // 根据 GitHub 事件类型分发处理逻辑
+    console.log(`GitHub event: ${process.env.GITHUB_EVENT_NAME}`)
     if (
       process.env.GITHUB_EVENT_NAME === 'pull_request' ||
       process.env.GITHUB_EVENT_NAME === 'pull_request_target'
@@ -105,10 +116,12 @@ async function run(): Promise<void> {
       // PR 事件：执行完整的代码审查流程（摘要 + 逐文件审查）
       await codeReview(lightBot, heavyBot, options, prompts)
     } else if (
-      process.env.GITHUB_EVENT_NAME === 'pull_request_review_comment'
+      process.env.GITHUB_EVENT_NAME === 'pull_request_review_comment' ||
+      process.env.GITHUB_EVENT_NAME === 'issue_comment'
     ) {
-      // 审查评论事件：处理用户在 review comment 中 @ai-reviewer 的回复
-      await handleReviewComment(heavyBot, options, prompts)
+      // 评论事件（顶层 issue_comment 或 review comment）
+      // 先走命令调度，未命中命令时再透传给既有的对话式追问
+      await handleCommentEvent({heavyBot, lightBot, options, prompts})
     } else {
       warning('Skipped: this action only works on push events or pull_request')
     }

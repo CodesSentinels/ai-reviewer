@@ -1,7 +1,7 @@
 /******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
 
-/***/ 9032:
+/***/ 4936:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
 "use strict";
@@ -15,7 +15,7 @@ __nccwpck_require__.d(__webpack_exports__, {
 var core = __nccwpck_require__(1078);
 // EXTERNAL MODULE: external "child_process"
 var external_child_process_ = __nccwpck_require__(2081);
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/internal/tslib.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/tslib.mjs
 function __classPrivateFieldSet(receiver, state, value, kind, f) {
     if (kind === "m")
         throw new TypeError("Private method is not writable");
@@ -34,7 +34,7 @@ function __classPrivateFieldGet(receiver, state, kind, f) {
 }
 
 
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/internal/utils/uuid.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/utils/uuid.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 /**
  * https://stackoverflow.com/a/2117523
@@ -50,7 +50,7 @@ let uuid4 = function () {
     return '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, (c) => (+c ^ (randomByte() & (15 >> (+c / 4)))).toString(16));
 };
 //# sourceMappingURL=uuid.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/internal/errors.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/errors.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 function isAbortError(err) {
     return (typeof err === 'object' &&
@@ -87,7 +87,7 @@ const castToError = (err) => {
     return new Error(err);
 };
 //# sourceMappingURL=errors.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/core/error.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/core/error.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 class error_OpenAIError extends Error {
@@ -205,7 +205,7 @@ class InvalidWebhookSignatureError extends Error {
     }
 }
 //# sourceMappingURL=error.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/internal/utils/values.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/utils/values.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 // https://url.spec.whatwg.org/#url-scheme-string
@@ -300,14 +300,14 @@ const safeJSON = (text) => {
     }
 };
 //# sourceMappingURL=values.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/internal/utils/sleep.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/utils/sleep.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 //# sourceMappingURL=sleep.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/version.mjs
-const VERSION = '6.33.0'; // x-release-please-version
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/version.mjs
+const VERSION = '6.27.0'; // x-release-please-version
 //# sourceMappingURL=version.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/internal/detect-platform.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/detect-platform.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 const isRunningInBrowser = () => {
@@ -465,7 +465,7 @@ const getPlatformHeaders = () => {
     return (_platformHeaders ?? (_platformHeaders = getPlatformProperties()));
 };
 //# sourceMappingURL=detect-platform.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/internal/shims.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/shims.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 function getDefaultFetch() {
     if (typeof fetch !== 'undefined') {
@@ -551,7 +551,7 @@ async function CancelReadableStream(stream) {
     await cancelPromise;
 }
 //# sourceMappingURL=shims.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/internal/request-options.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/request-options.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 const FallbackEncoder = ({ headers, body }) => {
     return {
@@ -562,7 +562,7 @@ const FallbackEncoder = ({ headers, body }) => {
     };
 };
 //# sourceMappingURL=request-options.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/internal/qs/formats.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/qs/formats.mjs
 const default_format = 'RFC3986';
 const default_formatter = (v) => String(v);
 const formatters = {
@@ -572,7 +572,7 @@ const formatters = {
 const RFC1738 = 'RFC1738';
 const RFC3986 = 'RFC3986';
 //# sourceMappingURL=formats.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/internal/qs/utils.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/qs/utils.mjs
 
 
 let has = (obj, key) => ((has = Object.hasOwn ?? Function.prototype.call.bind(Object.prototype.hasOwnProperty)),
@@ -790,7 +790,7 @@ function maybe_map(val, fn) {
     return fn(val);
 }
 //# sourceMappingURL=utils.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/internal/qs/stringify.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/qs/stringify.mjs
 
 
 
@@ -1065,14 +1065,14 @@ function stringify(object, opts = {}) {
     return joined.length > 0 ? prefix + joined : '';
 }
 //# sourceMappingURL=stringify.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/internal/utils/query.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/utils/query.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 function stringifyQuery(query) {
     return stringify(query, { arrayFormat: 'brackets' });
 }
 //# sourceMappingURL=query.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/internal/utils/bytes.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/utils/bytes.mjs
 function concatBytes(buffers) {
     let length = 0;
     for (const buffer of buffers) {
@@ -1099,7 +1099,7 @@ function decodeUTF8(bytes) {
         ((decoder = new globalThis.TextDecoder()), (decodeUTF8_ = decoder.decode.bind(decoder))))(bytes);
 }
 //# sourceMappingURL=bytes.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/internal/decoders/line.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/decoders/line.mjs
 var _LineDecoder_buffer, _LineDecoder_carriageReturnIndex;
 
 
@@ -1208,7 +1208,7 @@ function findDoubleNewlineIndex(buffer) {
     return -1;
 }
 //# sourceMappingURL=line.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/internal/utils/log.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/utils/log.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 const levelNumbers = {
@@ -1288,7 +1288,7 @@ const formatRequestDetails = (details) => {
     return details;
 };
 //# sourceMappingURL=log.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/core/streaming.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/core/streaming.mjs
 var _Stream_client;
 
 
@@ -1577,7 +1577,7 @@ function partition(str, delimiter) {
     return [str, '', ''];
 }
 //# sourceMappingURL=streaming.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/internal/parse.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/parse.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -1634,7 +1634,7 @@ function addRequestID(value, response) {
     });
 }
 //# sourceMappingURL=parse.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/core/api-promise.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/core/api-promise.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 var _APIPromise_client;
 
@@ -1707,7 +1707,7 @@ class APIPromise extends Promise {
 }
 _APIPromise_client = new WeakMap();
 //# sourceMappingURL=api-promise.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/core/pagination.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/core/pagination.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 var _AbstractPage_client;
 
@@ -1856,7 +1856,7 @@ class ConversationCursorPage extends AbstractPage {
     }
 }
 //# sourceMappingURL=pagination.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/internal/uploads.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/uploads.mjs
 
 const checkFileSupport = () => {
     if (typeof File === 'undefined') {
@@ -1988,7 +1988,7 @@ const addFormValue = async (form, key, value) => {
     }
 };
 //# sourceMappingURL=uploads.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/internal/to-file.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/to-file.mjs
 
 
 /**
@@ -2077,10 +2077,10 @@ function propsForError(value) {
     return `; props: [${props.map((p) => `"${p}"`).join(', ')}]`;
 }
 //# sourceMappingURL=to-file.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/core/uploads.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/core/uploads.mjs
 
 //# sourceMappingURL=uploads.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/core/resource.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/core/resource.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 class APIResource {
     constructor(client) {
@@ -2088,7 +2088,7 @@ class APIResource {
     }
 }
 //# sourceMappingURL=resource.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/internal/utils/path.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/utils/path.mjs
 
 /**
  * Percent-encode everything that isn't safe to have in a path without encoding safe chars.
@@ -2163,7 +2163,7 @@ const createPathTagFunction = (pathEncoder = encodeURIPath) => function path(sta
  */
 const path = /* @__PURE__ */ createPathTagFunction(encodeURIPath);
 //# sourceMappingURL=path.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/chat/completions/messages.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/chat/completions/messages.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -2191,10 +2191,10 @@ class Messages extends APIResource {
     }
 }
 //# sourceMappingURL=messages.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/error.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/error.mjs
 
 //# sourceMappingURL=error.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/lib/parser.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/parser.mjs
 
 function isChatCompletionFunctionTool(tool) {
     return tool !== undefined && 'function' in tool && tool.function !== undefined;
@@ -2357,7 +2357,7 @@ function validateInputTools(tools) {
     }
 }
 //# sourceMappingURL=parser.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/lib/chatCompletionUtils.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/chatCompletionUtils.mjs
 const isAssistantMessage = (message) => {
     return message?.role === 'assistant';
 };
@@ -2368,7 +2368,7 @@ function isPresent(obj) {
     return obj != null;
 }
 //# sourceMappingURL=chatCompletionUtils.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/lib/EventStream.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/EventStream.mjs
 var _EventStream_instances, _EventStream_connectedPromise, _EventStream_resolveConnectedPromise, _EventStream_rejectConnectedPromise, _EventStream_endPromise, _EventStream_resolveEndPromise, _EventStream_rejectEndPromise, _EventStream_listeners, _EventStream_ended, _EventStream_errored, _EventStream_aborted, _EventStream_catchingPromiseCreated, _EventStream_handleError;
 
 
@@ -2555,7 +2555,7 @@ _EventStream_connectedPromise = new WeakMap(), _EventStream_resolveConnectedProm
     return this._emit('error', new error_OpenAIError(String(error)));
 };
 //# sourceMappingURL=EventStream.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/lib/RunnableFunction.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/RunnableFunction.mjs
 function isRunnableFunctionWithParse(fn) {
     return typeof fn.parse === 'function';
 }
@@ -2570,7 +2570,7 @@ class ParsingToolFunction {
     }
 }
 //# sourceMappingURL=RunnableFunction.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/lib/AbstractChatCompletionRunner.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/AbstractChatCompletionRunner.mjs
 var _AbstractChatCompletionRunner_instances, _AbstractChatCompletionRunner_getFinalContent, _AbstractChatCompletionRunner_getFinalMessage, _AbstractChatCompletionRunner_getFinalFunctionToolCall, _AbstractChatCompletionRunner_getFinalFunctionToolCallResult, _AbstractChatCompletionRunner_calculateTotalUsage, _AbstractChatCompletionRunner_validateParams, _AbstractChatCompletionRunner_stringifyFunctionCallResult;
 
 
@@ -2858,7 +2858,7 @@ _AbstractChatCompletionRunner_instances = new WeakSet(), _AbstractChatCompletion
             : JSON.stringify(rawContent));
 };
 //# sourceMappingURL=AbstractChatCompletionRunner.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/lib/ChatCompletionRunner.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/ChatCompletionRunner.mjs
 
 
 class ChatCompletionRunner extends AbstractChatCompletionRunner {
@@ -2879,7 +2879,7 @@ class ChatCompletionRunner extends AbstractChatCompletionRunner {
     }
 }
 //# sourceMappingURL=ChatCompletionRunner.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/_vendor/partial-json-parser/parser.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/_vendor/partial-json-parser/parser.mjs
 const STR = 0b000000001;
 const NUM = 0b000000010;
 const ARR = 0b000000100;
@@ -3121,10 +3121,10 @@ const _parseJSON = (jsonString, allow) => {
 const partialParse = (input) => parseJSON(input, Allow.ALL ^ Allow.NUM);
 
 //# sourceMappingURL=parser.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/streaming.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/streaming.mjs
 
 //# sourceMappingURL=streaming.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/lib/ChatCompletionStream.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/ChatCompletionStream.mjs
 var _ChatCompletionStream_instances, _ChatCompletionStream_params, _ChatCompletionStream_choiceEventStates, _ChatCompletionStream_currentChatCompletionSnapshot, _ChatCompletionStream_beginRequest, _ChatCompletionStream_getChoiceEventState, _ChatCompletionStream_addChunk, _ChatCompletionStream_emitToolCallDoneEvent, _ChatCompletionStream_emitContentDoneEvents, _ChatCompletionStream_endRequest, _ChatCompletionStream_getAutoParseableResponseFormat, _ChatCompletionStream_accumulateChatCompletion;
 
 
@@ -3614,7 +3614,7 @@ function assertIsEmpty(obj) {
 }
 function assertNever(_x) { }
 //# sourceMappingURL=ChatCompletionStream.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/lib/ChatCompletionStreamingRunner.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/ChatCompletionStreamingRunner.mjs
 
 class ChatCompletionStreamingRunner extends ChatCompletionStream {
     static fromReadableStream(stream) {
@@ -3635,7 +3635,7 @@ class ChatCompletionStreamingRunner extends ChatCompletionStream {
     }
 }
 //# sourceMappingURL=ChatCompletionStreamingRunner.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/chat/completions/completions.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/chat/completions/completions.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -3745,7 +3745,7 @@ class Completions extends APIResource {
 
 Completions.Messages = Messages;
 //# sourceMappingURL=completions.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/chat/chat.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/chat/chat.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -3758,18 +3758,18 @@ class Chat extends APIResource {
 }
 Chat.Completions = Completions;
 //# sourceMappingURL=chat.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/chat/completions/index.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/chat/completions/index.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
 
 //# sourceMappingURL=index.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/chat/index.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/chat/index.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
 //# sourceMappingURL=index.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/internal/headers.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/headers.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 const brand_privateNullableHeaders = /* @__PURE__ */ Symbol('brand.privateNullableHeaders');
@@ -3844,7 +3844,7 @@ const isEmptyHeaders = (headers) => {
     return true;
 };
 //# sourceMappingURL=headers.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/audio/speech.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/audio/speech.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -3862,7 +3862,7 @@ class Speech extends APIResource {
      * const speech = await client.audio.speech.create({
      *   input: 'input',
      *   model: 'string',
-     *   voice: 'string',
+     *   voice: 'ash',
      * });
      *
      * const content = await speech.blob();
@@ -3879,7 +3879,7 @@ class Speech extends APIResource {
     }
 }
 //# sourceMappingURL=speech.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/audio/transcriptions.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/audio/transcriptions.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -3897,7 +3897,7 @@ class Transcriptions extends APIResource {
     }
 }
 //# sourceMappingURL=transcriptions.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/audio/translations.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/audio/translations.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -3910,7 +3910,7 @@ class Translations extends APIResource {
     }
 }
 //# sourceMappingURL=translations.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/audio/audio.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/audio/audio.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -3931,7 +3931,7 @@ Audio.Transcriptions = Transcriptions;
 Audio.Translations = Translations;
 Audio.Speech = Speech;
 //# sourceMappingURL=audio.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/batches.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/batches.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -3968,7 +3968,7 @@ class Batches extends APIResource {
     }
 }
 //# sourceMappingURL=batches.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/beta/assistants.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/assistants.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -4038,7 +4038,7 @@ class Assistants extends APIResource {
     }
 }
 //# sourceMappingURL=assistants.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/beta/realtime/sessions.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/realtime/sessions.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -4067,7 +4067,7 @@ class Sessions extends APIResource {
     }
 }
 //# sourceMappingURL=sessions.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/beta/realtime/transcription-sessions.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/realtime/transcription-sessions.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -4096,7 +4096,7 @@ class TranscriptionSessions extends APIResource {
     }
 }
 //# sourceMappingURL=transcription-sessions.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/beta/realtime/realtime.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/realtime/realtime.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -4116,7 +4116,7 @@ class Realtime extends APIResource {
 Realtime.Sessions = Sessions;
 Realtime.TranscriptionSessions = TranscriptionSessions;
 //# sourceMappingURL=realtime.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/beta/chatkit/sessions.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/chatkit/sessions.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -4160,7 +4160,7 @@ class sessions_Sessions extends APIResource {
     }
 }
 //# sourceMappingURL=sessions.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/beta/chatkit/threads.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/chatkit/threads.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -4234,7 +4234,7 @@ class Threads extends APIResource {
     }
 }
 //# sourceMappingURL=threads.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/beta/chatkit/chatkit.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/chatkit/chatkit.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -4251,7 +4251,7 @@ class ChatKit extends APIResource {
 ChatKit.Sessions = sessions_Sessions;
 ChatKit.Threads = Threads;
 //# sourceMappingURL=chatkit.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/beta/threads/messages.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/threads/messages.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -4326,7 +4326,7 @@ class messages_Messages extends APIResource {
     }
 }
 //# sourceMappingURL=messages.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/beta/threads/runs/steps.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/threads/runs/steps.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -4366,7 +4366,7 @@ class Steps extends APIResource {
     }
 }
 //# sourceMappingURL=steps.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/internal/utils/base64.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/utils/base64.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -4422,7 +4422,7 @@ const toFloat32Array = (base64Str) => {
     }
 };
 //# sourceMappingURL=base64.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/internal/utils.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/utils.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -4432,7 +4432,7 @@ const toFloat32Array = (base64Str) => {
 
 
 //# sourceMappingURL=utils.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/lib/AssistantStream.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/AssistantStream.mjs
 var _AssistantStream_instances, _a, _AssistantStream_events, _AssistantStream_runStepSnapshots, _AssistantStream_messageSnapshots, _AssistantStream_messageSnapshot, _AssistantStream_finalRun, _AssistantStream_currentContentIndex, _AssistantStream_currentContent, _AssistantStream_currentToolCallIndex, _AssistantStream_currentToolCall, _AssistantStream_currentEvent, _AssistantStream_currentRunSnapshot, _AssistantStream_currentRunStepSnapshot, _AssistantStream_addEvent, _AssistantStream_endRequest, _AssistantStream_handleMessage, _AssistantStream_handleRunStep, _AssistantStream_handleEvent, _AssistantStream_accumulateRunStep, _AssistantStream_accumulateMessage, _AssistantStream_accumulateContent, _AssistantStream_handleRun;
 
 
@@ -4982,7 +4982,7 @@ _a = AssistantStream, _AssistantStream_addEvent = function _AssistantStream_addE
 };
 function AssistantStream_assertNever(_x) { }
 //# sourceMappingURL=AssistantStream.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/beta/threads/runs/runs.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/threads/runs/runs.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5164,7 +5164,7 @@ class Runs extends APIResource {
 }
 Runs.Steps = Steps;
 //# sourceMappingURL=runs.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/beta/threads/threads.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/threads/threads.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5259,7 +5259,7 @@ class threads_Threads extends APIResource {
 threads_Threads.Runs = Runs;
 threads_Threads.Messages = messages_Messages;
 //# sourceMappingURL=threads.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/beta/beta.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/beta.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5284,7 +5284,7 @@ Beta.ChatKit = ChatKit;
 Beta.Assistants = Assistants;
 Beta.Threads = threads_Threads;
 //# sourceMappingURL=beta.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/completions.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/completions.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 /**
@@ -5296,7 +5296,7 @@ class completions_Completions extends APIResource {
     }
 }
 //# sourceMappingURL=completions.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/containers/files/content.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/containers/files/content.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5315,7 +5315,7 @@ class Content extends APIResource {
     }
 }
 //# sourceMappingURL=content.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/containers/files/files.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/containers/files/files.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5367,7 +5367,7 @@ class Files extends APIResource {
 }
 Files.Content = Content;
 //# sourceMappingURL=files.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/containers/containers.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/containers/containers.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5410,7 +5410,7 @@ class Containers extends APIResource {
 }
 Containers.Files = Files;
 //# sourceMappingURL=containers.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/conversations/items.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/conversations/items.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5452,7 +5452,7 @@ class Items extends APIResource {
     }
 }
 //# sourceMappingURL=items.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/conversations/conversations.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/conversations/conversations.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5493,7 +5493,7 @@ class Conversations extends APIResource {
 }
 Conversations.Items = Items;
 //# sourceMappingURL=conversations.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/embeddings.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/embeddings.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5549,7 +5549,7 @@ class Embeddings extends APIResource {
     }
 }
 //# sourceMappingURL=embeddings.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/evals/runs/output-items.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/evals/runs/output-items.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5574,7 +5574,7 @@ class OutputItems extends APIResource {
     }
 }
 //# sourceMappingURL=output-items.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/evals/runs/runs.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/evals/runs/runs.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5630,7 +5630,7 @@ class runs_Runs extends APIResource {
 }
 runs_Runs.OutputItems = OutputItems;
 //# sourceMappingURL=runs.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/evals/evals.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/evals/evals.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5683,7 +5683,7 @@ class Evals extends APIResource {
 }
 Evals.Runs = runs_Runs;
 //# sourceMappingURL=evals.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/files.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/files.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5769,13 +5769,13 @@ class files_Files extends APIResource {
     }
 }
 //# sourceMappingURL=files.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/fine-tuning/methods.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/fine-tuning/methods.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 class Methods extends APIResource {
 }
 //# sourceMappingURL=methods.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/fine-tuning/alpha/graders.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/fine-tuning/alpha/graders.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 /**
@@ -5824,7 +5824,7 @@ class Graders extends APIResource {
     }
 }
 //# sourceMappingURL=graders.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/fine-tuning/alpha/alpha.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/fine-tuning/alpha/alpha.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5837,7 +5837,7 @@ class Alpha extends APIResource {
 }
 Alpha.Graders = Graders;
 //# sourceMappingURL=alpha.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/fine-tuning/checkpoints/permissions.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/fine-tuning/checkpoints/permissions.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5923,7 +5923,7 @@ class Permissions extends APIResource {
     }
 }
 //# sourceMappingURL=permissions.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/fine-tuning/checkpoints/checkpoints.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/fine-tuning/checkpoints/checkpoints.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5936,7 +5936,7 @@ class Checkpoints extends APIResource {
 }
 Checkpoints.Permissions = Permissions;
 //# sourceMappingURL=checkpoints.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/fine-tuning/jobs/checkpoints.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/fine-tuning/jobs/checkpoints.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5963,7 +5963,7 @@ class checkpoints_Checkpoints extends APIResource {
     }
 }
 //# sourceMappingURL=checkpoints.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/fine-tuning/jobs/jobs.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/fine-tuning/jobs/jobs.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6085,7 +6085,7 @@ class Jobs extends APIResource {
 }
 Jobs.Checkpoints = checkpoints_Checkpoints;
 //# sourceMappingURL=jobs.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/fine-tuning/fine-tuning.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/fine-tuning/fine-tuning.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6110,13 +6110,13 @@ FineTuning.Jobs = Jobs;
 FineTuning.Checkpoints = Checkpoints;
 FineTuning.Alpha = Alpha;
 //# sourceMappingURL=fine-tuning.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/graders/grader-models.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/graders/grader-models.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 class GraderModels extends APIResource {
 }
 //# sourceMappingURL=grader-models.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/graders/graders.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/graders/graders.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6129,7 +6129,7 @@ class graders_Graders extends APIResource {
 }
 graders_Graders.GraderModels = GraderModels;
 //# sourceMappingURL=graders.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/images.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/images.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6158,7 +6158,7 @@ class Images extends APIResource {
     }
 }
 //# sourceMappingURL=images.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/models.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/models.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6190,7 +6190,7 @@ class Models extends APIResource {
     }
 }
 //# sourceMappingURL=models.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/moderations.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/moderations.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 /**
@@ -6206,7 +6206,7 @@ class Moderations extends APIResource {
     }
 }
 //# sourceMappingURL=moderations.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/realtime/calls.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/realtime/calls.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6278,7 +6278,7 @@ class Calls extends APIResource {
     }
 }
 //# sourceMappingURL=calls.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/realtime/client-secrets.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/realtime/client-secrets.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 class ClientSecrets extends APIResource {
@@ -6310,7 +6310,7 @@ class ClientSecrets extends APIResource {
     }
 }
 //# sourceMappingURL=client-secrets.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/realtime/realtime.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/realtime/realtime.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6327,7 +6327,7 @@ class realtime_Realtime extends APIResource {
 realtime_Realtime.ClientSecrets = ClientSecrets;
 realtime_Realtime.Calls = Calls;
 //# sourceMappingURL=realtime.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/lib/ResponsesParser.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/ResponsesParser.mjs
 
 
 function maybeParseResponse(response, params) {
@@ -6488,7 +6488,7 @@ function addOutputText(rsp) {
     rsp.output_text = texts.join('');
 }
 //# sourceMappingURL=ResponsesParser.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/lib/responses/ResponseStream.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/responses/ResponseStream.mjs
 var _ResponseStream_instances, _ResponseStream_params, _ResponseStream_currentResponseSnapshot, _ResponseStream_finalResponse, _ResponseStream_beginRequest, _ResponseStream_addEvent, _ResponseStream_endRequest, _ResponseStream_accumulateResponse;
 
 
@@ -6750,7 +6750,7 @@ function finalizeResponse(snapshot, params) {
     return maybeParseResponse(snapshot, params);
 }
 //# sourceMappingURL=ResponseStream.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/responses/input-items.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/responses/input-items.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6774,7 +6774,7 @@ class InputItems extends APIResource {
     }
 }
 //# sourceMappingURL=input-items.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/responses/input-tokens.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/responses/input-tokens.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 class InputTokens extends APIResource {
@@ -6794,7 +6794,7 @@ class InputTokens extends APIResource {
     }
 }
 //# sourceMappingURL=input-tokens.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/responses/responses.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/responses/responses.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6895,7 +6895,7 @@ class Responses extends APIResource {
 Responses.InputItems = InputItems;
 Responses.InputTokens = InputTokens;
 //# sourceMappingURL=responses.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/skills/content.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/skills/content.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6913,7 +6913,7 @@ class content_Content extends APIResource {
     }
 }
 //# sourceMappingURL=content.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/skills/versions/content.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/skills/versions/content.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6932,7 +6932,7 @@ class versions_content_Content extends APIResource {
     }
 }
 //# sourceMappingURL=content.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/skills/versions/versions.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/skills/versions/versions.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6977,7 +6977,7 @@ class Versions extends APIResource {
 }
 Versions.Content = versions_content_Content;
 //# sourceMappingURL=versions.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/skills/skills.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/skills/skills.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -7027,7 +7027,7 @@ class Skills extends APIResource {
 Skills.Content = content_Content;
 Skills.Versions = Versions;
 //# sourceMappingURL=skills.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/uploads/parts.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/uploads/parts.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -7054,7 +7054,7 @@ class Parts extends APIResource {
     }
 }
 //# sourceMappingURL=parts.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/uploads/uploads.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/uploads/uploads.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -7125,7 +7125,7 @@ class Uploads extends APIResource {
 }
 Uploads.Parts = Parts;
 //# sourceMappingURL=uploads.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/lib/Util.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/Util.mjs
 /**
  * Like `Promise.allSettled()` but throws an error if any promises are rejected.
  */
@@ -7148,7 +7148,7 @@ const allSettledWithThrow = async (promises) => {
     return values;
 };
 //# sourceMappingURL=Util.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/vector-stores/file-batches.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/vector-stores/file-batches.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -7278,7 +7278,7 @@ class FileBatches extends APIResource {
     }
 }
 //# sourceMappingURL=file-batches.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/vector-stores/files.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/vector-stores/files.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -7417,7 +7417,7 @@ class vector_stores_files_Files extends APIResource {
     }
 }
 //# sourceMappingURL=files.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/vector-stores/vector-stores.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/vector-stores/vector-stores.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -7497,7 +7497,7 @@ class VectorStores extends APIResource {
 VectorStores.Files = vector_stores_files_Files;
 VectorStores.FileBatches = FileBatches;
 //# sourceMappingURL=vector-stores.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/videos.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/videos.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -7509,7 +7509,7 @@ class Videos extends APIResource {
      * Create a new video generation job from a prompt and optional reference assets.
      */
     create(body, options) {
-        return this._client.post('/videos', multipartFormRequestOptions({ body, ...options }, this._client));
+        return this._client.post('/videos', maybeMultipartFormRequestOptions({ body, ...options }, this._client));
     }
     /**
      * Fetch the latest metadata for a generated video.
@@ -7530,12 +7530,6 @@ class Videos extends APIResource {
         return this._client.delete(path `/videos/${videoID}`, options);
     }
     /**
-     * Create a character from an uploaded video.
-     */
-    createCharacter(body, options) {
-        return this._client.post('/videos/characters', multipartFormRequestOptions({ body, ...options }, this._client));
-    }
-    /**
      * Download the generated video bytes or a derived preview asset.
      *
      * Streams the rendered video content for the specified video job.
@@ -7549,25 +7543,6 @@ class Videos extends APIResource {
         });
     }
     /**
-     * Create a new video generation job by editing a source video or existing
-     * generated video.
-     */
-    edit(body, options) {
-        return this._client.post('/videos/edits', multipartFormRequestOptions({ body, ...options }, this._client));
-    }
-    /**
-     * Create an extension of a completed video.
-     */
-    extend(body, options) {
-        return this._client.post('/videos/extensions', multipartFormRequestOptions({ body, ...options }, this._client));
-    }
-    /**
-     * Fetch a character.
-     */
-    getCharacter(characterID, options) {
-        return this._client.get(path `/videos/characters/${characterID}`, options);
-    }
-    /**
      * Create a remix of a completed video using a refreshed prompt.
      */
     remix(videoID, body, options) {
@@ -7575,7 +7550,7 @@ class Videos extends APIResource {
     }
 }
 //# sourceMappingURL=videos.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/webhooks/webhooks.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/webhooks/webhooks.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 var _Webhooks_instances, _Webhooks_validateSecret, _Webhooks_getRequiredHeader;
 
@@ -7673,15 +7648,15 @@ _Webhooks_instances = new WeakSet(), _Webhooks_validateSecret = function _Webhoo
     return value;
 };
 //# sourceMappingURL=webhooks.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/webhooks/index.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/webhooks/index.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 //# sourceMappingURL=index.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/webhooks.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/webhooks.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 //# sourceMappingURL=webhooks.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/resources/index.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/index.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -7707,7 +7682,7 @@ _Webhooks_instances = new WeakSet(), _Webhooks_validateSecret = function _Webhoo
 
 
 //# sourceMappingURL=index.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/internal/utils/env.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/utils/env.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 /**
  * Read an environment variable.
@@ -7726,7 +7701,7 @@ const env_readEnv = (env) => {
     return undefined;
 };
 //# sourceMappingURL=env.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/client.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/client.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 var _OpenAI_instances, client_a, _OpenAI_encoder, _OpenAI_baseURLOverridden;
 
@@ -7949,9 +7924,8 @@ class client_OpenAI {
             new URL(path)
             : new URL(baseURL + (baseURL.endsWith('/') && path.startsWith('/') ? path.slice(1) : path));
         const defaultQuery = this.defaultQuery();
-        const pathQuery = Object.fromEntries(url.searchParams);
-        if (!isEmptyObj(defaultQuery) || !isEmptyObj(pathQuery)) {
-            query = { ...pathQuery, ...defaultQuery, ...query };
+        if (!isEmptyObj(defaultQuery)) {
+            query = { ...defaultQuery, ...query };
         }
         if (typeof query === 'object' && query && !Array.isArray(query)) {
             url.search = this.stringifyQuery(query);
@@ -8335,7 +8309,7 @@ client_OpenAI.Containers = Containers;
 client_OpenAI.Skills = Skills;
 client_OpenAI.Videos = Videos;
 //# sourceMappingURL=client.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/azure.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/azure.mjs
 
 
 
@@ -8428,7 +8402,7 @@ const _deployments_endpoints = new Set([
     '/images/edits',
 ]);
 //# sourceMappingURL=azure.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.33.0/node_modules/openai/index.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/index.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -8747,13 +8721,13 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
                 const shellOutputs = await this.executeShellCalls(pendingShellCalls, analysisSteps);
                 response = await this.createResponse(this.buildParams(shellOutputs, response.id, tools));
             }
-            (0,core.info)(`[analysis_chain] total analysis steps captured: ${analysisSteps.length}`);
-            if (analysisSteps.length > 0) {
-                for (let i = 0; i < analysisSteps.length; i++) {
-                    const s = analysisSteps[i];
-                    (0,core.info)(`[analysis_chain] step[${i}]: type=${s.type}, commands=${JSON.stringify(s.commands)}, stdout_len=${s.stdoutLength ?? 0}, stderr_len=${s.stderrLength ?? 0}`);
-                }
-            }
+            // info(`[analysis_chain] total analysis steps captured: ${analysisSteps.length}`)
+            // if (analysisSteps.length > 0) {
+            //   for (let i = 0; i < analysisSteps.length; i++) {
+            //     const s = analysisSteps[i]
+            //     info(`[analysis_chain] step[${i}]: type=${s.type}, commands=${JSON.stringify(s.commands)}, stdout_len=${s.stdoutLength ?? 0}, stderr_len=${s.stderrLength ?? 0}`)
+            //   }
+            // }
             // 移除响应中可能存在的多余前缀 "with "
             if (responseText.startsWith('with ')) {
                 responseText = responseText.substring(5);
@@ -8966,6 +8940,1388 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
 
 /***/ }),
 
+/***/ 1085:
+/***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
+
+"use strict";
+
+// EXPORTS
+__nccwpck_require__.d(__webpack_exports__, {
+  "_": () => (/* binding */ handleCommentEvent)
+});
+
+// EXTERNAL MODULE: ./node_modules/.pnpm/@actions+core@1.11.1/node_modules/@actions/core/lib/core.js
+var core = __nccwpck_require__(1078);
+// EXTERNAL MODULE: ./node_modules/.pnpm/@actions+github@5.1.1/node_modules/@actions/github/lib/github.js
+var github = __nccwpck_require__(3695);
+// EXTERNAL MODULE: ./lib/commands/bootstrap.js + 2 modules
+var bootstrap = __nccwpck_require__(6806);
+// EXTERNAL MODULE: ./lib/commands/registry.js
+var commands_registry = __nccwpck_require__(953);
+// EXTERNAL MODULE: ./lib/commands/parser.js
+var parser = __nccwpck_require__(5964);
+// EXTERNAL MODULE: ./lib/octokit.js
+var octokit = __nccwpck_require__(2247);
+;// CONCATENATED MODULE: ./lib/commands/types.js
+/** 权限等级的比较用数值 */
+const PERMISSION_RANK = {
+    none: 0,
+    read: 1,
+    triage: 2,
+    write: 3,
+    maintain: 4,
+    admin: 5
+};
+/** 判断 actual >= required */
+function permissionAtLeast(actual, required) {
+    return PERMISSION_RANK[actual] >= PERMISSION_RANK[required];
+}
+
+;// CONCATENATED MODULE: ./lib/commands/permission.js
+/**
+ * commands/permission.ts - 命令权限校验
+ *
+ * 职责:
+ * - 查询评论者对仓库的权限等级
+ * - 提供命令级权限检查
+ * - 进程内缓存，避免在单次 Actions run 中重复查询
+ * - PR 作者豁免逻辑
+ *
+ * 对 GitHub API 的依赖:
+ *   octokit.repos.getCollaboratorPermissionLevel({owner, repo, username})
+ *   返回 permission ∈ {admin, maintain, write, triage, read, none}
+ */
+
+
+
+/** 进程内缓存: `${owner}/${repo}/${username}` → permission */
+const cache = new Map();
+/**
+ * 查询评论者权限，带缓存。
+ * 查询失败时回退为 'none'，并记录 warning（不抛异常）。
+ */
+async function getPermission(q) {
+    const key = `${q.owner}/${q.repo}/${q.username}`;
+    const cached = cache.get(key);
+    if (cached)
+        return cached;
+    try {
+        const res = await octokit/* octokit.repos.getCollaboratorPermissionLevel */.K.repos.getCollaboratorPermissionLevel({
+            owner: q.owner,
+            repo: q.repo,
+            username: q.username
+        });
+        // API 返回的 permission 字符串已经是我们需要的枚举之一
+        const perm = (res.data?.permission ?? 'none');
+        cache.set(key, perm);
+        return perm;
+    }
+    catch (e) {
+        (0,core.warning)(`getCollaboratorPermissionLevel failed for ${key}: ${String(e)} — ` +
+            `falling back to 'none'`);
+        cache.set(key, 'none');
+        return 'none';
+    }
+}
+/**
+ * 命令级权限检查
+ *
+ * @param handler    要检查的命令
+ * @param actual     评论者权限等级
+ * @param isPrAuthor 是否 PR 作者（作者对自己 PR 有部分豁免）
+ */
+function canExecute(handler, actual, isPrAuthor) {
+    const required = handler.minPermission ?? 'write';
+    if (permissionAtLeast(actual, required))
+        return true;
+    // PR 作者豁免：对自己 PR 调用这些"无副作用/仅影响自身 PR"的命令
+    if (isPrAuthor) {
+        const selfSafe = new Set(['help', 'review', 'full review', 'summary']);
+        if (selfSafe.has(handler.name.toLowerCase())) {
+            return true;
+        }
+    }
+    return false;
+}
+/** 仅供测试 */
+function _resetPermissionCache() {
+    cache.clear();
+}
+
+;// CONCATENATED MODULE: ./lib/commands/rate-limit.js
+/**
+ * commands/rate-limit.ts - 命令速率限制
+ *
+ * 简单的进程内令牌桶: 同一 actor 在 WINDOW_MS 内最多 MAX_PER_WINDOW 条命令。
+ *
+ * 注意: Actions 是无状态环境，跨 run 无法限流；本实现仅在单次 run 内有效。
+ * 这足以防止同一次 webhook 抖动下的重复处理，但不防"攻击者分多次提交评论"。
+ * 后者需要在更上层做（例如 GitHub 自身的 abuse detection）。
+ */
+const WINDOW_MS = 60_000;
+const MAX_PER_WINDOW = 10;
+const buckets = new Map();
+function checkRateLimit(actor, now = Date.now()) {
+    let bucket = buckets.get(actor);
+    if (!bucket) {
+        bucket = { timestamps: [] };
+        buckets.set(actor, bucket);
+    }
+    // 清理窗口外的记录
+    const cutoff = now - WINDOW_MS;
+    while (bucket.timestamps.length && bucket.timestamps[0] < cutoff) {
+        bucket.timestamps.shift();
+    }
+    if (bucket.timestamps.length >= MAX_PER_WINDOW) {
+        const earliest = bucket.timestamps[0];
+        return {
+            allowed: false,
+            retryAfterMs: Math.max(0, earliest + WINDOW_MS - now)
+        };
+    }
+    bucket.timestamps.push(now);
+    return { allowed: true };
+}
+/** 仅供测试 */
+function _resetRateLimit() {
+    buckets.clear();
+}
+const _RATE_LIMIT_CONSTANTS = { WINDOW_MS, MAX_PER_WINDOW };
+
+;// CONCATENATED MODULE: ./lib/commands/reply.js
+/**
+ * commands/reply.ts - 统一评论回复工具
+ *
+ * 所有命令的输出必须经过此层，确保:
+ * - 格式一致（Greeting + tag + body）
+ * - 幂等标签（PROCESSED_TAG）统一注入
+ * - ACK / 成功 / 失败 / 进度 四种状态通过 create+update 串联
+ * - 错误码 → 用户可读文案的映射集中维护
+ *
+ * 设计要点:
+ * - ack() 返回 ackId（新建的评论 id），失败时返回 null（降级为直接 reply）
+ * - success/error 若收到 ackId 则 updateComment，否则 createComment
+ * - error 文案带错误码，便于日志与用户排查
+ */
+
+
+/** Bot 问候图标 + 可配置名称（与 commenter.ts 对齐，但避免循环依赖） */
+const GREETING = `${(0,core.getInput)('bot_icon') || '🤖'} ${(0,core.getInput)('bot_name') || 'AI Reviewer'}`;
+/** 命令回复评论的幂等标签前缀 */
+const CMD_REPLY_TAG_PREFIX = '<!-- codesentinel-cmd-reply';
+/** 组装幂等 tag */
+function buildCmdReplyTag(originalCommentId, commandName) {
+    return `${CMD_REPLY_TAG_PREFIX}:${originalCommentId}:${commandName} -->`;
+}
+/** 错误码 → 用户可读文案 */
+function formatErrorMessage(code, detail) {
+    const base = ERROR_MESSAGES[code] ?? '命令执行出错';
+    return detail ? `${base}\n\n详情: ${detail}` : base;
+}
+const ERROR_MESSAGES = {
+    UNKNOWN_COMMAND: '❓ **未知命令**。发送 `@ai-reviewer help` 查看支持的命令列表。',
+    INVALID_ARGS: '⚠️ **参数不合法**。命令参数仅接受字母、数字以及 `._-/:=` 字符。',
+    FORBIDDEN: '🚫 **权限不足**。执行该命令需要仓库 `write` 及以上权限。',
+    BOT_FORBIDDEN: '🚫 **Bot 权限不足**。请检查 workflow `permissions` 配置（pull-requests: write / contents: read）。',
+    NOT_IMPLEMENTED: '🚧 **命令暂未实现**。该命令已在路线图中，等待实现。',
+    RATE_LIMITED: '⏱️ **请求过于频繁**。同一用户在 60 秒内最多执行 10 条命令，请稍后再试。',
+    DUPLICATE: 'ℹ️ **命令已处理**（重复事件已去重）。',
+    INTERNAL: '💥 **命令执行失败**。错误已记录，请联系维护者。'
+};
+/**
+ * Reply 实现
+ */
+class Reply {
+    ctx;
+    constructor(ctx) {
+        this.ctx = ctx;
+    }
+    async ack(message) {
+        const body = this.wrap(`⏳ ${message}`);
+        try {
+            const res = await octokit/* octokit.issues.createComment */.K.issues.createComment({
+                owner: this.ctx.owner,
+                repo: this.ctx.repo,
+                issue_number: this.ctx.issueNumber,
+                body
+            });
+            return res.data.id;
+        }
+        catch (e) {
+            (0,core.warning)(`reply.ack failed: ${String(e)}`);
+            return null;
+        }
+    }
+    async success(message, ackId) {
+        const body = this.wrap(message);
+        const htmlUrl = await this.publish(body, ackId);
+        await this.postInlineAnchor(htmlUrl, false);
+    }
+    async error(code, detail, ackId) {
+        const body = this.wrap(`${formatErrorMessage(code, detail)}\n\n\`错误码: ${code}\``);
+        const htmlUrl = await this.publish(body, ackId);
+        await this.postInlineAnchor(htmlUrl, true);
+        (0,core.info)(`command error [${code}] ${detail ?? ''}`);
+    }
+    async progress(message, ackId) {
+        const body = this.wrap(`⏳ ${message}`);
+        try {
+            await octokit/* octokit.issues.updateComment */.K.issues.updateComment({
+                owner: this.ctx.owner,
+                repo: this.ctx.repo,
+                comment_id: ackId,
+                body
+            });
+        }
+        catch (e) {
+            (0,core.warning)(`reply.progress update failed: ${String(e)}`);
+        }
+    }
+    /** 新建或更新评论，返回落地评论的 html_url（失败时返回 null） */
+    async publish(body, ackId) {
+        if (ackId != null) {
+            try {
+                const res = await octokit/* octokit.issues.updateComment */.K.issues.updateComment({
+                    owner: this.ctx.owner,
+                    repo: this.ctx.repo,
+                    comment_id: ackId,
+                    body
+                });
+                return res?.data?.html_url ?? null;
+            }
+            catch (e) {
+                (0,core.warning)(`reply.publish update failed, falling back to create: ${String(e)}`);
+            }
+        }
+        try {
+            const res = await octokit/* octokit.issues.createComment */.K.issues.createComment({
+                owner: this.ctx.owner,
+                repo: this.ctx.repo,
+                issue_number: this.ctx.issueNumber,
+                body
+            });
+            return res?.data?.html_url ?? null;
+        }
+        catch (e) {
+            (0,core.warning)(`reply.publish create failed: ${String(e)}`);
+            return null;
+        }
+    }
+    /**
+     * 若命令由 PR 行级评论触发，在原行级线程里追加一条短指针，
+     * 指向会话区的完整回复。失败仅 warning，不影响主流程。
+     */
+    async postInlineAnchor(htmlUrl, isError) {
+        if (this.ctx.sourceEvent !== 'pull_request_review_comment') {
+            (0,core.info)(`postInlineAnchor: skip (sourceEvent=${String(this.ctx.sourceEvent)})`);
+            return;
+        }
+        if (!this.ctx.reviewCommentId || !this.ctx.pullNumber || !htmlUrl) {
+            (0,core.info)(`postInlineAnchor: skip (reviewCommentId=${String(this.ctx.reviewCommentId)} pullNumber=${String(this.ctx.pullNumber)} htmlUrl=${htmlUrl ? 'ok' : 'null'})`);
+            return;
+        }
+        const label = isError ? '查看错误详情' : '查看完整回复';
+        const body = `${GREETING} · \`${this.ctx.commandName}\`\n\n🔗 已在会话区回复 → [${label}](${htmlUrl})`;
+        try {
+            const res = await octokit/* octokit.pulls.createReplyForReviewComment */.K.pulls.createReplyForReviewComment({
+                owner: this.ctx.owner,
+                repo: this.ctx.repo,
+                pull_number: this.ctx.pullNumber,
+                comment_id: this.ctx.reviewCommentId,
+                body
+            });
+            (0,core.info)(`postInlineAnchor: posted reply id=${res?.data?.id} url=${res?.data?.html_url ?? ''}`);
+        }
+        catch (e) {
+            (0,core.warning)(`postInlineAnchor failed (pull_number=${this.ctx.pullNumber} comment_id=${this.ctx.reviewCommentId}): ${String(e)}`);
+        }
+    }
+    wrap(message) {
+        const tag = buildCmdReplyTag(this.ctx.originalCommentId, this.ctx.commandName);
+        return `${tag}\n${GREETING} · \`${this.ctx.commandName}\`\n\n${message}`;
+    }
+}
+/**
+ * 扫描 issue 已有评论，判断该 (commentId, commandName) 是否已被处理过。
+ * 用于 dispatcher 的幂等检查。
+ */
+async function hasBeenProcessed(owner, repo, issueNumber, originalCommentId, commandName) {
+    const tag = buildCmdReplyTag(originalCommentId, commandName);
+    try {
+        // 用 paginate 扫描（一期最多 100 条足够）
+        const res = await octokit/* octokit.issues.listComments */.K.issues.listComments({
+            owner,
+            repo,
+            issue_number: issueNumber,
+            per_page: 100
+        });
+        for (const c of res.data) {
+            if (typeof c.body === 'string' && c.body.includes(tag)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    catch (e) {
+        (0,core.warning)(`hasBeenProcessed failed: ${String(e)} — treating as not processed`);
+        return false;
+    }
+}
+
+;// CONCATENATED MODULE: ./lib/commands/dispatcher.js
+/**
+ * commands/dispatcher.ts - 命令调度主流程
+ *
+ * 设计文档对应: 04-iteration-02-member-a-design.md §4.1
+ *
+ * 流程:
+ *   1. 事件类型校验 (issue_comment / pull_request_review_comment, action=created)
+ *   2. 提取 PR number / 评论信息
+ *   3. bot 自评论过滤
+ *   4. 命令解析 (parser.parse)
+ *      - none → 忽略
+ *      - conversation → 透传对话 fallback
+ *      - command → 继续
+ *   5. 幂等检查 (reply.hasBeenProcessed)
+ *   6. 速率限制 (rate-limit)
+ *   7. 权限查询 + 命令权限校验
+ *   8. ACK 回复（如 needsAck）
+ *   9. 执行 handler.execute
+ *   10. 成功/失败反馈
+ *
+ * 对外导出:
+ *   - dispatchCommentEvent(deps): 主入口，被 command-handler.ts 调用
+ *   - DispatchOutcome: 用于测试的明确返回值
+ */
+
+// eslint-disable-next-line camelcase
+
+
+
+
+
+
+
+// eslint-disable-next-line camelcase
+const context = github.context;
+/**
+ * 主调度入口。
+ * 调用方 (command-handler.ts) 负责:
+ *   - 当返回 'fallback_conversation' 时，调用旧的 handleReviewComment
+ */
+async function dispatchCommentEvent(deps) {
+    const eventName = context.eventName;
+    if (eventName !== 'issue_comment' &&
+        eventName !== 'pull_request_review_comment') {
+        return { kind: 'ignored', reason: `unsupported event: ${eventName}` };
+    }
+    const payload = context.payload;
+    if (!payload || payload.action !== 'created') {
+        return { kind: 'ignored', reason: `action not created` };
+    }
+    // 提取 PR number & 评论 —— 两种事件的 payload 形态不同
+    let prNumber;
+    let comment;
+    let headSha = '';
+    let baseSha = '';
+    let prAuthor = '';
+    let commentNodeId;
+    let threadNodeId;
+    if (eventName === 'issue_comment') {
+        if (!payload.issue?.pull_request) {
+            return { kind: 'ignored', reason: 'issue_comment on non-PR issue' };
+        }
+        prNumber = payload.issue.number;
+        comment = payload.comment;
+        // issue_comment 的 payload 没有 head/base SHA，需由 handler 自行查
+        prAuthor = payload.issue.user?.login ?? '';
+    }
+    else {
+        if (!payload.pull_request) {
+            return { kind: 'ignored', reason: 'review_comment missing pull_request' };
+        }
+        prNumber = payload.pull_request.number;
+        comment = payload.comment;
+        headSha = payload.pull_request.head?.sha ?? '';
+        baseSha = payload.pull_request.base?.sha ?? '';
+        prAuthor = payload.pull_request.user?.login ?? '';
+        commentNodeId = comment?.node_id;
+        // review_thread 的 nodeId 需要另查 GraphQL；此处置空由 B 在 handler 中补齐
+    }
+    if (!comment || typeof comment.body !== 'string' || !prNumber) {
+        return { kind: 'ignored', reason: 'missing comment body or pr number' };
+    }
+    // 过滤 bot 自身（避免自我触发）
+    const actorLogin = comment.user?.login ?? '';
+    const actorIsBot = comment.user?.type === 'Bot' || /\[bot\]$/i.test(actorLogin);
+    if (actorIsBot) {
+        return { kind: 'ignored', reason: 'comment from bot' };
+    }
+    // 命令解析
+    const registry = (0,commands_registry/* getRegistry */.JH)();
+    const parseOpts = {
+        registeredCommands: registry.getRegisteredNames(),
+        botMentions: deps.botMentions ?? parser/* DEFAULT_BOT_MENTIONS */.gC
+    };
+    const outcome = (0,parser/* parse */.Qc)(comment.body, parseOpts);
+    if (outcome.kind === 'none') {
+        return { kind: 'ignored', reason: 'no bot mention' };
+    }
+    if (outcome.kind === 'conversation') {
+        return { kind: 'fallback_conversation' };
+    }
+    // outcome.kind === 'command'
+    // 即便解析出错，也尽量构造 reply 以反馈用户
+    const owner = context.repo.owner;
+    const repoName = context.repo.repo;
+    const cmdNameForReply = outcome.command?.name ?? 'unknown';
+    const reply = new Reply({
+        owner,
+        repo: repoName,
+        issueNumber: prNumber,
+        originalCommentId: comment.id,
+        commandName: cmdNameForReply,
+        sourceEvent: eventName,
+        reviewCommentId: eventName === 'pull_request_review_comment' ? comment.id : undefined,
+        pullNumber: prNumber
+    });
+    if (outcome.error) {
+        await reply.error(outcome.error.code, outcome.error.detail);
+        return {
+            kind: 'executed',
+            command: cmdNameForReply,
+            ok: false,
+            error: outcome.error.code
+        };
+    }
+    const parsed = outcome.command;
+    // 幂等检查: 同一 commentId × 同一 command 是否已有回复
+    const processed = await hasBeenProcessed(owner, repoName, prNumber, comment.id, parsed.name);
+    if (processed) {
+        (0,core.info)(`command dispatcher: skip duplicate commentId=${comment.id} cmd=${parsed.name}`);
+        return { kind: 'executed', command: parsed.name, ok: false, error: 'DUPLICATE' };
+    }
+    // 速率限制
+    const rl = checkRateLimit(actorLogin);
+    if (!rl.allowed) {
+        await reply.error('RATE_LIMITED', `请 ${Math.ceil((rl.retryAfterMs ?? 0) / 1000)} 秒后再试`);
+        return {
+            kind: 'executed',
+            command: parsed.name,
+            ok: false,
+            error: 'RATE_LIMITED'
+        };
+    }
+    // 查找 handler
+    const handler = registry.get(parsed.name);
+    if (!handler) {
+        await reply.error('UNKNOWN_COMMAND', `\`${parsed.name}\``);
+        return {
+            kind: 'executed',
+            command: parsed.name,
+            ok: false,
+            error: 'UNKNOWN_COMMAND'
+        };
+    }
+    // 权限: 查询 + 校验
+    const permission = await getPermission({
+        owner,
+        repo: repoName,
+        username: actorLogin
+    });
+    const isPrAuthor = actorLogin === prAuthor;
+    if (!canExecute(handler, permission, isPrAuthor)) {
+        await reply.error('FORBIDDEN', `用户 \`${actorLogin}\` 当前权限: \`${permission}\``);
+        return {
+            kind: 'executed',
+            command: parsed.name,
+            ok: false,
+            error: 'FORBIDDEN'
+        };
+    }
+    const actor = {
+        login: actorLogin,
+        permission,
+        isPrAuthor,
+        isBot: false
+    };
+    const ctx = {
+        command: parsed,
+        eventName,
+        action: 'created',
+        owner,
+        repo: repoName,
+        prNumber,
+        headSha,
+        baseSha,
+        actor,
+        commentId: comment.id,
+        commentBody: comment.body,
+        commentNodeId,
+        threadNodeId,
+        reply,
+        options: deps.options
+    };
+    // ACK
+    let ackId = null;
+    if (handler.needsAck) {
+        ackId = await reply.ack(`正在执行 \`${parsed.name}\` …`);
+    }
+    // 执行
+    try {
+        const result = await handler.execute(ctx);
+        const message = result?.message ?? `✅ 命令 \`${parsed.name}\` 执行完成`;
+        await reply.success(message, ackId);
+        return { kind: 'executed', command: parsed.name, ok: true };
+    }
+    catch (e) {
+        const code = extractErrorCode(e);
+        const detail = e instanceof Error ? e.message : String(e);
+        await reply.error(code, detail, ackId);
+        (0,core.warning)(`command handler failed: name=${parsed.name} code=${code} ${detail}`);
+        return {
+            kind: 'executed',
+            command: parsed.name,
+            ok: false,
+            error: code
+        };
+    }
+}
+function extractErrorCode(e) {
+    if (e && typeof e === 'object' && 'code' in e) {
+        const c = e.code;
+        if (typeof c === 'string') {
+            if ([
+                'UNKNOWN_COMMAND',
+                'INVALID_ARGS',
+                'FORBIDDEN',
+                'BOT_FORBIDDEN',
+                'NOT_IMPLEMENTED',
+                'RATE_LIMITED',
+                'DUPLICATE',
+                'INTERNAL'
+            ].includes(c)) {
+                return c;
+            }
+        }
+    }
+    return 'INTERNAL';
+}
+
+// EXTERNAL MODULE: ./lib/commenter.js
+var lib_commenter = __nccwpck_require__(4558);
+// EXTERNAL MODULE: ./lib/inputs.js
+var lib_inputs = __nccwpck_require__(6305);
+// EXTERNAL MODULE: ./lib/tokenizer.js
+var tokenizer = __nccwpck_require__(7525);
+;// CONCATENATED MODULE: ./lib/review-comment.js
+/**
+ * review-comment.ts - PR 审查评论回复处理模块
+ *
+ * 处理 pull_request_review_comment 事件，即用户在 PR 的代码审查评论中发表回复。
+ *
+ * 触发条件（满足任一）：
+ * 1. 评论对话链中已有 bot 的评论（继续对话）
+ * 2. 评论内容中 @ai-reviewer（主动召唤 bot）
+ *
+ * 处理流程：
+ * 1. 验证事件类型和 payload 数据
+ * 2. 过滤 bot 自身发出的评论（避免自我回复循环）
+ * 3. 获取评论对话链上下文
+ * 4. 收集文件 diff、PR 摘要等辅助上下文
+ * 5. 在 token 限制内打包所有上下文
+ * 6. 调用 AI 生成回复并发布
+ */
+
+// eslint-disable-next-line camelcase
+
+
+
+
+
+// eslint-disable-next-line camelcase
+const review_comment_context = github.context;
+const repo = review_comment_context.repo;
+/** 用户在评论中 @ bot 的关键词 */
+const ASK_BOT = '@ai-reviewer';
+/**
+ * 处理 PR 审查评论回复事件的主函数
+ *
+ * @param heavyBot - 重量级 AI 模型（用于生成高质量回复）
+ * @param options - 全局配置选项
+ * @param prompts - 提示词模板
+ */
+const handleReviewComment = async (heavyBot, options, prompts) => {
+    const commenter = new lib_commenter/* Commenter */.Es();
+    const inputs = new lib_inputs/* Inputs */.k();
+    // ===== 第一步：验证事件类型 =====
+    if (review_comment_context.eventName !== 'pull_request_review_comment') {
+        (0,core.warning)(`Skipped: ${review_comment_context.eventName} is not a pull_request_review_comment event`);
+        return;
+    }
+    if (!review_comment_context.payload) {
+        (0,core.warning)(`Skipped: ${review_comment_context.eventName} event is missing payload`);
+        return;
+    }
+    const comment = review_comment_context.payload.comment;
+    if (comment == null) {
+        (0,core.warning)(`Skipped: ${review_comment_context.eventName} event is missing comment`);
+        return;
+    }
+    if (review_comment_context.payload.pull_request == null ||
+        review_comment_context.payload.repository == null) {
+        (0,core.warning)(`Skipped: ${review_comment_context.eventName} event is missing pull_request`);
+        return;
+    }
+    // 填充 PR 基本信息到 inputs
+    inputs.title = review_comment_context.payload.pull_request.title;
+    if (review_comment_context.payload.pull_request.body) {
+        inputs.description = commenter.getDescription(review_comment_context.payload.pull_request.body);
+    }
+    // ===== 第二步：只处理新创建的评论 =====
+    if (review_comment_context.payload.action !== 'created') {
+        (0,core.warning)(`Skipped: ${review_comment_context.eventName} event is not created`);
+        return;
+    }
+    // ===== 第三步：过滤 bot 自身的评论（避免自我回复循环） =====
+    if (!comment.body.includes(lib_commenter/* COMMENT_TAG */.Rs) &&
+        !comment.body.includes(lib_commenter/* COMMENT_REPLY_TAG */.aD)) {
+        const pullNumber = review_comment_context.payload.pull_request.number;
+        // 填充评论相关信息
+        inputs.comment = `${comment.user.login}: ${comment.body}`;
+        inputs.diff = comment.diff_hunk; // 评论所在的 diff 片段
+        inputs.filename = comment.path; // 评论所在的文件路径
+        // 获取完整的评论对话链
+        const { chain: commentChain, topLevelComment } = await commenter.getCommentChain(pullNumber, comment);
+        if (!topLevelComment) {
+            (0,core.warning)('Failed to find the top-level comment to reply to');
+            return;
+        }
+        inputs.commentChain = commentChain;
+        // ===== 第四步：判断是否需要 AI 回复 =====
+        // 条件：对话链中已有 bot 评论（COMMENT_TAG/COMMENT_REPLY_TAG），
+        //       或用户主动 @ai-reviewer
+        if (commentChain.includes(lib_commenter/* COMMENT_TAG */.Rs) ||
+            commentChain.includes(lib_commenter/* COMMENT_REPLY_TAG */.aD) ||
+            comment.body.includes(ASK_BOT)) {
+            // ===== 第五步：收集文件 diff 上下文 =====
+            let fileDiff = '';
+            try {
+                // 获取文件的完整 diff（base 到 head 的对比）
+                const diffAll = await octokit/* octokit.repos.compareCommits */.K.repos.compareCommits({
+                    owner: repo.owner,
+                    repo: repo.repo,
+                    base: review_comment_context.payload.pull_request.base.sha,
+                    head: review_comment_context.payload.pull_request.head.sha
+                });
+                if (diffAll.data) {
+                    const files = diffAll.data.files;
+                    if (files != null) {
+                        const file = files.find(f => f.filename === comment.path);
+                        if (file != null && file.patch) {
+                            fileDiff = file.patch;
+                        }
+                    }
+                }
+            }
+            catch (error) {
+                (0,core.warning)(`Failed to get file diff: ${error}, skipping.`);
+            }
+            // 如果评论中没有 diff 片段，使用完整的文件 diff 替代
+            if (inputs.diff.length === 0) {
+                if (fileDiff.length > 0) {
+                    inputs.diff = fileDiff;
+                    fileDiff = '';
+                }
+                else {
+                    await commenter.reviewCommentReply(pullNumber, topLevelComment, 'Cannot reply to this comment as diff could not be found.');
+                    return;
+                }
+            }
+            // ===== 第六步：在 token 限制内打包上下文 =====
+            let tokens = (0,tokenizer/* getTokenCount */.V)(prompts.renderComment(inputs));
+            // 检查基础提示词是否已超出 token 限制
+            if (tokens > options.heavyTokenLimits.requestTokens) {
+                await commenter.reviewCommentReply(pullNumber, topLevelComment, 'Cannot reply to this comment as diff being commented is too large and exceeds the token limit.');
+                return;
+            }
+            // 尝试将完整文件 diff 加入上下文（如果 token 预算允许）
+            if (fileDiff.length > 0) {
+                const fileDiffCount = prompts.comment.split('$file_diff').length - 1;
+                const fileDiffTokens = (0,tokenizer/* getTokenCount */.V)(fileDiff);
+                if (fileDiffCount > 0 &&
+                    tokens + fileDiffTokens * fileDiffCount <=
+                        options.heavyTokenLimits.requestTokens) {
+                    tokens += fileDiffTokens * fileDiffCount;
+                    inputs.fileDiff = fileDiff;
+                }
+            }
+            // 尝试将 PR 精简摘要加入上下文（如果 token 预算允许）
+            const summary = await commenter.findCommentWithTag(lib_commenter/* SUMMARIZE_TAG */.Rp, pullNumber);
+            if (summary) {
+                const shortSummary = commenter.getShortSummary(summary.body);
+                const shortSummaryTokens = (0,tokenizer/* getTokenCount */.V)(shortSummary);
+                if (tokens + shortSummaryTokens <=
+                    options.heavyTokenLimits.requestTokens) {
+                    tokens += shortSummaryTokens;
+                    inputs.shortSummary = shortSummary;
+                }
+            }
+            // ===== 第七步：调用 AI 生成回复并发布 =====
+            const [reply] = await heavyBot.chat(prompts.renderComment(inputs), {});
+            await commenter.reviewCommentReply(pullNumber, topLevelComment, reply);
+        }
+    }
+    else {
+        (0,core.info)(`Skipped: ${review_comment_context.eventName} event is from the bot itself`);
+    }
+};
+
+;// CONCATENATED MODULE: ./lib/command-handler.js
+/**
+ * command-handler.ts - 评论事件的顶层入口
+ *
+ * 被 main.ts 调用，用于处理 issue_comment 与 pull_request_review_comment 事件。
+ *
+ * 职责:
+ *   1. 启动命令注册表（只需一次）
+ *   2. 调用 dispatcher 处理事件
+ *   3. 当 dispatcher 判定为 "fallback_conversation" 时，
+ *      透传给既有的 handleReviewComment（对话式追问），
+ *      但仅当事件是 pull_request_review_comment 时才透传
+ *      （issue_comment 场景的对话由迭代二成员 D 后续扩展）。
+ */
+
+// eslint-disable-next-line camelcase
+
+
+
+
+// eslint-disable-next-line camelcase
+const command_handler_context = github.context;
+async function handleCommentEvent(deps) {
+    (0,bootstrap/* bootstrapCommands */.K)();
+    const outcome = await dispatchCommentEvent({ options: deps.options });
+    (0,core.info)(`commentEvent dispatcher outcome: ${JSON.stringify(outcome)}`);
+    if (outcome.kind === 'fallback_conversation') {
+        // 既有对话式追问仅支持 pull_request_review_comment
+        if (command_handler_context.eventName === 'pull_request_review_comment') {
+            await handleReviewComment(deps.heavyBot, deps.options, deps.prompts);
+        }
+        else {
+            (0,core.info)('commentEvent: conversation fallback skipped (issue_comment 对话由后续迭代支持)');
+        }
+    }
+}
+
+
+/***/ }),
+
+/***/ 6806:
+/***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
+
+"use strict";
+
+// EXPORTS
+__nccwpck_require__.d(__webpack_exports__, {
+  "K": () => (/* binding */ bootstrapCommands)
+});
+
+// UNUSED EXPORTS: _resetBootstrap
+
+// EXTERNAL MODULE: ./node_modules/.pnpm/@actions+core@1.11.1/node_modules/@actions/core/lib/core.js
+var core = __nccwpck_require__(1078);
+// EXTERNAL MODULE: ./lib/commands/registry.js
+var registry = __nccwpck_require__(953);
+;// CONCATENATED MODULE: ./lib/commands/handlers/help.js
+/**
+ * commands/handlers/help.ts - help 命令的参考实现（成员 A 交付）
+ *
+ * 功能:
+ * - 自动聚合 registry 中已注册的所有命令
+ * - 按注册顺序输出命令名、描述、用法
+ * - 提供 buildHelpMessage() 纯函数，便于单测
+ */
+
+
+/**
+ * 纯函数：根据命令列表生成 help Markdown。
+ * 提取出来便于单元测试（不依赖 registry 单例）。
+ */
+function buildHelpMessage(commands) {
+    const lines = [];
+    lines.push('## 支持的命令');
+    lines.push('');
+    lines.push('| 命令 | 描述 | 最低权限 |');
+    lines.push('| :--- | :--- | :------- |');
+    // help 自身也要出现在列表里，但排在最后
+    const ordered = [...commands].sort((a, b) => {
+        if (a.name === 'help')
+            return 1;
+        if (b.name === 'help')
+            return -1;
+        return 0;
+    });
+    for (const c of ordered) {
+        const perm = c.minPermission ?? 'write';
+        const usage = c.usage ?? `@ai-reviewer ${c.name}`;
+        lines.push(`| \`${usage}\` | ${c.description} | \`${perm}\` |`);
+    }
+    if (ordered.some(c => (c.aliases?.length ?? 0) > 0)) {
+        lines.push('');
+        lines.push('### 别名');
+        for (const c of ordered) {
+            if (c.aliases && c.aliases.length > 0) {
+                lines.push(`- \`${c.name}\` → ${c.aliases.map(a => `\`${a}\``).join(', ')}`);
+            }
+        }
+    }
+    lines.push('');
+    lines.push(`> ${(0,core.getInput)('bot_icon') || '🤖'} Bot 同时支持 \`@ai-reviewer\` 与 \`@codesentinel\` 两个 mention。`);
+    return lines.join('\n');
+}
+const helpHandler = {
+    name: 'help',
+    description: '显示所有支持的命令及用法',
+    usage: '@ai-reviewer help',
+    needsAck: false,
+    minPermission: 'read',
+    async execute(_ctx) {
+        const cmds = (0,registry/* getRegistry */.JH)().listCommands();
+        return { message: buildHelpMessage(cmds) };
+    }
+};
+
+;// CONCATENATED MODULE: ./lib/commands/handlers/stubs.js
+function notImplemented(name) {
+    return async (_ctx) => {
+        // 调度器会把抛出的标记型错误转成 NOT_IMPLEMENTED 反馈
+        const e = new Error(`Command not implemented: ${name}`);
+        e.code = 'NOT_IMPLEMENTED';
+        throw e;
+    };
+}
+/** 成员 B */
+const resolveStub = {
+    name: 'resolve',
+    description: '批量将所有 CodeSentinel 审查意见标记为已解决',
+    usage: '@ai-reviewer resolve',
+    needsAck: true,
+    minPermission: 'write',
+    execute: notImplemented('resolve')
+};
+/** 成员 C */
+const reviewStub = {
+    name: 'review',
+    description: '触发增量审查（仅审查自上次审查以来的新增变更）',
+    usage: '@ai-reviewer review',
+    needsAck: true,
+    minPermission: 'write',
+    execute: notImplemented('review')
+};
+const fullReviewStub = {
+    name: 'full review',
+    description: '触发全量审查（从 base 到 HEAD 的完整 diff）',
+    usage: '@ai-reviewer full review',
+    needsAck: true,
+    minPermission: 'write',
+    execute: notImplemented('full review')
+};
+const summaryStub = {
+    name: 'summary',
+    description: '基于当前最新代码重新生成 PR 摘要',
+    usage: '@ai-reviewer summary',
+    needsAck: true,
+    minPermission: 'write',
+    execute: notImplemented('summary')
+};
+const pauseStub = {
+    name: 'pause',
+    description: '暂停对当前 PR 的自动审查',
+    usage: '@ai-reviewer pause',
+    needsAck: false,
+    minPermission: 'write',
+    execute: notImplemented('pause')
+};
+const resumeStub = {
+    name: 'resume',
+    description: '恢复对当前 PR 的自动审查',
+    usage: '@ai-reviewer resume',
+    needsAck: false,
+    minPermission: 'write',
+    execute: notImplemented('resume')
+};
+const configurationStub = {
+    name: 'configuration',
+    description: '显示当前仓库的审查配置',
+    usage: '@ai-reviewer configuration',
+    needsAck: false,
+    minPermission: 'read',
+    execute: notImplemented('configuration')
+};
+const ALL_STUBS = [
+    reviewStub,
+    fullReviewStub,
+    resolveStub,
+    summaryStub,
+    pauseStub,
+    resumeStub,
+    configurationStub
+];
+
+;// CONCATENATED MODULE: ./lib/commands/bootstrap.js
+/**
+ * commands/bootstrap.ts - 命令框架启动注册
+ *
+ * 统一在应用启动时把所有 handler 注册到 registry。
+ * 后续 B/C/D 接入真实 handler 时，将对应的 stub 替换为正式实现即可。
+ *
+ * 注意: 注册表是单例，且 register 在重复注册时抛异常。
+ * 因此 bootstrap 必须保证只被调用一次（用模块级 flag 保护）。
+ */
+
+
+
+let bootstrapped = false;
+function bootstrapCommands() {
+    if (bootstrapped)
+        return;
+    const reg = (0,registry/* getRegistry */.JH)();
+    reg.register(helpHandler);
+    for (const h of ALL_STUBS) {
+        reg.register(h);
+    }
+    bootstrapped = true;
+}
+/** 仅供测试: 清空注册表并允许再次 bootstrap */
+function _resetBootstrap() {
+    getRegistry()._reset();
+    bootstrapped = false;
+}
+
+
+/***/ }),
+
+/***/ 6360:
+/***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
+
+"use strict";
+
+// EXPORTS
+__nccwpck_require__.d(__webpack_exports__, {
+  "G": () => (/* binding */ tryEarlyReaction)
+});
+
+// EXTERNAL MODULE: ./node_modules/.pnpm/@actions+core@1.11.1/node_modules/@actions/core/lib/core.js
+var core = __nccwpck_require__(1078);
+// EXTERNAL MODULE: ./node_modules/.pnpm/@actions+github@5.1.1/node_modules/@actions/github/lib/github.js
+var github = __nccwpck_require__(3695);
+// EXTERNAL MODULE: ./lib/commands/bootstrap.js + 2 modules
+var bootstrap = __nccwpck_require__(6806);
+// EXTERNAL MODULE: ./lib/commands/registry.js
+var commands_registry = __nccwpck_require__(953);
+// EXTERNAL MODULE: ./lib/commands/parser.js
+var parser = __nccwpck_require__(5964);
+// EXTERNAL MODULE: ./lib/octokit.js
+var octokit = __nccwpck_require__(2247);
+;// CONCATENATED MODULE: ./lib/commands/reaction.js
+/**
+ * commands/reaction.ts - 命令 ACK 表情反应
+ *
+ * 当 dispatcher 识别到 `@bot <cmd>` 时，会在用户原评论上打一个表情反应
+ * （默认 👀），以在正文回复之前先给一个可见的 "收到" 信号。
+ *
+ * 设计要点：
+ * - content 值来自 action input `command_ack_reaction`，通过 options 透传
+ * - 空字符串 / 'off' / 'none' 视为禁用
+ * - 非法值会被丢弃并给 warning，不阻塞命令执行
+ * - issue_comment 与 pull_request_review_comment 走不同 endpoint
+ * - 任何失败都只打 warning，不让命令主流程受影响
+ */
+
+
+const VALID_REACTIONS = [
+    '+1',
+    '-1',
+    'laugh',
+    'confused',
+    'heart',
+    'hooray',
+    'rocket',
+    'eyes'
+];
+/**
+ * 把 raw 配置归一化为合法的 ReactionContent；不合法或禁用时返回 null。
+ */
+function normalizeReaction(raw) {
+    if (raw == null)
+        return null;
+    const trimmed = raw.trim().toLowerCase();
+    if (trimmed === '' || trimmed === 'off' || trimmed === 'none' || trimmed === 'false') {
+        return null;
+    }
+    if (VALID_REACTIONS.includes(trimmed)) {
+        return trimmed;
+    }
+    (0,core.warning)(`command_ack_reaction "${raw}" is not a valid GitHub reaction ` +
+        `(expected one of ${VALID_REACTIONS.join(', ')}); ACK reaction will be skipped.`);
+    return null;
+}
+/**
+ * 在触发命令的用户评论上加表情反应。失败只 warning，不抛错。
+ */
+async function addAckReaction(params) {
+    const content = normalizeReaction(params.rawReaction);
+    if (content == null) {
+        return;
+    }
+    try {
+        if (params.eventName === 'pull_request_review_comment') {
+            await octokit/* octokit.reactions.createForPullRequestReviewComment */.K.reactions.createForPullRequestReviewComment({
+                owner: params.owner,
+                repo: params.repo,
+                comment_id: params.commentId,
+                content
+            });
+        }
+        else {
+            await octokit/* octokit.reactions.createForIssueComment */.K.reactions.createForIssueComment({
+                owner: params.owner,
+                repo: params.repo,
+                comment_id: params.commentId,
+                content
+            });
+        }
+        (0,core.info)(`ack reaction "${content}" added on ${params.eventName} commentId=${params.commentId}`);
+    }
+    catch (e) {
+        (0,core.warning)(`addAckReaction failed (content=${content}, commentId=${params.commentId}): ${String(e)}`);
+    }
+}
+
+;// CONCATENATED MODULE: ./lib/commands/early-reaction.js
+/**
+ * commands/early-reaction.ts - 评论事件的提前 ACK 表情
+ *
+ * 在 main.ts 中、Bot 初始化之前调用。目的是在 Actions 冷启动后尽快
+ * 给用户评论打一个表情反应（默认 👀），让用户知道"已收到"。
+ *
+ * 只做三件事：
+ *   1. 校验事件 + payload
+ *   2. 解析评论是否含 @bot 命令
+ *   3. 是 → 打表情；不是 → 跳过
+ *
+ * 不做 Bot 初始化、权限查询、幂等检查等重操作。
+ */
+
+// eslint-disable-next-line camelcase
+
+
+
+
+
+// eslint-disable-next-line camelcase
+const context = github.context;
+/**
+ * 尝试在 Bot 初始化前尽快给用户评论打 ACK 表情。
+ * 失败或非命令场景下静默返回，不影响后续流程。
+ */
+async function tryEarlyReaction(rawReaction) {
+    try {
+        const eventName = context.eventName;
+        if (eventName !== 'issue_comment' &&
+            eventName !== 'pull_request_review_comment') {
+            return;
+        }
+        const payload = context.payload;
+        if (!payload || payload.action !== 'created')
+            return;
+        let comment;
+        if (eventName === 'issue_comment') {
+            if (!payload.issue?.pull_request)
+                return;
+            comment = payload.comment;
+        }
+        else {
+            if (!payload.pull_request)
+                return;
+            comment = payload.comment;
+        }
+        if (!comment || typeof comment.body !== 'string')
+            return;
+        const actorIsBot = comment.user?.type === 'Bot' || /\[bot\]$/i.test(comment.user?.login ?? '');
+        if (actorIsBot)
+            return;
+        (0,bootstrap/* bootstrapCommands */.K)();
+        const registry = (0,commands_registry/* getRegistry */.JH)();
+        const outcome = (0,parser/* parse */.Qc)(comment.body, {
+            registeredCommands: registry.getRegisteredNames(),
+            botMentions: parser/* DEFAULT_BOT_MENTIONS */.gC
+        });
+        if (outcome.kind !== 'command')
+            return;
+        const owner = context.repo.owner;
+        const repo = context.repo.repo;
+        await addAckReaction({
+            owner,
+            repo,
+            commentId: comment.id,
+            eventName,
+            rawReaction
+        });
+        (0,core.info)(`early ack reaction sent for commentId=${comment.id}`);
+    }
+    catch (e) {
+        (0,core.info)(`early ack reaction skipped: ${String(e)}`);
+    }
+}
+
+
+/***/ }),
+
+/***/ 5964:
+/***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
+
+"use strict";
+/* harmony export */ __nccwpck_require__.d(__webpack_exports__, {
+/* harmony export */   "Qc": () => (/* binding */ parse),
+/* harmony export */   "gC": () => (/* binding */ DEFAULT_BOT_MENTIONS)
+/* harmony export */ });
+/* unused harmony exports MAX_COMMAND_LINE_LENGTH, MAX_ARG_LENGTH, MAX_ARGS_COUNT */
+/** 默认支持的 bot mention 别名（小写，已带 @） */
+const DEFAULT_BOT_MENTIONS = ['@ai-reviewer', '@codesentinel'];
+/** 命令行长度上限 */
+const MAX_COMMAND_LINE_LENGTH = 512;
+/** 单个 arg 长度上限 */
+const MAX_ARG_LENGTH = 128;
+/** 参数个数上限 */
+const MAX_ARGS_COUNT = 16;
+/** 允许的参数字符集 */
+const SAFE_TOKEN_RE = /^[A-Za-z0-9_\-./:=]+$/;
+/** shell 元字符黑名单（补充检查，用于生成更明确的错误信息） */
+const SHELL_METACHARS_RE = /[`$(){}|&;<>\\'"]/;
+/**
+ * 主解析入口
+ */
+function parse(body, opts) {
+    if (typeof body !== 'string' || body.length === 0) {
+        return { kind: 'none' };
+    }
+    const mentions = (opts.botMentions ?? DEFAULT_BOT_MENTIONS).map(m => m.toLowerCase());
+    // 1. 找到第一个 bot mention 出现的位置（忽略大小写）
+    const lower = body.toLowerCase();
+    let mentionIdx = -1;
+    let mentionLen = 0;
+    for (const m of mentions) {
+        const idx = lower.indexOf(m);
+        if (idx !== -1 && (mentionIdx === -1 || idx < mentionIdx)) {
+            // 要求 mention 前是行首/空白/标点，避免匹配到 foo@ai-reviewer
+            const prev = idx === 0 ? ' ' : body[idx - 1];
+            if (/\s|[,.;:，。；：]/.test(prev) || idx === 0) {
+                mentionIdx = idx;
+                mentionLen = m.length;
+            }
+        }
+    }
+    if (mentionIdx === -1) {
+        return { kind: 'none' };
+    }
+    // 2. 提取 mention 之后的剩余内容
+    let rest = body.slice(mentionIdx + mentionLen);
+    // 允许 mention 后紧跟标点分隔符
+    rest = rest.replace(/^[,:;，：；]+/, '');
+    // 按第一个换行切分：第一行是命令体，其余是 rawAfter
+    const firstNewline = rest.indexOf('\n');
+    const firstLineRaw = firstNewline === -1 ? rest : rest.slice(0, firstNewline);
+    const rawAfter = firstNewline === -1 ? '' : rest.slice(firstNewline + 1).trim();
+    // 3. 命令行长度校验
+    if (firstLineRaw.length > MAX_COMMAND_LINE_LENGTH) {
+        return {
+            kind: 'command',
+            error: {
+                code: 'INVALID_ARGS',
+                detail: `命令长度超过上限 (${MAX_COMMAND_LINE_LENGTH})`
+            }
+        };
+    }
+    const firstLine = firstLineRaw.trim();
+    if (firstLine.length === 0) {
+        // 仅 @bot 单独出现 → 视为对话触发
+        return { kind: 'conversation' };
+    }
+    // 4. 分词（空白分隔）
+    const tokens = firstLine.split(/\s+/);
+    // 5. 尝试匹配命令名（最长前缀匹配，最多看前 3 个 token）
+    const matched = matchCommandName(tokens, opts.registeredCommands);
+    if (!matched) {
+        // 未命中命令但有 @bot → 交给对话 fallback
+        return { kind: 'conversation' };
+    }
+    const { name, consumed } = matched;
+    const argTokens = tokens.slice(consumed);
+    // 6. 参数数量校验
+    if (argTokens.length > MAX_ARGS_COUNT) {
+        return {
+            kind: 'command',
+            error: {
+                code: 'INVALID_ARGS',
+                detail: `参数个数超过上限 (${MAX_ARGS_COUNT})`
+            },
+            command: { name, raw: firstLine, args: [], kv: {}, rawAfter }
+        };
+    }
+    // 7. 参数字符集校验
+    for (const t of argTokens) {
+        if (t.length > MAX_ARG_LENGTH) {
+            return {
+                kind: 'command',
+                error: {
+                    code: 'INVALID_ARGS',
+                    detail: `参数过长: \`${truncate(t, 32)}\``
+                },
+                command: { name, raw: firstLine, args: [], kv: {}, rawAfter }
+            };
+        }
+        if (SHELL_METACHARS_RE.test(t)) {
+            return {
+                kind: 'command',
+                error: {
+                    code: 'INVALID_ARGS',
+                    detail: `参数包含非法字符: \`${truncate(t, 32)}\``
+                },
+                command: { name, raw: firstLine, args: [], kv: {}, rawAfter }
+            };
+        }
+        if (!SAFE_TOKEN_RE.test(t)) {
+            return {
+                kind: 'command',
+                error: {
+                    code: 'INVALID_ARGS',
+                    detail: `参数包含不允许的字符: \`${truncate(t, 32)}\``
+                },
+                command: { name, raw: firstLine, args: [], kv: {}, rawAfter }
+            };
+        }
+    }
+    // 8. 拆分 kv
+    const args = [];
+    const kv = {};
+    for (const t of argTokens) {
+        const eq = t.indexOf('=');
+        if (eq > 0 && eq < t.length - 1) {
+            const k = t.slice(0, eq);
+            const v = t.slice(eq + 1);
+            kv[k] = v;
+        }
+        args.push(t);
+    }
+    const command = {
+        name,
+        raw: firstLine,
+        args,
+        kv,
+        rawAfter
+    };
+    return { kind: 'command', command };
+}
+/**
+ * 在已注册命令集合中对 token 序列做最长前缀匹配
+ *
+ * 例如: registered = {"review", "full review"}
+ * tokens = ["full", "review"] → 匹配到 "full review"
+ * tokens = ["review"]         → 匹配到 "review"
+ * tokens = ["full"]           → 不匹配（full 未注册）→ 返回 null
+ */
+function matchCommandName(tokens, registered) {
+    const maxDepth = Math.min(tokens.length, 3);
+    // 从最长开始尝试
+    for (let depth = maxDepth; depth >= 1; depth--) {
+        const candidate = tokens
+            .slice(0, depth)
+            .map(t => t.toLowerCase())
+            .join(' ');
+        if (registered.has(candidate)) {
+            return { name: candidate, consumed: depth };
+        }
+    }
+    return null;
+}
+function truncate(s, n) {
+    return s.length > n ? `${s.slice(0, n)}...` : s;
+}
+
+
+/***/ }),
+
+/***/ 953:
+/***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
+
+"use strict";
+/* harmony export */ __nccwpck_require__.d(__webpack_exports__, {
+/* harmony export */   "JH": () => (/* binding */ getRegistry)
+/* harmony export */ });
+/* unused harmony exports registerCommand, CommandRegistry */
+class CommandRegistry {
+    handlers = new Map();
+    /** 规范名 → 注册顺序，help 命令按注册顺序输出 */
+    order = [];
+    // {
+    //   name: "review",
+    //   aliases: ['r', 're']
+    // }
+    // {
+    //   name: 'review',
+    // }
+    register(handler) {
+        const primary = handler.name.toLowerCase();
+        if (this.handlers.has(primary)) {
+            throw new Error(`Command already registered: ${primary}`);
+        }
+        this.handlers.set(primary, handler);
+        this.order.push(primary);
+        for (const alias of handler.aliases ?? []) {
+            const a = alias.toLowerCase();
+            if (this.handlers.has(a)) {
+                throw new Error(`Command alias collides with existing command: ${a}`);
+            }
+            this.handlers.set(a, handler);
+        }
+        console.log('[Registered command]:', handler.name, 'aliases:', handler.aliases ?? []);
+    }
+    get(name) {
+        return this.handlers.get(name.toLowerCase());
+    }
+    has(name) {
+        return this.handlers.has(name.toLowerCase());
+    }
+    /** 仅返回主名 + 别名，用于 parser 命中检测 */
+    getRegisteredNames() {
+        return new Set(this.handlers.keys());
+    }
+    /** 按注册顺序返回所有主命令（不含别名），供 help 使用 */
+    listCommands() {
+        return this.order
+            .map(n => this.handlers.get(n))
+            .filter((h) => h !== undefined);
+    }
+    /** 仅供测试使用 */
+    _reset() {
+        this.handlers.clear();
+        this.order.length = 0;
+    }
+}
+const globalRegistry = new CommandRegistry();
+function registerCommand(handler) {
+    globalRegistry.register(handler);
+}
+function getRegistry() {
+    return globalRegistry;
+}
+
+
+
+/***/ }),
+
 /***/ 4558:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
@@ -9009,8 +10365,8 @@ const context = _actions_github__WEBPACK_IMPORTED_MODULE_1__.context;
 const repo = context.repo;
 // ==================== 标签常量 ====================
 // 这些 HTML 注释标签用于标识和定位 bot 生成的各类评论
-/** 评论顶部的问候语（包含 bot 图标） */
-const COMMENT_GREETING = `${(0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('bot_icon')}   AI Reviewer`;
+/** 评论顶部的问候语（包含 bot 图标 + 可配置名称） */
+const COMMENT_GREETING = `${(0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('bot_icon') || '🤖'}   ${(0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('bot_name') || 'AI Reviewer'}`;
 /** 标识 bot 自动生成的代码审查评论 */
 const COMMENT_TAG = '<!-- This is an auto-generated comment by AI Reviewer -->';
 /** 标识 bot 自动生成的回复评论 */
@@ -9872,11 +11228,12 @@ __nccwpck_require__.a(module, async (__webpack_handle_async_dependencies__, __we
 __nccwpck_require__.r(__webpack_exports__);
 /* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(1078);
 /* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__nccwpck_require__.n(_actions_core__WEBPACK_IMPORTED_MODULE_0__);
-/* harmony import */ var _bot__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(9032);
-/* harmony import */ var _options__WEBPACK_IMPORTED_MODULE_2__ = __nccwpck_require__(5341);
-/* harmony import */ var _prompts__WEBPACK_IMPORTED_MODULE_5__ = __nccwpck_require__(2379);
-/* harmony import */ var _review__WEBPACK_IMPORTED_MODULE_3__ = __nccwpck_require__(6439);
-/* harmony import */ var _review_comment__WEBPACK_IMPORTED_MODULE_4__ = __nccwpck_require__(3458);
+/* harmony import */ var _bot__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(4936);
+/* harmony import */ var _command_handler__WEBPACK_IMPORTED_MODULE_2__ = __nccwpck_require__(1085);
+/* harmony import */ var _commands_early_reaction__WEBPACK_IMPORTED_MODULE_3__ = __nccwpck_require__(6360);
+/* harmony import */ var _options__WEBPACK_IMPORTED_MODULE_4__ = __nccwpck_require__(5341);
+/* harmony import */ var _prompts__WEBPACK_IMPORTED_MODULE_6__ = __nccwpck_require__(2379);
+/* harmony import */ var _review__WEBPACK_IMPORTED_MODULE_5__ = __nccwpck_require__(6439);
 /**
  * main.ts - GitHub Action 入口文件
  *
@@ -9893,18 +11250,24 @@ __nccwpck_require__.r(__webpack_exports__);
 
 
 
+
 async function run() {
     // 从 action.yml 中读取所有配置参数，构建 Options 配置对象
-    const options = new _options__WEBPACK_IMPORTED_MODULE_2__/* .Options */ .Ei((0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('debug'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('disable_review'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('disable_release_notes'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_files'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('review_simple_changes'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('review_comment_lgtm'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getMultilineInput)('path_filters'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('system_message'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_light_model'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_heavy_model'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_model_temperature'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_retries'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_timeout_ms'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_concurrency_limit'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('github_concurrency_limit'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_base_url'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('language'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_dependency_analysis'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_dependency_files'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_web_search'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_shell'));
+    const options = new _options__WEBPACK_IMPORTED_MODULE_4__/* .Options */ .Ei((0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('debug'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('disable_review'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('disable_release_notes'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_files'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('review_simple_changes'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('review_comment_lgtm'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getMultilineInput)('path_filters'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('system_message'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_light_model'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_heavy_model'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_model_temperature'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_retries'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_timeout_ms'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_concurrency_limit'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('github_concurrency_limit'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_base_url'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('language'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_dependency_analysis'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_dependency_files'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_web_search'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_shell'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('command_ack_reaction'));
     // 打印所有配置项，方便调试
     options.print();
+    // 评论事件：在 Bot 初始化前尽快给用户评论打 ACK 表情
+    if (process.env.GITHUB_EVENT_NAME === 'issue_comment' ||
+        process.env.GITHUB_EVENT_NAME === 'pull_request_review_comment') {
+        await (0,_commands_early_reaction__WEBPACK_IMPORTED_MODULE_3__/* .tryEarlyReaction */ .G)(options.commandAckReaction);
+    }
     // 构建提示词模板对象，包含用户自定义的摘要和发布说明提示词
-    const prompts = new _prompts__WEBPACK_IMPORTED_MODULE_5__/* .Prompts */ .j((0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('summarize'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('summarize_release_notes'));
+    const prompts = new _prompts__WEBPACK_IMPORTED_MODULE_6__/* .Prompts */ .j((0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('summarize'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('summarize_release_notes'));
     // 创建两个 Bot 实例：轻量 Bot 用于文件摘要，重量 Bot 用于深度代码审查
     // 初始化轻量模型 Bot（默认 gpt-5.4-nano），用于快速生成文件摘要
     let lightBot = null;
     try {
-        lightBot = new _bot__WEBPACK_IMPORTED_MODULE_1__/* .Bot */ .r(options, new _options__WEBPACK_IMPORTED_MODULE_2__/* .OpenAIOptions */ .i0(options.openaiLightModel, options.lightTokenLimits, false, false));
+        lightBot = new _bot__WEBPACK_IMPORTED_MODULE_1__/* .Bot */ .r(options, new _options__WEBPACK_IMPORTED_MODULE_4__/* .OpenAIOptions */ .i0(options.openaiLightModel, options.lightTokenLimits, false, false));
     }
     catch (e) {
         (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Skipped: failed to create summary bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`);
@@ -9913,7 +11276,7 @@ async function run() {
     // 初始化重量模型 Bot（默认 gpt-5.4-mini），用于深度代码审查和最终摘要生成
     let heavyBot = null;
     try {
-        heavyBot = new _bot__WEBPACK_IMPORTED_MODULE_1__/* .Bot */ .r(options, new _options__WEBPACK_IMPORTED_MODULE_2__/* .OpenAIOptions */ .i0(options.openaiHeavyModel, options.heavyTokenLimits, options.enableWebSearch, options.enableShell));
+        heavyBot = new _bot__WEBPACK_IMPORTED_MODULE_1__/* .Bot */ .r(options, new _options__WEBPACK_IMPORTED_MODULE_4__/* .OpenAIOptions */ .i0(options.openaiHeavyModel, options.heavyTokenLimits, options.enableWebSearch, options.enableShell));
     }
     catch (e) {
         (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Skipped: failed to create review bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`);
@@ -9921,14 +11284,17 @@ async function run() {
     }
     try {
         // 根据 GitHub 事件类型分发处理逻辑
+        console.log(`GitHub event: ${process.env.GITHUB_EVENT_NAME}`);
         if (process.env.GITHUB_EVENT_NAME === 'pull_request' ||
             process.env.GITHUB_EVENT_NAME === 'pull_request_target') {
             // PR 事件：执行完整的代码审查流程（摘要 + 逐文件审查）
-            await (0,_review__WEBPACK_IMPORTED_MODULE_3__/* .codeReview */ .z)(lightBot, heavyBot, options, prompts);
+            await (0,_review__WEBPACK_IMPORTED_MODULE_5__/* .codeReview */ .z)(lightBot, heavyBot, options, prompts);
         }
-        else if (process.env.GITHUB_EVENT_NAME === 'pull_request_review_comment') {
-            // 审查评论事件：处理用户在 review comment 中 @ai-reviewer 的回复
-            await (0,_review_comment__WEBPACK_IMPORTED_MODULE_4__/* .handleReviewComment */ .V)(heavyBot, options, prompts);
+        else if (process.env.GITHUB_EVENT_NAME === 'pull_request_review_comment' ||
+            process.env.GITHUB_EVENT_NAME === 'issue_comment') {
+            // 评论事件（顶层 issue_comment 或 review comment）
+            // 先走命令调度，未命中命令时再透传给既有的对话式追问
+            await (0,_command_handler__WEBPACK_IMPORTED_MODULE_2__/* .handleCommentEvent */ ._)({ heavyBot, lightBot, options, prompts });
         }
         else {
             (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)('Skipped: this action only works on push events or pull_request');
@@ -12154,7 +13520,8 @@ class Options {
     maxDependencyFiles; // 依赖分析最大扫描文件数
     enableWebSearch; // 是否启用 web search（用于验证 API）
     enableShell; // 是否启用 shell
-    constructor(debug, disableReview, disableReleaseNotes, maxFiles = '0', reviewSimpleChanges = false, reviewCommentLGTM = false, pathFilters = null, systemMessage = '', openaiLightModel = 'gpt-5.4-nano', openaiHeavyModel = 'gpt-5.4-mini', openaiModelTemperature = '0.0', openaiRetries = '3', openaiTimeoutMS = '120000', openaiConcurrencyLimit = '6', githubConcurrencyLimit = '6', apiBaseUrl = 'https://api.openai.com/v1', language = 'en-US', enableDependencyAnalysis = true, maxDependencyFiles = '50', enableWebSearch = true, enableShell = true) {
+    commandAckReaction; // 命令识别后在用户评论上打的表情（空/off/none 表示禁用）
+    constructor(debug, disableReview, disableReleaseNotes, maxFiles = '0', reviewSimpleChanges = false, reviewCommentLGTM = false, pathFilters = null, systemMessage = '', openaiLightModel = 'gpt-5.4-nano', openaiHeavyModel = 'gpt-5.4-mini', openaiModelTemperature = '0.0', openaiRetries = '3', openaiTimeoutMS = '120000', openaiConcurrencyLimit = '6', githubConcurrencyLimit = '6', apiBaseUrl = 'https://api.openai.com/v1', language = 'en-US', enableDependencyAnalysis = true, maxDependencyFiles = '50', enableWebSearch = true, enableShell = true, commandAckReaction = 'eyes') {
         this.debug = debug;
         this.disableReview = disableReview;
         this.disableReleaseNotes = disableReleaseNotes;
@@ -12178,6 +13545,7 @@ class Options {
         this.maxDependencyFiles = parseInt(maxDependencyFiles);
         this.enableWebSearch = enableWebSearch;
         this.enableShell = enableShell;
+        this.commandAckReaction = commandAckReaction;
     }
     /** 打印所有配置项到日志，方便调试 */
     print() {
@@ -12204,6 +13572,7 @@ class Options {
         (0,core.info)(`max_dependency_files: ${this.maxDependencyFiles}`);
         (0,core.info)(`enable_web_search: ${this.enableWebSearch}`);
         (0,core.info)(`enable_shell: ${this.enableShell}`);
+        (0,core.info)(`command_ack_reaction: ${this.commandAckReaction}`);
     }
     /**
      * 检查文件路径是否通过过滤规则
@@ -12704,186 +14073,6 @@ use web search to find and reference current documentation.
         return inputs.render(this.reviewFileDiff);
     }
 }
-
-
-/***/ }),
-
-/***/ 3458:
-/***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
-
-"use strict";
-/* harmony export */ __nccwpck_require__.d(__webpack_exports__, {
-/* harmony export */   "V": () => (/* binding */ handleReviewComment)
-/* harmony export */ });
-/* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(1078);
-/* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__nccwpck_require__.n(_actions_core__WEBPACK_IMPORTED_MODULE_0__);
-/* harmony import */ var _actions_github__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(3695);
-/* harmony import */ var _actions_github__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__nccwpck_require__.n(_actions_github__WEBPACK_IMPORTED_MODULE_1__);
-/* harmony import */ var _commenter__WEBPACK_IMPORTED_MODULE_2__ = __nccwpck_require__(4558);
-/* harmony import */ var _inputs__WEBPACK_IMPORTED_MODULE_3__ = __nccwpck_require__(6305);
-/* harmony import */ var _octokit__WEBPACK_IMPORTED_MODULE_4__ = __nccwpck_require__(2247);
-/* harmony import */ var _tokenizer__WEBPACK_IMPORTED_MODULE_5__ = __nccwpck_require__(7525);
-/**
- * review-comment.ts - PR 审查评论回复处理模块
- *
- * 处理 pull_request_review_comment 事件，即用户在 PR 的代码审查评论中发表回复。
- *
- * 触发条件（满足任一）：
- * 1. 评论对话链中已有 bot 的评论（继续对话）
- * 2. 评论内容中 @ai-reviewer（主动召唤 bot）
- *
- * 处理流程：
- * 1. 验证事件类型和 payload 数据
- * 2. 过滤 bot 自身发出的评论（避免自我回复循环）
- * 3. 获取评论对话链上下文
- * 4. 收集文件 diff、PR 摘要等辅助上下文
- * 5. 在 token 限制内打包所有上下文
- * 6. 调用 AI 生成回复并发布
- */
-
-// eslint-disable-next-line camelcase
-
-
-
-
-
-// eslint-disable-next-line camelcase
-const context = _actions_github__WEBPACK_IMPORTED_MODULE_1__.context;
-const repo = context.repo;
-/** 用户在评论中 @ bot 的关键词 */
-const ASK_BOT = '@ai-reviewer';
-/**
- * 处理 PR 审查评论回复事件的主函数
- *
- * @param heavyBot - 重量级 AI 模型（用于生成高质量回复）
- * @param options - 全局配置选项
- * @param prompts - 提示词模板
- */
-const handleReviewComment = async (heavyBot, options, prompts) => {
-    const commenter = new _commenter__WEBPACK_IMPORTED_MODULE_2__/* .Commenter */ .Es();
-    const inputs = new _inputs__WEBPACK_IMPORTED_MODULE_3__/* .Inputs */ .k();
-    // ===== 第一步：验证事件类型 =====
-    if (context.eventName !== 'pull_request_review_comment') {
-        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Skipped: ${context.eventName} is not a pull_request_review_comment event`);
-        return;
-    }
-    if (!context.payload) {
-        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Skipped: ${context.eventName} event is missing payload`);
-        return;
-    }
-    const comment = context.payload.comment;
-    if (comment == null) {
-        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Skipped: ${context.eventName} event is missing comment`);
-        return;
-    }
-    if (context.payload.pull_request == null ||
-        context.payload.repository == null) {
-        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Skipped: ${context.eventName} event is missing pull_request`);
-        return;
-    }
-    // 填充 PR 基本信息到 inputs
-    inputs.title = context.payload.pull_request.title;
-    if (context.payload.pull_request.body) {
-        inputs.description = commenter.getDescription(context.payload.pull_request.body);
-    }
-    // ===== 第二步：只处理新创建的评论 =====
-    if (context.payload.action !== 'created') {
-        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Skipped: ${context.eventName} event is not created`);
-        return;
-    }
-    // ===== 第三步：过滤 bot 自身的评论（避免自我回复循环） =====
-    if (!comment.body.includes(_commenter__WEBPACK_IMPORTED_MODULE_2__/* .COMMENT_TAG */ .Rs) &&
-        !comment.body.includes(_commenter__WEBPACK_IMPORTED_MODULE_2__/* .COMMENT_REPLY_TAG */ .aD)) {
-        const pullNumber = context.payload.pull_request.number;
-        // 填充评论相关信息
-        inputs.comment = `${comment.user.login}: ${comment.body}`;
-        inputs.diff = comment.diff_hunk; // 评论所在的 diff 片段
-        inputs.filename = comment.path; // 评论所在的文件路径
-        // 获取完整的评论对话链
-        const { chain: commentChain, topLevelComment } = await commenter.getCommentChain(pullNumber, comment);
-        if (!topLevelComment) {
-            (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)('Failed to find the top-level comment to reply to');
-            return;
-        }
-        inputs.commentChain = commentChain;
-        // ===== 第四步：判断是否需要 AI 回复 =====
-        // 条件：对话链中已有 bot 评论（COMMENT_TAG/COMMENT_REPLY_TAG），
-        //       或用户主动 @ai-reviewer
-        if (commentChain.includes(_commenter__WEBPACK_IMPORTED_MODULE_2__/* .COMMENT_TAG */ .Rs) ||
-            commentChain.includes(_commenter__WEBPACK_IMPORTED_MODULE_2__/* .COMMENT_REPLY_TAG */ .aD) ||
-            comment.body.includes(ASK_BOT)) {
-            // ===== 第五步：收集文件 diff 上下文 =====
-            let fileDiff = '';
-            try {
-                // 获取文件的完整 diff（base 到 head 的对比）
-                const diffAll = await _octokit__WEBPACK_IMPORTED_MODULE_4__/* .octokit.repos.compareCommits */ .K.repos.compareCommits({
-                    owner: repo.owner,
-                    repo: repo.repo,
-                    base: context.payload.pull_request.base.sha,
-                    head: context.payload.pull_request.head.sha
-                });
-                if (diffAll.data) {
-                    const files = diffAll.data.files;
-                    if (files != null) {
-                        const file = files.find(f => f.filename === comment.path);
-                        if (file != null && file.patch) {
-                            fileDiff = file.patch;
-                        }
-                    }
-                }
-            }
-            catch (error) {
-                (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Failed to get file diff: ${error}, skipping.`);
-            }
-            // 如果评论中没有 diff 片段，使用完整的文件 diff 替代
-            if (inputs.diff.length === 0) {
-                if (fileDiff.length > 0) {
-                    inputs.diff = fileDiff;
-                    fileDiff = '';
-                }
-                else {
-                    await commenter.reviewCommentReply(pullNumber, topLevelComment, 'Cannot reply to this comment as diff could not be found.');
-                    return;
-                }
-            }
-            // ===== 第六步：在 token 限制内打包上下文 =====
-            let tokens = (0,_tokenizer__WEBPACK_IMPORTED_MODULE_5__/* .getTokenCount */ .V)(prompts.renderComment(inputs));
-            // 检查基础提示词是否已超出 token 限制
-            if (tokens > options.heavyTokenLimits.requestTokens) {
-                await commenter.reviewCommentReply(pullNumber, topLevelComment, 'Cannot reply to this comment as diff being commented is too large and exceeds the token limit.');
-                return;
-            }
-            // 尝试将完整文件 diff 加入上下文（如果 token 预算允许）
-            if (fileDiff.length > 0) {
-                const fileDiffCount = prompts.comment.split('$file_diff').length - 1;
-                const fileDiffTokens = (0,_tokenizer__WEBPACK_IMPORTED_MODULE_5__/* .getTokenCount */ .V)(fileDiff);
-                if (fileDiffCount > 0 &&
-                    tokens + fileDiffTokens * fileDiffCount <=
-                        options.heavyTokenLimits.requestTokens) {
-                    tokens += fileDiffTokens * fileDiffCount;
-                    inputs.fileDiff = fileDiff;
-                }
-            }
-            // 尝试将 PR 精简摘要加入上下文（如果 token 预算允许）
-            const summary = await commenter.findCommentWithTag(_commenter__WEBPACK_IMPORTED_MODULE_2__/* .SUMMARIZE_TAG */ .Rp, pullNumber);
-            if (summary) {
-                const shortSummary = commenter.getShortSummary(summary.body);
-                const shortSummaryTokens = (0,_tokenizer__WEBPACK_IMPORTED_MODULE_5__/* .getTokenCount */ .V)(shortSummary);
-                if (tokens + shortSummaryTokens <=
-                    options.heavyTokenLimits.requestTokens) {
-                    tokens += shortSummaryTokens;
-                    inputs.shortSummary = shortSummary;
-                }
-            }
-            // ===== 第七步：调用 AI 生成回复并发布 =====
-            const [reply] = await heavyBot.chat(prompts.renderComment(inputs), {});
-            await commenter.reviewCommentReply(pullNumber, topLevelComment, reply);
-        }
-    }
-    else {
-        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`Skipped: ${context.eventName} event is from the bot itself`);
-    }
-};
 
 
 /***/ }),
@@ -15125,6 +16314,7 @@ ${filename}: ${summary}
     if (summarizeFinalResponse === '') {
         (0,core.info)('summarize: nothing obtained from openai');
     }
+    const botName = (0,core.getInput)('bot_name') || 'AI Reviewer';
     // 生成发布说明并写入 PR 描述
     if (options.disableReleaseNotes === false) {
         const [releaseNotesResponse] = await heavyBot.chat(prompts.renderSummarizeReleaseNotes(inputs), {});
@@ -15132,7 +16322,7 @@ ${filename}: ${summary}
             (0,core.info)('release notes: nothing obtained from openai');
         }
         else {
-            let message = '### Summary by AI Reviewer\n\n';
+            let message = `### Summary by ${botName}\n\n`;
             message += releaseNotesResponse;
             try {
                 await commenter.updateDescription(review_context.payload.pull_request.number, message);
@@ -15157,9 +16347,9 @@ ${dependencyContext != null ? `\n${formatDependencySummary(dependencyContext)}` 
 ---
 
 <details>
-<summary>About AI Reviewer</summary>
+<summary>About ${botName}</summary>
 
-AI Reviewer is an AI-powered code review tool that helps improve code quality.
+${botName} is an AI-powered code review tool that helps improve code quality.
 
 </details>
 `;
@@ -15402,7 +16592,7 @@ ${reviewsSkipped.length > 0
 <details>
 <summary>Tips</summary>
 
-### Chat with AI Reviewer Bot (\`@ai-reviewer\`)
+### Chat with ${botName} Bot (\`@ai-reviewer\`)
 - Reply on review comments left by this bot to ask follow-up questions. A review comment is a comment on a diff or a file.
 - Invite the bot into a review comment chain by tagging \`@ai-reviewer\` in a reply.
 

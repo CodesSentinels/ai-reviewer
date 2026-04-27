@@ -152,13 +152,15 @@ inputs:
     required: false
     description:
       'Model to use for simple tasks like summarizing diff on a file.
-      Recommended: gpt-5.4-nano (fastest, cheapest, 1M context, 32K output, supports local_shell).'
+      Recommended: gpt-5.4-nano (fastest, cheapest, 1M context, 32K output,
+      supports local_shell).'
     default: 'gpt-5.4-nano'
   openai_heavy_model:
     required: false
     description:
       'Model to use for complex tasks such as code reviews. Recommended:
-      gpt-5.4-mini (high intelligence, 1M context, 32K output, supports local_shell).'
+      gpt-5.4-mini (high intelligence, 1M context, 32K output, supports
+      local_shell).'
     default: 'gpt-5.4-mini'
   openai_model_temperature:
     required: false
@@ -242,9 +244,17 @@ inputs:
     required: false
     description:
       'Enable local shell for the heavy review model. When enabled, the action
-      executes model-requested shell commands on the runner and sends the
-      output back to the model.'
+      executes model-requested shell commands on the runner and sends the output
+      back to the model.'
     default: 'true'
+  command_ack_reaction:
+    required: false
+    description:
+      'Reaction emoji to add on the user comment as soon as a bot command is
+      recognized (acknowledges receipt before any reply comment is posted).
+      Valid values: +1, -1, laugh, confused, heart, hooray, rocket, eyes. Leave
+      empty (or set to "off" / "none") to disable.'
+    default: 'rocket'
   language:
     required: false
     description: ISO code for the response language
@@ -265,7 +275,13 @@ inputs:
   bot_icon:
     required: false
     description: 'The icon for the bot'
-    default: '🤖'
+    default: '🦉'
+  bot_name:
+    required: false
+    description:
+      'Display name of the bot shown in review comments and summaries'
+    # default: 'AI Reviewer'
+    default: 'CodeSentinel'
 runs:
   using: 'node20'
   main: 'dist/index.js'

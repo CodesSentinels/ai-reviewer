@@ -40,6 +40,7 @@ export class Options {
   maxDependencyFiles: number // 依赖分析最大扫描文件数
   enableWebSearch: boolean // 是否启用 web search（用于验证 API）
   enableShell: boolean // 是否启用 shell
+  commandAckReaction: string // 命令识别后在用户评论上打的表情（空/off/none 表示禁用）
 
   constructor(
     debug: boolean,
@@ -62,7 +63,8 @@ export class Options {
     enableDependencyAnalysis = true,
     maxDependencyFiles = '50',
     enableWebSearch = true,
-    enableShell = true
+    enableShell = true,
+    commandAckReaction = 'eyes'
   ) {
     this.debug = debug
     this.disableReview = disableReview
@@ -87,6 +89,7 @@ export class Options {
     this.maxDependencyFiles = parseInt(maxDependencyFiles)
     this.enableWebSearch = enableWebSearch
     this.enableShell = enableShell
+    this.commandAckReaction = commandAckReaction
   }
 
   /** 打印所有配置项到日志，方便调试 */
@@ -114,6 +117,7 @@ export class Options {
     info(`max_dependency_files: ${this.maxDependencyFiles}`)
     info(`enable_web_search: ${this.enableWebSearch}`)
     info(`enable_shell: ${this.enableShell}`)
+    info(`command_ack_reaction: ${this.commandAckReaction}`)
   }
 
   /**

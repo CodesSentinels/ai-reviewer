@@ -24,8 +24,8 @@ const repo = context.repo
 // ==================== 标签常量 ====================
 // 这些 HTML 注释标签用于标识和定位 bot 生成的各类评论
 
-/** 评论顶部的问候语（包含 bot 图标） */
-export const COMMENT_GREETING = `${getInput('bot_icon')}   AI Reviewer`
+/** 评论顶部的问候语（包含 bot 图标 + 可配置名称） */
+export const COMMENT_GREETING = `${getInput('bot_icon') || '🤖'}   ${getInput('bot_name') || 'AI Reviewer'}`
 
 /** 标识 bot 自动生成的代码审查评论 */
 export const COMMENT_TAG =
