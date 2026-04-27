@@ -14,7 +14,7 @@
  */
 import {getInput, info, warning} from '@actions/core'
 import {octokit} from '../octokit'
-import type {CommandEventName, ErrorCode, Reply as IReply} from './types'
+import type {ErrorCode, Reply as IReply} from './types'
 
 /** Bot 问候图标 + 可配置名称（与 commenter.ts 对齐，但避免循环依赖） */
 const GREETING = `${getInput('bot_icon') || '🤖'} ${getInput('bot_name') || 'AI Reviewer'}`
@@ -31,12 +31,6 @@ export interface ReplyContext {
   originalCommentId: number
   /** 命令名（写入 tag 用于去重） */
   commandName: string
-  /** 触发事件类型，用于判断是否需要在行级线程回帖锚点 */
-  sourceEvent?: CommandEventName
-  /** review_comment 事件下原始行级评论 id（用于 createReplyForReviewComment） */
-  reviewCommentId?: number
-  /** PR number（review_comment 发帖必填；issue_comment 可不传） */
-  pullNumber?: number
 }
 
 /** 组装幂等 tag */
@@ -102,8 +96,7 @@ export class Reply implements IReply {
     ackId?: number | null
   ): Promise<void> {
     const body = this.wrap(message)
-    const htmlUrl = await this.publish(body, ackId)
-    await this.postInlineAnchor(htmlUrl, false)
+    await this.publish(body, ackId)
   }
 
   async error(
@@ -114,8 +107,7 @@ export class Reply implements IReply {
     const body = this.wrap(
       `${formatErrorMessage(code, detail)}\n\n\`错误码: ${code}\``
     )
-    const htmlUrl = await this.publish(body, ackId)
-    await this.postInlineAnchor(htmlUrl, true)
+    await this.publish(body, ackId)
     info(`command error [${code}] ${detail ?? ''}`)
   }
 
@@ -133,75 +125,33 @@ export class Reply implements IReply {
     }
   }
 
-  /** 新建或更新评论，返回落地评论的 html_url（失败时返回 null） */
+  /** 新建或更新评论 */
   private async publish(
     body: string,
     ackId?: number | null
-  ): Promise<string | null> {
+  ): Promise<void> {
     if (ackId != null) {
       try {
-        const res = await octokit.issues.updateComment({
+        await octokit.issues.updateComment({
           owner: this.ctx.owner,
           repo: this.ctx.repo,
           comment_id: ackId,
           body
         })
-        return res?.data?.html_url ?? null
+        return
       } catch (e) {
         warning(`reply.publish update failed, falling back to create: ${String(e)}`)
       }
     }
     try {
-      const res = await octokit.issues.createComment({
+      await octokit.issues.createComment({
         owner: this.ctx.owner,
         repo: this.ctx.repo,
         issue_number: this.ctx.issueNumber,
         body
       })
-      return res?.data?.html_url ?? null
     } catch (e) {
       warning(`reply.publish create failed: ${String(e)}`)
-      return null
-    }
-  }
-
-  /**
-   * 若命令由 PR 行级评论触发，在原行级线程里追加一条短指针，
-   * 指向会话区的完整回复。失败仅 warning，不影响主流程。
-   */
-  private async postInlineAnchor(
-    htmlUrl: string | null,
-    isError: boolean
-  ): Promise<void> {
-    if (this.ctx.sourceEvent !== 'pull_request_review_comment') {
-      info(
-        `postInlineAnchor: skip (sourceEvent=${String(this.ctx.sourceEvent)})`
-      )
-      return
-    }
-    if (!this.ctx.reviewCommentId || !this.ctx.pullNumber || !htmlUrl) {
-      info(
-        `postInlineAnchor: skip (reviewCommentId=${String(this.ctx.reviewCommentId)} pullNumber=${String(this.ctx.pullNumber)} htmlUrl=${htmlUrl ? 'ok' : 'null'})`
-      )
-      return
-    }
-    const label = isError ? '查看错误详情' : '查看完整回复'
-    const body = `${GREETING} · \`${this.ctx.commandName}\`\n\n🔗 已在会话区回复 → [${label}](${htmlUrl})`
-    try {
-      const res = await octokit.pulls.createReplyForReviewComment({
-        owner: this.ctx.owner,
-        repo: this.ctx.repo,
-        pull_number: this.ctx.pullNumber,
-        comment_id: this.ctx.reviewCommentId,
-        body
-      })
-      info(
-        `postInlineAnchor: posted reply id=${res?.data?.id} url=${res?.data?.html_url ?? ''}`
-      )
-    } catch (e) {
-      warning(
-        `postInlineAnchor failed (pull_number=${this.ctx.pullNumber} comment_id=${this.ctx.reviewCommentId}): ${String(e)}`
-      )
     }
   }
 

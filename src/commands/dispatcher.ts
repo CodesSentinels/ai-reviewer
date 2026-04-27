@@ -143,11 +143,7 @@ export async function dispatchCommentEvent(
     repo: repoName,
     issueNumber: prNumber,
     originalCommentId: comment.id,
-    commandName: cmdNameForReply,
-    sourceEvent: eventName,
-    reviewCommentId:
-      eventName === 'pull_request_review_comment' ? comment.id : undefined,
-    pullNumber: prNumber
+    commandName: cmdNameForReply
   })
 
   if (outcome.error) {

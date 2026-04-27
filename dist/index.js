@@ -9154,13 +9154,11 @@ class Reply {
     }
     async success(message, ackId) {
         const body = this.wrap(message);
-        const htmlUrl = await this.publish(body, ackId);
-        await this.postInlineAnchor(htmlUrl, false);
+        await this.publish(body, ackId);
     }
     async error(code, detail, ackId) {
         const body = this.wrap(`${formatErrorMessage(code, detail)}\n\n\`错误码: ${code}\``);
-        const htmlUrl = await this.publish(body, ackId);
-        await this.postInlineAnchor(htmlUrl, true);
+        await this.publish(body, ackId);
         (0,core.info)(`command error [${code}] ${detail ?? ''}`);
     }
     async progress(message, ackId) {
@@ -9177,63 +9175,32 @@ class Reply {
             (0,core.warning)(`reply.progress update failed: ${String(e)}`);
         }
     }
-    /** 新建或更新评论，返回落地评论的 html_url（失败时返回 null） */
+    /** 新建或更新评论 */
     async publish(body, ackId) {
         if (ackId != null) {
             try {
-                const res = await octokit/* octokit.issues.updateComment */.K.issues.updateComment({
+                await octokit/* octokit.issues.updateComment */.K.issues.updateComment({
                     owner: this.ctx.owner,
                     repo: this.ctx.repo,
                     comment_id: ackId,
                     body
                 });
-                return res?.data?.html_url ?? null;
+                return;
             }
             catch (e) {
                 (0,core.warning)(`reply.publish update failed, falling back to create: ${String(e)}`);
             }
         }
         try {
-            const res = await octokit/* octokit.issues.createComment */.K.issues.createComment({
+            await octokit/* octokit.issues.createComment */.K.issues.createComment({
                 owner: this.ctx.owner,
                 repo: this.ctx.repo,
                 issue_number: this.ctx.issueNumber,
                 body
             });
-            return res?.data?.html_url ?? null;
         }
         catch (e) {
             (0,core.warning)(`reply.publish create failed: ${String(e)}`);
-            return null;
-        }
-    }
-    /**
-     * 若命令由 PR 行级评论触发，在原行级线程里追加一条短指针，
-     * 指向会话区的完整回复。失败仅 warning，不影响主流程。
-     */
-    async postInlineAnchor(htmlUrl, isError) {
-        if (this.ctx.sourceEvent !== 'pull_request_review_comment') {
-            (0,core.info)(`postInlineAnchor: skip (sourceEvent=${String(this.ctx.sourceEvent)})`);
-            return;
-        }
-        if (!this.ctx.reviewCommentId || !this.ctx.pullNumber || !htmlUrl) {
-            (0,core.info)(`postInlineAnchor: skip (reviewCommentId=${String(this.ctx.reviewCommentId)} pullNumber=${String(this.ctx.pullNumber)} htmlUrl=${htmlUrl ? 'ok' : 'null'})`);
-            return;
-        }
-        const label = isError ? '查看错误详情' : '查看完整回复';
-        const body = `${GREETING} · \`${this.ctx.commandName}\`\n\n🔗 已在会话区回复 → [${label}](${htmlUrl})`;
-        try {
-            const res = await octokit/* octokit.pulls.createReplyForReviewComment */.K.pulls.createReplyForReviewComment({
-                owner: this.ctx.owner,
-                repo: this.ctx.repo,
-                pull_number: this.ctx.pullNumber,
-                comment_id: this.ctx.reviewCommentId,
-                body
-            });
-            (0,core.info)(`postInlineAnchor: posted reply id=${res?.data?.id} url=${res?.data?.html_url ?? ''}`);
-        }
-        catch (e) {
-            (0,core.warning)(`postInlineAnchor failed (pull_number=${this.ctx.pullNumber} comment_id=${this.ctx.reviewCommentId}): ${String(e)}`);
         }
     }
     wrap(message) {
@@ -9380,10 +9347,7 @@ async function dispatchCommentEvent(deps) {
         repo: repoName,
         issueNumber: prNumber,
         originalCommentId: comment.id,
-        commandName: cmdNameForReply,
-        sourceEvent: eventName,
-        reviewCommentId: eventName === 'pull_request_review_comment' ? comment.id : undefined,
-        pullNumber: prNumber
+        commandName: cmdNameForReply
     });
     if (outcome.error) {
         await reply.error(outcome.error.code, outcome.error.detail);
