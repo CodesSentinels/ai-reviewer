@@ -9213,27 +9213,24 @@ class Reply {
      */
     async postInlineAnchor(htmlUrl, isError) {
         if (this.ctx.sourceEvent !== 'pull_request_review_comment') {
-            (0,core.info)(`postInlineAnchor: skip (sourceEvent=${String(this.ctx.sourceEvent)})`);
             return;
         }
         if (!this.ctx.reviewCommentId || !this.ctx.pullNumber || !htmlUrl) {
-            (0,core.info)(`postInlineAnchor: skip (reviewCommentId=${String(this.ctx.reviewCommentId)} pullNumber=${String(this.ctx.pullNumber)} htmlUrl=${htmlUrl ? 'ok' : 'null'})`);
             return;
         }
         const label = isError ? '查看错误详情' : '查看完整回复';
         const body = `${GREETING} · \`${this.ctx.commandName}\`\n\n🔗 已在会话区回复 → [${label}](${htmlUrl})`;
         try {
-            const res = await octokit/* octokit.pulls.createReplyForReviewComment */.K.pulls.createReplyForReviewComment({
+            await octokit/* octokit.pulls.createReplyForReviewComment */.K.pulls.createReplyForReviewComment({
                 owner: this.ctx.owner,
                 repo: this.ctx.repo,
                 pull_number: this.ctx.pullNumber,
                 comment_id: this.ctx.reviewCommentId,
                 body
             });
-            (0,core.info)(`postInlineAnchor: posted reply id=${res?.data?.id} url=${res?.data?.html_url ?? ''}`);
         }
         catch (e) {
-            (0,core.warning)(`postInlineAnchor failed (pull_number=${this.ctx.pullNumber} comment_id=${this.ctx.reviewCommentId}): ${String(e)}`);
+            (0,core.warning)(`reply.postInlineAnchor failed: ${String(e)}`);
         }
     }
     wrap(message) {
