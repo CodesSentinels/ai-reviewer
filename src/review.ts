@@ -33,6 +33,13 @@ import {
   formatDependencySummary,
   type DependencyContext
 } from './dependency-analyzer'
+import {
+  formatLintContextForFile,
+  formatLintSummary,
+  formatToolAttribution,
+  runLintTools,
+  type LintReport
+} from './lint'
 import { Inputs } from './inputs'
 import { octokit } from './octokit'
 import { type Options } from './options'
@@ -312,6 +319,27 @@ ${hunks.oldHunk}
     return
   }
 
+  // ==================== 阶段零·B：静态分析工具扫描（Linter/SAST） ====================
+  let lintReport: LintReport | null = null
+  if (options.enableLintTools) {
+    try {
+      info('Phase 0b: starting static analysis tool scan (Linter/SAST)')
+      lintReport = await runLintTools({
+        repoRoot: process.cwd(),
+        filesAndChanges,
+        disabled: false
+      })
+      info(
+        `Phase 0b: lint scan completed in ${lintReport.durationMs}ms — ${lintReport.results.length} findings on changed lines from ${lintReport.toolSummaries.filter(s => s.available).length} tool(s)`
+      )
+    } catch (e: any) {
+      warning(`Phase 0b: lint scan failed: ${e.message}, skipping`)
+      lintReport = null
+    }
+  } else {
+    info('Phase 0b: lint tools disabled by config, skipping')
+  }
+
   // ==================== 阶段零：跨文件依赖分析 ====================
   let dependencyContext: DependencyContext | null = null
   if (options.enableDependencyAnalysis) {
@@ -544,6 +572,7 @@ ${SHORT_SUMMARY_START_TAG}
 ${inputs.shortSummary}
 ${SHORT_SUMMARY_END_TAG}
 ${dependencyContext != null ? `\n${formatDependencySummary(dependencyContext)}` : ''}
+${lintReport != null ? `\n${formatLintSummary(lintReport)}` : ''}
 ---
 
 <details>
@@ -626,6 +655,15 @@ ${summariesFailed.length > 0
       info(`reviewing ${filename}`)
       const ins: Inputs = inputs.clone()
       ins.filename = filename
+
+      // 注入静态分析工具结果（仅当前文件相关的 finding）
+      if (lintReport != null) {
+        const lintCtx = formatLintContextForFile(filename, lintReport)
+        if (lintCtx.length > 0) {
+          ins.lintContext = lintCtx
+          info(`injected lint context for ${filename}: ${getTokenCount(lintCtx)} tokens`)
+        }
+      }
 
       // 注入跨文件引用上下文（在 token 预算内）
       if (dependencyContext != null) {
@@ -777,11 +815,23 @@ ${commentChain}
               // 每个文件只在第一条评论上附加一次 Analysis chain，避免重复刷屏
               const shouldAttachAnalysisChain =
                 analysisChainMd !== '' && !analysisChainAttached
-              const commentWithChain = shouldAttachAnalysisChain
+              let commentWithChain = shouldAttachAnalysisChain
                 ? `${review.comment}\n\n${analysisChainMd}`
                 : review.comment
               if (shouldAttachAnalysisChain) {
                 analysisChainAttached = true
+              }
+              // 附加该评论行号范围内重叠的工具发现（CodeRabbit "🧰 Tools" 风格）
+              if (lintReport != null) {
+                const toolAttribution = formatToolAttribution(
+                  filename,
+                  review.startLine,
+                  review.endLine,
+                  lintReport
+                )
+                if (toolAttribution.length > 0) {
+                  commentWithChain = `${commentWithChain}\n${toolAttribution}`
+                }
               }
               info(`[analysis_chain] ${filename}: comment line ${review.startLine}-${review.endLine}, hasChain=${shouldAttachAnalysisChain}, finalLen=${commentWithChain.length}`)
               // 将审查评论加入缓冲区

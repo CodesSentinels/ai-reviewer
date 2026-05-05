@@ -247,6 +247,15 @@ inputs:
       executes model-requested shell commands on the runner and sends the output
       back to the model.'
     default: 'true'
+  enable_lint_tools:
+    required: false
+    description:
+      'Enable static analysis tool scanning (Linter/SAST). When enabled, the
+      action runs configured tools (ESLint, Biome, Prettier, etc.) on changed
+      files and injects findings into the AI review prompt for cross-validation.
+      Tool selection per language and per-tool config can be controlled via a
+      .codesentinel.yaml file at the repo root.'
+    default: 'true'
   command_ack_reaction:
     required: false
     description:

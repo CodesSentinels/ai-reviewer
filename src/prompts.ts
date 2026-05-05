@@ -145,6 +145,10 @@ $short_summary
 
 $cross_file_context
 
+## Static analysis tool results (pre-review)
+
+$lint_context
+
 ## Analysis chain (pre-review reasoning)
 
 $analysis_chain
@@ -187,6 +191,19 @@ For fixes, use \`diff\` code blocks, marking changes with \`+\` or \`-\`. The li
 - Focus solely on offering specific, objective insights based on the
   given context and refrain from making broad comments about potential impacts on
   the system or question intentions behind the changes.
+- **Static analysis cross-validation (MANDATORY when tool findings exist)** — When the
+  "Static analysis tool results" section above contains actual findings (not "No static
+  analysis tool results available."), you MUST:
+  1. For each tool finding that lands on a changed line, write a review comment on that
+     exact line range (using the same \`startLine-endLine:\\n comment\\n---\` format).
+  2. In your comment, name which tool reported it (e.g. "ESLint reports …") and explain
+     the underlying business or logic impact in your own words — do not just paraphrase
+     the tool message.
+  3. If you disagree with a tool finding (false positive), still write a comment on that
+     line stating "tool finding appears to be a false positive because …" so the author
+     can see the cross-validation reasoning.
+  4. After cross-validating tool findings, continue to surface logic/architecture issues
+     the tools cannot detect — those are still your highest-value contributions.
 - **Cross-file impact analysis (MANDATORY)** — When the "Cross-file references" section
   above contains actual references (not "No cross-file references detected"), you MUST
   write a review comment on the changed line (using the same \`startLine-endLine:\\n comment\\n---\`

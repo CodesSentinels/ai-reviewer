@@ -40,6 +40,7 @@ export class Options {
   maxDependencyFiles: number // 依赖分析最大扫描文件数
   enableWebSearch: boolean // 是否启用 web search（用于验证 API）
   enableShell: boolean // 是否启用 shell
+  enableLintTools: boolean // 是否启用静态分析工具扫描（Linter/SAST）
   commandAckReaction: string // 命令识别后在用户评论上打的表情（空/off/none 表示禁用）
 
   constructor(
@@ -64,6 +65,7 @@ export class Options {
     maxDependencyFiles = '50',
     enableWebSearch = true,
     enableShell = true,
+    enableLintTools = true,
     commandAckReaction = 'eyes'
   ) {
     this.debug = debug
@@ -89,6 +91,7 @@ export class Options {
     this.maxDependencyFiles = parseInt(maxDependencyFiles)
     this.enableWebSearch = enableWebSearch
     this.enableShell = enableShell
+    this.enableLintTools = enableLintTools
     this.commandAckReaction = commandAckReaction
   }
 
@@ -117,6 +120,7 @@ export class Options {
     info(`max_dependency_files: ${this.maxDependencyFiles}`)
     info(`enable_web_search: ${this.enableWebSearch}`)
     info(`enable_shell: ${this.enableShell}`)
+    info(`enable_lint_tools: ${this.enableLintTools}`)
     info(`command_ack_reaction: ${this.commandAckReaction}`)
   }
 

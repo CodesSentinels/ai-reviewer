@@ -46,6 +46,7 @@ async function run(): Promise<void> {
     getInput('max_dependency_files'),
     getBooleanInput('enable_web_search'),
     getBooleanInput('enable_shell'),
+    getBooleanInput('enable_lint_tools'),
     getInput('command_ack_reaction')
   )
 
