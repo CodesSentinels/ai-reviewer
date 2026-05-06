@@ -469,3 +469,4 @@ for (const h of ALL_STUBS) { reg.register(h) }
 | 单元测试（7 个用例） | P0 | 3h |
 | bootstrap 接入 + 联调 | P0 | 1h |
 | **合计** | | **~14h（约 2 个工作日）** |
+PS. 实际预计7～10个工作日，包括代码审核、模块对接以及技术沟通
