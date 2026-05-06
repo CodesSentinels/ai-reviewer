@@ -24,20 +24,41 @@
 
 ## 2. 模块结构
 
-```
-src/lint/
-├── types.ts                # LintResult / ToolAdapter / ToolConfig 等核心类型
-├── language-detector.ts    # 文件扩展名 → 语言枚举
-├── diff-filter.ts          # 变更行提取 + 结果过滤 + 跨工具去重
-├── config.ts               # .codesentinel.yaml 解析
-├── orchestrator.ts         # 工具编排：检测 → 选择 → 并行扫描 → 聚合
-├── formatter.ts            # 三种输出：Prompt 注入 / PR 摘要表 / 评论标注
-├── index.ts                # 对外公开 API
-└── adapters/
-    ├── exec.ts             # 共享：execFile + JSON 解析 + 版本提取
-    ├── eslint.ts           # ESLint 适配器
-    ├── biome.ts            # Biome 适配器
-    └── prettier.ts         # Prettier 适配器
+```mermaid
+flowchart TB
+  subgraph Lint["src/lint/  (Linter/SAST 集成模块)"]
+    direction TB
+
+    idx["index.ts<br/>对外公开 API"]
+
+    subgraph Core["核心模块"]
+      direction LR
+      types["types.ts<br/>LintResult / ToolAdapter / ToolConfig"]
+      ld["language-detector.ts<br/>扩展名 → 语言"]
+      df["diff-filter.ts<br/>变更行 + 过滤 + 去重"]
+      cfg["config.ts<br/>.codesentinel.yaml 解析"]
+      orch["orchestrator.ts<br/>检测 → 选择 → 并行扫描 → 聚合"]
+      fmt["formatter.ts<br/>Prompt 注入 / PR 摘要表 / 评论标注"]
+    end
+
+    subgraph Adapters["adapters/  (工具适配器)"]
+      direction LR
+      exec["exec.ts<br/>execFile + JSON 解析 + 版本提取"]
+      es["eslint.ts"]
+      bi["biome.ts"]
+      pr["prettier.ts"]
+    end
+  end
+
+  idx --> Core
+  idx --> Adapters
+  orch --> df
+  orch --> cfg
+  orch --> Adapters
+  Core -. 类型契约 .-> types
+  es -. 共享 .-> exec
+  bi -. 共享 .-> exec
+  pr -. 共享 .-> exec
 ```
 
 集成点：`src/review.ts` 在 Phase 0b 调用 orchestrator，结果注入 Phase 4 的逐文件审查 Prompt。
@@ -46,111 +67,44 @@ src/lint/
 
 ## 3. 工作流总览
 
-```
-                        codeReview() 主流程
-                              │
-   ┌──────────────────────────┼──────────────────────────┐
-   │                          │                          │
-   ▼                          ▼                          ▼
-Phase 0  增量 diff       Phase 0b  Lint 扫描         Phase 0  依赖分析
- 解析 hunk                runLintTools()              analyzeDependencies()
-                              │
-                              ▼
-                       LintReport（results + summaries）
-                              │
-   ┌──────────────────────────┼──────────────────────────┐
-   │                          │                          │
-   ▼                          ▼                          ▼
-Phase 4 doReview()       PR 摘要评论              逐评论标注
-注入 $lint_context       formatLintSummary()       formatToolAttribution()
-formatLintContextForFile()
+```mermaid
+flowchart TB
+  CR["codeReview() 主流程"]
+  CR --> P0a["Phase 0<br/>增量 diff + 解析 hunk"]
+  CR --> P0b["Phase 0b<br/>Lint 扫描<br/>runLintTools()"]
+  CR --> P0c["Phase 0<br/>依赖分析<br/>analyzeDependencies()"]
+
+  P0b --> LR["LintReport<br/>(results + summaries)"]
+
+  LR --> C1["Phase 4 doReview()<br/>注入 $lint_context<br/>formatLintContextForFile()"]
+  LR --> C2["PR 摘要评论<br/>formatLintSummary()"]
+  LR --> C3["逐评论标注<br/>formatToolAttribution()"]
 ```
 
 ### 3.1 详细数据流
 
-```
-PR 变更文件列表 (filesAndChanges)
-   │
-   │ [filename, fileContent, fileDiff, patches[]]
-   ▼
-┌──────────────────────────────────────────────────────────────────┐
-│ 1) loadConfig(repoRoot)                                          │
-│    读取 .codesentinel.yaml → ToolsConfig                         │
-└──────────────────────────────────────────────────────────────────┘
-   │
-   ▼
-┌──────────────────────────────────────────────────────────────────┐
-│ 2) 适配器注册表                                                    │
-│    [ESLintAdapter, BiomeAdapter, PrettierAdapter]                │
-│      ↓ isToolEnabled(name, ToolsConfig, defaultEnabled)          │
-│    enabledAdapters                                               │
-└──────────────────────────────────────────────────────────────────┘
-   │
-   ▼  Promise.all（并行检测）
-┌──────────────────────────────────────────────────────────────────┐
-│ 3) safeDetect → ToolDetection                                    │
-│    跑 `npx <tool> --version`，超时 10s，失败转为 available=false   │
-└──────────────────────────────────────────────────────────────────┘
-   │
-   ▼  Promise.all（并行扫描）
-┌──────────────────────────────────────────────────────────────────┐
-│ 4) 每个可用工具：                                                  │
-│    a. 按 fileExtensions 过滤目标文件                              │
-│    b. adapter.scan(targets, repoRoot, toolConfig)                │
-│    c. 异常 → 警告 + 视为 0 个发现                                  │
-│    → LintResult[] (raw)                                          │
-└──────────────────────────────────────────────────────────────────┘
-   │
-   ▼
-┌──────────────────────────────────────────────────────────────────┐
-│ 5) 合并 / 过滤 / 排序                                              │
-│    a. buildChangedLineMap(filesAndChanges)                       │
-│       从每个文件的 unified diff 中提取 + 行号                     │
-│    b. filterByChangedLines(allResults, map, tolerance=3)         │
-│       仅保留 |line - changed| ≤ 3 的发现                          │
-│    c. deduplicateResults(filtered)                               │
-│       归一化规则名 + message 前 50 字符 → 跨工具去重               │
-│       同位置同问题保留更高 severity                                │
-│    d. sort by (file, line)                                       │
-└──────────────────────────────────────────────────────────────────┘
-   │
-   ▼
-LintReport {
-  results: LintResult[],         // 已过滤 / 去重 / 排序
-  toolSummaries: ToolSummary[],  // 每个工具的统计与可用性
-  durationMs, filesScanned
-}
+```mermaid
+flowchart TB
+  IN["PR 变更文件列表 (filesAndChanges)<br/>[filename, fileContent, fileDiff, patches[]]"]
+  IN --> S1["1) loadConfig(repoRoot)<br/>读取 .codesentinel.yaml → ToolsConfig"]
+  S1 --> S2["2) 适配器注册表<br/>[ESLintAdapter, BiomeAdapter, PrettierAdapter]<br/>↓ isToolEnabled(name, ToolsConfig, defaultEnabled)<br/>enabledAdapters"]
+  S2 -- "Promise.all (并行检测)" --> S3["3) safeDetect → ToolDetection<br/>跑 npx &lt;tool&gt; --version, 超时 10s<br/>失败转为 available=false"]
+  S3 -- "Promise.all (并行扫描)" --> S4["4) 每个可用工具:<br/>a. 按 fileExtensions 过滤目标文件<br/>b. adapter.scan(targets, repoRoot, toolConfig)<br/>c. 异常 → 警告 + 视为 0 个发现<br/>→ LintResult[] (raw)"]
+  S4 --> S5["5) 合并 / 过滤 / 排序<br/>a. buildChangedLineMap(filesAndChanges)<br/>b. filterByChangedLines (tolerance=3)<br/>c. deduplicateResults (归一化规则名 + 同位置取高 severity)<br/>d. sort by (file, line)"]
+  S5 --> OUT["LintReport {<br/>results: LintResult[]   // 已过滤 / 去重 / 排序<br/>toolSummaries: ToolSummary[]   // 每工具统计与可用性<br/>durationMs, filesScanned<br/>}"]
 ```
 
 ### 3.2 评论生成阶段
 
-```
-Phase 4 doReview(filename, fileContent, patches)
-   │
-   ▼
-formatLintContextForFile(filename, lintReport)
-   │   过滤 results 仅保留 file === filename
-   │   按工具分组、生成 "🧰 Tools / 🪛 ESLint (9.x.x)" Markdown
-   │   截断到 4000 字符
-   │
-   ▼
-inputs.lintContext = ctx   →  prompts.reviewFileDiff
-                              用 $lint_context 占位符替换
-   │
-   ▼
-heavyBot.chat(prompt)
-   │
-   ▼
-parseReview(response, patches)
-   │  → review { startLine, endLine, comment }
-   │
-   ▼
-formatToolAttribution(filename, startLine, endLine, lintReport)
-   │  找出 line 范围与该评论重叠的工具发现
-   │  追加到评论尾部："🧰 Tools / 🪛 Biome (2.x) / [error] 29-29: …"
-   │
-   ▼
-commenter.bufferReviewComment(filename, startLine, endLine, finalComment)
+```mermaid
+flowchart TB
+  S["Phase 4 doReview(filename, fileContent, patches)"]
+  S --> F1["formatLintContextForFile(filename, lintReport)<br/>· 过滤 results 仅保留 file === filename<br/>· 按工具分组、生成 🧰 Tools / 🪛 ESLint (9.x.x) Markdown<br/>· 截断到 4000 字符"]
+  F1 --> F2["inputs.lintContext = ctx<br/>→ prompts.reviewFileDiff<br/>(杠杆 A: 仅在 ctx 非空时拼入段头 + MANDATORY)"]
+  F2 --> F3["heavyBot.chat(prompt)"]
+  F3 --> F4["parseReview(response, patches)<br/>→ review { startLine, endLine, comment }"]
+  F4 --> F5["formatToolAttribution(filename, startLine, endLine, lintReport)<br/>· 找出 line 范围与该评论重叠的工具发现<br/>· 追加到评论尾部: 🧰 Tools / 🪛 Biome (2.x) / [error] 29-29: …"]
+  F5 --> F6["commenter.bufferReviewComment(filename, startLine, endLine, finalComment)"]
 ```
 
 ### 3.3 PR 摘要评论中的工具统计表
@@ -303,12 +257,22 @@ GitHub Action 输入 `enable_lint_tools`（默认 `true`）是总开关，关闭
    summarizeComment += formatLintSummary(lintReport)
    ```
 
-5. **`Inputs.render()`**：将 `$lint_context` 占位符替换为本次 lint 结果，无值时输出 `"No static analysis tool results available."`。
+5. **`Inputs.render()`**：当 `lintContext` 非空时把 `$lint_context` 占位符替换为本次 lint 结果。
+   注：杠杆 A 启用后，`reviewFileDiff` 模板在无 finding 时不再含 `$lint_context` 占位符，
+   保留兜底替换仅为防御未来其他 prompt 直接消费 `$lint_context`。
 
-6. **Prompt 模板**：`prompts.reviewFileDiff` 中新增 `$lint_context` 区块，并在 `## IMPORTANT Instructions` 中加入"静态分析交叉验证（MANDATORY when tool findings exist）"硬性规则，要求 AI：
-   - 对每条变更行上的工具发现写一条评论，命名工具并解释业务影响
-   - 不同意工具发现时，标注为 false positive 并给出理由
-   - 同时仍需指出工具盲区中的逻辑/架构问题
+6. **Prompt 模板（条件注入，杠杆 A）**：
+   - `reviewFileDiff` 中以 `$lint_section` / `$lint_mandatory_instruction` 两个占位符承载
+     "静态分析工具结果"段头和 MANDATORY 指令。
+   - `Prompts.renderReviewFileDiff` 在渲染前根据 `inputs.lintContext` 是否为空决定填入：
+     - **非空**：填入 `lintSection`（段头 + `$lint_context`）+ `lintMandatoryInstruction`
+       （4 条 MANDATORY 规则）
+     - **空**：两个占位符替换为空串，最终 prompt 完全不含 lint 相关字样
+   - 这样在文件无 finding 时节省 ~300 token / 文件，对 5 文件 PR 约节省 1.5 K token。
+   - MANDATORY 指令本体未变化，要求 AI：
+     - 对每条变更行上的工具发现写一条评论，命名工具并解释业务影响
+     - 不同意工具发现时，标注为 false positive 并给出理由
+     - 同时仍需指出工具盲区中的逻辑/架构问题
 
 ---
 
@@ -319,7 +283,7 @@ GitHub Action 输入 `enable_lint_tools`（默认 `true`）是总开关，关闭
 | 总耗时 | orchestrator 内 `Promise.all` 并行执行所有可用工具 |
 | 单工具超时 | `runCommand` 默认 60 秒（可在适配器内传入 `timeoutMs`） |
 | 单工具失败 | 检测失败 → `available=false` 记入 ToolSummary；scan 抛异常 → 警告 + 0 发现 |
-| Token 预算 | `formatLintContextForFile` 截断到 4000 字符；不超出后端 token 限制 |
+| Token 预算 | `formatLintContextForFile` 截断到 4000 字符；**杠杆 A** 在无 finding 文件中完全跳过段头与 MANDATORY 指令注入（节省 ~300 token / 文件） |
 | 缓冲区 | `runCommand` 单次 stdout 上限 64 MB，避免极端大输出 OOM |
 
 ---
@@ -330,8 +294,9 @@ GitHub Action 输入 `enable_lint_tools`（默认 `true`）是总开关，关闭
 |:---------|:---------|
 | [`__tests__/lint-diff-filter.test.ts`](../__tests__/lint-diff-filter.test.ts) | unified diff 行号提取、变更行窗口过滤、跨工具去重（含规则名归一化） |
 | [`__tests__/lint-orchestrator.test.ts`](../__tests__/lint-orchestrator.test.ts) | 启用/禁用、不可用工具的 ToolSummary、scan 抛异常的容忍、`disabled=true` 短路 |
+| [`__tests__/lint-prompt-injection.test.ts`](../__tests__/lint-prompt-injection.test.ts) | 杠杆 A 条件注入：lintContext 空/非空两条路径在最终 prompt 中的体现；token 节省下界 |
 
-执行：`npm test`（与既有 182 个用例合并后总计 194 个用例全部通过）。
+执行：`npm test`（与既有 182 个用例合并后总计 198 个用例全部通过）。
 
 ---
 

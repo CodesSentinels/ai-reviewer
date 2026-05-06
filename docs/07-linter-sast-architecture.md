@@ -37,7 +37,7 @@
 | 决策点 | 选择 | 备选 | 拒绝备选的原因 |
 |:-------|:-----|:-----|:---------------|
 | 工具调用方式 | 子进程 `execFile` 调 CLI | 通过 npm API 内嵌 | API 版本耦合、不同语言无统一接口、不便扩展到 Go/Python |
-| 工具发现 → AI 注入 | Prompt 中文本注入 + 评论尾部标注 | 直接发布工具评论 | 直接发评论会与 AI 评论错位，且 AI 无法交叉验证 |
+| 工具发现 → AI 注入 | Prompt 中**条件**注入（杠杆 A） + 评论尾部标注 | 直接发布工具评论 / 总是注入 | 直接发评论会与 AI 评论错位，且 AI 无法交叉验证；总是注入则在无 finding 文件上浪费 ~300 token |
 | 变更行过滤 | 在 orchestrator 里统一做 | 让每个适配器自己做 | 过滤逻辑应一次定义；适配器只关心解析 |
 | 跨工具去重 | 在 orchestrator 里做 | 不去重 | ESLint 与 Biome 大量规则重叠，不去重会出现"同一行两条几乎一样的评论" |
 | 配置文件 | `.codesentinel.yaml` | 全部走 GitHub Action 输入 | 工具特定参数（rule 列表、严重级别覆盖）通过 Action 输入会爆炸 |
@@ -364,7 +364,7 @@ sequenceDiagram
   end
 ```
 
-### 3.4 Phase 4 单文件审查的 lint 集成
+### 3.4 Phase 4 单文件审查的 lint 集成（含杠杆 A 条件注入）
 
 ```mermaid
 flowchart TD
@@ -372,8 +372,13 @@ flowchart TD
   A --> B["formatLintContextForFile<br/>(filename, lintReport)"]
   B --> C["filter file === filename<br/>group by tool<br/>render Markdown<br/>truncate 4000 chars"]
   C --> D["ins.lintContext = ..."]
-  D --> E["prompts.renderReviewFileDiff(ins)<br/>$lint_context 占位符替换"]
-  E --> F["heavyBot.chat(prompt)"]
+  D --> Cond{"ins.lintContext<br/>非空?"}
+
+  Cond -->|"否 (无 finding)"| E1["prompts.renderReviewFileDiff(ins)<br/><br/>$lint_section → ''<br/>$lint_mandatory_instruction → ''<br/><br/>(节省 ~300 token)"]
+  Cond -->|"是 (有 finding)"| E2["prompts.renderReviewFileDiff(ins)<br/><br/>$lint_section → 段头 + $lint_context<br/>$lint_mandatory_instruction → 4 条 MANDATORY 规则<br/><br/>$lint_context 由 inputs.render 填入"]
+
+  E1 --> F["heavyBot.chat(prompt)"]
+  E2 --> F
   F --> G{LLM 输出}
 
   G -->|"看到工具发现 + MANDATORY 指令"| H["29-29:<br/>ESLint reports …<br/>The deeper issue is …<br/>---"]
@@ -388,6 +393,10 @@ flowchart TD
   N --> O["finalComment =<br/>review.comment + '\\n' + attribution"]
   O --> P["commenter.bufferReviewComment<br/>(filename, 29, 29, finalComment)"]
 ```
+
+> 💡 注意：`formatToolAttribution` 直接消费 `lintReport`，**不经过 LLM**，
+> 因此即使在"无 finding 走 E1 路径"的文件上，依然能为有发现的其它文件保留
+> 评论尾部的 `🧰 Tools` 卡片 — 杠杆 A 只省 prompt token，不省工具标注能力。
 
 ### 3.5 失败 / 容错路径
 
@@ -465,7 +474,7 @@ flowchart TD
 | 失败容忍 | 三层 try/catch（safeDetect / scan / runLintTools 整体） | `lint-orchestrator.test.ts` 4 个用例覆盖 |
 | 聚焦变更 | `buildChangedLineMap` + `filterByChangedLines(tol=3)` | `lint-diff-filter.test.ts` 中 "drops outside tolerance" 通过 |
 | 零新增依赖 | 复用 `js-yaml` (require)、`child_process.execFile` | `package.json` 未改 |
-| AI ↔ 工具有机融合 | Prompt 注入 + 评论标注 + 摘要表 三处协同 | `prompts.ts` MANDATORY 指令 + `formatToolAttribution` |
+| AI ↔ 工具有机融合 | Prompt **条件**注入（杠杆 A） + 评论标注 + 摘要表 三处协同 | `prompts.ts::renderReviewFileDiff` + `formatToolAttribution` + `lint-prompt-injection.test.ts` |
 
 ### 4.2 已知局限（留给下一迭代）
 

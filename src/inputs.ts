@@ -138,11 +138,18 @@ export class Inputs {
     if (hadPlaceholder) {
       info(`[render] $analysis_chain replaced: hasValue=${!!this.analysisChain}, valueLen=${analysisChainValue.length}, preview="${analysisChainValue.substring(0, 100).replace(/\n/g, '\\n')}"`)
     }
-    // 静态分析工具结果：无论是否有值，都替换占位符
-    content = content.replace(
-      '$lint_context',
-      this.lintContext || 'No static analysis tool results available.'
-    )
+    // 静态分析工具结果：仅在 lintContext 非空时替换。
+    // 杠杆 A：当无 finding 时，prompts.renderReviewFileDiff 已整体移除
+    // "$lint_section" 段，故占位符不应出现；这里保留兜底替换以防未来其他模板
+    // 直接消费 $lint_context。
+    if (this.lintContext) {
+      content = content.replace('$lint_context', this.lintContext)
+    } else {
+      content = content.replace(
+        '$lint_context',
+        'No static analysis tool results available.'
+      )
+    }
     return content
   }
 }

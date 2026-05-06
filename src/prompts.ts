@@ -145,10 +145,7 @@ $short_summary
 
 $cross_file_context
 
-## Static analysis tool results (pre-review)
-
-$lint_context
-
+$lint_section
 ## Analysis chain (pre-review reasoning)
 
 $analysis_chain
@@ -191,20 +188,7 @@ For fixes, use \`diff\` code blocks, marking changes with \`+\` or \`-\`. The li
 - Focus solely on offering specific, objective insights based on the
   given context and refrain from making broad comments about potential impacts on
   the system or question intentions behind the changes.
-- **Static analysis cross-validation (MANDATORY when tool findings exist)** — When the
-  "Static analysis tool results" section above contains actual findings (not "No static
-  analysis tool results available."), you MUST:
-  1. For each tool finding that lands on a changed line, write a review comment on that
-     exact line range (using the same \`startLine-endLine:\\n comment\\n---\` format).
-  2. In your comment, name which tool reported it (e.g. "ESLint reports …") and explain
-     the underlying business or logic impact in your own words — do not just paraphrase
-     the tool message.
-  3. If you disagree with a tool finding (false positive), still write a comment on that
-     line stating "tool finding appears to be a false positive because …" so the author
-     can see the cross-validation reasoning.
-  4. After cross-validating tool findings, continue to surface logic/architecture issues
-     the tools cannot detect — those are still your highest-value contributions.
-- **Cross-file impact analysis (MANDATORY)** — When the "Cross-file references" section
+$lint_mandatory_instruction- **Cross-file impact analysis (MANDATORY)** — When the "Cross-file references" section
   above contains actual references (not "No cross-file references detected"), you MUST
   write a review comment on the changed line (using the same \`startLine-endLine:\\n comment\\n---\`
   output format) that lists ALL affected callers. Rules:
@@ -432,8 +416,56 @@ use web search to find and reference current documentation.
     return inputs.render(this.comment)
   }
 
-  /** 渲染代码审查提示词 */
+  /**
+   * 仅当文件存在工具发现时拼入的"静态分析工具结果"区块。
+   * 没有发现时整段连同段头一起从最终 prompt 中移除（杠杆 A，节省 token）。
+   */
+  lintSection = `## Static analysis tool results (pre-review)
+
+$lint_context
+
+`
+
+  /**
+   * 仅当文件存在工具发现时拼入的"静态分析交叉验证 MANDATORY"指令。
+   * 没有发现时整段移除，避免空泡然占用 token。
+   */
+  lintMandatoryInstruction = `- **Static analysis cross-validation (MANDATORY when tool findings exist)** — When the
+  "Static analysis tool results" section above contains actual findings (not "No static
+  analysis tool results available."), you MUST:
+  1. For each tool finding that lands on a changed line, write a review comment on that
+     exact line range (using the same \`startLine-endLine:\\n comment\\n---\` format).
+  2. In your comment, name which tool reported it (e.g. "ESLint reports …") and explain
+     the underlying business or logic impact in your own words — do not just paraphrase
+     the tool message.
+  3. If you disagree with a tool finding (false positive), still write a comment on that
+     line stating "tool finding appears to be a false positive because …" so the author
+     can see the cross-validation reasoning.
+  4. After cross-validating tool findings, continue to surface logic/architecture issues
+     the tools cannot detect — those are still your highest-value contributions.
+`
+
+  /**
+   * 渲染代码审查提示词
+   *
+   * 杠杆 A：仅当 inputs.lintContext 非空时，才把"静态分析工具结果"段头 +
+   * MANDATORY 指令拼到模板中；无发现的文件完全移除两者，节省 token。
+   */
   renderReviewFileDiff(inputs: Inputs): string {
-    return inputs.render(this.reviewFileDiff)
+    const hasLintFindings =
+      inputs.lintContext != null && inputs.lintContext.trim().length > 0
+
+    let prompt = this.reviewFileDiff
+    if (hasLintFindings) {
+      prompt = prompt.replace('$lint_section', this.lintSection)
+      prompt = prompt.replace(
+        '$lint_mandatory_instruction',
+        this.lintMandatoryInstruction
+      )
+    } else {
+      prompt = prompt.replace('$lint_section', '')
+      prompt = prompt.replace('$lint_mandatory_instruction', '')
+    }
+    return inputs.render(prompt)
   }
 }
