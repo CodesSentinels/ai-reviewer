@@ -111,7 +111,8 @@ export class BiomeAdapter implements ToolAdapter {
 
   private resolvedVersion = ''
 
-  async detect(): Promise<ToolDetection> {
+  async detect(_repoRoot: string): Promise<ToolDetection> {
+    // Biome 2.x 内置 recommended 规则集，无需项目配置即可工作；忽略 _repoRoot
     const result = await runCommand({
       command: 'npx',
       args: ['--no-install', 'biome', '--version'],

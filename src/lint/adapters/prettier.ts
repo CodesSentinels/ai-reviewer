@@ -52,7 +52,8 @@ export class PrettierAdapter implements ToolAdapter {
 
   private resolvedVersion = ''
 
-  async detect(): Promise<ToolDetection> {
+  async detect(_repoRoot: string): Promise<ToolDetection> {
+    // Prettier 自带默认格式规则，无需项目配置即可工作；忽略 _repoRoot
     const result = await runCommand({
       command: 'npx',
       args: ['--no-install', 'prettier', '--version'],

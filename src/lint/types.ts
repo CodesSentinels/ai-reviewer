@@ -94,10 +94,13 @@ export interface ToolAdapter {
    *
    * 实现要求：
    * - 调用 `<tool> --version` 或类似命令
+   * - 检查项目侧的必要前置（如 ESLint 9 的 `eslint.config.js`），缺失视为不可用
    * - 失败时返回 { available: false, reason }，不抛异常
    * - 限制超时（建议 ≤ 5 秒）
+   *
+   * @param repoRoot 仓库根目录（绝对路径），用于检查项目侧的工具配置文件
    */
-  detect(): Promise<ToolDetection>
+  detect(repoRoot: string): Promise<ToolDetection>
 
   /**
    * 执行扫描

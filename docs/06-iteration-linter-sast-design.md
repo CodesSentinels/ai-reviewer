@@ -180,10 +180,21 @@ interface ToolAdapter {
 
 通用约定：
 
-- `detect()` 跑 `<tool> --version`，超时 10s
+- `detect(repoRoot)` 跑 `<tool> --version`，超时 10s；并按需检查项目侧的必要前置文件
 - `scan()` 内部不做变更行过滤，原样返回
 - 任何执行错误都通过 stdout/exitCode 体现，不抛异常
 - 退出码 ≠ 0 不视为失败（lint 工具按惯例发现问题就返回非零）
+
+ESLint 适配器额外检查（**改进 A**）：ESLint 9 Flat Config 不再内置默认规则，
+`detect()` 在确认二进制可用后会扫描 `repoRoot` 下的：
+
+- `eslint.config.{js,mjs,cjs,ts,mts,cts}` （Flat Config 系列）
+- `.eslintrc.{js,cjs,yaml,yml,json}` 与 `.eslintrc` （Legacy）
+- `package.json` 中的 `eslintConfig` 字段
+
+任一命中即可。**全部缺失时返回 `available: false`**，原因写入 `reason` 字段，
+用户能在 PR 摘要的统计表中直接看到 `_unavailable_ — no ESLint config found in repo …`，
+而不是面对一堆"扫描了 N 个文件，0 finding"的迷惑结果。
 
 ---
 
@@ -295,8 +306,9 @@ GitHub Action 输入 `enable_lint_tools`（默认 `true`）是总开关，关闭
 | [`__tests__/lint-diff-filter.test.ts`](../__tests__/lint-diff-filter.test.ts) | unified diff 行号提取、变更行窗口过滤、跨工具去重（含规则名归一化） |
 | [`__tests__/lint-orchestrator.test.ts`](../__tests__/lint-orchestrator.test.ts) | 启用/禁用、不可用工具的 ToolSummary、scan 抛异常的容忍、`disabled=true` 短路 |
 | [`__tests__/lint-prompt-injection.test.ts`](../__tests__/lint-prompt-injection.test.ts) | 杠杆 A 条件注入：lintContext 空/非空两条路径在最终 prompt 中的体现；token 节省下界 |
+| [`__tests__/lint-eslint-config-detection.test.ts`](../__tests__/lint-eslint-config-detection.test.ts) | 改进 A：项目缺少 ESLint 配置时 `detect()` 返回 available=false；覆盖 Flat Config / Legacy / package.json#eslintConfig / 损坏 package.json 等 7 种情形 |
 
-执行：`npm test`（与既有 182 个用例合并后总计 198 个用例全部通过）。
+执行：`npm test`（与既有 182 个用例合并后总计 205 个用例全部通过）。
 
 ---
 
@@ -331,3 +343,4 @@ GitHub Action 输入 `enable_lint_tools`（默认 `true`）是总开关，关闭
 | `.codesentinel.yaml` 配置化 | `config.ts::loadConfig` |
 | 性能 ≤ 3 分钟 | 并行执行 + 单工具 60s 默认超时 |
 | 错误容忍 | `safeDetect` + scan try/catch + `available=false` 上报 |
+| ESLint 项目无配置时优雅降级 | `EslintAdapter.detect()` 检测到 `eslint.config.*` / `.eslintrc.*` / `package.json#eslintConfig` 缺失时返回 `available=false`（改进 A） |

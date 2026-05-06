@@ -88,10 +88,11 @@ export async function runLintTools(
   }
 
   // 2) 检测每个工具是否在执行环境中可用（并行）
+  //    传入 repoRoot 让适配器能检查项目侧前置条件（如 ESLint 9 的 eslint.config.js）
   const detections = await Promise.all(
     enabledAdapters.map(async a => ({
       adapter: a,
-      detection: await safeDetect(a)
+      detection: await safeDetect(a, options.repoRoot)
     }))
   )
 
@@ -192,9 +193,12 @@ export async function runLintTools(
   }
 }
 
-async function safeDetect(adapter: ToolAdapter): ReturnType<ToolAdapter['detect']> {
+async function safeDetect(
+  adapter: ToolAdapter,
+  repoRoot: string
+): ReturnType<ToolAdapter['detect']> {
   try {
-    return await adapter.detect()
+    return await adapter.detect(repoRoot)
   } catch (e) {
     return {
       available: false,

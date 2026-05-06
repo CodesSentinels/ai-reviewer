@@ -47,7 +47,7 @@ class FakeAdapter implements ToolAdapter {
     this.defaultEnabled = defaultEnabled
   }
 
-  async detect(): Promise<ToolDetection> {
+  async detect(_repoRoot: string): Promise<ToolDetection> {
     return this.detection
   }
 

@@ -42,6 +42,7 @@
 | 跨工具去重 | 在 orchestrator 里做 | 不去重 | ESLint 与 Biome 大量规则重叠，不去重会出现"同一行两条几乎一样的评论" |
 | 配置文件 | `.codesentinel.yaml` | 全部走 GitHub Action 输入 | 工具特定参数（rule 列表、严重级别覆盖）通过 Action 输入会爆炸 |
 | 单工具失败处理 | 记入 ToolSummary，继续 | 整体失败 | "缺一个工具就不审查"对用户体验是灾难 |
+| ESLint 项目配置缺失 | `detect()` 检测后标 `available=false`（改进 A） | 让 scan 静默返回 0 finding | ESLint 9 Flat Config 不内置规则；不检查会让用户面对"扫描了 N 文件，0 finding"，无从诊断 |
 | Phase 1 范围 | JS/TS（ESLint+Biome+Prettier） | 一次铺开所有语言 | 先把骨架打牢；Phase 2-5 复用骨架 |
 
 ### 1.4 明确不做什么（反模式清单）
@@ -293,7 +294,7 @@ flowchart TD
   S1OK --> S2
 
   S2["Step 2<br/>defaultAdapters() 过滤<br/>isToolEnabled(name, cfg, default)"]
-  S2 --> S3["Step 3<br/>Promise.all 并行检测<br/>safeDetect(adapter)"]
+  S2 --> S3["Step 3<br/>Promise.all 并行检测<br/>safeDetect(adapter, repoRoot)<br/>· 二进制可用性<br/>· 项目侧前置 (改进 A: ESLint 配置文件)"]
 
   S3 --> S4["Step 4<br/>Promise.all 并行扫描"]
 
@@ -416,6 +417,7 @@ flowchart TD
     M1["detect() throws<br/>→ safeDetect 捕获<br/>→ {available:false, reason}"]
     M2["detect 命令 ENOENT<br/>→ exec 返回 spawnError<br/>→ available:false"]
     M3["detect 超时 (10s)<br/>→ ETIMEDOUT<br/>→ available:false"]
+    M3a["改进 A: ESLint 项目无配置<br/>→ findEslintConfig 返回 null<br/>→ available:false<br/>→ reason: 'no ESLint config found in repo …'"]
     M4["scan() throws<br/>→ try/catch 包裹<br/>→ warning + raw=[]"]
     M5["scan 超时 (60s)<br/>→ exec timed out<br/>→ raw=[] (当作 0 发现)"]
     M6["scan stdout 解析失败<br/>→ parseJsonSafe 返回 null<br/>→ raw=[]"]
@@ -471,7 +473,7 @@ flowchart TD
 | 目标 | 落地方式 | 证据 |
 |:-----|:---------|:-----|
 | 可扩展 | `ToolAdapter` 接口 + `defaultAdapters()` 注册表 | Phase 2 加 golangci-lint 仅需新增 1 个文件 |
-| 失败容忍 | 三层 try/catch（safeDetect / scan / runLintTools 整体） | `lint-orchestrator.test.ts` 4 个用例覆盖 |
+| 失败容忍 | 三层 try/catch（safeDetect / scan / runLintTools 整体）+ 改进 A：ESLint 项目无配置时优雅降级 | `lint-orchestrator.test.ts` 4 + `lint-eslint-config-detection.test.ts` 7 个用例覆盖 |
 | 聚焦变更 | `buildChangedLineMap` + `filterByChangedLines(tol=3)` | `lint-diff-filter.test.ts` 中 "drops outside tolerance" 通过 |
 | 零新增依赖 | 复用 `js-yaml` (require)、`child_process.execFile` | `package.json` 未改 |
 | AI ↔ 工具有机融合 | Prompt **条件**注入（杠杆 A） + 评论标注 + 摘要表 三处协同 | `prompts.ts::renderReviewFileDiff` + `formatToolAttribution` + `lint-prompt-injection.test.ts` |

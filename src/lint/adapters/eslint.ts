@@ -12,6 +12,8 @@
  */
 
 import {info} from '@actions/core'
+import {existsSync, readFileSync} from 'fs'
+import * as path from 'path'
 import {
   type LintResult,
   type ToolAdapter,
@@ -19,6 +21,53 @@ import {
   type ToolDetection
 } from '../types'
 import {extractVersion, parseJsonSafe, runCommand} from './exec'
+
+/**
+ * 项目根可能存在的 ESLint 配置文件名（按优先级）。
+ *
+ * - 前 6 个：ESLint 9 Flat Config 系列
+ * - 中段：Legacy `.eslintrc.*`（ESLint 8 及更早）
+ *
+ * `package.json#eslintConfig` 字段会单独检查。
+ */
+const ESLINT_CONFIG_FILES = [
+  'eslint.config.js',
+  'eslint.config.mjs',
+  'eslint.config.cjs',
+  'eslint.config.ts',
+  'eslint.config.mts',
+  'eslint.config.cts',
+  '.eslintrc.js',
+  '.eslintrc.cjs',
+  '.eslintrc.yaml',
+  '.eslintrc.yml',
+  '.eslintrc.json',
+  '.eslintrc'
+]
+
+/**
+ * 在仓库根查找 ESLint 配置；找到任一即视为存在
+ *
+ * @returns 命中的配置标识（文件名或 'package.json#eslintConfig'），未找到返回 null
+ */
+function findEslintConfig(repoRoot: string): string | null {
+  for (const name of ESLINT_CONFIG_FILES) {
+    if (existsSync(path.join(repoRoot, name))) return name
+  }
+  // package.json 内嵌 eslintConfig
+  const pkgPath = path.join(repoRoot, 'package.json')
+  if (existsSync(pkgPath)) {
+    try {
+      const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as {
+        eslintConfig?: unknown
+      }
+      if (pkg.eslintConfig != null) return 'package.json#eslintConfig'
+    } catch {
+      // 解析失败不算命中
+    }
+  }
+  return null
+}
 
 /** ESLint JSON 输出中单个 message 的结构 */
 interface EslintMessage {
@@ -76,12 +125,14 @@ export class EslintAdapter implements ToolAdapter {
   /** 解析出的 ESLint 版本，detect() 后填充 */
   private resolvedVersion = ''
 
-  async detect(): Promise<ToolDetection> {
+  async detect(repoRoot: string): Promise<ToolDetection> {
+    // 第一步：确认 ESLint 二进制可用
     const result = await runCommand({
       command: 'npx',
       args: ['--no-install', 'eslint', '--version'],
       timeoutMs: 10_000
     })
+    let version: string
     if (result.spawnError || result.exitCode !== 0) {
       // 回退：尝试全局 eslint
       const fallback = await runCommand({
@@ -95,11 +146,27 @@ export class EslintAdapter implements ToolAdapter {
           reason: result.spawnErrorMessage ?? 'eslint --version failed'
         }
       }
-      this.resolvedVersion = extractVersion(fallback.stdout)
-      return {available: true, version: this.resolvedVersion}
+      version = extractVersion(fallback.stdout)
+    } else {
+      version = extractVersion(result.stdout)
     }
-    this.resolvedVersion = extractVersion(result.stdout)
-    return {available: true, version: this.resolvedVersion}
+
+    // 第二步：ESLint 9 Flat Config 不再内置默认规则；项目无配置 → 标记为不可用
+    // 这样用户在 PR 摘要的统计表中能直接看到原因，而不是面对一堆"扫描了 N 个文件，0 finding"
+    // 的迷惑结果。
+    const configFile = findEslintConfig(repoRoot)
+    if (configFile == null) {
+      return {
+        available: false,
+        version,
+        reason:
+          'no ESLint config found in repo (looked for eslint.config.{js,mjs,cjs,ts,mts,cts}, .eslintrc.*, package.json#eslintConfig)'
+      }
+    }
+    info(`lint/eslint: detected project config: ${configFile}`)
+
+    this.resolvedVersion = version
+    return {available: true, version}
   }
 
   async scan(
