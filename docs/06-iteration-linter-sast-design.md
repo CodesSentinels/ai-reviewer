@@ -26,6 +26,10 @@
 
 ```mermaid
 flowchart TB
+  subgraph Shared["src/changed-lines.ts (共享 diff 扫描器)"]
+    cl["scanPatch / buildPatchScans<br/>一次 walk 产出 addedLines + touchedLines"]
+  end
+
   subgraph Lint["src/lint/  (Linter/SAST 集成模块)"]
     direction TB
 
@@ -35,7 +39,7 @@ flowchart TB
       direction LR
       types["types.ts<br/>LintResult / ToolAdapter / ToolConfig"]
       ld["language-detector.ts<br/>扩展名 → 语言"]
-      df["diff-filter.ts<br/>变更行 + 过滤 + 去重"]
+      df["diff-filter.ts<br/>过滤 + 跨工具去重"]
       cfg["config.ts<br/>.codesentinel.yaml 解析"]
       orch["orchestrator.ts<br/>检测 → 选择 → 并行扫描 → 聚合"]
       fmt["formatter.ts<br/>Prompt 注入 / PR 摘要表 / 评论标注"]
@@ -50,6 +54,10 @@ flowchart TB
     end
   end
 
+  subgraph Dep["src/dependency-analyzer.ts"]
+    da["analyzeDependencies / findEnclosingExports"]
+  end
+
   idx --> Core
   idx --> Adapters
   orch --> df
@@ -59,9 +67,17 @@ flowchart TB
   es -. 共享 .-> exec
   bi -. 共享 .-> exec
   pr -. 共享 .-> exec
+  orch -. 用 addedLines .-> cl
+  da -. 用 touchedLines .-> cl
 ```
 
-集成点：`src/review.ts` 在 Phase 0b 调用 orchestrator，结果注入 Phase 4 的逐文件审查 Prompt。
+集成点：
+
+- `src/review.ts` 在 Phase 0/0b **之前** 通过 `buildPatchScans(filesAndChanges)` 一次性扫描每个 file 的 unified diff，得到 `PatchScanMap`
+- 把同一份 `PatchScanMap` 同时传入 `runLintTools(...)` 和 `analyzeDependencies(...)`
+- lint 用 `addedLines`（仅 `+` 行，删除行不存在于新文件无 finding 可言）
+- 依赖分析用 `touchedLines`（`+` 与 `-` 都标，"作用域内被改"也包括纯删除）
+- 同一份 diff 字符串只 walk 一次，三处冗余扫描收敛为一处
 
 ---
 
@@ -307,8 +323,9 @@ GitHub Action 输入 `enable_lint_tools`（默认 `true`）是总开关，关闭
 | [`__tests__/lint-orchestrator.test.ts`](../__tests__/lint-orchestrator.test.ts) | 启用/禁用、不可用工具的 ToolSummary、scan 抛异常的容忍、`disabled=true` 短路 |
 | [`__tests__/lint-prompt-injection.test.ts`](../__tests__/lint-prompt-injection.test.ts) | 杠杆 A 条件注入：lintContext 空/非空两条路径在最终 prompt 中的体现；token 节省下界 |
 | [`__tests__/lint-eslint-config-detection.test.ts`](../__tests__/lint-eslint-config-detection.test.ts) | 改进 A：项目缺少 ESLint 配置时 `detect()` 返回 available=false；覆盖 Flat Config / Legacy / package.json#eslintConfig / 损坏 package.json 等 7 种情形 |
+| [`__tests__/changed-lines.test.ts`](../__tests__/changed-lines.test.ts) | 集中 diff 扫描：`scanPatch` 单次 walk 产出 added/touched 两份集合；`buildPatchScans`/`toAddedLineMap`；纯删除 hunk / 多 hunk / 边界字符（"\\ No newline …"）等 8 种情形 |
 
-执行：`npm test`（与既有 182 个用例合并后总计 205 个用例全部通过）。
+执行：`npm test`（与既有 182 个用例合并后总计 213 个用例全部通过）。
 
 ---
 
@@ -344,3 +361,4 @@ GitHub Action 输入 `enable_lint_tools`（默认 `true`）是总开关，关闭
 | 性能 ≤ 3 分钟 | 并行执行 + 单工具 60s 默认超时 |
 | 错误容忍 | `safeDetect` + scan try/catch + `available=false` 上报 |
 | ESLint 项目无配置时优雅降级 | `EslintAdapter.detect()` 检测到 `eslint.config.*` / `.eslintrc.*` / `package.json#eslintConfig` 缺失时返回 `available=false`（改进 A） |
+| diff 扫描去冗余 | `src/changed-lines.ts::scanPatch` 单次 walk 产出 `addedLines` + `touchedLines`；`review.ts` 通过 `buildPatchScans` 预扫描后传给 `runLintTools` 与 `analyzeDependencies`，三处冗余收敛为一处 |

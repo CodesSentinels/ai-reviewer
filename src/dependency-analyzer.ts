@@ -17,6 +17,7 @@ import {info, warning} from '@actions/core'
 // eslint-disable-next-line camelcase
 import {context as github_context} from '@actions/github'
 import pLimit from 'p-limit'
+import {scanPatch, type PatchScanMap} from './changed-lines'
 import {octokit} from './octokit'
 import {type Options} from './options'
 import {
@@ -629,12 +630,22 @@ function addHunkContextSymbol(
  *
  * 作用域判断采用简化启发式：导出声明从其定义行开始，到下一个同级
  * 导出声明之前（或文件末尾）结束。
+ *
+ * @param touchedLines `+` 与 `-` 行的新文件行号集合（典型来自 `scanPatch().touchedLines`）。
+ *                     传入 `Set<number>` 而非 fileDiff，避免对同一份 diff 重复 walk。
+ *                     兼容旧调用：可以传入 fileDiff 字符串，函数会自动判别并扫描。
  */
 export function findEnclosingExports(
   filename: string,
   fileContent: string,
-  fileDiff: string
+  touchedLinesOrDiff: Set<number> | string
 ): ModifiedSymbol[] {
+  // 兼容旧签名：第三参数是 fileDiff 字符串时，就地扫描得到 touchedLines
+  const touchedLines: Set<number> =
+    typeof touchedLinesOrDiff === 'string'
+      ? scanPatch(touchedLinesOrDiff).touchedLines
+      : touchedLinesOrDiff
+
   const language = detectLanguage(filename)
 
   // 对 .vue 文件提取 script 块
@@ -688,35 +699,8 @@ export function findEnclosingExports(
 
   if (exportDeclarations.length === 0) return []
 
-  // 2. 从 diff 中提取实际修改行的行号（基于新文件的行号）
-  // 只追踪 +/- 行，不是整个 hunk 范围，避免误判相邻函数
-  const modifiedLines = new Set<number>()
-  const hunkRe = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/
-  let currentNewLine = 0
-  let inHunk = false
-  for (const line of fileDiff.split('\n')) {
-    const m = line.match(hunkRe)
-    if (m) {
-      currentNewLine = parseInt(m[1], 10)
-      inHunk = true
-      continue
-    }
-    if (!inHunk) continue
-    if (line.startsWith('+')) {
-      modifiedLines.add(currentNewLine)
-      currentNewLine++
-    } else if (line.startsWith('-')) {
-      // 删除行：标记当前位置（删除发生在此行号处）
-      modifiedLines.add(currentNewLine)
-      // 删除行不增加新文件行号
-    } else if (line.startsWith(' ')) {
-      currentNewLine++
-    } else if (line.startsWith('\\')) {
-      // "\ No newline at end of file" — 忽略
-    } else {
-      inHunk = false
-    }
-  }
+  // 2. 修改行集合 (touchedLines) 由调用方传入；避免对同一份 diff 重复 walk
+  const modifiedLines = touchedLines
 
   // 3. 为每个导出声明估算作用域范围（到下一个导出声明之前）
   // 然后检查是否有实际修改行落在该范围内
@@ -1102,13 +1086,17 @@ function hasReExportFrom(
  * @param repoFiles - 仓库文件树
  * @param options - 全局配置
  * @param githubConcurrencyLimit - GitHub API 并发限制器
+ * @param patchScans - （可选）由 review.ts 预先扫描的 PatchScanMap。
+ *   传入后避免对每个 fileDiff 重新 walk 提取 modifiedLines。
+ *   未传入时会按需就地扫描（兼容直接调用此函数的单元测试与早期调用方）。
  * @returns 完整的依赖分析上下文
  */
 export async function analyzeDependencies(
   filesAndChanges: Array<[string, string, string, Array<[number, number, string]>]>,
   repoFiles: string[],
   options: Options,
-  githubConcurrencyLimit: ReturnType<typeof pLimit>
+  githubConcurrencyLimit: ReturnType<typeof pLimit>,
+  patchScans?: PatchScanMap
 ): Promise<DependencyContext> {
   const fileAnalyses = new Map<string, FileDependencyInfo>()
 
@@ -1132,7 +1120,15 @@ export async function analyzeDependencies(
     // 当修改发生在导出函数内部时，diff 行中不包含 export 声明，
     // 需要通过文件内容 + hunk 行号范围来识别受影响的导出
     if (fileContent.length > 0) {
-      const enclosingExports = findEnclosingExports(filename, fileContent, fileDiff)
+      // 优先复用预扫描的 touchedLines；缺失时就地 walk
+      const touchedLines =
+        patchScans?.get(filename)?.touchedLines ??
+        scanPatch(fileDiff).touchedLines
+      const enclosingExports = findEnclosingExports(
+        filename,
+        fileContent,
+        touchedLines
+      )
       for (const sym of enclosingExports) {
         if (!exportedSymbols.some(s => s.name === sym.name && s.type === sym.type)) {
           exportedSymbols.push(sym)

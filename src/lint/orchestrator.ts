@@ -15,6 +15,11 @@
  */
 
 import {info, warning} from '@actions/core'
+import {
+  buildPatchScans,
+  toAddedLineMap,
+  type PatchScanMap
+} from '../changed-lines'
 import {EslintAdapter} from './adapters/eslint'
 import {BiomeAdapter} from './adapters/biome'
 import {PrettierAdapter} from './adapters/prettier'
@@ -24,11 +29,7 @@ import {
   isToolEnabled,
   loadConfig
 } from './config'
-import {
-  buildChangedLineMap,
-  deduplicateResults,
-  filterByChangedLines
-} from './diff-filter'
+import {deduplicateResults, filterByChangedLines} from './diff-filter'
 import {
   type LintReport,
   type LintResult,
@@ -49,6 +50,13 @@ export interface OrchestratorOptions {
   disabled?: boolean
   /** 用户配置覆盖（如果传入则跳过 .codesentinel.yaml 加载） */
   configOverride?: CodeSentinelConfig
+  /**
+   * 预先在 review.ts 一次性扫描得到的 PatchScanMap。
+   *
+   * 传入后本模块跳过对 fileDiff 的二次 walk；未传入时回退到内部构建（保持
+   * 单元测试与独立调用方的兼容性）。
+   */
+  patchScans?: PatchScanMap
 }
 
 /** 内置适配器注册表 */
@@ -99,7 +107,9 @@ export async function runLintTools(
   const toolSummaries: ToolSummary[] = []
   const allResults: LintResult[] = []
   const changedFiles = options.filesAndChanges.map(([f]) => f)
-  const changedLineMap = buildChangedLineMap(options.filesAndChanges)
+  // 优先复用 review.ts 预先扫描好的结果；未传入则在此 fallback 自行构建
+  const scans = options.patchScans ?? buildPatchScans(options.filesAndChanges)
+  const changedLineMap = toAddedLineMap(scans)
 
   // 3) 对每个可用工具：挑选目标文件 → 执行扫描
   await Promise.all(

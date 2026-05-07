@@ -27,6 +27,7 @@ import {
   SHORT_SUMMARY_START_TAG,
   SUMMARIZE_TAG
 } from './commenter'
+import {buildPatchScans} from './changed-lines'
 import {
   analyzeDependencies,
   formatCrossFileContext,
@@ -319,6 +320,13 @@ ${hunks.oldHunk}
     return
   }
 
+  // ==================== 共享：单次扫描 unified diff，得到每文件的 PatchScan ====================
+  // 提供给 Phase 0b（lint）与 Phase 0（依赖分析）复用，避免对同一份 diff
+  // 字符串重复 walk。Phase 0b 取 addedLines（lint 窗口过滤），Phase 0 取
+  // touchedLines（导出函数作用域内的修改判定）。
+  const patchScans = buildPatchScans(filesAndChanges)
+  info(`shared: precomputed PatchScan for ${patchScans.size} file(s)`)
+
   // ==================== 阶段零·B：静态分析工具扫描（Linter/SAST） ====================
   let lintReport: LintReport | null = null
   if (options.enableLintTools) {
@@ -327,6 +335,7 @@ ${hunks.oldHunk}
       lintReport = await runLintTools({
         repoRoot: process.cwd(),
         filesAndChanges,
+        patchScans,
         disabled: false
       })
       info(
@@ -354,7 +363,8 @@ ${hunks.oldHunk}
         filesAndChanges,
         repoFiles,
         options,
-        githubConcurrencyLimit
+        githubConcurrencyLimit,
+        patchScans
       )
       info('Phase 0: dependency analysis completed')
     } catch (e: any) {

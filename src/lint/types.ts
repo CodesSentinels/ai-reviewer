@@ -120,9 +120,9 @@ export interface ToolAdapter {
 /**
  * 单个文件在 diff 中的变更行集合
  *
- * key 为文件路径，value 为该文件中所有"新增/修改"的行号集合（基于 PR head）。
+ * 类型定义已上提到 src/changed-lines.ts；此处 re-export 以保持现有 import 路径兼容。
  */
-export type ChangedLineMap = Map<string, Set<number>>
+export type {ChangedLineMap} from '../changed-lines'
 
 /** Lint 阶段最终输出 */
 export interface LintReport {

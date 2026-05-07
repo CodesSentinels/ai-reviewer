@@ -39,6 +39,7 @@
 | 工具调用方式 | 子进程 `execFile` 调 CLI | 通过 npm API 内嵌 | API 版本耦合、不同语言无统一接口、不便扩展到 Go/Python |
 | 工具发现 → AI 注入 | Prompt 中**条件**注入（杠杆 A） + 评论尾部标注 | 直接发布工具评论 / 总是注入 | 直接发评论会与 AI 评论错位，且 AI 无法交叉验证；总是注入则在无 finding 文件上浪费 ~300 token |
 | 变更行过滤 | 在 orchestrator 里统一做 | 让每个适配器自己做 | 过滤逻辑应一次定义；适配器只关心解析 |
+| diff 扫描位置 | 上提到 `src/changed-lines.ts`，`review.ts` 一次扫描全文件，按 `addedLines` / `touchedLines` 分发 | 各模块各扫一遍 | 历史上 review/dep-analyzer/diff-filter 三处都有 walker，是真实的 DRY 问题 |
 | 跨工具去重 | 在 orchestrator 里做 | 不去重 | ESLint 与 Biome 大量规则重叠，不去重会出现"同一行两条几乎一样的评论" |
 | 配置文件 | `.codesentinel.yaml` | 全部走 GitHub Action 输入 | 工具特定参数（rule 列表、严重级别覆盖）通过 Action 输入会爆炸 |
 | 单工具失败处理 | 记入 ToolSummary，继续 | 整体失败 | "缺一个工具就不审查"对用户体验是灾难 |
@@ -313,8 +314,8 @@ flowchart TD
   end
 
   S4 --> PerTool
-  PerTool --> S5["Step 5<br/>buildChangedLineMap()<br/>解析 unified diff 提取 + 行号"]
-  S5 --> S6["Step 6<br/>filterByChangedLines<br/>(tolerance = 3)"]
+  PerTool --> S5["Step 5<br/>取 addedLines = patchScans.get(file).addedLines<br/>(预扫描结果，orchestrator 不再 walk)"]
+  S5 --> S6["Step 6<br/>filterByChangedLines (tolerance = 3)<br/>·使用 review.ts 预扫描的 addedLines<br/>·orchestrator 不再独立 walk diff"]
   S6 --> S7["Step 7<br/>deduplicateResults()<br/>归一化规则名 + 取高 severity"]
   S7 --> S8["Step 8<br/>sort by (file, line)"]
   S8 --> OUT["LintReport {<br/>results, toolSummaries,<br/>durationMs, filesScanned }"]
@@ -464,6 +465,30 @@ flowchart TD
   CONS --> RES["LintResult[]"]
 ```
 
+### 3.7 单次 diff 扫描的复用拓扑
+
+历史上 `review.ts` / `dependency-analyzer.ts` / `lint/diff-filter.ts` 各自实现了
+几乎相同的 unified diff walker。重构后 `src/changed-lines.ts::scanPatch` 单次
+walk 同时产出两份语义不同的集合，`review.ts` 在 Phase 0/0b 之前预扫描一次，
+两个下游消费者按字段挑取所需。
+
+```mermaid
+flowchart TB
+  RV["review.ts::codeReview()<br/>（解析 hunk 之后）"]
+  RV --> BPS["buildPatchScans(filesAndChanges)<br/>对每文件 fileDiff 调一次 scanPatch"]
+  BPS --> PSM["PatchScanMap<br/>file → { addedLines, touchedLines }"]
+
+  PSM -->|"addedLines<br/>(仅 + 行)"| LO["runLintTools({patchScans, ...})<br/>orchestrator 用于 filterByChangedLines"]
+  PSM -->|"touchedLines<br/>(+ 与 - 行)"| DA["analyzeDependencies(..., patchScans)<br/>findEnclosingExports 用于<br/>判断作用域内是否被改"]
+
+  LO --> LR["LintReport"]
+  DA --> DC["DependencyContext"]
+```
+
+> 💡 关键差异：lint 关心"新文件中有哪些行可被工具检查到"（仅 `+`），
+> 依赖分析关心"导出函数作用域内有没有任何变更"（`+` 与 `-` 都算）。
+> 单次 walk 产出两份集合，比两次 walk 各自产出更经济，也避免了语义漂移。
+
 ---
 
 ## 第四部分 · 设计回顾
@@ -474,7 +499,7 @@ flowchart TD
 |:-----|:---------|:-----|
 | 可扩展 | `ToolAdapter` 接口 + `defaultAdapters()` 注册表 | Phase 2 加 golangci-lint 仅需新增 1 个文件 |
 | 失败容忍 | 三层 try/catch（safeDetect / scan / runLintTools 整体）+ 改进 A：ESLint 项目无配置时优雅降级 | `lint-orchestrator.test.ts` 4 + `lint-eslint-config-detection.test.ts` 7 个用例覆盖 |
-| 聚焦变更 | `buildChangedLineMap` + `filterByChangedLines(tol=3)` | `lint-diff-filter.test.ts` 中 "drops outside tolerance" 通过 |
+| 聚焦变更 | `src/changed-lines.ts::scanPatch` 单次 walk → `review.ts` 预扫描 PatchScanMap → `runLintTools` 与 `analyzeDependencies` 共享 | `lint-diff-filter.test.ts`、`changed-lines.test.ts` 中 added/touched 双语义覆盖通过 |
 | 零新增依赖 | 复用 `js-yaml` (require)、`child_process.execFile` | `package.json` 未改 |
 | AI ↔ 工具有机融合 | Prompt **条件**注入（杠杆 A） + 评论标注 + 摘要表 三处协同 | `prompts.ts::renderReviewFileDiff` + `formatToolAttribution` + `lint-prompt-injection.test.ts` |
 

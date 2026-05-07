@@ -1,78 +1,28 @@
 /**
- * lint/diff-filter.ts - 变更行提取与结果过滤
+ * lint/diff-filter.ts - lint 结果过滤与去重
  *
- * 工具会扫描整个文件，但 PR 审查只关心变更行附近的问题。
- * 本模块从 unified diff 中提取每个文件的变更行号集合，
- * 并据此过滤工具结果。
+ * 变更行扫描逻辑已上提到 src/changed-lines.ts，本模块仅保留：
+ *   - filterByChangedLines / isLineInChangedWindow：基于变更行 ± tolerance 的过滤
+ *   - deduplicateResults：跨工具同位置同问题去重
+ *
+ * 同时为兼容旧调用方（包括 __tests__/lint-diff-filter.test.ts），从
+ * `../changed-lines` 重新导出 `extractChangedLinesFromPatch` 与 `buildChangedLineMap`。
  */
 
 import {info} from '@actions/core'
-import {type ChangedLineMap, type LintResult} from './types'
+import {
+  buildChangedLineMap,
+  extractChangedLinesFromPatch,
+  type ChangedLineMap
+} from '../changed-lines'
+import {type LintResult} from './types'
+
+// 兼容性 re-export
+export {buildChangedLineMap, extractChangedLinesFromPatch}
+export type {ChangedLineMap}
 
 /** 变更行附近的"上下文容忍范围"。单位：行 */
 export const DEFAULT_CONTEXT_TOLERANCE = 3
-
-/**
- * 从单个文件的 diff patch 中提取所有变更行号
- *
- * 仅采集"新增行（+）"对应的新文件行号。删除行不产生新文件行号。
- * 上下文行（空格前缀）也会推进新文件行号但不算变更行。
- *
- * @param patch unified diff 字符串
- * @returns 变更行号集合（基于新文件，1-based）
- */
-export function extractChangedLinesFromPatch(patch: string): Set<number> {
-  const changed = new Set<number>()
-  if (!patch) return changed
-
-  const hunkHeader = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/
-  const lines = patch.split('\n')
-  let currentNewLine = 0
-  let inHunk = false
-
-  for (const line of lines) {
-    const m = line.match(hunkHeader)
-    if (m != null) {
-      currentNewLine = parseInt(m[1], 10)
-      inHunk = true
-      continue
-    }
-    if (!inHunk) continue
-    if (line.startsWith('+')) {
-      changed.add(currentNewLine)
-      currentNewLine++
-    } else if (line.startsWith('-')) {
-      // 删除行不增加新文件行号
-    } else if (line.startsWith(' ')) {
-      currentNewLine++
-    } else if (line.startsWith('\\')) {
-      // "\ No newline at end of file" — 忽略
-    } else {
-      inHunk = false
-    }
-  }
-
-  return changed
-}
-
-/**
- * 从 filesAndChanges 三元组列表构建变更行映射
- *
- * @param filesAndChanges [filename, fileContent, fileDiff, patches] 列表
- *   其中 fileDiff 为整个文件的 unified diff
- * @returns 文件 → 变更行号集合
- */
-export function buildChangedLineMap(
-  filesAndChanges: Array<
-    [string, string, string, Array<[number, number, string]>]
-  >
-): ChangedLineMap {
-  const map: ChangedLineMap = new Map()
-  for (const [filename, , fileDiff] of filesAndChanges) {
-    map.set(filename, extractChangedLinesFromPatch(fileDiff))
-  }
-  return map
-}
 
 /**
  * 判断行号是否在变更窗口内（变更行 ± tolerance）
@@ -95,7 +45,7 @@ export function isLineInChangedWindow(
  * 非 PR 变更文件）。
  *
  * @param results 原始 lint 结果
- * @param changedLineMap 变更行映射
+ * @param changedLineMap 变更行映射（由调用方传入；典型来自 `buildPatchScans` 的 addedLines）
  * @param tolerance 上下文容忍范围（默认 3 行）
  */
 export function filterByChangedLines(
