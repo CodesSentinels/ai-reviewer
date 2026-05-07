@@ -11209,7 +11209,7 @@ __nccwpck_require__.r(__webpack_exports__);
 /* harmony import */ var _commands_early_reaction__WEBPACK_IMPORTED_MODULE_3__ = __nccwpck_require__(6360);
 /* harmony import */ var _options__WEBPACK_IMPORTED_MODULE_4__ = __nccwpck_require__(5341);
 /* harmony import */ var _prompts__WEBPACK_IMPORTED_MODULE_6__ = __nccwpck_require__(2379);
-/* harmony import */ var _review__WEBPACK_IMPORTED_MODULE_5__ = __nccwpck_require__(658);
+/* harmony import */ var _review__WEBPACK_IMPORTED_MODULE_5__ = __nccwpck_require__(2594);
 /**
  * main.ts - GitHub Action 入口文件
  *
@@ -14099,7 +14099,7 @@ $lint_context
 
 /***/ }),
 
-/***/ 658:
+/***/ 2594:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
 "use strict";
@@ -14279,6 +14279,115 @@ function pLimit(concurrency) {
 
 // EXTERNAL MODULE: ./lib/commenter.js
 var lib_commenter = __nccwpck_require__(4558);
+;// CONCATENATED MODULE: ./lib/changed-lines.js
+/**
+ * changed-lines.ts - 统一的 unified diff 行号扫描器
+ *
+ * 历史上 review.ts / dependency-analyzer.ts / lint/diff-filter.ts 各自实现了
+ * 几乎一样的"逐行 walk diff、推进 newLine"逻辑。这里集中一份，
+ * 让上层调用方一次扫描产出两份语义不同的集合：
+ *
+ *   - addedLines     ：仅 `+` 行的新文件行号
+ *                       适用：lint 结果窗口过滤（删除行不存在于新文件，无 finding 可言）
+ *
+ *   - touchedLines   ：`+` 与 `-` 两类行的新文件行号（删除行标记其发生位置）
+ *                       适用：依赖分析判断"导出函数作用域内是否有变更"
+ *                            （只有删除也算函数被修改）
+ *
+ * 设计原则：
+ *   - 单次 walk，生成两份集合，避免对同一份 diff 字符串的重复扫描
+ *   - 各消费者按字段挑取所需，不再各自实现 walker
+ */
+const HUNK_HEADER_RE = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/;
+/**
+ * 对单个文件的 unified diff 做一次 walk，返回 `addedLines` 与 `touchedLines`
+ *
+ * 规则：
+ *   - 遇到 `@@ -a,b +c,d @@` 头：currentNewLine = c
+ *   - `+` 行：addedLines.add(currentNewLine); touchedLines.add(currentNewLine); currentNewLine++
+ *   - `-` 行：仅 touchedLines.add(currentNewLine)；不推进 currentNewLine
+ *   - ` ` 行（上下文）：仅推进 currentNewLine
+ *   - `\` 行（"\ No newline at end of file"）：忽略
+ *   - 其他：视为 hunk 结束
+ */
+function scanPatch(patch) {
+    const addedLines = new Set();
+    const touchedLines = new Set();
+    if (!patch)
+        return { addedLines, touchedLines };
+    let currentNewLine = 0;
+    let inHunk = false;
+    for (const line of patch.split('\n')) {
+        const m = line.match(HUNK_HEADER_RE);
+        if (m != null) {
+            currentNewLine = parseInt(m[1], 10);
+            inHunk = true;
+            continue;
+        }
+        if (!inHunk)
+            continue;
+        if (line.startsWith('+')) {
+            addedLines.add(currentNewLine);
+            touchedLines.add(currentNewLine);
+            currentNewLine++;
+        }
+        else if (line.startsWith('-')) {
+            touchedLines.add(currentNewLine);
+            // 删除行不推进 newLine
+        }
+        else if (line.startsWith(' ')) {
+            currentNewLine++;
+        }
+        else if (line.startsWith('\\')) {
+            // 忽略 "\ No newline at end of file"
+        }
+        else {
+            inHunk = false;
+        }
+    }
+    return { addedLines, touchedLines };
+}
+/**
+ * 兼容方法：仅返回 added 行 Set（与早期 `extractChangedLinesFromPatch` 等价）
+ */
+function extractChangedLinesFromPatch(patch) {
+    return scanPatch(patch).addedLines;
+}
+/**
+ * 对 PR 中所有变更文件做一次 walk，得到 PatchScanMap
+ *
+ * @param filesAndChanges [filename, fileContent, fileDiff, patches] 列表
+ */
+function buildPatchScans(filesAndChanges) {
+    const map = new Map();
+    for (const [filename, , fileDiff] of filesAndChanges) {
+        map.set(filename, scanPatch(fileDiff));
+    }
+    return map;
+}
+/**
+ * 兼容方法：返回 file → addedLines Set 的映射
+ *
+ * 内部仍走 `buildPatchScans`，仅丢弃 touchedLines 字段。
+ */
+function buildChangedLineMap(filesAndChanges) {
+    const map = new Map();
+    for (const [filename, scan] of buildPatchScans(filesAndChanges)) {
+        map.set(filename, scan.addedLines);
+    }
+    return map;
+}
+/**
+ * 从 PatchScanMap 派生出 added-only 的 ChangedLineMap（lint 用）
+ */
+function toAddedLineMap(scans) {
+    const map = new Map();
+    for (const [filename, scan] of scans) {
+        map.set(filename, scan.addedLines);
+    }
+    return map;
+}
+
 // EXTERNAL MODULE: ./lib/octokit.js
 var octokit = __nccwpck_require__(2247);
 ;// CONCATENATED MODULE: ./lib/repo-tree.js
@@ -14508,6 +14617,7 @@ function sortByProximity(candidateFiles, modifiedFiles) {
  */
 
 // eslint-disable-next-line camelcase
+
 
 
 
@@ -15017,8 +15127,16 @@ function addHunkContextSymbol(language, hunkContext, symbols, seen, filename) {
  *
  * 作用域判断采用简化启发式：导出声明从其定义行开始，到下一个同级
  * 导出声明之前（或文件末尾）结束。
+ *
+ * @param touchedLines `+` 与 `-` 行的新文件行号集合（典型来自 `scanPatch().touchedLines`）。
+ *                     传入 `Set<number>` 而非 fileDiff，避免对同一份 diff 重复 walk。
+ *                     兼容旧调用：可以传入 fileDiff 字符串，函数会自动判别并扫描。
  */
-function findEnclosingExports(filename, fileContent, fileDiff) {
+function findEnclosingExports(filename, fileContent, touchedLinesOrDiff) {
+    // 兼容旧签名：第三参数是 fileDiff 字符串时，就地扫描得到 touchedLines
+    const touchedLines = typeof touchedLinesOrDiff === 'string'
+        ? scanPatch(touchedLinesOrDiff).touchedLines
+        : touchedLinesOrDiff;
     const language = detectLanguage(filename);
     // 对 .vue 文件提取 script 块
     let content = fileContent;
@@ -15064,40 +15182,8 @@ function findEnclosingExports(filename, fileContent, fileDiff) {
     }
     if (exportDeclarations.length === 0)
         return [];
-    // 2. 从 diff 中提取实际修改行的行号（基于新文件的行号）
-    // 只追踪 +/- 行，不是整个 hunk 范围，避免误判相邻函数
-    const modifiedLines = new Set();
-    const hunkRe = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/;
-    let currentNewLine = 0;
-    let inHunk = false;
-    for (const line of fileDiff.split('\n')) {
-        const m = line.match(hunkRe);
-        if (m) {
-            currentNewLine = parseInt(m[1], 10);
-            inHunk = true;
-            continue;
-        }
-        if (!inHunk)
-            continue;
-        if (line.startsWith('+')) {
-            modifiedLines.add(currentNewLine);
-            currentNewLine++;
-        }
-        else if (line.startsWith('-')) {
-            // 删除行：标记当前位置（删除发生在此行号处）
-            modifiedLines.add(currentNewLine);
-            // 删除行不增加新文件行号
-        }
-        else if (line.startsWith(' ')) {
-            currentNewLine++;
-        }
-        else if (line.startsWith('\\')) {
-            // "\ No newline at end of file" — 忽略
-        }
-        else {
-            inHunk = false;
-        }
-    }
+    // 2. 修改行集合 (touchedLines) 由调用方传入；避免对同一份 diff 重复 walk
+    const modifiedLines = touchedLines;
     // 3. 为每个导出声明估算作用域范围（到下一个导出声明之前）
     // 然后检查是否有实际修改行落在该范围内
     const results = [];
@@ -15409,9 +15495,12 @@ function hasReExportFrom(content, sourceFile, targetFile, repoFilesSet) {
  * @param repoFiles - 仓库文件树
  * @param options - 全局配置
  * @param githubConcurrencyLimit - GitHub API 并发限制器
+ * @param patchScans - （可选）由 review.ts 预先扫描的 PatchScanMap。
+ *   传入后避免对每个 fileDiff 重新 walk 提取 modifiedLines。
+ *   未传入时会按需就地扫描（兼容直接调用此函数的单元测试与早期调用方）。
  * @returns 完整的依赖分析上下文
  */
-async function analyzeDependencies(filesAndChanges, repoFiles, options, githubConcurrencyLimit) {
+async function analyzeDependencies(filesAndChanges, repoFiles, options, githubConcurrencyLimit, patchScans) {
     const fileAnalyses = new Map();
     // 空文件树时跳过分析（getRepoFileTree 失败返回空数组）
     if (repoFiles.length === 0) {
@@ -15430,7 +15519,10 @@ async function analyzeDependencies(filesAndChanges, repoFiles, options, githubCo
         // 当修改发生在导出函数内部时，diff 行中不包含 export 声明，
         // 需要通过文件内容 + hunk 行号范围来识别受影响的导出
         if (fileContent.length > 0) {
-            const enclosingExports = findEnclosingExports(filename, fileContent, fileDiff);
+            // 优先复用预扫描的 touchedLines；缺失时就地 walk
+            const touchedLines = patchScans?.get(filename)?.touchedLines ??
+                scanPatch(fileDiff).touchedLines;
+            const enclosingExports = findEnclosingExports(filename, fileContent, touchedLines);
             for (const sym of enclosingExports) {
                 if (!exportedSymbols.some(s => s.name === sym.name && s.type === sym.type)) {
                     exportedSymbols.push(sym);
@@ -16597,74 +16689,21 @@ function getToolConfig(toolName, config) {
 
 ;// CONCATENATED MODULE: ./lib/lint/diff-filter.js
 /**
- * lint/diff-filter.ts - 变更行提取与结果过滤
+ * lint/diff-filter.ts - lint 结果过滤与去重
  *
- * 工具会扫描整个文件，但 PR 审查只关心变更行附近的问题。
- * 本模块从 unified diff 中提取每个文件的变更行号集合，
- * 并据此过滤工具结果。
+ * 变更行扫描逻辑已上提到 src/changed-lines.ts，本模块仅保留：
+ *   - filterByChangedLines / isLineInChangedWindow：基于变更行 ± tolerance 的过滤
+ *   - deduplicateResults：跨工具同位置同问题去重
+ *
+ * 同时为兼容旧调用方（包括 __tests__/lint-diff-filter.test.ts），从
+ * `../changed-lines` 重新导出 `extractChangedLinesFromPatch` 与 `buildChangedLineMap`。
  */
+
+
+// 兼容性 re-export
 
 /** 变更行附近的"上下文容忍范围"。单位：行 */
 const DEFAULT_CONTEXT_TOLERANCE = 3;
-/**
- * 从单个文件的 diff patch 中提取所有变更行号
- *
- * 仅采集"新增行（+）"对应的新文件行号。删除行不产生新文件行号。
- * 上下文行（空格前缀）也会推进新文件行号但不算变更行。
- *
- * @param patch unified diff 字符串
- * @returns 变更行号集合（基于新文件，1-based）
- */
-function extractChangedLinesFromPatch(patch) {
-    const changed = new Set();
-    if (!patch)
-        return changed;
-    const hunkHeader = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/;
-    const lines = patch.split('\n');
-    let currentNewLine = 0;
-    let inHunk = false;
-    for (const line of lines) {
-        const m = line.match(hunkHeader);
-        if (m != null) {
-            currentNewLine = parseInt(m[1], 10);
-            inHunk = true;
-            continue;
-        }
-        if (!inHunk)
-            continue;
-        if (line.startsWith('+')) {
-            changed.add(currentNewLine);
-            currentNewLine++;
-        }
-        else if (line.startsWith('-')) {
-            // 删除行不增加新文件行号
-        }
-        else if (line.startsWith(' ')) {
-            currentNewLine++;
-        }
-        else if (line.startsWith('\\')) {
-            // "\ No newline at end of file" — 忽略
-        }
-        else {
-            inHunk = false;
-        }
-    }
-    return changed;
-}
-/**
- * 从 filesAndChanges 三元组列表构建变更行映射
- *
- * @param filesAndChanges [filename, fileContent, fileDiff, patches] 列表
- *   其中 fileDiff 为整个文件的 unified diff
- * @returns 文件 → 变更行号集合
- */
-function buildChangedLineMap(filesAndChanges) {
-    const map = new Map();
-    for (const [filename, , fileDiff] of filesAndChanges) {
-        map.set(filename, extractChangedLinesFromPatch(fileDiff));
-    }
-    return map;
-}
 /**
  * 判断行号是否在变更窗口内（变更行 ± tolerance）
  */
@@ -16682,7 +16721,7 @@ function isLineInChangedWindow(line, changedLines, tolerance = DEFAULT_CONTEXT_T
  * 非 PR 变更文件）。
  *
  * @param results 原始 lint 结果
- * @param changedLineMap 变更行映射
+ * @param changedLineMap 变更行映射（由调用方传入；典型来自 `buildPatchScans` 的 addedLines）
  * @param tolerance 上下文容忍范围（默认 3 行）
  */
 function filterByChangedLines(results, changedLineMap, tolerance = DEFAULT_CONTEXT_TOLERANCE) {
@@ -16764,6 +16803,7 @@ function deduplicateResults(results) {
 
 
 
+
 /** 内置适配器注册表 */
 function defaultAdapters() {
     return [new EslintAdapter(), new BiomeAdapter(), new PrettierAdapter()];
@@ -16796,7 +16836,9 @@ async function runLintTools(options, adaptersOverride) {
     const toolSummaries = [];
     const allResults = [];
     const changedFiles = options.filesAndChanges.map(([f]) => f);
-    const changedLineMap = buildChangedLineMap(options.filesAndChanges);
+    // 优先复用 review.ts 预先扫描好的结果；未传入则在此 fallback 自行构建
+    const scans = options.patchScans ?? buildPatchScans(options.filesAndChanges);
+    const changedLineMap = toAddedLineMap(scans);
     // 3) 对每个可用工具：挑选目标文件 → 执行扫描
     await Promise.all(detections.map(async ({ adapter, detection }) => {
         const toolStart = Date.now();
@@ -17072,6 +17114,7 @@ var tokenizer = __nccwpck_require__(7525);
 
 
 
+
 // eslint-disable-next-line camelcase
 const review_context = github.context;
 /** 跨文件上下文注入的 token 上限 */
@@ -17270,6 +17313,12 @@ ${hunks.oldHunk}
         (0,core.error)('Skipped: no files to review');
         return;
     }
+    // ==================== 共享：单次扫描 unified diff，得到每文件的 PatchScan ====================
+    // 提供给 Phase 0b（lint）与 Phase 0（依赖分析）复用，避免对同一份 diff
+    // 字符串重复 walk。Phase 0b 取 addedLines（lint 窗口过滤），Phase 0 取
+    // touchedLines（导出函数作用域内的修改判定）。
+    const patchScans = buildPatchScans(filesAndChanges);
+    (0,core.info)(`shared: precomputed PatchScan for ${patchScans.size} file(s)`);
     // ==================== 阶段零·B：静态分析工具扫描（Linter/SAST） ====================
     let lintReport = null;
     if (options.enableLintTools) {
@@ -17278,6 +17327,7 @@ ${hunks.oldHunk}
             lintReport = await runLintTools({
                 repoRoot: process.cwd(),
                 filesAndChanges,
+                patchScans,
                 disabled: false
             });
             (0,core.info)(`Phase 0b: lint scan completed in ${lintReport.durationMs}ms — ${lintReport.results.length} findings on changed lines from ${lintReport.toolSummaries.filter(s => s.available).length} tool(s)`);
@@ -17298,7 +17348,7 @@ ${hunks.oldHunk}
             // 获取仓库文件树（1 次 API 调用，结果缓存）
             const repoFiles = await getRepoFileTree(review_context.payload.pull_request.head.sha);
             // 分析依赖关系：解析导入、提取被修改的导出符号、搜索引用
-            dependencyContext = await analyzeDependencies(filesAndChanges, repoFiles, options, githubConcurrencyLimit);
+            dependencyContext = await analyzeDependencies(filesAndChanges, repoFiles, options, githubConcurrencyLimit, patchScans);
             (0,core.info)('Phase 0: dependency analysis completed');
         }
         catch (e) {
