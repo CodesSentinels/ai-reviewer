@@ -57,6 +57,53 @@ export interface ToolsConfig {
   [toolName: string]: ToolConfig
 }
 
+// ==================== 安装策略（多策略 dispatcher） ====================
+//
+// 不同语言/工具有不同的发布形态，把"如何获得这个工具的二进制"抽象成一个
+// 声明式的 InstallSpec：
+//
+//   - npm   ：JS/TS 工具（eslint / @biomejs/biome / prettier）
+//   - binary：直接从 GitHub Releases 下载预编译压缩包（golangci-lint / ruff /
+//             semgrep 等大多数 Phase 2-4 工具）— Phase 2 实现
+//   - 后续可加 pip / jar 等
+//
+// 适配器在自身字段上声明 installSpec，由 src/lint/tool-installer.ts 统一处理：
+// 待审查项目无需把工具写入自己的 package.json/devDependencies。
+
+/** npm 包安装策略：调用 `npm install` 把包装到沙箱 node_modules/ */
+export interface NpmInstallSpec {
+  readonly kind: 'npm'
+  /** npm 包名，如 'eslint' / '@biomejs/biome' */
+  readonly package: string
+  /** 二进制名（出现在 node_modules/.bin/ 下） */
+  readonly binName: string
+  /** 版本范围，如 '^9.15.0' */
+  readonly version: string
+}
+
+/**
+ * 二进制下载策略（Phase 2+）：从 URL 下载预编译归档并解压
+ *
+ * 现阶段保留为接口，installer 调用时返回"未实现"。新增 Adapter（如
+ * golangci-lint / ruff）时打开实现即可，无需触动 Phase 1 适配器。
+ */
+export interface BinaryInstallSpec {
+  readonly kind: 'binary'
+  /**
+   * URL 模板，可包含 {version} / {os} / {arch} 占位符。
+   * 例：'https://github.com/golangci/golangci-lint/releases/download/v{version}/golangci-lint-{version}-{os}-{arch}.tar.gz'
+   */
+  readonly urlPattern: string
+  readonly version: string
+  /** 解压后二进制相对归档根的路径 */
+  readonly binPathInArchive: string
+  /** （可选）按 os-arch 索引的 sha256 校验值 */
+  readonly sha256?: Record<string, string>
+}
+
+/** 适配器声明的安装方式 */
+export type InstallSpec = NpmInstallSpec | BinaryInstallSpec
+
 /** 工具检测结果 */
 export interface ToolDetection {
   /** 工具是否在执行环境中可用 */
@@ -88,6 +135,16 @@ export interface ToolAdapter {
 
   /** 默认是否启用 */
   readonly defaultEnabled: boolean
+
+  /**
+   * 工具安装方式声明
+   *
+   * detect() 内部会调用 `tool-installer.ts::ensureToolInstalled(this.installSpec)`，
+   * 把工具装到 ai-reviewer 自管的沙箱目录。**待审查项目无需自行 install。**
+   *
+   * 多策略 dispatcher 设计 → 参见 types.ts 中 InstallSpec 的注释。
+   */
+  readonly installSpec: InstallSpec
 
   /**
    * 检测工具在当前执行环境中是否可用

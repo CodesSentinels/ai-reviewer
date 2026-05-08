@@ -12,13 +12,15 @@
  */
 
 import {info} from '@actions/core'
+import {ensureToolInstalled} from '../tool-installer'
 import {
+  type InstallSpec,
   type LintResult,
   type ToolAdapter,
   type ToolConfig,
   type ToolDetection
 } from '../types'
-import {buildVersionFailureReason, extractVersion, runCommand} from './exec'
+import {extractVersion, runCommand} from './exec'
 
 export class PrettierAdapter implements ToolAdapter {
   readonly name = 'prettier'
@@ -50,39 +52,44 @@ export class PrettierAdapter implements ToolAdapter {
   ]
   readonly defaultEnabled = false // 默认关闭：风格类问题信噪比较低
 
+  /** Prettier 自带默认格式规则，无需项目配置即可工作 */
+  readonly installSpec: InstallSpec = {
+    kind: 'npm',
+    package: 'prettier',
+    binName: 'prettier',
+    version: '^3.0.0'
+  }
+
   private resolvedVersion = ''
+  private resolvedBinPath = ''
 
   async detect(repoRoot: string): Promise<ToolDetection> {
-    // Prettier 自带默认格式规则，无需项目配置即可工作
-    // 必须在 repoRoot 下跑：npx --no-install 在 cwd 的 node_modules/.bin 里找
-    const result = await runCommand({
-      command: 'npx',
-      args: ['--no-install', 'prettier', '--version'],
+    const install = await ensureToolInstalled(this.installSpec)
+    if (!install.ok) {
+      return {
+        available: false,
+        reason: `bundled Prettier install failed: ${install.reason ?? 'unknown'}`
+      }
+    }
+    this.resolvedBinPath = install.binPath as string
+
+    const versionResult = await runCommand({
+      command: this.resolvedBinPath,
+      args: ['--version'],
       cwd: repoRoot,
       timeoutMs: 10_000
     })
-    if (result.spawnError || result.exitCode !== 0) {
-      const fallback = await runCommand({
-        command: 'prettier',
-        args: ['--version'],
-        cwd: repoRoot,
-        timeoutMs: 5_000
-      })
-      if (fallback.spawnError || fallback.exitCode !== 0) {
-        return {
-          available: false,
-          reason: buildVersionFailureReason(
-            'prettier',
-            repoRoot,
-            result,
-            fallback
-          )
-        }
+    if (versionResult.spawnError || versionResult.exitCode !== 0) {
+      const stderrSnippet =
+        versionResult.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 120) ?? ''
+      return {
+        available: false,
+        reason: `bundled Prettier --version failed: exit=${versionResult.exitCode}; stderr="${stderrSnippet}"`
       }
-      this.resolvedVersion = extractVersion(fallback.stdout)
-      return {available: true, version: this.resolvedVersion}
     }
-    this.resolvedVersion = extractVersion(result.stdout)
+
+    this.resolvedVersion = extractVersion(versionResult.stdout)
+    info(`lint/prettier: bundled bin=${this.resolvedBinPath}`)
     return {available: true, version: this.resolvedVersion}
   }
 
@@ -93,16 +100,12 @@ export class PrettierAdapter implements ToolAdapter {
   ): Promise<LintResult[]> {
     if (files.length === 0) return []
 
-    info(`lint/prettier: checking ${files.length} files`)
+    info(
+      `lint/prettier: checking ${files.length} files via ${this.resolvedBinPath}`
+    )
     const result = await runCommand({
-      command: 'npx',
-      args: [
-        '--no-install',
-        'prettier',
-        '--check',
-        '--no-error-on-unmatched-pattern',
-        ...files
-      ],
+      command: this.resolvedBinPath,
+      args: ['--check', '--no-error-on-unmatched-pattern', ...files],
       cwd: repoRoot
     })
 

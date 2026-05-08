@@ -14,18 +14,15 @@
 import {info} from '@actions/core'
 import {existsSync, readFileSync} from 'fs'
 import * as path from 'path'
+import {ensureToolInstalled} from '../tool-installer'
 import {
+  type InstallSpec,
   type LintResult,
   type ToolAdapter,
   type ToolConfig,
   type ToolDetection
 } from '../types'
-import {
-  buildVersionFailureReason,
-  extractVersion,
-  parseJsonSafe,
-  runCommand
-} from './exec'
+import {extractVersion, parseJsonSafe, runCommand} from './exec'
 
 /**
  * 项目根可能存在的 ESLint 配置文件名（按优先级）。
@@ -127,41 +124,52 @@ export class EslintAdapter implements ToolAdapter {
   ]
   readonly defaultEnabled = true
 
-  /** 解析出的 ESLint 版本，detect() 后填充 */
+  /**
+   * 多策略：声明 ESLint 用 npm 装到沙箱目录
+   * （待审查项目无需把 eslint 写入 devDependencies）
+   */
+  readonly installSpec: InstallSpec = {
+    kind: 'npm',
+    package: 'eslint',
+    binName: 'eslint',
+    version: '^9.15.0'
+  }
+
+  /** detect() 成功后填充：ESLint 版本 */
   private resolvedVersion = ''
+  /** detect() 成功后填充：bundled 二进制的绝对路径，scan 时直接调用 */
+  private resolvedBinPath = ''
 
   async detect(repoRoot: string): Promise<ToolDetection> {
-    // 第一步：确认 ESLint 二进制可用
-    // 必须在 repoRoot 下跑：npx --no-install 在 cwd 的 node_modules/.bin 里找
-    const result = await runCommand({
-      command: 'npx',
-      args: ['--no-install', 'eslint', '--version'],
+    // 1) 让 installer 确保 bundled ESLint 在沙箱内可用
+    const install = await ensureToolInstalled(this.installSpec)
+    if (!install.ok) {
+      return {
+        available: false,
+        reason: `bundled ESLint install failed: ${install.reason ?? 'unknown'}`
+      }
+    }
+    this.resolvedBinPath = install.binPath as string
+
+    // 2) 跑一遍 --version 确认能正常启动
+    const versionResult = await runCommand({
+      command: this.resolvedBinPath,
+      args: ['--version'],
       cwd: repoRoot,
       timeoutMs: 10_000
     })
-    let version: string
-    if (result.spawnError || result.exitCode !== 0) {
-      // 回退：尝试全局 eslint
-      const fallback = await runCommand({
-        command: 'eslint',
-        args: ['--version'],
-        cwd: repoRoot,
-        timeoutMs: 5_000
-      })
-      if (fallback.spawnError || fallback.exitCode !== 0) {
-        return {
-          available: false,
-          reason: buildVersionFailureReason('eslint', repoRoot, result, fallback)
-        }
+    if (versionResult.spawnError || versionResult.exitCode !== 0) {
+      const stderrSnippet =
+        versionResult.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 120) ?? ''
+      return {
+        available: false,
+        reason: `bundled ESLint --version failed: exit=${versionResult.exitCode}; stderr="${stderrSnippet}"`
       }
-      version = extractVersion(fallback.stdout)
-    } else {
-      version = extractVersion(result.stdout)
     }
+    const version = extractVersion(versionResult.stdout)
 
-    // 第二步：ESLint 9 Flat Config 不再内置默认规则；项目无配置 → 标记为不可用
-    // 这样用户在 PR 摘要的统计表中能直接看到原因，而不是面对一堆"扫描了 N 个文件，0 finding"
-    // 的迷惑结果。
+    // 3) ESLint 9 Flat Config 不内置规则；项目无配置 → 标记为不可用
+    //    （改进 A 保留：理由清晰可见，不让用户面对 0 finding 困惑）
     const configFile = findEslintConfig(repoRoot)
     if (configFile == null) {
       return {
@@ -171,7 +179,9 @@ export class EslintAdapter implements ToolAdapter {
           'no ESLint config found in repo (looked for eslint.config.{js,mjs,cjs,ts,mts,cts}, .eslintrc.*, package.json#eslintConfig)'
       }
     }
-    info(`lint/eslint: detected project config: ${configFile}`)
+    info(
+      `lint/eslint: bundled bin=${this.resolvedBinPath}, project config=${configFile}`
+    )
 
     this.resolvedVersion = version
     return {available: true, version}
@@ -187,17 +197,17 @@ export class EslintAdapter implements ToolAdapter {
     // 默认使用项目自带配置；用户可显式关闭
     const useProjectConfig = config.useProjectConfig !== false
 
-    const args = ['--no-install', 'eslint', '--format', 'json', '--no-error-on-unmatched-pattern']
+    const args = ['--format', 'json', '--no-error-on-unmatched-pattern']
     if (!useProjectConfig) {
-      // 完全跳过项目配置，使用 ESLint 内置规则集
       args.push('--no-config-lookup')
     }
-    // 文件列表追加在末尾
     args.push(...files)
 
-    info(`lint/eslint: scanning ${files.length} files`)
+    info(
+      `lint/eslint: scanning ${files.length} files via ${this.resolvedBinPath}`
+    )
     const result = await runCommand({
-      command: 'npx',
+      command: this.resolvedBinPath,
       args,
       cwd: repoRoot
     })

@@ -18,8 +18,16 @@ jest.mock('@actions/core', () => ({
   warning: jest.fn()
 }))
 
-// 强制 EslintAdapter 的 detect 第一步认为 eslint 二进制可用，
-// 这样我们可以专注测第二步（项目配置检查）
+// 跳过真实 npm install — 让 ensureToolInstalled 始终返回成功
+jest.mock('../src/lint/tool-installer', () => ({
+  ensureToolInstalled: jest.fn(async () => ({
+    ok: true,
+    binPath: '/tmp/ai-reviewer-lint-tools/node_modules/.bin/eslint'
+  }))
+}))
+
+// 强制 EslintAdapter 的二进制版本检测认为 eslint 可用，
+// 这样我们可以专注测试项目配置检查的逻辑
 jest.mock('../src/lint/adapters/exec', () => ({
   runCommand: jest.fn(async () => ({
     exitCode: 0,

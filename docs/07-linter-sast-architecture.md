@@ -37,6 +37,7 @@
 | 决策点 | 选择 | 备选 | 拒绝备选的原因 |
 |:-------|:-----|:-----|:---------------|
 | 工具调用方式 | 子进程 `execFile` 调 CLI | 通过 npm API 内嵌 | API 版本耦合、不同语言无统一接口、不便扩展到 Go/Python |
+| **工具来源** | ai-reviewer **自带**（沙箱安装到 `/tmp`，多策略 dispatcher） | 要求待审查项目把 lint 工具写入 `package.json` | 项目侧零负担；不必为每个想接 ai-reviewer 的项目都开 PR 加 devDependencies |
 | 工具发现 → AI 注入 | Prompt 中**条件**注入（杠杆 A） + 评论尾部标注 | 直接发布工具评论 / 总是注入 | 直接发评论会与 AI 评论错位，且 AI 无法交叉验证；总是注入则在无 finding 文件上浪费 ~300 token |
 | 变更行过滤 | 在 orchestrator 里统一做 | 让每个适配器自己做 | 过滤逻辑应一次定义；适配器只关心解析 |
 | diff 扫描位置 | 上提到 `src/changed-lines.ts`，`review.ts` 一次扫描全文件，按 `addedLines` / `touchedLines` 分发 | 各模块各扫一遍 | 历史上 review/dep-analyzer/diff-filter 三处都有 walker，是真实的 DRY 问题 |
@@ -498,7 +499,8 @@ flowchart TB
 | 目标 | 落地方式 | 证据 |
 |:-----|:---------|:-----|
 | 可扩展 | `ToolAdapter` 接口 + `defaultAdapters()` 注册表 | Phase 2 加 golangci-lint 仅需新增 1 个文件 |
-| 失败容忍 | 三层 try/catch（safeDetect / scan / runLintTools 整体）+ 改进 A：ESLint 项目无配置时优雅降级 | `lint-orchestrator.test.ts` 4 + `lint-eslint-config-detection.test.ts` 7 个用例覆盖 |
+| 失败容忍 | 三层 try/catch（safeDetect / scan / runLintTools 整体）+ 改进 A：ESLint 项目无配置时优雅降级 + 沙箱安装失败时优雅降级 | `lint-orchestrator.test.ts` 4 + `lint-eslint-config-detection.test.ts` 7 + `lint-tool-installer.test.ts` 7 |
+| **项目侧零负担** | 多策略 `tool-installer.ts` 把 lint 工具装到 ai-reviewer 自管沙箱 `/tmp/ai-reviewer-lint-tools/`；待审查项目无需把工具写入 `package.json`，workflow 也无需 `npm install` 步骤 | `lint-tool-installer.test.ts` 覆盖 npm 策略与 binary 占位 |
 | 聚焦变更 | `src/changed-lines.ts::scanPatch` 单次 walk → `review.ts` 预扫描 PatchScanMap → `runLintTools` 与 `analyzeDependencies` 共享 | `lint-diff-filter.test.ts`、`changed-lines.test.ts` 中 added/touched 双语义覆盖通过 |
 | 零新增依赖 | 复用 `js-yaml` (require)、`child_process.execFile` | `package.json` 未改 |
 | AI ↔ 工具有机融合 | Prompt **条件**注入（杠杆 A） + 评论标注 + 摘要表 三处协同 | `prompts.ts::renderReviewFileDiff` + `formatToolAttribution` + `lint-prompt-injection.test.ts` |

@@ -181,5 +181,24 @@ export function buildVersionFailureReason(
     `${toolName}-bin=${hasBin ? 'yes' : 'NO'}`
   ]
   if (stderrSnippet.length > 0) parts.push(`stderr="${stderrSnippet}"`)
+
+  // node_modules 不存在 → 几乎一定是 workflow 漏了 `npm install`
+  // 明确给出可操作建议，避免用户在 cryptic 错误里循环
+  if (!hasNodeModules) {
+    parts.push(
+      'HINT: workflow appears to have not run `npm install` before this ' +
+        'action (or checked out the wrong ref). Add `- run: npm install` ' +
+        'before the ai-reviewer step. For pull_request_target events, also ' +
+        "set `actions/checkout@v4` with `ref: \${{ github.event.pull_request.head.sha }}` " +
+        "so the PR branch's devDependencies are installed."
+    )
+  } else if (!hasBin) {
+    parts.push(
+      `HINT: node_modules exists but ${toolName} is missing — ensure ` +
+        `${toolName} is in package.json devDependencies on the checked-out ref, ` +
+        `or add a workflow step to install it (\`npm install --no-save ${toolName}\`).`
+    )
+  }
+
   return parts.join('; ')
 }

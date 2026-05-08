@@ -23,6 +23,7 @@ jest.mock('fs', () => ({
 
 import {runLintTools} from '../src/lint/orchestrator'
 import {
+  type InstallSpec,
   type LintResult,
   type ToolAdapter,
   type ToolDetection
@@ -34,6 +35,13 @@ class FakeAdapter implements ToolAdapter {
   readonly supportedLanguages = ['typescript']
   readonly fileExtensions = ['.ts']
   readonly defaultEnabled: boolean
+  /** 测试用 stub：满足 ToolAdapter 接口；FakeAdapter.detect() 不真用它 */
+  readonly installSpec: InstallSpec = {
+    kind: 'npm',
+    package: 'fake-not-used',
+    binName: 'fake',
+    version: '0.0.0'
+  }
 
   constructor(
     name: string,

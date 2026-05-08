@@ -26,18 +26,15 @@
  */
 
 import {info} from '@actions/core'
+import {ensureToolInstalled} from '../tool-installer'
 import {
+  type InstallSpec,
   type LintResult,
   type ToolAdapter,
   type ToolConfig,
   type ToolDetection
 } from '../types'
-import {
-  buildVersionFailureReason,
-  extractVersion,
-  parseJsonSafe,
-  runCommand
-} from './exec'
+import {extractVersion, parseJsonSafe, runCommand} from './exec'
 
 interface BiomeLocation {
   path?: {file?: string}
@@ -114,34 +111,46 @@ export class BiomeAdapter implements ToolAdapter {
   ]
   readonly defaultEnabled = true
 
+  /** Biome 完全零配置可用（内置 recommended 规则集），无需项目侧任何文件 */
+  readonly installSpec: InstallSpec = {
+    kind: 'npm',
+    package: '@biomejs/biome',
+    binName: 'biome',
+    version: '^2.3.0'
+  }
+
   private resolvedVersion = ''
+  private resolvedBinPath = ''
 
   async detect(repoRoot: string): Promise<ToolDetection> {
-    // Biome 2.x 内置 recommended 规则集，无需项目配置即可工作
-    // 必须在 repoRoot 下跑：npx --no-install 在 cwd 的 node_modules/.bin 里找
-    const result = await runCommand({
-      command: 'npx',
-      args: ['--no-install', 'biome', '--version'],
+    // 1) 让 installer 装到沙箱（待审查项目不需要 @biomejs/biome）
+    const install = await ensureToolInstalled(this.installSpec)
+    if (!install.ok) {
+      return {
+        available: false,
+        reason: `bundled Biome install failed: ${install.reason ?? 'unknown'}`
+      }
+    }
+    this.resolvedBinPath = install.binPath as string
+
+    // 2) 跑 --version 校验
+    const versionResult = await runCommand({
+      command: this.resolvedBinPath,
+      args: ['--version'],
       cwd: repoRoot,
       timeoutMs: 10_000
     })
-    if (result.spawnError || result.exitCode !== 0) {
-      const fallback = await runCommand({
-        command: 'biome',
-        args: ['--version'],
-        cwd: repoRoot,
-        timeoutMs: 5_000
-      })
-      if (fallback.spawnError || fallback.exitCode !== 0) {
-        return {
-          available: false,
-          reason: buildVersionFailureReason('biome', repoRoot, result, fallback)
-        }
+    if (versionResult.spawnError || versionResult.exitCode !== 0) {
+      const stderrSnippet =
+        versionResult.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 120) ?? ''
+      return {
+        available: false,
+        reason: `bundled Biome --version failed: exit=${versionResult.exitCode}; stderr="${stderrSnippet}"`
       }
-      this.resolvedVersion = extractVersion(fallback.stdout)
-      return {available: true, version: this.resolvedVersion}
     }
-    this.resolvedVersion = extractVersion(result.stdout)
+
+    this.resolvedVersion = extractVersion(versionResult.stdout)
+    info(`lint/biome: bundled bin=${this.resolvedBinPath}, zero-config OK`)
     return {available: true, version: this.resolvedVersion}
   }
 
@@ -152,16 +161,12 @@ export class BiomeAdapter implements ToolAdapter {
   ): Promise<LintResult[]> {
     if (files.length === 0) return []
 
-    info(`lint/biome: scanning ${files.length} files`)
+    info(
+      `lint/biome: scanning ${files.length} files via ${this.resolvedBinPath}`
+    )
     const result = await runCommand({
-      command: 'npx',
-      args: [
-        '--no-install',
-        'biome',
-        'check',
-        '--reporter=json',
-        ...files
-      ],
+      command: this.resolvedBinPath,
+      args: ['check', '--reporter=json', ...files],
       cwd: repoRoot
     })
 
