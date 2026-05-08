@@ -32,7 +32,12 @@ import {
   type ToolConfig,
   type ToolDetection
 } from '../types'
-import {extractVersion, parseJsonSafe, runCommand} from './exec'
+import {
+  buildVersionFailureReason,
+  extractVersion,
+  parseJsonSafe,
+  runCommand
+} from './exec'
 
 interface BiomeLocation {
   path?: {file?: string}
@@ -111,23 +116,26 @@ export class BiomeAdapter implements ToolAdapter {
 
   private resolvedVersion = ''
 
-  async detect(_repoRoot: string): Promise<ToolDetection> {
-    // Biome 2.x 内置 recommended 规则集，无需项目配置即可工作；忽略 _repoRoot
+  async detect(repoRoot: string): Promise<ToolDetection> {
+    // Biome 2.x 内置 recommended 规则集，无需项目配置即可工作
+    // 必须在 repoRoot 下跑：npx --no-install 在 cwd 的 node_modules/.bin 里找
     const result = await runCommand({
       command: 'npx',
       args: ['--no-install', 'biome', '--version'],
+      cwd: repoRoot,
       timeoutMs: 10_000
     })
     if (result.spawnError || result.exitCode !== 0) {
       const fallback = await runCommand({
         command: 'biome',
         args: ['--version'],
+        cwd: repoRoot,
         timeoutMs: 5_000
       })
       if (fallback.spawnError || fallback.exitCode !== 0) {
         return {
           available: false,
-          reason: result.spawnErrorMessage ?? 'biome --version failed'
+          reason: buildVersionFailureReason('biome', repoRoot, result, fallback)
         }
       }
       this.resolvedVersion = extractVersion(fallback.stdout)

@@ -16147,6 +16147,45 @@ function extractVersion(rawVersion) {
     const m = rawVersion.match(/v?(\d+\.\d+\.\d+)/);
     return m?.[1] ?? rawVersion.trim().split('\n')[0];
 }
+/**
+ * 构造适配器 detect 失败时的诊断 reason
+ *
+ * 把 exitCode、cwd、node_modules 是否存在、工具 bin 是否存在、stderr 首行
+ * 都带出来，让用户在 PR 摘要表里就能直接判断："是 npm install 没装上"
+ * 还是"装了但 cwd 不对"。
+ *
+ * @param toolName     工具名称（用于探测 node_modules/.bin/<toolName>）
+ * @param repoRoot     仓库根目录
+ * @param npxResult    `npx --no-install <tool> --version` 的执行结果
+ * @param fallbackResult 全局 `<tool> --version` 的执行结果（可选）
+ */
+function buildVersionFailureReason(toolName, repoRoot, npxResult, fallbackResult) {
+    if (npxResult.spawnErrorMessage != null)
+        return npxResult.spawnErrorMessage;
+    // 探测 node_modules 是否真的存在以及工具 bin 是否在其中
+    // 用 require('fs') 而非 import 是因为本模块大量使用 child_process，
+    // 加少量 fs 不构成额外耦合
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const fs = __nccwpck_require__(7147);
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const path = __nccwpck_require__(1017);
+    const hasNodeModules = fs.existsSync(path.join(repoRoot, 'node_modules'));
+    const hasBin = fs.existsSync(path.join(repoRoot, 'node_modules', '.bin', toolName));
+    const stderrSnippet = ((npxResult.stderr || fallbackResult?.stderr) ?? '')
+        .split('\n')
+        .find(l => l.trim().length > 0)
+        ?.substring(0, 120) ?? '';
+    const parts = [
+        `${toolName} --version failed`,
+        `exit=${npxResult.exitCode ?? 'null'}`,
+        `cwd=${repoRoot}`,
+        `node_modules=${hasNodeModules ? 'yes' : 'NO'}`,
+        `${toolName}-bin=${hasBin ? 'yes' : 'NO'}`
+    ];
+    if (stderrSnippet.length > 0)
+        parts.push(`stderr="${stderrSnippet}"`);
+    return parts.join('; ');
+}
 
 ;// CONCATENATED MODULE: ./lib/lint/adapters/eslint.js
 /**
@@ -16247,9 +16286,11 @@ class EslintAdapter {
     resolvedVersion = '';
     async detect(repoRoot) {
         // 第一步：确认 ESLint 二进制可用
+        // 必须在 repoRoot 下跑：npx --no-install 在 cwd 的 node_modules/.bin 里找
         const result = await runCommand({
             command: 'npx',
             args: ['--no-install', 'eslint', '--version'],
+            cwd: repoRoot,
             timeoutMs: 10_000
         });
         let version;
@@ -16258,12 +16299,13 @@ class EslintAdapter {
             const fallback = await runCommand({
                 command: 'eslint',
                 args: ['--version'],
+                cwd: repoRoot,
                 timeoutMs: 5_000
             });
             if (fallback.spawnError || fallback.exitCode !== 0) {
                 return {
                     available: false,
-                    reason: result.spawnErrorMessage ?? 'eslint --version failed'
+                    reason: buildVersionFailureReason('eslint', repoRoot, result, fallback)
                 };
             }
             version = extractVersion(fallback.stdout);
@@ -16427,23 +16469,26 @@ class BiomeAdapter {
     ];
     defaultEnabled = true;
     resolvedVersion = '';
-    async detect(_repoRoot) {
-        // Biome 2.x 内置 recommended 规则集，无需项目配置即可工作；忽略 _repoRoot
+    async detect(repoRoot) {
+        // Biome 2.x 内置 recommended 规则集，无需项目配置即可工作
+        // 必须在 repoRoot 下跑：npx --no-install 在 cwd 的 node_modules/.bin 里找
         const result = await runCommand({
             command: 'npx',
             args: ['--no-install', 'biome', '--version'],
+            cwd: repoRoot,
             timeoutMs: 10_000
         });
         if (result.spawnError || result.exitCode !== 0) {
             const fallback = await runCommand({
                 command: 'biome',
                 args: ['--version'],
+                cwd: repoRoot,
                 timeoutMs: 5_000
             });
             if (fallback.spawnError || fallback.exitCode !== 0) {
                 return {
                     available: false,
-                    reason: result.spawnErrorMessage ?? 'biome --version failed'
+                    reason: buildVersionFailureReason('biome', repoRoot, result, fallback)
                 };
             }
             this.resolvedVersion = extractVersion(fallback.stdout);
@@ -16550,23 +16595,26 @@ class PrettierAdapter {
     ];
     defaultEnabled = false; // 默认关闭：风格类问题信噪比较低
     resolvedVersion = '';
-    async detect(_repoRoot) {
-        // Prettier 自带默认格式规则，无需项目配置即可工作；忽略 _repoRoot
+    async detect(repoRoot) {
+        // Prettier 自带默认格式规则，无需项目配置即可工作
+        // 必须在 repoRoot 下跑：npx --no-install 在 cwd 的 node_modules/.bin 里找
         const result = await runCommand({
             command: 'npx',
             args: ['--no-install', 'prettier', '--version'],
+            cwd: repoRoot,
             timeoutMs: 10_000
         });
         if (result.spawnError || result.exitCode !== 0) {
             const fallback = await runCommand({
                 command: 'prettier',
                 args: ['--version'],
+                cwd: repoRoot,
                 timeoutMs: 5_000
             });
             if (fallback.spawnError || fallback.exitCode !== 0) {
                 return {
                     available: false,
-                    reason: result.spawnErrorMessage ?? 'prettier --version failed'
+                    reason: buildVersionFailureReason('prettier', repoRoot, result, fallback)
                 };
             }
             this.resolvedVersion = extractVersion(fallback.stdout);

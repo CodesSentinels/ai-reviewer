@@ -18,7 +18,7 @@ import {
   type ToolConfig,
   type ToolDetection
 } from '../types'
-import {extractVersion, runCommand} from './exec'
+import {buildVersionFailureReason, extractVersion, runCommand} from './exec'
 
 export class PrettierAdapter implements ToolAdapter {
   readonly name = 'prettier'
@@ -52,23 +52,31 @@ export class PrettierAdapter implements ToolAdapter {
 
   private resolvedVersion = ''
 
-  async detect(_repoRoot: string): Promise<ToolDetection> {
-    // Prettier 自带默认格式规则，无需项目配置即可工作；忽略 _repoRoot
+  async detect(repoRoot: string): Promise<ToolDetection> {
+    // Prettier 自带默认格式规则，无需项目配置即可工作
+    // 必须在 repoRoot 下跑：npx --no-install 在 cwd 的 node_modules/.bin 里找
     const result = await runCommand({
       command: 'npx',
       args: ['--no-install', 'prettier', '--version'],
+      cwd: repoRoot,
       timeoutMs: 10_000
     })
     if (result.spawnError || result.exitCode !== 0) {
       const fallback = await runCommand({
         command: 'prettier',
         args: ['--version'],
+        cwd: repoRoot,
         timeoutMs: 5_000
       })
       if (fallback.spawnError || fallback.exitCode !== 0) {
         return {
           available: false,
-          reason: result.spawnErrorMessage ?? 'prettier --version failed'
+          reason: buildVersionFailureReason(
+            'prettier',
+            repoRoot,
+            result,
+            fallback
+          )
         }
       }
       this.resolvedVersion = extractVersion(fallback.stdout)

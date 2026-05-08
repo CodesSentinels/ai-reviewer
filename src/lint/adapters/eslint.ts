@@ -20,7 +20,12 @@ import {
   type ToolConfig,
   type ToolDetection
 } from '../types'
-import {extractVersion, parseJsonSafe, runCommand} from './exec'
+import {
+  buildVersionFailureReason,
+  extractVersion,
+  parseJsonSafe,
+  runCommand
+} from './exec'
 
 /**
  * 项目根可能存在的 ESLint 配置文件名（按优先级）。
@@ -127,9 +132,11 @@ export class EslintAdapter implements ToolAdapter {
 
   async detect(repoRoot: string): Promise<ToolDetection> {
     // 第一步：确认 ESLint 二进制可用
+    // 必须在 repoRoot 下跑：npx --no-install 在 cwd 的 node_modules/.bin 里找
     const result = await runCommand({
       command: 'npx',
       args: ['--no-install', 'eslint', '--version'],
+      cwd: repoRoot,
       timeoutMs: 10_000
     })
     let version: string
@@ -138,12 +145,13 @@ export class EslintAdapter implements ToolAdapter {
       const fallback = await runCommand({
         command: 'eslint',
         args: ['--version'],
+        cwd: repoRoot,
         timeoutMs: 5_000
       })
       if (fallback.spawnError || fallback.exitCode !== 0) {
         return {
           available: false,
-          reason: result.spawnErrorMessage ?? 'eslint --version failed'
+          reason: buildVersionFailureReason('eslint', repoRoot, result, fallback)
         }
       }
       version = extractVersion(fallback.stdout)

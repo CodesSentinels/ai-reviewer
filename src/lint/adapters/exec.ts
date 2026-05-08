@@ -134,3 +134,52 @@ export function extractVersion(rawVersion: string): string {
   const m = rawVersion.match(/v?(\d+\.\d+\.\d+)/)
   return m?.[1] ?? rawVersion.trim().split('\n')[0]
 }
+
+/**
+ * 构造适配器 detect 失败时的诊断 reason
+ *
+ * 把 exitCode、cwd、node_modules 是否存在、工具 bin 是否存在、stderr 首行
+ * 都带出来，让用户在 PR 摘要表里就能直接判断："是 npm install 没装上"
+ * 还是"装了但 cwd 不对"。
+ *
+ * @param toolName     工具名称（用于探测 node_modules/.bin/<toolName>）
+ * @param repoRoot     仓库根目录
+ * @param npxResult    `npx --no-install <tool> --version` 的执行结果
+ * @param fallbackResult 全局 `<tool> --version` 的执行结果（可选）
+ */
+export function buildVersionFailureReason(
+  toolName: string,
+  repoRoot: string,
+  npxResult: RunCommandResult,
+  fallbackResult?: RunCommandResult
+): string {
+  if (npxResult.spawnErrorMessage != null) return npxResult.spawnErrorMessage
+
+  // 探测 node_modules 是否真的存在以及工具 bin 是否在其中
+  // 用 require('fs') 而非 import 是因为本模块大量使用 child_process，
+  // 加少量 fs 不构成额外耦合
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const fs = require('fs') as typeof import('fs')
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const path = require('path') as typeof import('path')
+
+  const hasNodeModules = fs.existsSync(path.join(repoRoot, 'node_modules'))
+  const hasBin = fs.existsSync(
+    path.join(repoRoot, 'node_modules', '.bin', toolName)
+  )
+
+  const stderrSnippet = ((npxResult.stderr || fallbackResult?.stderr) ?? '')
+    .split('\n')
+    .find(l => l.trim().length > 0)
+    ?.substring(0, 120) ?? ''
+
+  const parts = [
+    `${toolName} --version failed`,
+    `exit=${npxResult.exitCode ?? 'null'}`,
+    `cwd=${repoRoot}`,
+    `node_modules=${hasNodeModules ? 'yes' : 'NO'}`,
+    `${toolName}-bin=${hasBin ? 'yes' : 'NO'}`
+  ]
+  if (stderrSnippet.length > 0) parts.push(`stderr="${stderrSnippet}"`)
+  return parts.join('; ')
+}

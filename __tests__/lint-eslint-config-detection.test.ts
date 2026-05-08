@@ -29,7 +29,8 @@ jest.mock('../src/lint/adapters/exec', () => ({
     spawnError: false
   })),
   parseJsonSafe: jest.fn(),
-  extractVersion: jest.fn((s: string) => s.match(/v?(\d+\.\d+\.\d+)/)?.[1] ?? '')
+  extractVersion: jest.fn((s: string) => s.match(/v?(\d+\.\d+\.\d+)/)?.[1] ?? ''),
+  buildVersionFailureReason: jest.fn(() => 'mocked failure reason')
 }))
 
 import {EslintAdapter} from '../src/lint/adapters/eslint'
