@@ -109,7 +109,7 @@ flowchart TB
   IN["PR 变更文件列表 (filesAndChanges)<br/>[filename, fileContent, fileDiff, patches[]]"]
   IN --> S1["1) loadConfig(repoRoot)<br/>读取 .codesentinel.yaml → ToolsConfig"]
   S1 --> S2["2) 适配器注册表<br/>[ESLintAdapter, BiomeAdapter, PrettierAdapter]<br/>↓ isToolEnabled(name, ToolsConfig, defaultEnabled)<br/>enabledAdapters"]
-  S2 -- "Promise.all (并行检测)" --> S3["3) safeDetect → ToolDetection<br/>跑 npx &lt;tool&gt; --version, 超时 10s<br/>失败转为 available=false"]
+  S2 -- "Promise.all (并行检测)" --> S3["3) safeDetect → ToolDetection<br/>· ensureToolInstalled(installSpec) — 沙箱内确保工具就绪<br/>· runCommand(&lt;sandboxBin&gt;, ['--version']) 校验启动<br/>· 项目侧前置检查 (如 ESLint config)<br/>失败转为 available=false"]
   S3 -- "Promise.all (并行扫描)" --> S4["4) 每个可用工具:<br/>a. 按 fileExtensions 过滤目标文件<br/>b. adapter.scan(targets, repoRoot, toolConfig)<br/>c. 异常 → 警告 + 视为 0 个发现<br/>→ LintResult[] (raw)"]
   S4 --> S5["5) 合并 / 过滤 / 排序<br/>a. buildChangedLineMap(filesAndChanges)<br/>b. filterByChangedLines (tolerance=3)<br/>c. deduplicateResults (归一化规则名 + 同位置取高 severity)<br/>d. sort by (file, line)"]
   S5 --> OUT["LintReport {<br/>results: LintResult[]   // 已过滤 / 去重 / 排序<br/>toolSummaries: ToolSummary[]   // 每工具统计与可用性<br/>durationMs, filesScanned<br/>}"]

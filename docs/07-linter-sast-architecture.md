@@ -52,7 +52,7 @@
 - ❌ 不实现 AST 级深度分析（交给工具自己）
 - ❌ 不引入插件系统/动态加载（YAGNI；Phase 2-5 直接编辑 `defaultAdapters()`）
 - ❌ 不做工具结果的"自动修复" patch 应用（迭代三只读不写）
-- ❌ 不在适配器内做"工具自动安装"（环境管理由 Docker 镜像/CI step 承担，避免审查时副作用）
+- ❌ ~~不在适配器内做"工具自动安装"~~ → **已转为正向需求**：通过 `tool-installer.ts` 的多策略 dispatcher 在沙箱目录内自动安装，待审查项目侧零负担。Docker 镜像方案被取消，原因见 §1.3 决策表中"工具来源"行。
 - ❌ 不为每个工具引入单独的 GitHub Action 输入（用 `.codesentinel.yaml` 承载）
 
 ---
@@ -97,11 +97,11 @@ flowchart TB
     end
   end
 
-  subgraph OS["操作系统进程层 — 子进程 CLI"]
+  subgraph Sandbox["沙箱目录 /tmp/ai-reviewer-lint-tools/<br/>(由 tool-installer.ts 自管，待审查项目侧零负担)"]
     direction LR
-    CLI1["npx eslint<br/>--format json"]
-    CLI2["npx biome check<br/>--reporter=json"]
-    CLI3["npx prettier<br/>--check"]
+    CLI1["node_modules/.bin/eslint<br/>--format json"]
+    CLI2["node_modules/.bin/biome check<br/>--reporter=json"]
+    CLI3["node_modules/.bin/prettier<br/>--check"]
   end
 
   Entry --> Review
@@ -329,21 +329,32 @@ sequenceDiagram
   autonumber
   participant O as orchestrator
   participant A as EslintAdapter
+  participant I as tool-installer.ts
   participant E as exec.ts
   participant CP as child_process
 
-  Note over O,A: 检测阶段
-  O->>A: detect()
-  A->>E: runCommand("npx eslint --version", timeout=10s)
+  Note over O,A: 检测阶段（沙箱安装 + 版本校验 + 项目配置检查）
+  O->>A: detect(repoRoot)
+  A->>I: ensureToolInstalled({kind:'npm', package:'eslint', version:'^9.15.0'})
+  alt 沙箱已有 bin（缓存命中）
+    I-->>A: { ok:true, binPath:'/tmp/.../node_modules/.bin/eslint' }
+  else 首次安装
+    I->>E: runCommand("npm install --no-save eslint@^9.15.0", cwd=/tmp/...)
+    E->>CP: execFile spawn (~15s)
+    CP-->>E: exitCode 0
+    E-->>I: { exitCode:0 }
+    I-->>A: { ok:true, binPath:'/tmp/.../node_modules/.bin/eslint' }
+  end
+  A->>E: runCommand(binPath, ['--version'], cwd=repoRoot)
   E->>CP: execFile spawn
-  CP-->>E: stdout "v9.15.0"<br/>exitCode 0
-  E-->>A: { exitCode:0, stdout, stderr }
-  A->>A: extractVersion(stdout) → "9.15.0"
+  CP-->>E: stdout "v9.15.0"
+  E-->>A: { exitCode:0, stdout }
+  A->>A: findEslintConfig(repoRoot)
   A-->>O: { available:true, version:"9.15.0" }
 
-  Note over O,A: 扫描阶段
+  Note over O,A: 扫描阶段（直接调用沙箱内绝对路径）
   O->>A: scan(files, repoRoot, config)
-  A->>E: runCommand("npx eslint --format json …", timeout=60s)
+  A->>E: runCommand(binPath, ['--format','json',...files], cwd=repoRoot)
   E->>CP: execFile spawn
   CP-->>E: stdout JSON [{filePath, messages[]}]<br/>exitCode 1 (有问题但合法)
   E-->>A: { exitCode:1, stdout }
@@ -355,11 +366,12 @@ sequenceDiagram
   end
   A-->>O: LintResult[]
 
-  Note over O,CP: 失败分支
-  alt 命令不存在
-    CP-->>E: ENOENT
-    E-->>A: { spawnError:true }
-    A-->>O: { available:false, reason:"command not found" }
+  Note over O,I: 失败分支
+  alt 沙箱安装失败（npm 错误 / 网络不可达）
+    I-->>A: { ok:false, reason:"npm install ... failed (exit=1): ..." }
+    A-->>O: { available:false, reason:"bundled ESLint install failed: ..." }
+  else 项目无 ESLint 配置
+    A-->>O: { available:false, reason:"no ESLint config found in repo ..." }
   else 超时
     CP-->>E: SIGTERM (timeout)
     E-->>A: { timedOut:true }
