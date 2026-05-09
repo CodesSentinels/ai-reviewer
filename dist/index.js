@@ -16550,36 +16550,58 @@ function toRelativePath(absOrRel, repoRoot) {
 /**
  * lint/adapters/biome.ts - Biome 适配器
  *
- * Biome 2.x 的 JSON reporter 输出结构：
- * {
- *   "diagnostics": [
- *     {
- *       "category": "lint/suspicious/useIterableCallbackReturn",
- *       "severity": "error" | "warning" | "information",
- *       "description": "...",
- *       "location": {
- *         "path": { "file": "src/utils.js" },
- *         "span": [<offset>, <offset>]
- *       },
- *       "advices": { ... }
- *     }
- *   ]
- * }
+ * 使用 `--reporter=github` 模式输出 GitHub Actions 标注格式：
  *
- * 注意：Biome 的 location.span 是字节偏移而非行号，需要从源码内容映射。
- * 为简化实现，本适配器使用 `--reporter=github` 模式（行号已解析）作为主路径，
- * 失败时回退到 JSON。
+ *   ::error title=lint/suspicious/noDoubleEquals,file=src/foo.ts,line=42,col=15,endLine=42,endColumn=22::Use === instead of ==.
+ *   ::warning title=lint/suspicious/noConsole,file=src/bar.ts,line=10,col=1::Avoid console.log
  *
- * 实际上 Biome 也支持 --reporter=json 输出含 line_start/column_start 字段
- * 的诊断信息，更稳定的解析路径直接使用 JSON。
+ * 选这个 reporter 的原因：
+ *   - 跨 Biome 版本格式稳定（1.x / 2.x / 2.4 / 未来都不会变）
+ *   - 一行一条诊断，正则即可解析，不依赖嵌套 JSON schema
+ *   - Biome 1.x → 2.x 的 JSON 输出结构改动过两次（line_start / span / start.line），
+ *     用 GitHub reporter 可以彻底回避适配器频繁修改的问题
+ *
+ * 历史教训：早期版本用 `--reporter=json`，发现 Biome 2.4.x 把 location 字段从
+ * `line_start` 重命名为 `span`/`start.line`，所有 finding 都被 silently 丢弃，
+ * 统计表显示 0 errors。
  */
 
 
 
-function severityToUnified(severity) {
-    if (severity === 'error')
+/**
+ * 把 Biome 的 GitHub annotation 行 `::level k=v,k=v::msg` 解析为字段对象。
+ *
+ * 输入示例：
+ *   ::error title=lint/suspicious/noDoubleEquals,file=src/foo.ts,line=42,col=15::Use === instead of ==.
+ */
+const GITHUB_ANNOTATION_RE = /^::(error|warning|notice) (.+?)::(.*)$/;
+function parseGithubAnnotation(line) {
+    const m = line.match(GITHUB_ANNOTATION_RE);
+    if (m == null)
+        return null;
+    const [, level, fieldsStr, message] = m;
+    const fields = {};
+    // metadata 是 `k=v,k=v` 形式；value 内不包含逗号（Biome 的 title/file 不会含），
+    // 所以按逗号切就够。如果以后有边角情况再升级到考虑转义的解析器。
+    for (const pair of fieldsStr.split(',')) {
+        const eqIdx = pair.indexOf('=');
+        if (eqIdx === -1)
+            continue;
+        const k = pair.substring(0, eqIdx).trim();
+        const v = pair.substring(eqIdx + 1).trim();
+        if (k.length > 0)
+            fields[k] = v;
+    }
+    return {
+        level: level,
+        fields,
+        message
+    };
+}
+function severityFromLevel(level) {
+    if (level === 'error')
         return 'error';
-    if (severity === 'warning')
+    if (level === 'warning')
         return 'warning';
     return 'info';
 }
@@ -16596,18 +16618,6 @@ function categoryToType(category) {
     if (category.includes('style'))
         return 'style';
     return 'quality';
-}
-function extractMessage(diag) {
-    if (typeof diag.message === 'string')
-        return diag.message;
-    if (Array.isArray(diag.message)) {
-        return diag.message
-            .map(m => (typeof m === 'string' ? m : m.content ?? ''))
-            .filter(s => s.length > 0)
-            .join(' ')
-            .trim();
-    }
-    return diag.description ?? '';
 }
 class BiomeAdapter {
     name = 'biome';
@@ -16665,45 +16675,66 @@ class BiomeAdapter {
         if (files.length === 0)
             return [];
         (0,core.info)(`lint/biome: scanning ${files.length} files via ${this.resolvedBinPath}`);
+        // --reporter=github 输出 GitHub Actions 标注格式（一行一条诊断），
+        // --max-diagnostics=999 防止默认 20 条上限把发现截断
         const result = await runCommand({
             command: this.resolvedBinPath,
-            args: ['check', '--reporter=json', ...files],
+            args: [
+                'check',
+                '--reporter=github',
+                '--max-diagnostics=999',
+                ...files
+            ],
             cwd: repoRoot
         });
         if (result.spawnError) {
             (0,core.info)(`lint/biome: spawn failed: ${result.spawnErrorMessage ?? ''}`);
             return [];
         }
-        const parsed = parseJsonSafe(result.stdout, 'biome');
-        if (parsed == null || parsed.diagnostics == null) {
-            (0,core.info)(`lint/biome: no parseable diagnostics`);
+        // Biome 把诊断写到 stdout（不是 stderr）；exit 非零仅代表"有发现"，不算异常
+        const output = result.stdout || result.stderr;
+        if (output.trim().length === 0) {
+            (0,core.info)(`lint/biome: no output (exit=${result.exitCode}); 0 findings`);
             return [];
         }
         const results = [];
-        for (const diag of parsed.diagnostics) {
-            const file = diag.location?.path?.file;
-            if (file == null)
+        for (const rawLine of output.split('\n')) {
+            const ann = parseGithubAnnotation(rawLine);
+            if (ann == null)
                 continue;
-            const startLine = diag.location?.line_start;
-            if (startLine == null)
+            const file = ann.fields.file;
+            if (file == null || file.length === 0)
                 continue;
-            const message = extractMessage(diag);
-            const ruleId = diag.category ?? 'biome/unknown';
+            // 路径归一化：Biome 可能输出绝对路径，转为相对仓库根
+            let relFile = file;
+            if (relFile.startsWith(repoRoot)) {
+                relFile = relFile.substring(repoRoot.length).replace(/^[/\\]/, '');
+            }
+            const lineNo = parseInt(ann.fields.line ?? '1', 10);
+            const colNo = parseInt(ann.fields.col ?? ann.fields.column ?? '1', 10);
+            const endLineNo = ann.fields.endLine
+                ? parseInt(ann.fields.endLine, 10)
+                : undefined;
+            const endColNo = ann.fields.endColumn
+                ? parseInt(ann.fields.endColumn, 10)
+                : undefined;
+            const ruleId = ann.fields.title ?? 'biome/unknown';
             results.push({
                 tool: this.displayName,
                 toolVersion: this.resolvedVersion,
-                file,
-                line: startLine,
-                column: diag.location?.column_start ?? 1,
-                endLine: diag.location?.line_end,
-                endColumn: diag.location?.column_end,
-                severity: severityToUnified(diag.severity),
+                file: relFile,
+                line: lineNo,
+                column: colNo,
+                endLine: endLineNo,
+                endColumn: endColNo,
+                severity: severityFromLevel(ann.level),
                 ruleId,
-                message,
+                message: ann.message.trim(),
                 fixable: false,
                 category: categoryToType(ruleId)
             });
         }
+        (0,core.info)(`lint/biome: parsed ${results.length} finding(s) from --reporter=github output`);
         return results;
     }
 }
