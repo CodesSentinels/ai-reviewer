@@ -133,6 +133,9 @@ export async function runLintTools(
           errors: 0,
           warnings: 0,
           infos: 0,
+          errorsOnChanges: 0,
+          warningsOnChanges: 0,
+          infosOnChanges: 0,
           filesScanned: 0,
           durationMs: Date.now() - toolStart
         })
@@ -152,6 +155,9 @@ export async function runLintTools(
           errors: 0,
           warnings: 0,
           infos: 0,
+          errorsOnChanges: 0,
+          warningsOnChanges: 0,
+          infosOnChanges: 0,
           filesScanned: 0,
           durationMs: Date.now() - toolStart
         })
@@ -181,6 +187,10 @@ export async function runLintTools(
         errors: counts.error,
         warnings: counts.warning,
         infos: counts.info,
+        // 占位：稍后做完全局 filter+dedup 后回填实际写到 PR 评论的数量
+        errorsOnChanges: 0,
+        warningsOnChanges: 0,
+        infosOnChanges: 0,
         filesScanned: targets.length,
         durationMs: Date.now() - toolStart
       })
@@ -200,6 +210,31 @@ export async function runLintTools(
     if (a.file !== b.file) return a.file.localeCompare(b.file)
     return a.line - b.line
   })
+
+  // 5) 回填每个工具"实际写到 PR 评论的数量"（post-filter + post-dedup）
+  //    这样统计表能同时显示 "X / Y" — X=进了评论的, Y=工具原始扫描的，
+  //    避免 tsc 这类项目级扫描器给出"43 errors 但只看到 3 条评论"的迷惑。
+  const onChangesByTool = new Map<
+    string,
+    {error: number; warning: number; info: number}
+  >()
+  for (const r of deduped) {
+    const c = onChangesByTool.get(r.tool) ?? {error: 0, warning: 0, info: 0}
+    if (r.severity === 'error') c.error++
+    else if (r.severity === 'warning') c.warning++
+    else c.info++
+    onChangesByTool.set(r.tool, c)
+  }
+  for (const summary of toolSummaries) {
+    const c = onChangesByTool.get(summary.tool) ?? {
+      error: 0,
+      warning: 0,
+      info: 0
+    }
+    summary.errorsOnChanges = c.error
+    summary.warningsOnChanges = c.warning
+    summary.infosOnChanges = c.info
+  }
 
   return {
     results: deduped,

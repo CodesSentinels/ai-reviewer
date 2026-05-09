@@ -148,6 +148,52 @@ describe('runLintTools', () => {
     expect(report.results.length).toBe(0)
   })
 
+  test('toolSummary 同时上报 raw count（errors）与 post-filter count（errorsOnChanges）', async () => {
+    // 模拟项目级扫描器（如 tsc）：报 3 条 error，其中只有 1 条落在变更行附近
+    const onChanged: LintResult = {
+      tool: 'fake',
+      toolVersion: '1.0.0',
+      file: 'src/a.ts',
+      line: 2,                      // changed line is 2 → 命中
+      column: 1,
+      severity: 'error',
+      ruleId: 'fake/A',
+      message: 'on-changed',
+      fixable: false
+    }
+    const offChanged1: LintResult = {
+      ...onChanged,
+      line: 100,
+      ruleId: 'fake/B',
+      message: 'off-1'
+    }
+    const offChanged2: LintResult = {
+      ...onChanged,
+      line: 200,
+      ruleId: 'fake/C',
+      message: 'off-2',
+      severity: 'warning'
+    }
+    const adapter = new FakeAdapter(
+      'fake',
+      {available: true, version: '1.0.0'},
+      [onChanged, offChanged1, offChanged2]
+    )
+
+    const report = await runLintTools({repoRoot: '/tmp', filesAndChanges}, [
+      adapter
+    ])
+
+    expect(report.results.length).toBe(1) // 只有变更行上的进入最终结果
+    const s = report.toolSummaries[0]
+    // 原始扫到的总数（errors=2 是 onChanged + offChanged1）
+    expect(s.errors).toBe(2)
+    expect(s.warnings).toBe(1)
+    // 变更行 + 去重后的最终数（只有 onChanged 一条 error 进了 PR 评论）
+    expect(s.errorsOnChanges).toBe(1)
+    expect(s.warningsOnChanges).toBe(0)
+  })
+
   test('adapter throwing during scan is treated as no findings', async () => {
     const adapter = new FakeAdapter(
       'fake',

@@ -201,9 +201,24 @@ export interface ToolSummary {
   available: boolean
   /** 不可用原因（available=false 时） */
   unavailableReason?: string
+
+  /**
+   * 工具**原始扫描**到的错误/警告/信息数（项目级，未做变更行过滤）。
+   * tsc 等项目级扫描器这里会包含已存在但与本次 PR 无关的发现。
+   */
   errors: number
   warnings: number
   infos: number
+
+  /**
+   * 落在 PR 变更行附近（±3 行）且经跨工具去重后的发现数 —— **这才是真正写到 PR 评论里的数量**。
+   * 与 errors/warnings/infos 同时显示让用户清楚"工具找到了 N 个，但只有 M 个跟你这次改的代码相关"。
+   * 有 finding 但被 dedup 给其他工具时也会反映到这里。
+   */
+  errorsOnChanges: number
+  warningsOnChanges: number
+  infosOnChanges: number
+
   filesScanned: number
   /** 工具执行耗时（毫秒） */
   durationMs: number

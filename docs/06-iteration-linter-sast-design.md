@@ -439,6 +439,7 @@ GitHub Action 输入 `enable_lint_tools`（默认 `true`）是总开关，关闭
 |:---------|:---------|
 | 框架可扩展 | `ToolAdapter` 接口 + `orchestrator` 注册表 |
 | ESLint / Biome / TypeScript / Prettier 集成 | `src/lint/adapters/*.ts`（4 个适配器，共享 multi-strategy installer） |
+| 统计表区分"评论数"vs"原始扫描数" | `ToolSummary.errorsOnChanges` / `warningsOnChanges` 在 orchestrator 后回填；formatter 用 `X / Y` 形式呈现，仅在两数不同时分开显示 |
 | 变更行过滤 | `diff-filter.ts::filterByChangedLines` |
 | 结果注入 LLM Prompt | `Inputs.lintContext` + `$lint_context` 占位符 |
 | AI 交叉验证 | `formatToolAttribution` + Prompt 中的 MANDATORY 指令 |

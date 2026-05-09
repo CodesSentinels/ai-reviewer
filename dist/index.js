@@ -17220,6 +17220,9 @@ async function runLintTools(options, adaptersOverride) {
                 errors: 0,
                 warnings: 0,
                 infos: 0,
+                errorsOnChanges: 0,
+                warningsOnChanges: 0,
+                infosOnChanges: 0,
                 filesScanned: 0,
                 durationMs: Date.now() - toolStart
             });
@@ -17236,6 +17239,9 @@ async function runLintTools(options, adaptersOverride) {
                 errors: 0,
                 warnings: 0,
                 infos: 0,
+                errorsOnChanges: 0,
+                warningsOnChanges: 0,
+                infosOnChanges: 0,
                 filesScanned: 0,
                 durationMs: Date.now() - toolStart
             });
@@ -17256,6 +17262,10 @@ async function runLintTools(options, adaptersOverride) {
             errors: counts.error,
             warnings: counts.warning,
             infos: counts.info,
+            // 占位：稍后做完全局 filter+dedup 后回填实际写到 PR 评论的数量
+            errorsOnChanges: 0,
+            warningsOnChanges: 0,
+            infosOnChanges: 0,
             filesScanned: targets.length,
             durationMs: Date.now() - toolStart
         });
@@ -17271,6 +17281,30 @@ async function runLintTools(options, adaptersOverride) {
             return a.file.localeCompare(b.file);
         return a.line - b.line;
     });
+    // 5) 回填每个工具"实际写到 PR 评论的数量"（post-filter + post-dedup）
+    //    这样统计表能同时显示 "X / Y" — X=进了评论的, Y=工具原始扫描的，
+    //    避免 tsc 这类项目级扫描器给出"43 errors 但只看到 3 条评论"的迷惑。
+    const onChangesByTool = new Map();
+    for (const r of deduped) {
+        const c = onChangesByTool.get(r.tool) ?? { error: 0, warning: 0, info: 0 };
+        if (r.severity === 'error')
+            c.error++;
+        else if (r.severity === 'warning')
+            c.warning++;
+        else
+            c.info++;
+        onChangesByTool.set(r.tool, c);
+    }
+    for (const summary of toolSummaries) {
+        const c = onChangesByTool.get(summary.tool) ?? {
+            error: 0,
+            warning: 0,
+            info: 0
+        };
+        summary.errorsOnChanges = c.error;
+        summary.warningsOnChanges = c.warning;
+        summary.infosOnChanges = c.info;
+    }
     return {
         results: deduped,
         toolSummaries,
@@ -17359,28 +17393,55 @@ function formatLintContextForFile(filename, report) {
     lines.push('3. When you write a review comment that overlaps with a tool finding, mark it as cross-validated by listing the tool name(s).');
     return truncate(lines.join('\n'), MAX_PROMPT_CHARS_PER_FILE);
 }
+/**
+ * 把"在变更行 / 总共"两个数字渲染成单元格文本。
+ *
+ * 相等时只显示一个数；否则用 `X / Y` 表达："进入 PR 评论的 X 个 / 工具原始扫到的 Y 个"。
+ * 这种约定能直接区分 ESLint（针对变更文件扫，一般 X≈Y）与 tsc（项目级扫，X≪Y 是常态）。
+ */
+function fmtCount(onChanges, total) {
+    if (onChanges === total)
+        return `${total}`;
+    return `${onChanges} / ${total}`;
+}
 /** PR 摘要中的工具统计表（Markdown） */
 function formatLintSummary(report) {
     if (report.toolSummaries.length === 0)
         return '';
+    // 表格列说明：
+    //   - Errors / Warnings 列采用 "X / Y" 格式（X=变更行上 + 去重后的最终评论数, Y=工具原始扫描数）
+    //   - 当两者相等时简化为单一数字
+    //   - "Files Scanned" 列对项目级扫描器（如 tsc）来说不准；适配器自己上报值
     const rows = report.toolSummaries
         .map(s => {
         if (!s.available) {
             return `| ${s.tool} | _unavailable_ | _unavailable_ | 0 | ${s.unavailableReason ?? '—'} |`;
         }
-        return `| ${s.tool}${s.toolVersion ? ` ${s.toolVersion}` : ''} | ${s.errors} | ${s.warnings} | ${s.filesScanned} | ${s.durationMs}ms |`;
+        const errCol = fmtCount(s.errorsOnChanges, s.errors);
+        const warnCol = fmtCount(s.warningsOnChanges, s.warnings);
+        return `| ${s.tool}${s.toolVersion ? ` ${s.toolVersion}` : ''} | ${errCol} | ${warnCol} | ${s.filesScanned} | ${s.durationMs}ms |`;
     })
         .join('\n');
     const totalFindings = report.results.length;
     const note = totalFindings === 0
         ? '_No findings reported on changed lines._'
         : `_${totalFindings} finding${totalFindings === 1 ? '' : 's'} on changed lines._`;
+    // 仅当至少有一个工具的 errorsOnChanges < errors（或 warnings 同理）时显示图例，
+    // 避免每次都铺一段说明
+    const hasSplit = report.toolSummaries.some(s => s.available &&
+        (s.errorsOnChanges !== s.errors || s.warningsOnChanges !== s.warnings));
+    const legend = hasSplit
+        ? `
+> _Errors / Warnings 列读法_：\`X / Y\` 表示"进入 PR 评论的 X 个 / 工具原始扫描到的 Y 个"。
+> 项目级扫描器（如 TypeScript）会扫到与本次 PR 无关的存量错误，变更行过滤后只保留与改动相关的部分。
+`
+        : '';
     return `
 <details>
 <summary>🧰 Static Analysis Summary (${report.toolSummaries.length} tool${report.toolSummaries.length === 1 ? '' : 's'})</summary>
 
 ${note}
-
+${legend}
 | Tool | Errors | Warnings | Files Scanned | Duration |
 |:-----|:------:|:--------:|:-------------:|:---------|
 ${rows}
