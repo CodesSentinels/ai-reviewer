@@ -23,6 +23,7 @@ import {
 import {EslintAdapter} from './adapters/eslint'
 import {BiomeAdapter} from './adapters/biome'
 import {PrettierAdapter} from './adapters/prettier'
+import {TscAdapter} from './adapters/tsc'
 import {
   type CodeSentinelConfig,
   getToolConfig,
@@ -61,7 +62,12 @@ export interface OrchestratorOptions {
 
 /** 内置适配器注册表 */
 function defaultAdapters(): ToolAdapter[] {
-  return [new EslintAdapter(), new BiomeAdapter(), new PrettierAdapter()]
+  return [
+    new EslintAdapter(),
+    new BiomeAdapter(),
+    new TscAdapter(),
+    new PrettierAdapter()
+  ]
 }
 
 /**

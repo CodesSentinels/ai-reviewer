@@ -93,7 +93,8 @@ flowchart TB
       EXEC["exec.ts<br/>共享 CLI 封装"]
       ES["EslintAdapter"]
       BI["BiomeAdapter"]
-      PR["PrettierAdapter"]
+      TS["TscAdapter<br/>(类型错误)"]
+      PR["PrettierAdapter<br/>(默认关闭)"]
     end
   end
 
@@ -152,6 +153,11 @@ classDiagram
     +scan() Promise~LintResult[]~
   }
   class BiomeAdapter {
+    -string resolvedVersion
+    +detect() Promise~ToolDetection~
+    +scan() Promise~LintResult[]~
+  }
+  class TscAdapter {
     -string resolvedVersion
     +detect() Promise~ToolDetection~
     +scan() Promise~LintResult[]~
@@ -218,6 +224,7 @@ classDiagram
 
   ToolAdapter <|.. EslintAdapter   : implements
   ToolAdapter <|.. BiomeAdapter    : implements
+  ToolAdapter <|.. TscAdapter      : implements
   ToolAdapter <|.. PrettierAdapter : implements
 
   ToolAdapter ..> ToolDetection    : detect() returns
@@ -510,7 +517,7 @@ flowchart TB
 
 | 目标 | 落地方式 | 证据 |
 |:-----|:---------|:-----|
-| 可扩展 | `ToolAdapter` 接口 + `defaultAdapters()` 注册表 | Phase 2 加 golangci-lint 仅需新增 1 个文件 |
+| 可扩展 | `ToolAdapter` 接口 + `defaultAdapters()` 注册表 + 多策略 `installSpec` | Phase 1 已落地 4 个适配器（ESLint/Biome/TypeScript/Prettier）；Phase 2 加 golangci-lint 仅需新增 1 个文件 + 声明 `installSpec.kind = 'binary'` |
 | 失败容忍 | 三层 try/catch（safeDetect / scan / runLintTools 整体）+ 改进 A：ESLint 项目无配置时优雅降级 + 沙箱安装失败时优雅降级 | `lint-orchestrator.test.ts` 4 + `lint-eslint-config-detection.test.ts` 7 + `lint-tool-installer.test.ts` 7 |
 | **项目侧零负担** | 多策略 `tool-installer.ts` 把 lint 工具装到 ai-reviewer 自管沙箱 `/tmp/ai-reviewer-lint-tools/`；待审查项目无需把工具写入 `package.json`，workflow 也无需 `npm install` 步骤 | `lint-tool-installer.test.ts` 覆盖 npm 策略与 binary 占位 |
 | 聚焦变更 | `src/changed-lines.ts::scanPatch` 单次 walk → `review.ts` 预扫描 PatchScanMap → `runLintTools` 与 `analyzeDependencies` 共享 | `lint-diff-filter.test.ts`、`changed-lines.test.ts` 中 added/touched 双语义覆盖通过 |

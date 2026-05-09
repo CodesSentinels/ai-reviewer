@@ -201,7 +201,8 @@ interface ToolAdapter {
 |:-------|:-----------|:---------|:---------|:---------|
 | ESLint | `{ kind: 'npm', package: 'eslint', binName: 'eslint', version: '^9.15.0' }` | `<bundled-bin> --format json --no-error-on-unmatched-pattern <files>` | JSON 数组，每元素 `{filePath, messages[]}` | ✅ |
 | Biome  | `{ kind: 'npm', package: '@biomejs/biome', binName: 'biome', version: '^2.3.0' }` | `<bundled-bin> check --reporter=json <files>` | `{diagnostics: [{category, severity, location.line_start, …}]}` | ✅ |
-| Prettier | `{ kind: 'npm', package: 'prettier', binName: 'prettier', version: '^3.0.0' }` | `<bundled-bin> --check --no-error-on-unmatched-pattern <files>` | stderr 中按行匹配 `[warn] <file>` | ❌（默认关闭） |
+| **TypeScript** | `{ kind: 'npm', package: 'typescript', binName: 'tsc', version: '^5.6.0' }` | `<bundled-bin> --noEmit --pretty false`（**项目级，忽略 files 参数**） | 正则 `^(.+)\((\d+),(\d+)\): (error\|warning) (TS\d+): (.+)$` 解析单行错误，忽略续行 type chain | ✅ |
+| Prettier | `{ kind: 'npm', package: 'prettier', binName: 'prettier', version: '^3.0.0' }` | `<bundled-bin> --check --no-error-on-unmatched-pattern <files>` | stderr 中按行匹配 `[warn] <file>` | ❌（默认关闭：风格规则信噪比低，与 ESLint/Biome 重叠） |
 
 通用约定：
 
@@ -220,6 +221,17 @@ ESLint 适配器额外检查（**改进 A**）：ESLint 9 Flat Config 不再内�
 任一命中即可。**全部缺失时返回 `available: false`**，原因写入 `reason` 字段，
 用户能在 PR 摘要的统计表中直接看到 `_unavailable_ — no ESLint config found in repo …`，
 而不是面对一堆"扫描了 N 个文件，0 finding"的迷惑结果。
+
+TypeScript 适配器同款约束：`detect()` 检查 `tsconfig.{json,base.json,app.json}` 任一命中；
+全部缺失时返回 unavailable + 明确 reason。
+
+TypeScript 适配器与其他适配器的关键差异：
+
+- **scan 项目级而非文件级**：`scan(files, repoRoot, _config)` 中 `files` 参数被**忽略**，
+  改为对整个项目跑 `tsc --noEmit`。这是 TypeScript 类型推导跨文件传递的固有约束 —
+  改一个文件的 export 类型可能让其他文件出错。
+- **变更行过滤仍生效**：orchestrator 后续按 `addedLines` 过滤，未变更代码上的旧错误不会出现在评论中。
+- **超时上调到 90s**：tsc 在中大型项目耗时较长（10K LOC ≈ 5-15s，100K LOC 30s+）。
 
 ---
 
@@ -391,8 +403,9 @@ GitHub Action 输入 `enable_lint_tools`（默认 `true`）是总开关，关闭
 | [`__tests__/lint-eslint-config-detection.test.ts`](../__tests__/lint-eslint-config-detection.test.ts) | 改进 A：项目缺少 ESLint 配置时 `detect()` 返回 available=false；覆盖 Flat Config / Legacy / package.json#eslintConfig / 损坏 package.json 等 7 种情形 |
 | [`__tests__/changed-lines.test.ts`](../__tests__/changed-lines.test.ts) | 集中 diff 扫描：`scanPatch` 单次 walk 产出 added/touched 两份集合；`buildPatchScans`/`toAddedLineMap`；纯删除 hunk / 多 hunk / 边界字符（"\\ No newline …"）等 8 种情形 |
 | [`__tests__/lint-tool-installer.test.ts`](../__tests__/lint-tool-installer.test.ts) | 多策略 dispatcher：npm 策略首次安装 / 缓存命中 / 沙箱目录初始化 / `npm install` 失败诊断 / `npm` 不存在 / 安装但 bin 缺失；binary 策略占位返回 7 种情形 |
+| [`__tests__/lint-tsc-adapter.test.ts`](../__tests__/lint-tsc-adapter.test.ts) | **TypeScript 适配器**：detect（沙箱失败 / version 失败 / 无 tsconfig / tsconfig.json 命中 / tsconfig.base.json 命中）+ scan 输出解析（单条 / 多条 / 续行忽略 / 绝对路径归一化 / 0 finding / spawnError）共 10 用例 |
 
-执行：`npm test`（合并后总计 220 个用例全部通过）。
+执行：`npm test`（合并后总计 230 个用例全部通过）。
 
 ---
 
@@ -425,7 +438,7 @@ GitHub Action 输入 `enable_lint_tools`（默认 `true`）是总开关，关闭
 | 文档要求 | 实现位置 |
 |:---------|:---------|
 | 框架可扩展 | `ToolAdapter` 接口 + `orchestrator` 注册表 |
-| ESLint / Biome / Prettier 集成 | `src/lint/adapters/*.ts` |
+| ESLint / Biome / TypeScript / Prettier 集成 | `src/lint/adapters/*.ts`（4 个适配器，共享 multi-strategy installer） |
 | 变更行过滤 | `diff-filter.ts::filterByChangedLines` |
 | 结果注入 LLM Prompt | `Inputs.lintContext` + `$lint_context` 占位符 |
 | AI 交叉验证 | `formatToolAttribution` + Prompt 中的 MANDATORY 指令 |
