@@ -24,7 +24,7 @@ import {EslintAdapter} from './adapters/eslint'
 import {BiomeAdapter} from './adapters/biome'
 import {PrettierAdapter} from './adapters/prettier'
 import {TscAdapter} from './adapters/tsc'
-import {deduplicateResults, filterByChangedLines} from './diff-filter'
+import {deduplicateResults, filterByChangedLines} from './lint-filter'
 import {
   type LintReport,
   type LintResult,

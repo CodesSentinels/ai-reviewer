@@ -11209,7 +11209,7 @@ __nccwpck_require__.r(__webpack_exports__);
 /* harmony import */ var _commands_early_reaction__WEBPACK_IMPORTED_MODULE_3__ = __nccwpck_require__(6360);
 /* harmony import */ var _options__WEBPACK_IMPORTED_MODULE_4__ = __nccwpck_require__(5341);
 /* harmony import */ var _prompts__WEBPACK_IMPORTED_MODULE_6__ = __nccwpck_require__(2379);
-/* harmony import */ var _review__WEBPACK_IMPORTED_MODULE_5__ = __nccwpck_require__(3055);
+/* harmony import */ var _review__WEBPACK_IMPORTED_MODULE_5__ = __nccwpck_require__(3723);
 /**
  * main.ts - GitHub Action 入口文件
  *
@@ -14116,7 +14116,7 @@ $lint_context
 
 /***/ }),
 
-/***/ 3055:
+/***/ 3723:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
 "use strict";
@@ -14300,7 +14300,7 @@ var lib_commenter = __nccwpck_require__(4558);
 /**
  * changed-lines.ts - 统一的 unified diff 行号扫描器
  *
- * 历史上 review.ts / dependency-analyzer.ts / lint/diff-filter.ts 各自实现了
+ * 历史上 review.ts / dependency-analyzer.ts / lint/lint-filter.ts 各自实现了
  * 几乎一样的"逐行 walk diff、推进 newLine"逻辑。这里集中一份，
  * 让上层调用方一次扫描产出两份语义不同的集合：
  *
@@ -17025,20 +17025,25 @@ class TscAdapter {
     }
 }
 
-;// CONCATENATED MODULE: ./lib/lint/diff-filter.js
+;// CONCATENATED MODULE: ./lib/lint/lint-filter.js
 /**
- * lint/diff-filter.ts - lint 结果过滤与去重
+ * lint/lint-filter.ts - Lint 结果后处理（过滤 + 去重）
  *
- * 变更行扫描逻辑已上提到 src/changed-lines.ts，本模块仅保留：
- *   - filterByChangedLines / isLineInChangedWindow：基于变更行 ± tolerance 的过滤
- *   - deduplicateResults：跨工具同位置同问题去重
+ * 此模块**不接触 diff 文本**，也不调用任何 lint 工具。
+ * 它接收"所有适配器已经跑出来的发现列表"，做两步后处理：
  *
- * 同时为兼容旧调用方（包括 __tests__/lint-diff-filter.test.ts），从
- * `../changed-lines` 重新导出 `extractChangedLinesFromPatch` 与 `buildChangedLineMap`。
+ *   1. filterByChangedLines —— 仅保留落在 PR 变更行 ± tolerance 范围内的发现
+ *      （tsc 这种项目级扫描器经常报出与本次 PR 无关的存量错误，需在此剔除）
+ *
+ *   2. deduplicateResults —— 跨工具同位置同问题去重
+ *      （ESLint 和 Biome 对同一个"未使用变量"会各报一条，需合并为一条）
+ *
+ * 在 orchestrator 流水线中位于"全部适配器 scan 完成"之后、"生成 LintReport"之前。
+ *
+ * 历史：本文件曾叫 `diff-filter.ts`，因为最初它直接读 unified diff。后来变更行
+ * 扫描逻辑上提到 `src/changed-lines.ts`，本模块就只剩"后处理"了，故 2026-05 改名
+ * 为 lint-filter.ts。
  */
-
-
-// 兼容性 re-export
 
 /** 变更行附近的"上下文容忍范围"。单位：行 */
 const DEFAULT_CONTEXT_TOLERANCE = 3;
@@ -17082,7 +17087,7 @@ function filterByChangedLines(results, changedLineMap, tolerance = DEFAULT_CONTE
             filtered.push(r);
     }
     if (results.length !== filtered.length) {
-        (0,core.info)(`lint: diff filter kept ${filtered.length}/${results.length} findings (tolerance=${tolerance})`);
+        (0,core.info)(`lint: post-filter kept ${filtered.length}/${results.length} findings (tolerance=${tolerance})`);
     }
     return filtered;
 }

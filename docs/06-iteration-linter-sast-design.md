@@ -40,7 +40,7 @@ flowchart TB
       direction LR
       types["types.ts<br/>LintResult / ToolAdapter<br/>InstallSpec (npm / binary)"]
       ld["language-detector.ts<br/>扩展名 → 语言"]
-      df["diff-filter.ts<br/>过滤 + 跨工具去重"]
+      df["lint-filter.ts<br/>过滤 + 跨工具去重"]
       orch["orchestrator.ts<br/>检测 → 选择 → 并行扫描 → 聚合"]
       fmt["formatter.ts<br/>Prompt 注入 / PR 摘要表 / 评论标注"]
       installer["tool-installer.ts<br/>多策略安装 dispatcher<br/>(npm / binary[Phase 2+])"]
@@ -419,7 +419,7 @@ interface BinaryInstallSpec {       // Phase 2+ 占位（golangci-lint / ruff / 
 
 | 测试文件 | 覆盖范围 |
 |:---------|:---------|
-| [`__tests__/lint-diff-filter.test.ts`](../__tests__/lint-diff-filter.test.ts) | unified diff 行号提取、变更行窗口过滤、跨工具去重（含规则名归一化） |
+| [`__tests__/lint-filter.test.ts`](../__tests__/lint-filter.test.ts) | unified diff 行号提取、变更行窗口过滤、跨工具去重（含规则名归一化） |
 | [`__tests__/lint-orchestrator.test.ts`](../__tests__/lint-orchestrator.test.ts) | 启用/禁用、不可用工具的 ToolSummary、scan 抛异常的容忍、`disabled=true` 短路 |
 | [`__tests__/lint-prompt-injection.test.ts`](../__tests__/lint-prompt-injection.test.ts) | 杠杆 A 条件注入：lintContext 空/非空两条路径在最终 prompt 中的体现；token 节省下界 |
 | [`__tests__/lint-eslint-config-detection.test.ts`](../__tests__/lint-eslint-config-detection.test.ts) | 改进 A：项目缺少 ESLint 配置时 `detect()` 返回 available=false；覆盖 Flat Config / Legacy / package.json#eslintConfig / 损坏 package.json 等 7 种情形 |
@@ -441,7 +441,7 @@ interface BinaryInstallSpec {       // Phase 2+ 占位（golangci-lint / ruff / 
 4. 在 `language-detector.ts` 的 `EXTENSION_TO_LANGUAGE` 中扩展（如已存在可跳过）
 5. **若用 binary 策略**，在 `tool-installer.ts::installViaBinary` 中实现首个 binary 工具的下载/解压/校验逻辑（一次性投入，后续 binary 适配器复用）
 
-无需改动 review.ts、prompts.ts、formatter.ts、diff-filter.ts。**也不再需要 Docker 镜像预装**（项目侧零负担承诺也对未来语言生效）。
+无需改动 review.ts、prompts.ts、formatter.ts、lint-filter.ts。**也不再需要 Docker 镜像预装**（项目侧零负担承诺也对未来语言生效）。
 
 | 阶段 | 工具 | InstallSpec 类型 | 备注 |
 |:-----|:-----|:----------------|:-----|
@@ -462,7 +462,7 @@ interface BinaryInstallSpec {       // Phase 2+ 占位（golangci-lint / ruff / 
 | 框架可扩展 | `ToolAdapter` 接口 + `orchestrator` 注册表 |
 | ESLint / Biome / TypeScript / Prettier 集成 | `src/lint/adapters/*.ts`（4 个适配器，共享 multi-strategy installer） |
 | 统计表区分"评论数"vs"原始扫描数" | `ToolSummary.errorsOnChanges` / `warningsOnChanges` 在 orchestrator 后回填；formatter 用 `X / Y` 形式呈现，仅在两数不同时分开显示 |
-| 变更行过滤 | `diff-filter.ts::filterByChangedLines` |
+| 变更行过滤 | `lint-filter.ts::filterByChangedLines` |
 | 结果注入 LLM Prompt | `Inputs.lintContext` + `$lint_context` 占位符 |
 | AI 交叉验证 | `formatToolAttribution` + Prompt 中的 MANDATORY 指令 |
 | **消费方零配置文件** | Action 输入 `enable_eslint` / `enable_biome` / `enable_tsc` / `enable_prettier`；`src/lint/config.ts` 与所有 `.codesentinel.yaml` 加载逻辑均已删除 |

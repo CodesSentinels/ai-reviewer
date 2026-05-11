@@ -1,8 +1,9 @@
 /**
- * lint-diff-filter.test.ts - Linter/SAST 集成的变更行过滤模块测试
+ * lint-filter.test.ts - Linter/SAST 后处理（过滤 + 去重）测试
  *
  * 覆盖：
  * - extractChangedLinesFromPatch 解析 unified diff 的 +/-/' ' 行号推进逻辑
+ *   （位于 src/changed-lines.ts —— 仍在此处一并测试，省得拆两个文件）
  * - filterByChangedLines 仅保留命中变更窗口的工具结果
  * - deduplicateResults 跨工具同位置去重，保留更高严重级别
  */
@@ -16,10 +17,12 @@ jest.mock('@actions/core', () => ({
 
 import {
   buildChangedLineMap,
+  extractChangedLinesFromPatch
+} from '../src/changed-lines'
+import {
   deduplicateResults,
-  extractChangedLinesFromPatch,
   filterByChangedLines
-} from '../src/lint/diff-filter'
+} from '../src/lint/lint-filter'
 import {type LintResult} from '../src/lint/types'
 
 describe('extractChangedLinesFromPatch', () => {

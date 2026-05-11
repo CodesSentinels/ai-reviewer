@@ -40,7 +40,7 @@
 | **工具来源** | ai-reviewer **自带**（沙箱安装到 `/tmp`，多策略 dispatcher） | 要求待审查项目把 lint 工具写入 `package.json` | 项目侧零负担；不必为每个想接 ai-reviewer 的项目都开 PR 加 devDependencies |
 | 工具发现 → AI 注入 | Prompt 中**条件**注入（杠杆 A） + 评论尾部标注 | 直接发布工具评论 / 总是注入 | 直接发评论会与 AI 评论错位，且 AI 无法交叉验证；总是注入则在无 finding 文件上浪费 ~300 token |
 | 变更行过滤 | 在 orchestrator 里统一做 | 让每个适配器自己做 | 过滤逻辑应一次定义；适配器只关心解析 |
-| diff 扫描位置 | 上提到 `src/changed-lines.ts`，`review.ts` 一次扫描全文件，按 `addedLines` / `touchedLines` 分发 | 各模块各扫一遍 | 历史上 review/dep-analyzer/diff-filter 三处都有 walker，是真实的 DRY 问题 |
+| diff 扫描位置 | 上提到 `src/changed-lines.ts`，`review.ts` 一次扫描全文件，按 `addedLines` / `touchedLines` 分发 | 各模块各扫一遍 | 历史上 review/dep-analyzer/lint-filter 三处都有 walker，是真实的 DRY 问题 |
 | 跨工具去重 | 在 orchestrator 里做 | 不去重 | ESLint 与 Biome 大量规则重叠，不去重会出现"同一行两条几乎一样的评论" |
 | ~~配置文件~~ **已废弃** | **全部走 GitHub Action 输入** | `.codesentinel.yaml` | 消费方零文件原则；workflow 的 `with:` 块比单独 YAML 更易发现；早期 `.codesentinel.yaml` 已删除 |
 | 单工具失败处理 | 记入 ToolSummary，继续 | 整体失败 | "缺一个工具就不审查"对用户体验是灾难 |
@@ -82,7 +82,7 @@ flowchart TB
       direction LR
       ORCH["orchestrator.ts<br/>主控逻辑"]
       FMT["formatter.ts<br/>三种输出格式"]
-      DF["diff-filter.ts<br/>变更行 / 去重"]
+      DF["lint-filter.ts<br/>变更行 / 去重"]
       LD["language-detector.ts"]
       TS["types.ts"]
     end
@@ -124,7 +124,7 @@ flowchart TB
 |:-----|:-----------|:-----|
 | `types.ts` | 定义所有共享类型 | 任何运行逻辑 |
 | `language-detector.ts` | 文件 → 语言枚举 | 工具选择（交给 orchestrator） |
-| `diff-filter.ts` | 提取变更行 / 过滤 / 跨工具去重 | 调用工具、IO |
+| `lint-filter.ts` | 提取变更行 / 过滤 / 跨工具去重 | 调用工具、IO |
 | `orchestrator.ts` | 编排：按 Action 输入选工具 → 跑工具 → 汇总 | 输出格式、Prompt 集成 |
 | `formatter.ts` | 三种输出文本生成 | 任何 IO 或工具调用 |
 | `adapters/exec.ts` | 子进程封装 + 解析辅助 | 知道任何具体工具 |
@@ -459,7 +459,7 @@ flowchart TD
 
 ### 3.7 单次 diff 扫描的复用拓扑
 
-历史上 `review.ts` / `dependency-analyzer.ts` / `lint/diff-filter.ts` 各自实现了
+历史上 `review.ts` / `dependency-analyzer.ts` / `lint/lint-filter.ts` 各自实现了
 几乎相同的 unified diff walker。重构后 `src/changed-lines.ts::scanPatch` 单次
 walk 同时产出两份语义不同的集合，`review.ts` 在 Phase 0/0b 之前预扫描一次，
 两个下游消费者按字段挑取所需。
@@ -492,7 +492,7 @@ flowchart TB
 | 可扩展 | `ToolAdapter` 接口 + `defaultAdapters()` 注册表 + 多策略 `installSpec` | Phase 1 已落地 4 个适配器（ESLint/Biome/TypeScript/Prettier）；Phase 2 加 golangci-lint 仅需新增 1 个文件 + 声明 `installSpec.kind = 'binary'` |
 | 失败容忍 | 三层 try/catch（safeDetect / scan / runLintTools 整体）+ 改进 A：ESLint 项目无配置时优雅降级 + 沙箱安装失败时优雅降级 | `lint-orchestrator.test.ts` 4 + `lint-eslint-config-detection.test.ts` 7 + `lint-tool-installer.test.ts` 7 |
 | **项目侧零负担** | 多策略 `tool-installer.ts` 把 lint 工具装到 ai-reviewer 自管沙箱 `/tmp/ai-reviewer-lint-tools/`；待审查项目无需把工具写入 `package.json`，workflow 也无需 `npm install` 步骤 | `lint-tool-installer.test.ts` 覆盖 npm 策略与 binary 占位 |
-| 聚焦变更 | `src/changed-lines.ts::scanPatch` 单次 walk → `review.ts` 预扫描 PatchScanMap → `runLintTools` 与 `analyzeDependencies` 共享 | `lint-diff-filter.test.ts`、`changed-lines.test.ts` 中 added/touched 双语义覆盖通过 |
+| 聚焦变更 | `src/changed-lines.ts::scanPatch` 单次 walk → `review.ts` 预扫描 PatchScanMap → `runLintTools` 与 `analyzeDependencies` 共享 | `lint-filter.test.ts`、`changed-lines.test.ts` 中 added/touched 双语义覆盖通过 |
 | 零新增依赖 | 复用 `js-yaml` (require)、`child_process.execFile` | `package.json` 未改 |
 | AI ↔ 工具有机融合 | Prompt **条件**注入（杠杆 A） + 评论标注 + 摘要表 三处协同 | `prompts.ts::renderReviewFileDiff` + `formatToolAttribution` + `lint-prompt-injection.test.ts` |
 

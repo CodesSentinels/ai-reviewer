@@ -1,7 +1,7 @@
 /**
  * changed-lines.ts - 统一的 unified diff 行号扫描器
  *
- * 历史上 review.ts / dependency-analyzer.ts / lint/diff-filter.ts 各自实现了
+ * 历史上 review.ts / dependency-analyzer.ts / lint/lint-filter.ts 各自实现了
  * 几乎一样的"逐行 walk diff、推进 newLine"逻辑。这里集中一份，
  * 让上层调用方一次扫描产出两份语义不同的集合：
  *
