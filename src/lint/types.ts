@@ -4,12 +4,14 @@
  * 定义所有工具适配器共享的统一接口和数据结构：
  * - LintResult: 所有工具输出的统一格式
  * - ToolAdapter: 适配器接口契约
- * - ToolConfig: 单个工具的用户配置
- * - ToolsConfig: 整体工具配置（来自 .codesentinel.yaml）
+ * - InstallSpec (NpmInstallSpec / BinaryInstallSpec): 工具安装策略声明
+ * - ToolDetection / ToolSummary / LintReport: orchestrator 在不同阶段的产物
  *
  * 设计原则：
  * - 与 dependency-analyzer 类似，采用纯数据接口 + 函数式编排，便于单元测试
  * - 适配器只负责"调用工具 + 解析输出"，所有过滤/合并/格式化逻辑放在 orchestrator
+ * - 历史：早期还包含 ToolConfig/ToolsConfig 用于 `.codesentinel.yaml` 解析，
+ *   已在 2026-05 移除（统一改用 GitHub Action 输入），细节见 §"已废弃" 注释
  */
 
 /** 单条 Lint/SAST 结果 */
@@ -42,20 +44,13 @@ export interface LintResult {
   category?: 'quality' | 'security' | 'style' | 'performance'
 }
 
-/** 工具配置（单个工具） */
-export interface ToolConfig {
-  /** 是否启用（默认值由适配器决定） */
-  enabled?: boolean
-  /** 是否使用项目自带的配置文件（如 .eslintrc / biome.json） */
-  useProjectConfig?: boolean
-  /** 工具特定的扩展配置（如 ruff 的 select 列表） */
-  [key: string]: unknown
-}
-
-/** 用户工具配置（来自 .codesentinel.yaml 的 tools 区块） */
-export interface ToolsConfig {
-  [toolName: string]: ToolConfig
-}
+// （历史）ToolConfig / ToolsConfig / .codesentinel.yaml 已彻底移除。
+//
+// 早期版本通过仓库根的 .codesentinel.yaml 控制 lint 工具开关 + 工具特定选项。
+// 当前版本把开关移到 GitHub Action 输入（enable_eslint / enable_biome /
+// enable_tsc / enable_prettier），消费方完全不再需要在自己仓库里维护 YAML 配置。
+// 未来若引入需要项目级覆盖的工具特定选项（如 ruff 的 rule 选择），可考虑新增
+// 对应的 Action 输入或单独的机制，但默认目标仍是"消费方零配置"。
 
 // ==================== 安装策略（多策略 dispatcher） ====================
 //
@@ -164,14 +159,9 @@ export interface ToolAdapter {
    *
    * @param files 要扫描的文件列表（绝对路径或相对仓库根的路径）
    * @param repoRoot 仓库根目录（绝对路径）
-   * @param config 来自 `.codesentinel.yaml` 的工具配置
    * @returns 扁平化的 LintResult 列表（不做变更行过滤，由 orchestrator 处理）
    */
-  scan(
-    files: string[],
-    repoRoot: string,
-    config: ToolConfig
-  ): Promise<LintResult[]>
+  scan(files: string[], repoRoot: string): Promise<LintResult[]>
 }
 
 /**

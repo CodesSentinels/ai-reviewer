@@ -336,6 +336,8 @@ ${hunks.oldHunk}
         repoRoot: process.cwd(),
         filesAndChanges,
         patchScans,
+        // 取代 .codesentinel.yaml：把 Action 输入收集到的开关传给 orchestrator
+        toolEnableOverrides: options.toolEnableOverrides,
         disabled: false
       })
       info(

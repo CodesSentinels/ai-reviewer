@@ -38,10 +38,9 @@ flowchart TB
 
     subgraph Core["核心模块"]
       direction LR
-      types["types.ts<br/>LintResult / ToolAdapter / ToolConfig<br/>InstallSpec (npm / binary)"]
+      types["types.ts<br/>LintResult / ToolAdapter<br/>InstallSpec (npm / binary)"]
       ld["language-detector.ts<br/>扩展名 → 语言"]
       df["diff-filter.ts<br/>过滤 + 跨工具去重"]
-      cfg["config.ts<br/>.codesentinel.yaml 解析"]
       orch["orchestrator.ts<br/>检测 → 选择 → 并行扫描 → 聚合"]
       fmt["formatter.ts<br/>Prompt 注入 / PR 摘要表 / 评论标注"]
       installer["tool-installer.ts<br/>多策略安装 dispatcher<br/>(npm / binary[Phase 2+])"]
@@ -63,7 +62,6 @@ flowchart TB
   idx --> Core
   idx --> Adapters
   orch --> df
-  orch --> cfg
   orch --> Adapters
   Core -. 类型契约 .-> types
   es -. 共享 .-> exec
@@ -107,10 +105,10 @@ flowchart TB
 ```mermaid
 flowchart TB
   IN["PR 变更文件列表 (filesAndChanges)<br/>[filename, fileContent, fileDiff, patches[]]"]
-  IN --> S1["1) loadConfig(repoRoot)<br/>读取 .codesentinel.yaml → ToolsConfig"]
-  S1 --> S2["2) 适配器注册表<br/>[ESLintAdapter, BiomeAdapter, PrettierAdapter]<br/>↓ isToolEnabled(name, ToolsConfig, defaultEnabled)<br/>enabledAdapters"]
-  S2 -- "Promise.all (并行检测)" --> S3["3) safeDetect → ToolDetection<br/>· ensureToolInstalled(installSpec) — 沙箱内确保工具就绪<br/>· runCommand(&lt;sandboxBin&gt;, ['--version']) 校验启动<br/>· 项目侧前置检查 (如 ESLint config)<br/>失败转为 available=false"]
-  S3 -- "Promise.all (并行扫描)" --> S4["4) 每个可用工具:<br/>a. 按 fileExtensions 过滤目标文件<br/>b. adapter.scan(targets, repoRoot, toolConfig)<br/>c. 异常 → 警告 + 视为 0 个发现<br/>→ LintResult[] (raw)"]
+  IN --> S1["1) 读取 Action 输入 toolEnableOverrides<br/>(enable_eslint / enable_biome / enable_tsc / enable_prettier)"]
+  S1 --> S2["2) 适配器注册表<br/>[ESLintAdapter, BiomeAdapter, TscAdapter, PrettierAdapter]<br/>↓ override ?? adapter.defaultEnabled<br/>enabledAdapters"]
+  S2 -- "Promise.all (并行检测)" --> S3["3) safeDetect → ToolDetection<br/>· ensureToolInstalled(installSpec) — 沙箱内确保工具就绪<br/>· runCommand(&lt;sandboxBin&gt;, ['--version']) 校验启动<br/>· 项目侧前置检查 (如 ESLint config / tsconfig)<br/>失败转为 available=false"]
+  S3 -- "Promise.all (并行扫描)" --> S4["4) 每个可用工具:<br/>a. 按 fileExtensions 过滤目标文件<br/>b. adapter.scan(targets, repoRoot)<br/>c. 异常 → 警告 + 视为 0 个发现<br/>→ LintResult[] (raw)"]
   S4 --> S5["5) 合并 / 过滤 / 排序<br/>a. buildChangedLineMap(filesAndChanges)<br/>b. filterByChangedLines (tolerance=3)<br/>c. deduplicateResults (归一化规则名 + 同位置取高 severity)<br/>d. sort by (file, line)"]
   S5 --> OUT["LintReport {<br/>results: LintResult[]   // 已过滤 / 去重 / 排序<br/>toolSummaries: ToolSummary[]   // 每工具统计与可用性<br/>durationMs, filesScanned<br/>}"]
 ```
@@ -292,35 +290,59 @@ interface BinaryInstallSpec {       // Phase 2+ 占位（golangci-lint / ruff / 
 
 ---
 
-## 6. 用户配置
+## 6. 用户配置（**消费方零文件**）
 
-`.codesentinel.yaml`（仓库根目录）：
+> **设计目标**：待审查项目无需创建任何配置文件。所有工具开关都通过 GitHub
+> Action 输入控制 —— 消费方只需要维护一份 `.github/workflows/*.yml`，里面包
+> 含他们配置 ai-reviewer 时本就要写的 `with:` 块。
+
+### 6.1 GitHub Action 输入
+
+| 输入 | 默认 | 说明 |
+|:----|:----|:----|
+| `enable_lint_tools` | `true` | 主总开关。`false` 时整个 Phase 0b 跳过，下面 4 个 per-tool 开关均被忽略 |
+| `enable_eslint` | `true` | 启用 ESLint 适配器 |
+| `enable_biome` | `true` | 启用 Biome 适配器 |
+| `enable_tsc` | `true` | 启用 TypeScript 编译器适配器 |
+| `enable_prettier` | `false` | 启用 Prettier 适配器（默认关闭，因风格类问题信噪比低） |
+
+典型消费方 workflow 写法：
 
 ```yaml
-tools:
-  eslint:
-    enabled: true
-    useProjectConfig: true     # 默认 true，使用项目自带 .eslintrc / eslint.config.js
-  biome:
-    enabled: true
-  prettier:
-    enabled: false             # 与 ESLint 重叠时常关闭
-  golangci-lint:               # Phase 2 预留
-    enabled: true
-  ruff:                        # Phase 3 预留
-    enabled: true
-    select: ["E", "F", "W", "I", "S"]
-  semgrep:                     # Phase 4 预留
-    enabled: false
+- uses: CodesSentinels/ai-reviewer@feature/lint
+  with:
+    enable_lint_tools: true   # 默认即真，可省略
+    enable_prettier: true     # 这一行就足以开启 Prettier
 ```
 
-加载策略（[src/lint/config.ts](../src/lint/config.ts)）：
+不写 `with:` 块时全部走默认值（ESLint + Biome + TypeScript 开，Prettier 关），
+这是绝大多数 JS/TS 项目想要的行为。
 
-- 仓库根缺少配置文件 → 全部使用适配器默认值
-- YAML 解析失败 → 警告 + 回退默认值
-- 单个工具 `enabled` 字段缺失 → 使用适配器 `defaultEnabled`
+### 6.2 优先级与回退
 
-GitHub Action 输入 `enable_lint_tools`（默认 `true`）是总开关，关闭后整个 Phase 0b 跳过。
+```
+最终启用状态 = options.toolEnableOverrides[adapter.name]
+              ↓ undefined（即 Action 输入留空 — 现已默认填充，理论上不会发生）
+              adapter.defaultEnabled
+```
+
+每个 enable_* 输入在 action.yml 中都有默认值，所以实际跑起来 `toolEnableOverrides`
+对所有内置工具都有项；`undefined` 分支只在 Phase 2+ 加新适配器但还没加对应输入
+时才走到，是兜底机制。
+
+### 6.3 历史：`.codesentinel.yaml` 已移除
+
+早期版本通过仓库根的 `.codesentinel.yaml` 控制开关 + 工具特定选项。在与消费方
+反复迭代后发现该机制：
+
+- **增加消费方负担**：要求他们在自己仓库新增一个文件，与现有 workflow.yml 分裂
+- **离散于 workflow**：所有配置应在同一处（workflow 的 `with:` 块），更易发现
+- **绝大多数用户不需要**：默认值已合理，覆盖场景占少数
+
+当前版本（2026-05）已**完全移除** `.codesentinel.yaml` 加载逻辑（删除了
+`src/lint/config.ts`），全部通过 Action 输入控制。后续若引入需要工具特定选项
+的 Phase 3 工具（如 Ruff 规则集选择），会通过新增 Action 输入扩展，仍坚持
+"消费方零配置文件"原则。
 
 ---
 
@@ -443,7 +465,7 @@ GitHub Action 输入 `enable_lint_tools`（默认 `true`）是总开关，关闭
 | 变更行过滤 | `diff-filter.ts::filterByChangedLines` |
 | 结果注入 LLM Prompt | `Inputs.lintContext` + `$lint_context` 占位符 |
 | AI 交叉验证 | `formatToolAttribution` + Prompt 中的 MANDATORY 指令 |
-| `.codesentinel.yaml` 配置化 | `config.ts::loadConfig` |
+| **消费方零配置文件** | Action 输入 `enable_eslint` / `enable_biome` / `enable_tsc` / `enable_prettier`；`src/lint/config.ts` 与所有 `.codesentinel.yaml` 加载逻辑均已删除 |
 | 性能 ≤ 3 分钟 | 并行执行 + 单工具 60s 默认超时 |
 | 错误容忍 | `safeDetect` + scan try/catch + `available=false` 上报 |
 | ESLint 项目无配置时优雅降级 | `EslintAdapter.detect()` 检测到 `eslint.config.*` / `.eslintrc.*` / `package.json#eslintConfig` 缺失时返回 `available=false`（改进 A） |

@@ -47,6 +47,13 @@ async function run(): Promise<void> {
     getBooleanInput('enable_web_search'),
     getBooleanInput('enable_shell'),
     getBooleanInput('enable_lint_tools'),
+    {
+      // 取代 .codesentinel.yaml：所有 lint 工具的开关都通过 Action 输入控制
+      eslint: getBooleanInput('enable_eslint'),
+      biome: getBooleanInput('enable_biome'),
+      tsc: getBooleanInput('enable_tsc'),
+      prettier: getBooleanInput('enable_prettier')
+    },
     getInput('command_ack_reaction')
   )
 

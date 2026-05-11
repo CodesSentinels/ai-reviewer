@@ -42,7 +42,7 @@
 | 变更行过滤 | 在 orchestrator 里统一做 | 让每个适配器自己做 | 过滤逻辑应一次定义；适配器只关心解析 |
 | diff 扫描位置 | 上提到 `src/changed-lines.ts`，`review.ts` 一次扫描全文件，按 `addedLines` / `touchedLines` 分发 | 各模块各扫一遍 | 历史上 review/dep-analyzer/diff-filter 三处都有 walker，是真实的 DRY 问题 |
 | 跨工具去重 | 在 orchestrator 里做 | 不去重 | ESLint 与 Biome 大量规则重叠，不去重会出现"同一行两条几乎一样的评论" |
-| 配置文件 | `.codesentinel.yaml` | 全部走 GitHub Action 输入 | 工具特定参数（rule 列表、严重级别覆盖）通过 Action 输入会爆炸 |
+| ~~配置文件~~ **已废弃** | **全部走 GitHub Action 输入** | `.codesentinel.yaml` | 消费方零文件原则；workflow 的 `with:` 块比单独 YAML 更易发现；早期 `.codesentinel.yaml` 已删除 |
 | 单工具失败处理 | 记入 ToolSummary，继续 | 整体失败 | "缺一个工具就不审查"对用户体验是灾难 |
 | ESLint 项目配置缺失 | `detect()` 检测后标 `available=false`（改进 A） | 让 scan 静默返回 0 finding | ESLint 9 Flat Config 不内置规则；不检查会让用户面对"扫描了 N 文件，0 finding"，无从诊断 |
 | Phase 1 范围 | JS/TS（ESLint+Biome+Prettier） | 一次铺开所有语言 | 先把骨架打牢；Phase 2-5 复用骨架 |
@@ -53,7 +53,7 @@
 - ❌ 不引入插件系统/动态加载（YAGNI；Phase 2-5 直接编辑 `defaultAdapters()`）
 - ❌ 不做工具结果的"自动修复" patch 应用（迭代三只读不写）
 - ❌ ~~不在适配器内做"工具自动安装"~~ → **已转为正向需求**：通过 `tool-installer.ts` 的多策略 dispatcher 在沙箱目录内自动安装，待审查项目侧零负担。Docker 镜像方案被取消，原因见 §1.3 决策表中"工具来源"行。
-- ❌ 不为每个工具引入单独的 GitHub Action 输入（用 `.codesentinel.yaml` 承载）
+- ✅ ~~不为每个工具引入单独的 GitHub Action 输入~~ → **已转向**：消费方零文件原则下，每工具一个 `enable_<tool>` 输入是唯一可行的覆盖机制。`.codesentinel.yaml` 与 `src/lint/config.ts` 已删除。
 
 ---
 
@@ -82,7 +82,6 @@ flowchart TB
       direction LR
       ORCH["orchestrator.ts<br/>主控逻辑"]
       FMT["formatter.ts<br/>三种输出格式"]
-      CFG["config.ts<br/>.codesentinel.yaml"]
       DF["diff-filter.ts<br/>变更行 / 去重"]
       LD["language-detector.ts"]
       TS["types.ts"]
@@ -126,8 +125,7 @@ flowchart TB
 | `types.ts` | 定义所有共享类型 | 任何运行逻辑 |
 | `language-detector.ts` | 文件 → 语言枚举 | 工具选择（交给 orchestrator） |
 | `diff-filter.ts` | 提取变更行 / 过滤 / 跨工具去重 | 调用工具、IO |
-| `config.ts` | 加载 `.codesentinel.yaml` | 校验业务规则、合并默认值 |
-| `orchestrator.ts` | 编排：选工具 → 跑工具 → 汇总 | 输出格式、Prompt 集成 |
+| `orchestrator.ts` | 编排：按 Action 输入选工具 → 跑工具 → 汇总 | 输出格式、Prompt 集成 |
 | `formatter.ts` | 三种输出文本生成 | 任何 IO 或工具调用 |
 | `adapters/exec.ts` | 子进程封装 + 解析辅助 | 知道任何具体工具 |
 | `adapters/<tool>.ts` | 调单个 CLI + 解析输出 → LintResult | 过滤、去重、注入 Prompt |
@@ -208,16 +206,6 @@ classDiagram
     +int             filesScanned
   }
 
-  class ToolConfig {
-    +bool   enabled
-    +bool   useProjectConfig
-    +any    extraOptions
-  }
-
-  class ToolsConfig {
-    +Map~string, ToolConfig~ tools
-  }
-
   class ChangedLineMap {
     +Map~string, Set~int~~ changedLines
   }
@@ -232,9 +220,6 @@ classDiagram
 
   LintReport "1" o-- "*" LintResult
   LintReport "1" o-- "*" ToolSummary
-
-  ToolsConfig "1" o-- "*" ToolConfig
-  ToolAdapter ..> ToolConfig       : scan() consumes
 ```
 
 ### 2.4 与既有系统的集成点
@@ -296,13 +281,9 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-  IN["filesAndChanges"] --> S1["Step 1<br/>loadConfig(repoRoot)<br/>读 .codesentinel.yaml"]
-  S1 -->|"失败"| S1F["{tools: {}}<br/>(不阻塞)"]
-  S1 -->|"成功"| S1OK["ToolsConfig"]
-  S1F --> S2
-  S1OK --> S2
+  IN["filesAndChanges<br/>+ toolEnableOverrides (来自 Action 输入)"] --> S2
 
-  S2["Step 2<br/>defaultAdapters() 过滤<br/>isToolEnabled(name, cfg, default)"]
+  S2["Step 1+2<br/>defaultAdapters() 过滤<br/>overrides[adapter.name] ?? adapter.defaultEnabled"]
   S2 --> S3["Step 3<br/>Promise.all 并行检测<br/>safeDetect(adapter, repoRoot)<br/>· 二进制可用性<br/>· 项目侧前置 (改进 A: ESLint 配置文件)"]
 
   S3 --> S4["Step 4<br/>Promise.all 并行扫描"]
@@ -454,36 +435,27 @@ flowchart TD
   VIS   --> CONT
 ```
 
-### 3.6 配置加载与生效时序
+### 3.6 配置加载与生效时序（**Action 输入直传，无文件加载**）
+
+> 早期此处描绘 `.codesentinel.yaml` → `loadConfig` → `ToolsConfig` 的多步加载/校验链。
+> 当前版本完全移除该机制（`src/lint/config.ts` 已删除），所有开关都通过
+> GitHub Action 输入直接传递。
 
 ```mermaid
 flowchart TD
-  Y[".codesentinel.yaml<br/>(仓库根)"] --> LC["loadConfig(repoRoot)"]
-  LC --> CF{".yaml 或 .yml<br/>是否存在?"}
-  CF -->|否| D1["{tools: {}}<br/>info('no .codesentinel.yaml')"]
-  CF -->|是| RD["readFileSync + yaml.load"]
-  RD --> CP{"解析成功<br/>且为 object?"}
-  CP -->|否| D2["warning<br/>{tools: {}}"]
-  CP -->|是| OK["{tools: ToolsConfig}"]
-
-  D1 --> E["isToolEnabled(name, cfg, defaultEnabled)"]
-  D2 --> E
-  OK --> E
-
-  E --> EX{"cfg[name]<br/>存在?"}
-  EX -->|否| DEF["返回 defaultEnabled"]
-  EX -->|是| TY{"cfg[name].enabled<br/>是 boolean?"}
-  TY -->|否| DEF
-  TY -->|是| USR["返回用户值"]
-
-  DEF --> EN["enabled adapters list"]
-  USR --> EN
-
-  EN --> GTC["getToolConfig(name, ToolsConfig)"]
-  GTC --> SC["adapter.scan(files, root, ToolConfig)"]
-  SC --> CONS["适配器消费:<br/>· cfg.useProjectConfig<br/>· cfg.select  (Ruff)<br/>· 其他工具特定字段"]
-  CONS --> RES["LintResult[]"]
+  WF[".github/workflows/*.yml<br/>with: enable_eslint: true / false ..."] --> ACT["action.yml 默认值<br/>+ 用户 with: 覆盖"]
+  ACT --> M["main.ts<br/>getBooleanInput('enable_eslint') 等 4 个"]
+  M --> O["Options.toolEnableOverrides<br/>{eslint: true, biome: true, tsc: true, prettier: false}"]
+  O --> R["review.ts → runLintTools({ toolEnableOverrides })"]
+  R --> S["orchestrator filter:<br/>adapters.filter(a => overrides[a.name] ?? a.defaultEnabled)"]
+  S --> EN["enabled adapters list"]
+  EN --> SC["adapter.scan(files, repoRoot)<br/>无 ToolConfig 参数，工具特定选项暂未启用"]
+  SC --> RES["LintResult[]"]
 ```
+
+> 💡 全链路只有 6 个节点 —— 没有 YAML 文件、没有 schema 校验、没有 fallback 树。
+> 适配器若需要工具特定选项（如未来 Ruff 规则集），将通过新增 `_<tool>_xxx` 系列
+> Action 输入扩展，仍保持消费方零配置文件原则。
 
 ### 3.7 单次 diff 扫描的复用拓扑
 
@@ -528,7 +500,7 @@ flowchart TB
 
 1. **Biome 输出位置字段**依赖 2.x 版本的 `line_start`/`column_start`；若 Biome 改版会需要适配
 2. **Prettier 仅文件级问题**（行号统一为 1）；若需精确行号要切换到差异比较模式
-3. **变更行容忍范围 N=3 写死**；后续可通过 `.codesentinel.yaml` 暴露
+3. **变更行容忍范围 N=3 写死**；后续可新增一个 `lint_changed_line_tolerance` Action 输入暴露
 4. **不并发限制工具数量**；若未来工具数 > 10，需要引入 `pLimit`（与 `openaiConcurrencyLimit` 对齐）
 5. **日志级别没有分级**（全部走 `info`/`warning`），后续若调试量大需要分模块日志开关
 

@@ -30,7 +30,6 @@ import {
   type InstallSpec,
   type LintResult,
   type ToolAdapter,
-  type ToolConfig,
   type ToolDetection
 } from '../types'
 import {extractVersion, runCommand} from './exec'
@@ -127,11 +126,7 @@ export class TscAdapter implements ToolAdapter {
     return {available: true, version}
   }
 
-  async scan(
-    files: string[],
-    repoRoot: string,
-    _config: ToolConfig
-  ): Promise<LintResult[]> {
+  async scan(files: string[], repoRoot: string): Promise<LintResult[]> {
     // 注意：files 参数被忽略 —— tsc 必须扫整个项目（types 跨文件传递），
     // 无法只 type-check 指定文件。orchestrator 会按 addedLines 后过滤到变更行。
     info(

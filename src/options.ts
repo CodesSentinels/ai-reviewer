@@ -40,7 +40,16 @@ export class Options {
   maxDependencyFiles: number // 依赖分析最大扫描文件数
   enableWebSearch: boolean // 是否启用 web search（用于验证 API）
   enableShell: boolean // 是否启用 shell
-  enableLintTools: boolean // 是否启用静态分析工具扫描（Linter/SAST）
+  enableLintTools: boolean // 是否启用静态分析工具扫描（Linter/SAST）总开关
+  /**
+   * 每个 lint 适配器的启用覆盖
+   *
+   * 取代了早期 `.codesentinel.yaml` 文件 — 消费方不需要在自己仓库里
+   * 维护 YAML，全部通过 GitHub Action 输入控制。
+   * key 是 adapter.name（'eslint' / 'biome' / 'tsc' / 'prettier'），
+   * value 是用户在 workflow 里写的 `with: enable_<tool>: true|false`。
+   */
+  toolEnableOverrides: Record<string, boolean>
   commandAckReaction: string // 命令识别后在用户评论上打的表情（空/off/none 表示禁用）
 
   constructor(
@@ -66,6 +75,7 @@ export class Options {
     enableWebSearch = true,
     enableShell = true,
     enableLintTools = true,
+    toolEnableOverrides: Record<string, boolean> = {},
     commandAckReaction = 'eyes'
   ) {
     this.debug = debug
@@ -92,6 +102,7 @@ export class Options {
     this.enableWebSearch = enableWebSearch
     this.enableShell = enableShell
     this.enableLintTools = enableLintTools
+    this.toolEnableOverrides = toolEnableOverrides
     this.commandAckReaction = commandAckReaction
   }
 
@@ -121,6 +132,7 @@ export class Options {
     info(`enable_web_search: ${this.enableWebSearch}`)
     info(`enable_shell: ${this.enableShell}`)
     info(`enable_lint_tools: ${this.enableLintTools}`)
+    info(`tool_enable_overrides: ${JSON.stringify(this.toolEnableOverrides)}`)
     info(`command_ack_reaction: ${this.commandAckReaction}`)
   }
 

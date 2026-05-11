@@ -2,7 +2,7 @@
  * lint/orchestrator.ts - 工具编排引擎
  *
  * 串联整个 Linter/SAST 扫描流程：
- *   1. 加载用户配置（.codesentinel.yaml）
+ *   1. 从 Action 输入读 toolEnableOverrides（取代早期的 .codesentinel.yaml 加载）
  *   2. 注册的工具适配器列表 → 过滤出"启用 + 可用"的工具
  *   3. 按文件扩展名为每个工具挑选目标文件
  *   4. 并行执行所有工具
@@ -24,12 +24,6 @@ import {EslintAdapter} from './adapters/eslint'
 import {BiomeAdapter} from './adapters/biome'
 import {PrettierAdapter} from './adapters/prettier'
 import {TscAdapter} from './adapters/tsc'
-import {
-  type CodeSentinelConfig,
-  getToolConfig,
-  isToolEnabled,
-  loadConfig
-} from './config'
 import {deduplicateResults, filterByChangedLines} from './diff-filter'
 import {
   type LintReport,
@@ -49,8 +43,14 @@ export interface OrchestratorOptions {
   toolTimeoutMs?: number
   /** 是否禁用全部工具扫描（开关由调用方传入） */
   disabled?: boolean
-  /** 用户配置覆盖（如果传入则跳过 .codesentinel.yaml 加载） */
-  configOverride?: CodeSentinelConfig
+  /**
+   * 每适配器启用覆盖（取代早期 .codesentinel.yaml）
+   *
+   * key = adapter.name（'eslint' / 'biome' / 'tsc' / 'prettier'）；
+   * value = true 强制启用、false 强制禁用、缺失则回退到 adapter.defaultEnabled。
+   * 由 review.ts 从 Action input（enable_eslint 等）收集后传入。
+   */
+  toolEnableOverrides?: Record<string, boolean>
   /**
    * 预先在 review.ts 一次性扫描得到的 PatchScanMap。
    *
@@ -85,15 +85,15 @@ export async function runLintTools(
   }
 
   const adapters = adaptersOverride ?? defaultAdapters()
-  const config =
-    options.configOverride ?? loadConfig(options.repoRoot)
+  const overrides = options.toolEnableOverrides ?? {}
 
-  // 1) 选出"用户启用"的适配器
-  const enabledAdapters = adapters.filter(a =>
-    isToolEnabled(a.name, config.tools, a.defaultEnabled)
-  )
+  // 1) 选出"用户启用"的适配器：Action input override 优先，缺失时回退到 adapter.defaultEnabled
+  const enabledAdapters = adapters.filter(a => {
+    const override = overrides[a.name]
+    return override === undefined ? a.defaultEnabled : override
+  })
   info(
-    `lint: ${enabledAdapters.length}/${adapters.length} adapters enabled by config: [${enabledAdapters
+    `lint: ${enabledAdapters.length}/${adapters.length} adapters enabled by Action inputs: [${enabledAdapters
       .map(a => a.name)
       .join(', ')}]`
   )
@@ -166,11 +166,7 @@ export async function runLintTools(
 
       let results: LintResult[] = []
       try {
-        results = await adapter.scan(
-          targets,
-          options.repoRoot,
-          getToolConfig(adapter.name, config.tools)
-        )
+        results = await adapter.scan(targets, options.repoRoot)
       } catch (e) {
         warning(
           `lint/${adapter.name}: scan threw: ${

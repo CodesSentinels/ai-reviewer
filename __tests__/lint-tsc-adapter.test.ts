@@ -143,7 +143,7 @@ describe('TscAdapter.scan — 输出解析', () => {
 
     const adapter = new TscAdapter()
     await adapter.detect(tmpRoot)
-    const findings = await adapter.scan(['src/utils.ts'], tmpRoot, {})
+    const findings = await adapter.scan(['src/utils.ts'], tmpRoot)
 
     expect(findings).toHaveLength(1)
     expect(findings[0]).toMatchObject({
@@ -184,7 +184,7 @@ describe('TscAdapter.scan — 输出解析', () => {
 
     const adapter = new TscAdapter()
     await adapter.detect(tmpRoot)
-    const findings = await adapter.scan([], tmpRoot, {})
+    const findings = await adapter.scan([], tmpRoot)
 
     expect(findings).toHaveLength(2)
     expect(findings[0].ruleId).toBe('TS2339')
@@ -213,7 +213,7 @@ describe('TscAdapter.scan — 输出解析', () => {
 
     const adapter = new TscAdapter()
     await adapter.detect(tmpRoot)
-    const findings = await adapter.scan([], tmpRoot, {})
+    const findings = await adapter.scan([], tmpRoot)
 
     expect(findings).toHaveLength(1)
     expect(findings[0].file).toBe('src/utils.ts')
@@ -239,7 +239,7 @@ describe('TscAdapter.scan — 输出解析', () => {
 
     const adapter = new TscAdapter()
     await adapter.detect(tmpRoot)
-    const findings = await adapter.scan([], tmpRoot, {})
+    const findings = await adapter.scan([], tmpRoot)
     expect(findings).toHaveLength(0)
   })
 
@@ -264,7 +264,7 @@ describe('TscAdapter.scan — 输出解析', () => {
 
     const adapter = new TscAdapter()
     await adapter.detect(tmpRoot)
-    const findings = await adapter.scan([], tmpRoot, {})
+    const findings = await adapter.scan([], tmpRoot)
     expect(findings).toEqual([])
   })
 })

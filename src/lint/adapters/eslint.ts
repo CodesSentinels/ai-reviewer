@@ -19,7 +19,6 @@ import {
   type InstallSpec,
   type LintResult,
   type ToolAdapter,
-  type ToolConfig,
   type ToolDetection
 } from '../types'
 import {extractVersion, parseJsonSafe, runCommand} from './exec'
@@ -187,21 +186,12 @@ export class EslintAdapter implements ToolAdapter {
     return {available: true, version}
   }
 
-  async scan(
-    files: string[],
-    repoRoot: string,
-    config: ToolConfig
-  ): Promise<LintResult[]> {
+  async scan(files: string[], repoRoot: string): Promise<LintResult[]> {
     if (files.length === 0) return []
 
-    // 默认使用项目自带配置；用户可显式关闭
-    const useProjectConfig = config.useProjectConfig !== false
-
-    const args = ['--format', 'json', '--no-error-on-unmatched-pattern']
-    if (!useProjectConfig) {
-      args.push('--no-config-lookup')
-    }
-    args.push(...files)
+    // 始终使用项目自带的 eslint config（早期支持的 useProjectConfig=false 已移除，
+    // 因 ESLint 9 不内置规则集，关掉项目配置会让扫描必败）
+    const args = ['--format', 'json', '--no-error-on-unmatched-pattern', ...files]
 
     info(
       `lint/eslint: scanning ${files.length} files via ${this.resolvedBinPath}`

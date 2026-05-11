@@ -23,7 +23,6 @@ import {
   type InstallSpec,
   type LintResult,
   type ToolAdapter,
-  type ToolConfig,
   type ToolDetection
 } from '../types'
 import {extractVersion, runCommand} from './exec'
@@ -143,11 +142,7 @@ export class BiomeAdapter implements ToolAdapter {
     return {available: true, version: this.resolvedVersion}
   }
 
-  async scan(
-    files: string[],
-    repoRoot: string,
-    _config: ToolConfig
-  ): Promise<LintResult[]> {
+  async scan(files: string[], repoRoot: string): Promise<LintResult[]> {
     if (files.length === 0) return []
 
     info(

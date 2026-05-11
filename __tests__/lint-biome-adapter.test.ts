@@ -89,7 +89,7 @@ describe('BiomeAdapter — github reporter 解析', () => {
 
     const adapter = new BiomeAdapter()
     await adapter.detect(tmpRoot)
-    const findings = await adapter.scan(['src/foo.ts'], tmpRoot, {})
+    const findings = await adapter.scan(['src/foo.ts'], tmpRoot)
 
     expect(findings).toHaveLength(1)
     expect(findings[0]).toMatchObject({
@@ -119,8 +119,7 @@ describe('BiomeAdapter — github reporter 解析', () => {
     await adapter.detect(tmpRoot)
     const findings = await adapter.scan(
       ['src/a.ts', 'src/b.ts', 'src/c.ts'],
-      tmpRoot,
-      {}
+      tmpRoot
     )
 
     expect(findings).toHaveLength(3)
@@ -138,7 +137,7 @@ describe('BiomeAdapter — github reporter 解析', () => {
 
     const adapter = new BiomeAdapter()
     await adapter.detect(tmpRoot)
-    const findings = await adapter.scan(['utils/foo.ts'], tmpRoot, {})
+    const findings = await adapter.scan(['utils/foo.ts'], tmpRoot)
 
     expect(findings).toHaveLength(1)
     expect(findings[0].file).toBe('utils/foo.ts')
@@ -158,7 +157,7 @@ describe('BiomeAdapter — github reporter 解析', () => {
 
     const adapter = new BiomeAdapter()
     await adapter.detect(tmpRoot)
-    const findings = await adapter.scan(['src/foo.ts'], tmpRoot, {})
+    const findings = await adapter.scan(['src/foo.ts'], tmpRoot)
 
     expect(findings).toHaveLength(1)
     expect(findings[0].ruleId).toBe('lint/suspicious/noDoubleEquals')
@@ -170,7 +169,7 @@ describe('BiomeAdapter — github reporter 解析', () => {
 
     const adapter = new BiomeAdapter()
     await adapter.detect(tmpRoot)
-    const findings = await adapter.scan(['src/foo.ts'], tmpRoot, {})
+    const findings = await adapter.scan(['src/foo.ts'], tmpRoot)
     expect(findings).toHaveLength(0)
   })
 
@@ -213,7 +212,7 @@ describe('BiomeAdapter — github reporter 解析', () => {
 
     const adapter = new BiomeAdapter()
     await adapter.detect(tmpRoot)
-    await adapter.scan(['src/foo.ts'], tmpRoot, {})
+    await adapter.scan(['src/foo.ts'], tmpRoot)
 
     // 第二次 runCommand 调用（scan）的参数
     const scanCall = runCommandMock.mock.calls[1]?.[0] as

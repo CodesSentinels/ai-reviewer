@@ -109,7 +109,7 @@ describe('runLintTools', () => {
       {
         repoRoot: '/tmp',
         filesAndChanges,
-        configOverride: {tools: {off: {enabled: false}}}
+        toolEnableOverrides: {off: false}
       },
       [enabled, unavailable, disabled]
     )
