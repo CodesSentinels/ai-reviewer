@@ -13,7 +13,12 @@ jest.mock('@actions/core', () => ({
   warning: jest.fn()
 }))
 
-import {mergeReviewsByLineRange, type Review} from '../src/review-dedup'
+import {
+  mergeReviewsByLineRange,
+  mergeReviewsByTopic,
+  type Review,
+  type ToolFindingForDedup
+} from '../src/review-dedup'
 
 describe('mergeReviewsByLineRange — 同行去重合并', () => {
   test('两条评论指向相同 (startLine, endLine) → 合并为一条，body 用 --- 分隔', () => {
@@ -106,5 +111,129 @@ describe('mergeReviewsByLineRange — 同行去重合并', () => {
     expect(out[0].comment).toMatch(/TS2345 是真实问题/)
     expect(out[0].comment).toMatch(/TS2345 指出 priceLabel/)
     expect(out[0].comment).toMatch(/\n\n---\n\n/)
+  })
+})
+
+// ============================================================================
+// v2 topic-based dedup：按重叠的 tool finding ruleId 合并
+// ============================================================================
+
+describe('mergeReviewsByTopic — 议题级（按 tool finding ruleId）合并', () => {
+  const tsFinding: ToolFindingForDedup = {line: 98, endLine: 98, ruleId: 'TS2345'}
+
+  test('两条评论挂在不同行号、但都覆盖同一个 TS2345 finding → 合并', () => {
+    const reviews: Review[] = [
+      {startLine: 95, endLine: 100, comment: 'broader analysis: design issue'},
+      {startLine: 98, endLine: 98, comment: 'specific call site'}
+    ]
+    const out = mergeReviewsByTopic(reviews, 'utils/cart.ts', [tsFinding])
+    expect(out).toHaveLength(1)
+    expect(out[0].comment).toContain('broader analysis')
+    expect(out[0].comment).toContain('specific call site')
+    // 合并后行号范围应扩大到覆盖两者
+    expect(out[0].startLine).toBe(95)
+    expect(out[0].endLine).toBe(100)
+  })
+
+  test('两条评论指向不同的 finding（TS2345 + TS2339）→ 不合并', () => {
+    const findings: ToolFindingForDedup[] = [
+      {line: 80, endLine: 80, ruleId: 'TS2339'},
+      {line: 98, endLine: 98, ruleId: 'TS2345'}
+    ]
+    const reviews: Review[] = [
+      {startLine: 80, endLine: 80, comment: '关于 TS2339'},
+      {startLine: 98, endLine: 98, comment: '关于 TS2345'}
+    ]
+    const out = mergeReviewsByTopic(reviews, 'utils/cart.ts', findings)
+    expect(out).toHaveLength(2)
+  })
+
+  test('一条评论覆盖两个 finding，另一条只覆盖其中一个 → 议题键不同，不合并', () => {
+    // review1 范围 95-100 覆盖 TS2339(80) ❌ 不覆盖；覆盖 TS2345(98) ✓
+    // review2 范围 80 只覆盖 TS2339
+    const findings: ToolFindingForDedup[] = [
+      {line: 80, endLine: 80, ruleId: 'TS2339'},
+      {line: 98, endLine: 98, ruleId: 'TS2345'}
+    ]
+    const reviews: Review[] = [
+      {startLine: 95, endLine: 100, comment: '关于 TS2345'},
+      {startLine: 80, endLine: 80, comment: '关于 TS2339'}
+    ]
+    const out = mergeReviewsByTopic(reviews, 'utils/cart.ts', findings)
+    expect(out).toHaveLength(2)
+  })
+
+  test('无 finding 覆盖的评论 → 退回到行号精确匹配（保留 v1 行为）', () => {
+    const reviews: Review[] = [
+      {startLine: 10, endLine: 10, comment: '纯 AI 洞察 A'},
+      {startLine: 10, endLine: 10, comment: '纯 AI 洞察 B'},
+      {startLine: 20, endLine: 20, comment: '另一处的纯 AI 洞察'}
+    ]
+    // 没有任何 tool finding
+    const out = mergeReviewsByTopic(reviews, 'utils/cart.ts', [])
+    expect(out).toHaveLength(2)
+    // 10-10 上的两条被合并
+    const merged = out.find(r => r.startLine === 10)
+    expect(merged?.comment).toContain('纯 AI 洞察 A')
+    expect(merged?.comment).toContain('纯 AI 洞察 B')
+  })
+
+  test('多个评论覆盖同一组 finding（含多 ruleId）→ 议题键稳定（顺序无关）', () => {
+    // 两个评论的行号范围都同时覆盖 TS2339(80) 和 TS2345(98)
+    // 即便 finding 数组顺序不一样，应该计算出相同的 topic key
+    const findings: ToolFindingForDedup[] = [
+      {line: 80, endLine: 80, ruleId: 'TS2339'},
+      {line: 98, endLine: 98, ruleId: 'TS2345'}
+    ]
+    const reviews: Review[] = [
+      {startLine: 78, endLine: 100, comment: '覆盖两个 finding'},
+      {startLine: 80, endLine: 98, comment: '也覆盖两个 finding'}
+    ]
+    const out = mergeReviewsByTopic(reviews, 'utils/cart.ts', findings)
+    expect(out).toHaveLength(1)
+    expect(out[0].comment).toContain('覆盖两个 finding')
+    expect(out[0].comment).toContain('也覆盖两个 finding')
+  })
+
+  test('复现用户实际场景：tsc TS2345 在 98 行，LLM 把两条评论挂在 95-100 和 98-98', () => {
+    // 这正是用户截图里的情况：两条评论谈 TS2345 但行号不同
+    // 旧 mergeReviewsByLineRange (v1) 漏掉；新 mergeReviewsByTopic (v2) 必须合并
+    const reviews: Review[] = [
+      {
+        startLine: 95,
+        endLine: 100,
+        comment:
+          'TS2345 也是实打实的问题：priceLabel 声明接收 number，但这里传入了字符串...'
+      },
+      {
+        startLine: 98,
+        endLine: 98,
+        comment:
+          "priceLabel('19.99') 与函数签名 price: number 不匹配，TypeScript 已报 TS2345..."
+      }
+    ]
+    const findings: ToolFindingForDedup[] = [
+      {line: 98, endLine: 98, ruleId: 'TS2345'}
+    ]
+    const out = mergeReviewsByTopic(
+      reviews,
+      'utils/lint-test-cart.ts',
+      findings
+    )
+    expect(out).toHaveLength(1)
+    expect(out[0].comment).toContain('TS2345 也是实打实的问题')
+    expect(out[0].comment).toContain("priceLabel('19.99') 与函数签名")
+    expect(out[0].comment).toContain('---')
+  })
+
+  test('mergeReviewsByLineRange 旧别名仍可用（向后兼容）', () => {
+    const reviews: Review[] = [
+      {startLine: 10, endLine: 10, comment: 'A'},
+      {startLine: 10, endLine: 10, comment: 'B'}
+    ]
+    const out = mergeReviewsByLineRange(reviews, 'src/foo.ts')
+    expect(out).toHaveLength(1)
+    expect(out[0].comment).toContain('A')
+    expect(out[0].comment).toContain('B')
   })
 })

@@ -182,7 +182,27 @@ Don't annotate code snippets with line numbers. Format and indent code correctly
 Do not use \`suggestion\` code blocks.
 For fixes, use \`diff\` code blocks, marking changes with \`+\` or \`-\`. The line number range for comments with fix snippets must exactly match the range to replace in the new hunk.
 
-**Fix suggestion header (MANDATORY)** — Every \`diff\` code block that proposes a fix MUST be preceded by a single-line bold header containing the 🔧 wrench emoji and the phrase "Suggested fix" (or its equivalent translated to the response language — e.g. "修复建议" for Chinese, "수정 제안" for Korean). Format: \`**🔧 Suggested fix**\` on its own line, followed by a blank line, then the \`diff\` code block. This makes fix proposals visually distinct from analysis prose in PR comments.
+**Fix suggestion block (MANDATORY)** — Every \`diff\` code block that proposes a fix MUST be wrapped in a collapsible HTML \`<details>\` block, mirroring the existing "🧩 Analysis chain" pattern. Exact format:
+
+\`\`\`
+<details>
+<summary>🔧 Suggested fix</summary>
+
+\\\`\\\`\\\`diff
+-old
++new
+\\\`\\\`\\\`
+
+</details>
+\`\`\`
+
+Rules:
+1. \`<summary>\` line MUST contain the 🔧 wrench emoji + the phrase "Suggested fix" (translate to response language — e.g. "🔧 修复建议" for Chinese, "🔧 수정 제안" for Korean; keep the 🔧 icon).
+2. There MUST be a blank line between \`<summary>\` and the \`\\\`\\\`\\\`diff\` opening fence (GitHub Flavored Markdown won't render the code block otherwise).
+3. There MUST be a blank line between the closing \`\\\`\\\`\\\`\` and \`</details>\`.
+4. Do NOT use the older "\`**🔧 Suggested fix**\`" bold-header format; always use \`<details>\`.
+
+This collapses long diffs by default and keeps PR comments visually clean.
 
 - Do NOT provide general feedback, summaries, explanations of changes, or praises
   for making good additions. Do NOT suggest adding validation, comments, documentation,
@@ -190,12 +210,20 @@ For fixes, use \`diff\` code blocks, marking changes with \`+\` or \`-\`. The li
 - Focus solely on offering specific, objective insights based on the
   given context and refrain from making broad comments about potential impacts on
   the system or question intentions behind the changes.
-- **One comment per line range (MANDATORY)** — Do NOT output two or more separate
-  \`startLine-endLine:\` blocks targeting the **exact same** line range. If multiple
-  issues (e.g. a syntax error AND a design concern) exist on the same line, **combine
-  them into a single comment** with paragraphs or bullets covering each angle. The
-  consumer sees one GitHub review comment per line range; duplicates produce visual
-  noise and look like a bug.
+- **One comment per issue (MANDATORY)** — Do NOT output two or more separate
+  \`startLine-endLine:\` blocks discussing the **same underlying issue**, even if
+  their line ranges differ. The "underlying issue" is identified by what lint
+  tool finding (e.g. TS2345, no-unused-vars) or what bug they reference.
+  Concretely:
+  - If you have multiple angles on a single TypeScript error (e.g. "syntax fix"
+    + "design concern"), combine them into ONE comment.
+  - If a lint tool reports one finding on line 98 and you want to comment on both
+    line 98 specifically AND the surrounding 95-100 function, pick ONE line range
+    and put all content there. Do NOT split into two \`startLine-endLine:\` blocks.
+  - Multiple separate comments on the same file are OK only when they reference
+    **different** tool findings or different bugs.
+  Rationale: PR reviewers see each \`startLine-endLine:\` block as a separate
+  GitHub comment thread. Splitting one issue across multiple threads is noise.
 $lint_mandatory_instruction- **Cross-file impact analysis (MANDATORY)** — When the "Cross-file references" section
   above contains actual references (not "No cross-file references detected"), you MUST
   write a review comment on the changed line (using the same \`startLine-endLine:\\n comment\\n---\`
@@ -273,12 +301,15 @@ Please review this change.
 22-22:
 There's a syntax error in the add function.
 
-**🔧 Suggested fix**
+<details>
+<summary>🔧 Suggested fix</summary>
 
 \`\`\`diff
 -    retrn z
 +    return z
 \`\`\`
+
+</details>
 ---
 24-25:
 LGTM!

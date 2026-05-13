@@ -13965,7 +13965,27 @@ Don't annotate code snippets with line numbers. Format and indent code correctly
 Do not use \`suggestion\` code blocks.
 For fixes, use \`diff\` code blocks, marking changes with \`+\` or \`-\`. The line number range for comments with fix snippets must exactly match the range to replace in the new hunk.
 
-**Fix suggestion header (MANDATORY)** — Every \`diff\` code block that proposes a fix MUST be preceded by a single-line bold header containing the 🔧 wrench emoji and the phrase "Suggested fix" (or its equivalent translated to the response language — e.g. "修复建议" for Chinese, "수정 제안" for Korean). Format: \`**🔧 Suggested fix**\` on its own line, followed by a blank line, then the \`diff\` code block. This makes fix proposals visually distinct from analysis prose in PR comments.
+**Fix suggestion block (MANDATORY)** — Every \`diff\` code block that proposes a fix MUST be wrapped in a collapsible HTML \`<details>\` block, mirroring the existing "🧩 Analysis chain" pattern. Exact format:
+
+\`\`\`
+<details>
+<summary>🔧 Suggested fix</summary>
+
+\\\`\\\`\\\`diff
+-old
++new
+\\\`\\\`\\\`
+
+</details>
+\`\`\`
+
+Rules:
+1. \`<summary>\` line MUST contain the 🔧 wrench emoji + the phrase "Suggested fix" (translate to response language — e.g. "🔧 修复建议" for Chinese, "🔧 수정 제안" for Korean; keep the 🔧 icon).
+2. There MUST be a blank line between \`<summary>\` and the \`\\\`\\\`\\\`diff\` opening fence (GitHub Flavored Markdown won't render the code block otherwise).
+3. There MUST be a blank line between the closing \`\\\`\\\`\\\`\` and \`</details>\`.
+4. Do NOT use the older "\`**🔧 Suggested fix**\`" bold-header format; always use \`<details>\`.
+
+This collapses long diffs by default and keeps PR comments visually clean.
 
 - Do NOT provide general feedback, summaries, explanations of changes, or praises
   for making good additions. Do NOT suggest adding validation, comments, documentation,
@@ -13973,12 +13993,20 @@ For fixes, use \`diff\` code blocks, marking changes with \`+\` or \`-\`. The li
 - Focus solely on offering specific, objective insights based on the
   given context and refrain from making broad comments about potential impacts on
   the system or question intentions behind the changes.
-- **One comment per line range (MANDATORY)** — Do NOT output two or more separate
-  \`startLine-endLine:\` blocks targeting the **exact same** line range. If multiple
-  issues (e.g. a syntax error AND a design concern) exist on the same line, **combine
-  them into a single comment** with paragraphs or bullets covering each angle. The
-  consumer sees one GitHub review comment per line range; duplicates produce visual
-  noise and look like a bug.
+- **One comment per issue (MANDATORY)** — Do NOT output two or more separate
+  \`startLine-endLine:\` blocks discussing the **same underlying issue**, even if
+  their line ranges differ. The "underlying issue" is identified by what lint
+  tool finding (e.g. TS2345, no-unused-vars) or what bug they reference.
+  Concretely:
+  - If you have multiple angles on a single TypeScript error (e.g. "syntax fix"
+    + "design concern"), combine them into ONE comment.
+  - If a lint tool reports one finding on line 98 and you want to comment on both
+    line 98 specifically AND the surrounding 95-100 function, pick ONE line range
+    and put all content there. Do NOT split into two \`startLine-endLine:\` blocks.
+  - Multiple separate comments on the same file are OK only when they reference
+    **different** tool findings or different bugs.
+  Rationale: PR reviewers see each \`startLine-endLine:\` block as a separate
+  GitHub comment thread. Splitting one issue across multiple threads is noise.
 $lint_mandatory_instruction- **Cross-file impact analysis (MANDATORY)** — When the "Cross-file references" section
   above contains actual references (not "No cross-file references detected"), you MUST
   write a review comment on the changed line (using the same \`startLine-endLine:\\n comment\\n---\`
@@ -14056,12 +14084,15 @@ Please review this change.
 22-22:
 There's a syntax error in the add function.
 
-**🔧 Suggested fix**
+<details>
+<summary>🔧 Suggested fix</summary>
 
 \`\`\`diff
 -    retrn z
 +    return z
 \`\`\`
+
+</details>
 ---
 24-25:
 LGTM!
@@ -17651,115 +17682,200 @@ function truncate(s, max) {
 var lib_inputs = __nccwpck_require__(6305);
 ;// CONCATENATED MODULE: ./lib/review-dedup.js
 /**
- * review-dedup.ts - AI 评论级去重
+ * review-dedup.ts - AI 评论级去重（按"底层问题"合并）
  *
- * 处理"LLM 在响应中对同一行号范围写了多条评论"的情况。
+ * 处理"LLM 对同一个 lint 工具发现写了多条评论"的情况。
  *
- * **与 lint-filter.ts 的区别**：
- *   - lint-filter.ts::deduplicateResults 在"lint 工具发现"层做去重（如 ESLint
- *     与 Biome 同时报 no-unused-vars 时合并）
- *   - 本模块在"LLM 解析后的 Review[]"层做去重，针对模型自己产出两条针对同一行
- *     的评论
+ * ## 与 lint-filter.ts 的区别
+ *
+ *   - `lint-filter.ts::deduplicateResults` 在**lint 工具发现**层去重
+ *     （如 ESLint 与 Biome 同时报 no-unused-vars 时合并）
+ *   - 本模块在**LLM 解析后的 Review[]**层去重，针对模型自己对同一个工具
+ *     发现写出多条评论（角度不同但谈的是同一个 bug）
+ *
+ * ## 演进
+ *
+ *   - v1：精确 `(startLine, endLine)` match。LLM 把两条评论挂在不同行
+ *     （一条 98-98，另一条 95-100）就漏掉 → 修复后用户仍看到重复
+ *   - v2（本版本）：用**底层 lint 发现的 ruleId 集合**当 key。两条 review
+ *     若关联到同一组 tool finding（如都覆盖 TS2345 在 line 98 的位置）就
+ *     视为同一议题，合并到一条评论里
+ *   - 无 tool finding 关联的纯 AI 洞察 → 退回 v1 的行号精确 match
  *
  * 抽离为独立文件是为了让单元测试可以直接导入，无须把 review.ts 的全部运行时
  * 依赖（@actions/github / octokit / p-limit）一起拉起来。
  */
 /**
- * 对 Review[] 做"行号范围"层面的去重合并
+ * 计算"议题键"
  *
- * **为什么需要**：lint 工具层级的去重只处理"ESLint 与 Biome 报同一规则"这类
- * 工具间重复。当 lint 只报 1 条 finding 时，**LLM 仍可能对该行写出多条不同
- * 角度的评论**（例：一条强调"必然报错"，另一条强调"测试隔离"），最终在 PR 上
- * 显示为两条独立 review comment，对用户来说就是"为什么同一处问题刷两条"。
+ * 思路：找出与 review 行号范围重叠的所有 tool finding，把它们的 ruleId
+ * 排序去重拼成字符串 —— 这就是这条 review 谈论的"底层议题"。
  *
- * 合并策略：
- *   - key 为 `${startLine}-${endLine}`
- *   - 同 key 的多条评论按出现顺序拼接，中间插入 `\n\n---\n\n` 分隔符
- *   - 保留所有视角的内容（不丢信息），但只占一条 GitHub 评论位
+ * - 有重叠 finding → key 形如 `topic:TS2345`（同议题的不同行号 review 会合并）
+ * - 无重叠 finding → key 形如 `range:98-98`（回退到精确行号匹配）
+ */
+function computeTopicKey(review, findings) {
+    const overlapping = findings.filter(f => {
+        const fEnd = f.endLine ?? f.line;
+        return fEnd >= review.startLine && f.line <= review.endLine;
+    });
+    if (overlapping.length === 0) {
+        return `range:${review.startLine}-${review.endLine}`;
+    }
+    const uniqueRuleIds = [...new Set(overlapping.map(f => f.ruleId))].sort();
+    return `topic:${uniqueRuleIds.join('|')}`;
+}
+/**
+ * 把"谈论同一议题"的多条 AI 评论合并为一条
  *
- * 与"严格保留最长的一条"等替代策略相比，合并方式是更保守的选择 —— LLM 写两条
- * 通常确实是从不同角度看同一问题，merge 让审阅者两条都能读到。
+ * 合并策略：按出现顺序拼接，中间插入 `\n\n---\n\n` 分隔符；保留所有视角的
+ * 内容，只占一条 GitHub 评论位。
  *
  * @param reviews 来自 parseReview 的原始数组
- * @param filename 仅用于日志（便于排查"为啥又重复了"）
- * @returns 合并后的数组；若有合并触发，会在 `@actions/core::info` 打一条日志
+ * @param filename 用于日志（便于排查"为啥又重复了"）
+ * @param toolFindings 该文件中所有 lint 工具发现的简化视图（用于计算议题键）；
+ *                    传 `[]` 时退化为按行号精确去重
+ * @returns 合并后的数组
  */
-function mergeReviewsByLineRange(reviews, filename) {
-    // 用 require 而非 import，避免在 .d.ts 推断时把 @actions/core 提前 evaluate
+function mergeReviewsByTopic(reviews, filename, toolFindings) {
+    // 仅在测试环境之外 require @actions/core，避免 jest 启动时直接拉起 GitHub runtime
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { info } = __nccwpck_require__(1078);
     const byKey = new Map();
     let mergedCount = 0;
     for (const r of reviews) {
-        const key = `${r.startLine}-${r.endLine}`;
+        const key = computeTopicKey(r, toolFindings);
         const existing = byKey.get(key);
         if (existing == null) {
             byKey.set(key, { ...r });
         }
         else {
             existing.comment = `${existing.comment.trimEnd()}\n\n---\n\n${r.comment.trimStart()}`;
+            // 合并时让评论的行号范围扩大到能覆盖两者（GitHub 评论锚点更合理）
+            existing.startLine = Math.min(existing.startLine, r.startLine);
+            existing.endLine = Math.max(existing.endLine, r.endLine);
             mergedCount += 1;
         }
     }
     if (mergedCount > 0) {
-        info(`[review-dedup] ${filename}: merged ${mergedCount} duplicate same-line comment(s) into ${byKey.size} unique entries`);
+        info(`[review-dedup] ${filename}: merged ${mergedCount} duplicate comment(s) into ${byKey.size} unique entries (topic-based)`);
     }
     return Array.from(byKey.values());
+}
+/**
+ * 向后兼容别名：按行号精确去重（v1 行为）
+ *
+ * 等价于调用 `mergeReviewsByTopic(reviews, filename, [])` —— 退化到 range 键。
+ *
+ * @deprecated 新代码请用 `mergeReviewsByTopic` 并传入 toolFindings 让议题级
+ *   去重生效；本别名仅为旧测试保留
+ */
+function mergeReviewsByLineRange(reviews, filename) {
+    return mergeReviewsByTopic(reviews, filename, []);
 }
 
 ;// CONCATENATED MODULE: ./lib/fix-suggestion-header.js
 /**
- * fix-suggestion-header.ts - 为 LLM 评论里的 `diff` 代码块强制添加"🔧 修复建议"标头
+ * fix-suggestion-header.ts - 把 LLM 评论里的 `diff` 代码块包进可折叠的
+ * `<details><summary>🔧 Suggested fix</summary>` 块
  *
- * Prompt 里已经要求 LLM 在 \`\`\`diff 块前加 `**🔧 Suggested fix**` 标头（详见
- * src/prompts.ts），但模型有时会忘掉。本模块作为**后处理 safety net**：扫描评论
- * body，发现"裸"的 diff 块（前面 ~5 行内没有 🔧 标头），就自动注入一行。
+ * 与之前实现差异：早期实现只在 diff 前加 `**🔧 Suggested fix**` 粗体标头，
+ * 但与现有 "🧩 Analysis chain" 的交互风格不一致。改为统一用
+ * `<details>/<summary>` 折叠组件，默认收起，点击展开看到 diff —— 让 PR 评
+ * 论区更清爽，长 diff 也不刷屏。
  *
  * 设计原则：
- *   - 已有 🔧 标头时**不重复添加**（检查紧邻 diff 块前 5 行内是否含 🔧 与 "fix"/"修复"）
- *   - 非 diff 块（plain code / typescript 等）**不动**，仅针对修复用的 diff 块
- *   - 标头文字使用英文 "Suggested fix"，markdown 里跟 emoji 一起渲染，与
- *     CodeRabbit / ai-reviewer 既有的 "🧰 Tools" 标签风格保持一致；如果模型
- *     已经用本地化文字（如"修复建议"）也保留不覆盖
- *   - 完全本地化（非英文）的 fallback 文字保留模型自主决定，因为不同 PR 评论
- *     的语言由 review 配置的 `language` 决定，我们这里只在**完全没有任何标头**
- *     时补上一个通用英文版本
+ *   - 已经被 `<details>` 包裹（且 summary 含 🔧 / fix / 修复 等关键词）时
+ *     **不重复包**
+ *   - 非 diff 代码块（```typescript / ```bash 等）不动
+ *   - 一条评论中多个 diff 块各自获得独立的 `<details>`
+ *   - GitHub Flavored Markdown 要求 `<summary>` 与代码块之间有空行，否则
+ *     代码块不会渲染 —— 注入时保证这一点
  */
-/** 修复建议标头的统一 markdown 写法（注入时使用） */
-const FIX_HEADER = '**🔧 Suggested fix**';
-/** 检测一段文本中是否已经有修复建议标头（兼容多种本地化和写法） */
-function hasFixHeader(text) {
-    // 必须含 🔧 emoji + "fix" 或 "修复" 或 "수정" 等已知本地化关键词
+
+const SUMMARY_LINE = '<summary>🔧 Suggested fix</summary>';
+/** 标头识别关键词（含本地化变体）— 用于判定"是否已经包过" */
+const FIX_KEYWORDS_RE = /(fix|修复|수정|fixar|réparer|поправ|correção)/i;
+/**
+ * 检测一段（紧贴 diff 块之前的）文本是否含已知的"修复建议"标记
+ *
+ * 同时识别两种形态：
+ *   - 新格式：`<summary>🔧 Suggested fix</summary>`（或本地化）
+ *   - 旧/兼容格式：`**🔧 Suggested fix**` 粗体
+ */
+function hasFixMarker(text) {
     if (!text.includes('🔧'))
         return false;
-    return /(fix|修复|수정|fixar|réparer|поправ|correção)/i.test(text);
+    return FIX_KEYWORDS_RE.test(text);
 }
 /**
- * 在每个 \`\`\`diff 块前注入 🔧 标头（仅当之前 5 行内未出现标头时）。
+ * 把每个 ```diff 块包进 `<details>` 折叠块。
  *
  * @param commentBody 单条 AI 评论的 markdown 内容
- * @returns 已注入标头的内容；输入无 diff 块时原样返回
+ * @returns 已包好的内容；输入无 diff 块时原样返回
  */
 function ensureFixSuggestionHeaders(commentBody) {
     if (!commentBody.includes('```diff'))
         return commentBody;
     const lines = commentBody.split('\n');
     const out = [];
-    for (let i = 0; i < lines.length; i++) {
+    let wrappedCount = 0;
+    let i = 0;
+    while (i < lines.length) {
         const line = lines[i];
         if (line.trim() === '```diff') {
-            // 检查前 5 行是否已有标头
-            const lookback = out.slice(-5).join('\n');
-            if (!hasFixHeader(lookback)) {
-                // 注入：如果前一行不是空行，先加空行；然后标头；然后空行；然后 diff
-                if (out.length > 0 && out[out.length - 1].trim() !== '') {
-                    out.push('');
+            // 找到这个 diff 块的结束位置
+            let endIdx = -1;
+            for (let j = i + 1; j < lines.length; j++) {
+                if (lines[j].trim() === '```') {
+                    endIdx = j;
+                    break;
                 }
-                out.push(FIX_HEADER);
+            }
+            if (endIdx === -1) {
+                // 没找到闭合 fence — 异常情况，原样输出，不包
+                out.push(line);
+                i++;
+                continue;
+            }
+            // 检查是否已经在 <details> 里
+            const lookback = out.slice(-5).join('\n');
+            const lookahead = lines.slice(endIdx + 1, endIdx + 6).join('\n');
+            const alreadyWrapped = lookback.includes('<details>') &&
+                hasFixMarker(lookback) &&
+                lookahead.includes('</details>');
+            if (alreadyWrapped) {
+                // 原样照搬整个 diff 块
+                for (let k = i; k <= endIdx; k++)
+                    out.push(lines[k]);
+                i = endIdx + 1;
+                continue;
+            }
+            // 注入 <details> 包装
+            // 1) 前一行不是空行时先补一行（让 details 块独立成段）
+            if (out.length > 0 && out[out.length - 1].trim() !== '') {
                 out.push('');
             }
+            out.push('<details>');
+            out.push(SUMMARY_LINE);
+            // GFM：summary 与代码块之间必须有空行，否则代码块不渲染
+            out.push('');
+            // 把 diff 块原样塞进去
+            for (let k = i; k <= endIdx; k++)
+                out.push(lines[k]);
+            // 闭合 details 前留一行空行
+            out.push('');
+            out.push('</details>');
+            wrappedCount += 1;
+            i = endIdx + 1;
         }
-        out.push(line);
+        else {
+            out.push(line);
+            i++;
+        }
+    }
+    if (wrappedCount > 0) {
+        (0,core.info)(`[fix-header] wrapped ${wrappedCount} diff block(s) in <details>`);
     }
     return out.join('\n');
 }
@@ -18370,10 +18486,16 @@ ${commentChain}
                     const analysisChainMd = formatAnalysisChain(analysisSteps, resolveAnalysisRepositoryUrl());
                     (0,core.info)(`[analysis_chain] ${filename}: formatted markdown length=${analysisChainMd.length}, empty=${analysisChainMd === ''}`);
                     // 解析 AI 响应，提取结构化的审查评论
-                    // 然后对**同一行号范围**上的多条评论做合并去重（防止 LLM 对同一处问题
-                    // 写出多个不同角度的评论 — 见 mergeReviewsByLineRange 注释）
+                    // 然后做**议题级合并去重**：LLM 经常对同一个 tool finding 写出多条
+                    // 不同角度的评论（行号还可能不同），按"重叠的 tool finding ruleId 集合"
+                    // 做 key 合并 — 详见 src/review-dedup.ts。
                     const rawReviews = parseReview(response, patches, options.debug);
-                    const reviews = mergeReviewsByLineRange(rawReviews, filename);
+                    const fileFindings = lintReport?.results.filter(r => r.file === filename) ?? [];
+                    const reviews = mergeReviewsByTopic(rawReviews, filename, fileFindings.map(f => ({
+                        line: f.line,
+                        endLine: f.endLine,
+                        ruleId: f.ruleId
+                    })));
                     let analysisChainAttached = false;
                     for (const review of reviews) {
                         // 过滤 LGTM 评论（如果配置为不保留）

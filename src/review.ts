@@ -45,7 +45,7 @@ import { Inputs } from './inputs'
 import { octokit } from './octokit'
 import { type Options } from './options'
 import { type Prompts } from './prompts'
-import {mergeReviewsByLineRange, type Review} from './review-dedup'
+import {mergeReviewsByTopic, type Review} from './review-dedup'
 import {ensureFixSuggestionHeaders} from './fix-suggestion-header'
 import { getRepoFileTree } from './repo-tree'
 import { getTokenCount } from './tokenizer'
@@ -808,10 +808,21 @@ ${commentChain}
           info(`[analysis_chain] ${filename}: formatted markdown length=${analysisChainMd.length}, empty=${analysisChainMd === ''}`)
 
           // 解析 AI 响应，提取结构化的审查评论
-          // 然后对**同一行号范围**上的多条评论做合并去重（防止 LLM 对同一处问题
-          // 写出多个不同角度的评论 — 见 mergeReviewsByLineRange 注释）
+          // 然后做**议题级合并去重**：LLM 经常对同一个 tool finding 写出多条
+          // 不同角度的评论（行号还可能不同），按"重叠的 tool finding ruleId 集合"
+          // 做 key 合并 — 详见 src/review-dedup.ts。
           const rawReviews = parseReview(response, patches, options.debug)
-          const reviews = mergeReviewsByLineRange(rawReviews, filename)
+          const fileFindings =
+            lintReport?.results.filter(r => r.file === filename) ?? []
+          const reviews = mergeReviewsByTopic(
+            rawReviews,
+            filename,
+            fileFindings.map(f => ({
+              line: f.line,
+              endLine: f.endLine,
+              ruleId: f.ruleId
+            }))
+          )
           let analysisChainAttached = false
           for (const review of reviews) {
             // 过滤 LGTM 评论（如果配置为不保留）

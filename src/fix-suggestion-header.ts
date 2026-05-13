@@ -1,59 +1,111 @@
 /**
- * fix-suggestion-header.ts - 为 LLM 评论里的 `diff` 代码块强制添加"🔧 修复建议"标头
+ * fix-suggestion-header.ts - 把 LLM 评论里的 `diff` 代码块包进可折叠的
+ * `<details><summary>🔧 Suggested fix</summary>` 块
  *
- * Prompt 里已经要求 LLM 在 \`\`\`diff 块前加 `**🔧 Suggested fix**` 标头（详见
- * src/prompts.ts），但模型有时会忘掉。本模块作为**后处理 safety net**：扫描评论
- * body，发现"裸"的 diff 块（前面 ~5 行内没有 🔧 标头），就自动注入一行。
+ * 与之前实现差异：早期实现只在 diff 前加 `**🔧 Suggested fix**` 粗体标头，
+ * 但与现有 "🧩 Analysis chain" 的交互风格不一致。改为统一用
+ * `<details>/<summary>` 折叠组件，默认收起，点击展开看到 diff —— 让 PR 评
+ * 论区更清爽，长 diff 也不刷屏。
  *
  * 设计原则：
- *   - 已有 🔧 标头时**不重复添加**（检查紧邻 diff 块前 5 行内是否含 🔧 与 "fix"/"修复"）
- *   - 非 diff 块（plain code / typescript 等）**不动**，仅针对修复用的 diff 块
- *   - 标头文字使用英文 "Suggested fix"，markdown 里跟 emoji 一起渲染，与
- *     CodeRabbit / ai-reviewer 既有的 "🧰 Tools" 标签风格保持一致；如果模型
- *     已经用本地化文字（如"修复建议"）也保留不覆盖
- *   - 完全本地化（非英文）的 fallback 文字保留模型自主决定，因为不同 PR 评论
- *     的语言由 review 配置的 `language` 决定，我们这里只在**完全没有任何标头**
- *     时补上一个通用英文版本
+ *   - 已经被 `<details>` 包裹（且 summary 含 🔧 / fix / 修复 等关键词）时
+ *     **不重复包**
+ *   - 非 diff 代码块（```typescript / ```bash 等）不动
+ *   - 一条评论中多个 diff 块各自获得独立的 `<details>`
+ *   - GitHub Flavored Markdown 要求 `<summary>` 与代码块之间有空行，否则
+ *     代码块不会渲染 —— 注入时保证这一点
  */
 
-/** 修复建议标头的统一 markdown 写法（注入时使用） */
-const FIX_HEADER = '**🔧 Suggested fix**'
+import {info} from '@actions/core'
 
-/** 检测一段文本中是否已经有修复建议标头（兼容多种本地化和写法） */
-function hasFixHeader(text: string): boolean {
-  // 必须含 🔧 emoji + "fix" 或 "修复" 或 "수정" 等已知本地化关键词
+const SUMMARY_LINE = '<summary>🔧 Suggested fix</summary>'
+/** 标头识别关键词（含本地化变体）— 用于判定"是否已经包过" */
+const FIX_KEYWORDS_RE = /(fix|修复|수정|fixar|réparer|поправ|correção)/i
+
+/**
+ * 检测一段（紧贴 diff 块之前的）文本是否含已知的"修复建议"标记
+ *
+ * 同时识别两种形态：
+ *   - 新格式：`<summary>🔧 Suggested fix</summary>`（或本地化）
+ *   - 旧/兼容格式：`**🔧 Suggested fix**` 粗体
+ */
+function hasFixMarker(text: string): boolean {
   if (!text.includes('🔧')) return false
-  return /(fix|修复|수정|fixar|réparer|поправ|correção)/i.test(text)
+  return FIX_KEYWORDS_RE.test(text)
 }
 
 /**
- * 在每个 \`\`\`diff 块前注入 🔧 标头（仅当之前 5 行内未出现标头时）。
+ * 把每个 ```diff 块包进 `<details>` 折叠块。
  *
  * @param commentBody 单条 AI 评论的 markdown 内容
- * @returns 已注入标头的内容；输入无 diff 块时原样返回
+ * @returns 已包好的内容；输入无 diff 块时原样返回
  */
 export function ensureFixSuggestionHeaders(commentBody: string): string {
   if (!commentBody.includes('```diff')) return commentBody
 
   const lines = commentBody.split('\n')
   const out: string[] = []
+  let wrappedCount = 0
+  let i = 0
 
-  for (let i = 0; i < lines.length; i++) {
+  while (i < lines.length) {
     const line = lines[i]
     if (line.trim() === '```diff') {
-      // 检查前 5 行是否已有标头
-      const lookback = out.slice(-5).join('\n')
-      if (!hasFixHeader(lookback)) {
-        // 注入：如果前一行不是空行，先加空行；然后标头；然后空行；然后 diff
-        if (out.length > 0 && out[out.length - 1].trim() !== '') {
-          out.push('')
+      // 找到这个 diff 块的结束位置
+      let endIdx = -1
+      for (let j = i + 1; j < lines.length; j++) {
+        if (lines[j].trim() === '```') {
+          endIdx = j
+          break
         }
-        out.push(FIX_HEADER)
+      }
+      if (endIdx === -1) {
+        // 没找到闭合 fence — 异常情况，原样输出，不包
+        out.push(line)
+        i++
+        continue
+      }
+
+      // 检查是否已经在 <details> 里
+      const lookback = out.slice(-5).join('\n')
+      const lookahead = lines.slice(endIdx + 1, endIdx + 6).join('\n')
+      const alreadyWrapped =
+        lookback.includes('<details>') &&
+        hasFixMarker(lookback) &&
+        lookahead.includes('</details>')
+
+      if (alreadyWrapped) {
+        // 原样照搬整个 diff 块
+        for (let k = i; k <= endIdx; k++) out.push(lines[k])
+        i = endIdx + 1
+        continue
+      }
+
+      // 注入 <details> 包装
+      // 1) 前一行不是空行时先补一行（让 details 块独立成段）
+      if (out.length > 0 && out[out.length - 1].trim() !== '') {
         out.push('')
       }
+      out.push('<details>')
+      out.push(SUMMARY_LINE)
+      // GFM：summary 与代码块之间必须有空行，否则代码块不渲染
+      out.push('')
+      // 把 diff 块原样塞进去
+      for (let k = i; k <= endIdx; k++) out.push(lines[k])
+      // 闭合 details 前留一行空行
+      out.push('')
+      out.push('</details>')
+      wrappedCount += 1
+
+      i = endIdx + 1
+    } else {
+      out.push(line)
+      i++
     }
-    out.push(line)
   }
 
+  if (wrappedCount > 0) {
+    info(`[fix-header] wrapped ${wrappedCount} diff block(s) in <details>`)
+  }
   return out.join('\n')
 }
