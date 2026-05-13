@@ -45,6 +45,8 @@ import { Inputs } from './inputs'
 import { octokit } from './octokit'
 import { type Options } from './options'
 import { type Prompts } from './prompts'
+import {mergeReviewsByLineRange, type Review} from './review-dedup'
+import {ensureFixSuggestionHeaders} from './fix-suggestion-header'
 import { getRepoFileTree } from './repo-tree'
 import { getTokenCount } from './tokenizer'
 
@@ -806,7 +808,10 @@ ${commentChain}
           info(`[analysis_chain] ${filename}: formatted markdown length=${analysisChainMd.length}, empty=${analysisChainMd === ''}`)
 
           // 解析 AI 响应，提取结构化的审查评论
-          const reviews = parseReview(response, patches, options.debug)
+          // 然后对**同一行号范围**上的多条评论做合并去重（防止 LLM 对同一处问题
+          // 写出多个不同角度的评论 — 见 mergeReviewsByLineRange 注释）
+          const rawReviews = parseReview(response, patches, options.debug)
+          const reviews = mergeReviewsByLineRange(rawReviews, filename)
           let analysisChainAttached = false
           for (const review of reviews) {
             // 过滤 LGTM 评论（如果配置为不保留）
@@ -846,6 +851,11 @@ ${commentChain}
                   commentWithChain = `${commentWithChain}\n${toolAttribution}`
                 }
               }
+              // 兜底：模型偶尔会忘记在 ```diff 块前加 🔧 修复建议标头（prompt
+              // 里是 MANDATORY 规则，但不是 100% 遵守）。post-process 给裸 diff
+              // 块自动加标头。
+              commentWithChain = ensureFixSuggestionHeaders(commentWithChain)
+
               info(`[analysis_chain] ${filename}: comment line ${review.startLine}-${review.endLine}, hasChain=${shouldAttachAnalysisChain}, finalLen=${commentWithChain.length}`)
               // 将审查评论加入缓冲区
               await commenter.bufferReviewComment(
@@ -1221,12 +1231,7 @@ const parsePatch = (
 
 // ==================== AI 响应解析 ====================
 
-/** 审查评论的结构化表示 */
-interface Review {
-  startLine: number  // 评论起始行号
-  endLine: number    // 评论结束行号
-  comment: string    // 评论内容
-}
+// `Review` 接口与 `mergeReviewsByLineRange` 已抽到 src/review-dedup.ts，便于单元测试
 
 /**
  * 解析 AI 的代码审查响应，提取结构化的评论列表

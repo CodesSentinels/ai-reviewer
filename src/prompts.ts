@@ -182,12 +182,20 @@ Don't annotate code snippets with line numbers. Format and indent code correctly
 Do not use \`suggestion\` code blocks.
 For fixes, use \`diff\` code blocks, marking changes with \`+\` or \`-\`. The line number range for comments with fix snippets must exactly match the range to replace in the new hunk.
 
+**Fix suggestion header (MANDATORY)** — Every \`diff\` code block that proposes a fix MUST be preceded by a single-line bold header containing the 🔧 wrench emoji and the phrase "Suggested fix" (or its equivalent translated to the response language — e.g. "修复建议" for Chinese, "수정 제안" for Korean). Format: \`**🔧 Suggested fix**\` on its own line, followed by a blank line, then the \`diff\` code block. This makes fix proposals visually distinct from analysis prose in PR comments.
+
 - Do NOT provide general feedback, summaries, explanations of changes, or praises
   for making good additions. Do NOT suggest adding validation, comments, documentation,
   or error handling that was not explicitly part of the changes.
 - Focus solely on offering specific, objective insights based on the
   given context and refrain from making broad comments about potential impacts on
   the system or question intentions behind the changes.
+- **One comment per line range (MANDATORY)** — Do NOT output two or more separate
+  \`startLine-endLine:\` blocks targeting the **exact same** line range. If multiple
+  issues (e.g. a syntax error AND a design concern) exist on the same line, **combine
+  them into a single comment** with paragraphs or bullets covering each angle. The
+  consumer sees one GitHub review comment per line range; duplicates produce visual
+  noise and look like a bug.
 $lint_mandatory_instruction- **Cross-file impact analysis (MANDATORY)** — When the "Cross-file references" section
   above contains actual references (not "No cross-file references detected"), you MUST
   write a review comment on the changed line (using the same \`startLine-endLine:\\n comment\\n---\`
@@ -264,6 +272,9 @@ Please review this change.
 
 22-22:
 There's a syntax error in the add function.
+
+**🔧 Suggested fix**
+
 \`\`\`diff
 -    retrn z
 +    return z

@@ -14,6 +14,7 @@ import { exec as execCallback } from 'child_process'
 import OpenAI, { APIError } from 'openai'
 import pRetry from 'p-retry'
 import { OpenAIOptions, Options } from './options'
+import { sanitizeModelOutput } from './sanitize-model-output'
 
 /**
  * 对话 ID 接口，用于维护多轮对话的上下文关系
@@ -360,6 +361,18 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
       if (responseText.startsWith('with ')) {
         responseText = responseText.substring(5)
       }
+
+      // 剥离 LLM 内置工具（web_search / browse / file_search）插入的 citation
+      // marker（看起来像乱码的 `citeturn0search0` 之类）。详见
+      // src/sanitize-model-output.ts 头部注释。
+      const beforeLen = responseText.length
+      responseText = sanitizeModelOutput(responseText)
+      if (responseText.length !== beforeLen) {
+        info(
+          `[sanitize] stripped citation markers: ${beforeLen} → ${responseText.length} chars`
+        )
+      }
+
       if (this.options.debug) {
         // info(`openai responses: ${responseText}`)
       }
