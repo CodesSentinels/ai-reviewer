@@ -62,8 +62,15 @@ export class PrettierAdapter implements ToolAdapter {
   private resolvedVersion = ''
   private resolvedBinPath = ''
 
-  async detect(repoRoot: string): Promise<ToolDetection> {
-    const install = await ensureToolInstalled(this.installSpec)
+  async detect(
+    repoRoot: string,
+    versionOverride?: string
+  ): Promise<ToolDetection> {
+    const spec: InstallSpec =
+      versionOverride && versionOverride.length > 0
+        ? {...this.installSpec, version: versionOverride}
+        : this.installSpec
+    const install = await ensureToolInstalled(spec)
     if (!install.ok) {
       return {
         available: false,

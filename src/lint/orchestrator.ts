@@ -52,6 +52,15 @@ export interface OrchestratorOptions {
    */
   toolEnableOverrides?: Record<string, boolean>
   /**
+   * 每适配器的工具版本覆盖（semver 范围字符串）
+   *
+   * 用于避免"ai-reviewer pin 的版本与消费方本地装的版本不一致"。
+   * key = adapter.name，value = `^8.57.0` 等 semver 范围。
+   * 仅当用户在 workflow 显式填写（如 `with: eslint_version: '^8.57.0'`）时
+   * 此 map 才包含对应 key；其他 key 走 adapter 自带 installSpec.version 默认值。
+   */
+  toolVersionOverrides?: Record<string, string>
+  /**
    * 预先在 review.ts 一次性扫描得到的 PatchScanMap。
    *
    * 传入后本模块跳过对 fileDiff 的二次 walk；未传入时回退到内部构建（保持
@@ -103,10 +112,12 @@ export async function runLintTools(
 
   // 2) 检测每个工具是否在执行环境中可用（并行）
   //    传入 repoRoot 让适配器能检查项目侧前置条件（如 ESLint 9 的 eslint.config.js）
+  //    传入 versionOverrides 让适配器装到与消费方本地一致的版本
+  const versionOverrides = options.toolVersionOverrides ?? {}
   const detections = await Promise.all(
     enabledAdapters.map(async a => ({
       adapter: a,
-      detection: await safeDetect(a, options.repoRoot)
+      detection: await safeDetect(a, options.repoRoot, versionOverrides[a.name])
     }))
   )
 
@@ -242,10 +253,11 @@ export async function runLintTools(
 
 async function safeDetect(
   adapter: ToolAdapter,
-  repoRoot: string
+  repoRoot: string,
+  versionOverride: string | undefined
 ): ReturnType<ToolAdapter['detect']> {
   try {
-    return await adapter.detect(repoRoot)
+    return await adapter.detect(repoRoot, versionOverride)
   } catch (e) {
     return {
       available: false,

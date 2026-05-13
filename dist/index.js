@@ -11235,7 +11235,16 @@ async function run() {
         biome: (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_biome'),
         tsc: (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_tsc'),
         prettier: (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_prettier')
-    }, (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('command_ack_reaction'));
+    }, 
+    // 工具版本覆盖：仅收集用户**显式填写**的值；空字符串视为"用默认版本"
+    Object.fromEntries([
+        ['eslint', 'eslint_version'],
+        ['biome', 'biome_version'],
+        ['tsc', 'tsc_version'],
+        ['prettier', 'prettier_version']
+    ]
+        .map(([toolName, inputName]) => [toolName, (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)(inputName).trim()])
+        .filter(([, v]) => v.length > 0)), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('command_ack_reaction'));
     // 打印所有配置项，方便调试
     options.print();
     // 评论事件：在 Bot 初始化前尽快给用户评论打 ACK 表情
@@ -13512,8 +13521,19 @@ class Options {
      * value 是用户在 workflow 里写的 `with: enable_<tool>: true|false`。
      */
     toolEnableOverrides;
+    /**
+     * 每个 lint 适配器的版本覆盖（semver 范围）
+     *
+     * 解决"ai-reviewer 装的工具版本与消费方本地装的不一致"问题。
+     * key = adapter.name，value = 用户在 workflow 里写的
+     * `with: <tool>_version: '^8.57.0'`。
+     *
+     * 用户**未填**或填空字符串时，**不会**进入此 map —— 适配器使用自己
+     * installSpec.version 的默认值（即 ai-reviewer pin 的版本）。
+     */
+    toolVersionOverrides;
     commandAckReaction; // 命令识别后在用户评论上打的表情（空/off/none 表示禁用）
-    constructor(debug, disableReview, disableReleaseNotes, maxFiles = '0', reviewSimpleChanges = false, reviewCommentLGTM = false, pathFilters = null, systemMessage = '', openaiLightModel = 'gpt-5.4-nano', openaiHeavyModel = 'gpt-5.4-mini', openaiModelTemperature = '0.0', openaiRetries = '3', openaiTimeoutMS = '120000', openaiConcurrencyLimit = '6', githubConcurrencyLimit = '6', apiBaseUrl = 'https://api.openai.com/v1', language = 'en-US', enableDependencyAnalysis = true, maxDependencyFiles = '50', enableWebSearch = true, enableShell = true, enableLintTools = true, toolEnableOverrides = {}, commandAckReaction = 'eyes') {
+    constructor(debug, disableReview, disableReleaseNotes, maxFiles = '0', reviewSimpleChanges = false, reviewCommentLGTM = false, pathFilters = null, systemMessage = '', openaiLightModel = 'gpt-5.4-nano', openaiHeavyModel = 'gpt-5.4-mini', openaiModelTemperature = '0.0', openaiRetries = '3', openaiTimeoutMS = '120000', openaiConcurrencyLimit = '6', githubConcurrencyLimit = '6', apiBaseUrl = 'https://api.openai.com/v1', language = 'en-US', enableDependencyAnalysis = true, maxDependencyFiles = '50', enableWebSearch = true, enableShell = true, enableLintTools = true, toolEnableOverrides = {}, toolVersionOverrides = {}, commandAckReaction = 'eyes') {
         this.debug = debug;
         this.disableReview = disableReview;
         this.disableReleaseNotes = disableReleaseNotes;
@@ -13539,6 +13559,7 @@ class Options {
         this.enableShell = enableShell;
         this.enableLintTools = enableLintTools;
         this.toolEnableOverrides = toolEnableOverrides;
+        this.toolVersionOverrides = toolVersionOverrides;
         this.commandAckReaction = commandAckReaction;
     }
     /** 打印所有配置项到日志，方便调试 */
@@ -13568,6 +13589,7 @@ class Options {
         (0,core.info)(`enable_shell: ${this.enableShell}`);
         (0,core.info)(`enable_lint_tools: ${this.enableLintTools}`);
         (0,core.info)(`tool_enable_overrides: ${JSON.stringify(this.toolEnableOverrides)}`);
+        (0,core.info)(`tool_version_overrides: ${JSON.stringify(this.toolVersionOverrides)}`);
         (0,core.info)(`command_ack_reaction: ${this.commandAckReaction}`);
     }
     /**
@@ -16463,9 +16485,13 @@ class EslintAdapter {
     resolvedVersion = '';
     /** detect() 成功后填充：bundled 二进制的绝对路径，scan 时直接调用 */
     resolvedBinPath = '';
-    async detect(repoRoot) {
+    async detect(repoRoot, versionOverride) {
         // 1) 让 installer 确保 bundled ESLint 在沙箱内可用
-        const install = await ensureToolInstalled(this.installSpec);
+        //    versionOverride 非空时覆盖默认版本，保证与消费方本地一致
+        const spec = versionOverride && versionOverride.length > 0
+            ? { ...this.installSpec, version: versionOverride }
+            : this.installSpec;
+        const install = await ensureToolInstalled(spec);
         if (!install.ok) {
             return {
                 available: false,
@@ -16656,9 +16682,12 @@ class BiomeAdapter {
     };
     resolvedVersion = '';
     resolvedBinPath = '';
-    async detect(repoRoot) {
+    async detect(repoRoot, versionOverride) {
         // 1) 让 installer 装到沙箱（待审查项目不需要 @biomejs/biome）
-        const install = await ensureToolInstalled(this.installSpec);
+        const spec = versionOverride && versionOverride.length > 0
+            ? { ...this.installSpec, version: versionOverride }
+            : this.installSpec;
+        const install = await ensureToolInstalled(spec);
         if (!install.ok) {
             return {
                 available: false,
@@ -16806,8 +16835,11 @@ class PrettierAdapter {
     };
     resolvedVersion = '';
     resolvedBinPath = '';
-    async detect(repoRoot) {
-        const install = await ensureToolInstalled(this.installSpec);
+    async detect(repoRoot, versionOverride) {
+        const spec = versionOverride && versionOverride.length > 0
+            ? { ...this.installSpec, version: versionOverride }
+            : this.installSpec;
+        const install = await ensureToolInstalled(spec);
         if (!install.ok) {
             return {
                 available: false,
@@ -16942,9 +16974,12 @@ class TscAdapter {
     };
     resolvedVersion = '';
     resolvedBinPath = '';
-    async detect(repoRoot) {
+    async detect(repoRoot, versionOverride) {
         // 1) 沙箱安装 typescript
-        const install = await ensureToolInstalled(this.installSpec);
+        const spec = versionOverride && versionOverride.length > 0
+            ? { ...this.installSpec, version: versionOverride }
+            : this.installSpec;
+        const install = await ensureToolInstalled(spec);
         if (!install.ok) {
             return {
                 available: false,
@@ -17180,9 +17215,11 @@ async function runLintTools(options, adaptersOverride) {
     }
     // 2) 检测每个工具是否在执行环境中可用（并行）
     //    传入 repoRoot 让适配器能检查项目侧前置条件（如 ESLint 9 的 eslint.config.js）
+    //    传入 versionOverrides 让适配器装到与消费方本地一致的版本
+    const versionOverrides = options.toolVersionOverrides ?? {};
     const detections = await Promise.all(enabledAdapters.map(async (a) => ({
         adapter: a,
-        detection: await safeDetect(a, options.repoRoot)
+        detection: await safeDetect(a, options.repoRoot, versionOverrides[a.name])
     })));
     const toolSummaries = [];
     const allResults = [];
@@ -17295,9 +17332,9 @@ async function runLintTools(options, adaptersOverride) {
         filesScanned: changedFiles.length
     };
 }
-async function safeDetect(adapter, repoRoot) {
+async function safeDetect(adapter, repoRoot, versionOverride) {
     try {
-        return await adapter.detect(repoRoot);
+        return await adapter.detect(repoRoot, versionOverride);
     }
     catch (e) {
         return {
@@ -17746,6 +17783,7 @@ ${hunks.oldHunk}
                 patchScans,
                 // 取代 .codesentinel.yaml：把 Action 输入收集到的开关传给 orchestrator
                 toolEnableOverrides: options.toolEnableOverrides,
+                toolVersionOverrides: options.toolVersionOverrides,
                 disabled: false
             });
             (0,core.info)(`Phase 0b: lint scan completed in ${lintReport.durationMs}ms — ${lintReport.results.length} findings on changed lines from ${lintReport.toolSummaries.filter(s => s.available).length} tool(s)`);

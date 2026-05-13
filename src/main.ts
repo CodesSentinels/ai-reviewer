@@ -54,6 +54,19 @@ async function run(): Promise<void> {
       tsc: getBooleanInput('enable_tsc'),
       prettier: getBooleanInput('enable_prettier')
     },
+    // 工具版本覆盖：仅收集用户**显式填写**的值；空字符串视为"用默认版本"
+    Object.fromEntries(
+      (
+        [
+          ['eslint', 'eslint_version'],
+          ['biome', 'biome_version'],
+          ['tsc', 'tsc_version'],
+          ['prettier', 'prettier_version']
+        ] as const
+      )
+        .map(([toolName, inputName]) => [toolName, getInput(inputName).trim()])
+        .filter(([, v]) => v.length > 0)
+    ),
     getInput('command_ack_reaction')
   )
 

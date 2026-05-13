@@ -145,14 +145,22 @@ export interface ToolAdapter {
    * 检测工具在当前执行环境中是否可用
    *
    * 实现要求：
+   * - 调用 `tool-installer.ts::ensureToolInstalled(this.installSpec)`
    * - 调用 `<tool> --version` 或类似命令
    * - 检查项目侧的必要前置（如 ESLint 9 的 `eslint.config.js`），缺失视为不可用
    * - 失败时返回 { available: false, reason }，不抛异常
    * - 限制超时（建议 ≤ 5 秒）
    *
    * @param repoRoot 仓库根目录（绝对路径），用于检查项目侧的工具配置文件
+   * @param versionOverride （可选）用户通过 Action 输入指定的工具版本范围，
+   *   如 `^8.57.0`。非空时适配器应**覆盖** `installSpec.version`
+   *   传给 `ensureToolInstalled`，从而装到与消费方本地一致的版本。
+   *   未提供或空字符串时使用适配器自身的 `installSpec.version` 默认值。
    */
-  detect(repoRoot: string): Promise<ToolDetection>
+  detect(
+    repoRoot: string,
+    versionOverride?: string
+  ): Promise<ToolDetection>
 
   /**
    * 执行扫描

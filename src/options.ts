@@ -50,6 +50,17 @@ export class Options {
    * value 是用户在 workflow 里写的 `with: enable_<tool>: true|false`。
    */
   toolEnableOverrides: Record<string, boolean>
+  /**
+   * 每个 lint 适配器的版本覆盖（semver 范围）
+   *
+   * 解决"ai-reviewer 装的工具版本与消费方本地装的不一致"问题。
+   * key = adapter.name，value = 用户在 workflow 里写的
+   * `with: <tool>_version: '^8.57.0'`。
+   *
+   * 用户**未填**或填空字符串时，**不会**进入此 map —— 适配器使用自己
+   * installSpec.version 的默认值（即 ai-reviewer pin 的版本）。
+   */
+  toolVersionOverrides: Record<string, string>
   commandAckReaction: string // 命令识别后在用户评论上打的表情（空/off/none 表示禁用）
 
   constructor(
@@ -76,6 +87,7 @@ export class Options {
     enableShell = true,
     enableLintTools = true,
     toolEnableOverrides: Record<string, boolean> = {},
+    toolVersionOverrides: Record<string, string> = {},
     commandAckReaction = 'eyes'
   ) {
     this.debug = debug
@@ -103,6 +115,7 @@ export class Options {
     this.enableShell = enableShell
     this.enableLintTools = enableLintTools
     this.toolEnableOverrides = toolEnableOverrides
+    this.toolVersionOverrides = toolVersionOverrides
     this.commandAckReaction = commandAckReaction
   }
 
@@ -133,6 +146,7 @@ export class Options {
     info(`enable_shell: ${this.enableShell}`)
     info(`enable_lint_tools: ${this.enableLintTools}`)
     info(`tool_enable_overrides: ${JSON.stringify(this.toolEnableOverrides)}`)
+    info(`tool_version_overrides: ${JSON.stringify(this.toolVersionOverrides)}`)
     info(`command_ack_reaction: ${this.commandAckReaction}`)
   }
 
