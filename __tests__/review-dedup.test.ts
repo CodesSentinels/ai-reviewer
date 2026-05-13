@@ -237,3 +237,113 @@ describe('mergeReviewsByTopic — 议题级（按 tool finding ruleId）合并',
     expect(out[0].comment).toContain('B')
   })
 })
+
+// ============================================================================
+// v3 贪心聚类：部分重叠 + 传递闭包 + 共享任意 ruleId 即合并
+// ============================================================================
+
+describe('mergeReviewsByTopic — v3 贪心聚类（部分重叠 / 传递闭包）', () => {
+  test('🐛 用户实际场景：review1 覆盖 {TS2345}，review2 覆盖 {TS2339, TS2345} → 合并', () => {
+    // 这是用户 2026-05-13 上报的实际 bug：v2 keys 是 "topic:TS2345" 和
+    // "topic:TS2339|TS2345"，集合不等，没合并。v3 应该合并（共享 TS2345）
+    const findings: ToolFindingForDedup[] = [
+      {line: 85, endLine: 85, ruleId: 'TS2339'}, // Bug 8
+      {line: 98, endLine: 98, ruleId: 'TS2345'} // Bug 9
+    ]
+    const reviews: Review[] = [
+      {startLine: 95, endLine: 100, comment: 'review1 范围覆盖 TS2345 only'},
+      {startLine: 80, endLine: 100, comment: 'review2 范围覆盖 TS2339 + TS2345'}
+    ]
+    const out = mergeReviewsByTopic(reviews, 'utils/cart.ts', findings)
+    expect(out).toHaveLength(1)
+    expect(out[0].comment).toContain('review1')
+    expect(out[0].comment).toContain('review2')
+    // 合并后范围扩大
+    expect(out[0].startLine).toBe(80)
+    expect(out[0].endLine).toBe(100)
+  })
+
+  test('传递闭包：A↔B 共享，B↔C 共享，A 与 C 直接不共享 → 三条全部合并', () => {
+    const findings: ToolFindingForDedup[] = [
+      {line: 10, ruleId: 'R-A'},
+      {line: 20, ruleId: 'R-B'},
+      {line: 30, ruleId: 'R-C'}
+    ]
+    const reviews: Review[] = [
+      {startLine: 9, endLine: 21, comment: 'A 覆盖 R-A + R-B'},
+      {startLine: 19, endLine: 31, comment: 'B 覆盖 R-B + R-C'},
+      {startLine: 29, endLine: 40, comment: 'C 仅覆盖 R-C'}
+    ]
+    // A↔B 共享 R-B；B↔C 共享 R-C。greedy 把 C 加入已有的 A+B group
+    const out = mergeReviewsByTopic(reviews, 'src/x.ts', findings)
+    expect(out).toHaveLength(1)
+    expect(out[0].comment).toContain('A 覆盖')
+    expect(out[0].comment).toContain('B 覆盖')
+    expect(out[0].comment).toContain('C 仅覆盖')
+  })
+
+  test('真正不相关的 review 不会被错误合并', () => {
+    const findings: ToolFindingForDedup[] = [
+      {line: 10, ruleId: 'R-A'},
+      {line: 100, ruleId: 'R-B'}
+    ]
+    const reviews: Review[] = [
+      {startLine: 5, endLine: 15, comment: '关于 R-A'},
+      {startLine: 95, endLine: 105, comment: '关于 R-B'}
+    ]
+    // 两个 review 各自覆盖不同 finding，没共享 → 不合并
+    const out = mergeReviewsByTopic(reviews, 'src/x.ts', findings)
+    expect(out).toHaveLength(2)
+  })
+
+  test('有 finding / 无 finding 的 review 不会互相合并', () => {
+    const findings: ToolFindingForDedup[] = [
+      {line: 10, ruleId: 'TS2345'}
+    ]
+    const reviews: Review[] = [
+      {startLine: 5, endLine: 15, comment: '与 TS2345 finding 重叠'},
+      {startLine: 200, endLine: 200, comment: '与任何 finding 都不重叠的纯 AI 洞察'}
+    ]
+    const out = mergeReviewsByTopic(reviews, 'src/x.ts', findings)
+    expect(out).toHaveLength(2)
+  })
+
+  test('两个都无 finding 覆盖但行号相同 → 合并（保持 v1 行为）', () => {
+    const reviews: Review[] = [
+      {startLine: 200, endLine: 200, comment: '纯 AI 洞察 A'},
+      {startLine: 200, endLine: 200, comment: '纯 AI 洞察 B'}
+    ]
+    // 没有任何 tool finding 触及行号 200
+    const out = mergeReviewsByTopic(reviews, 'src/x.ts', [
+      {line: 10, ruleId: 'unrelated'}
+    ])
+    expect(out).toHaveLength(1)
+    expect(out[0].comment).toContain('纯 AI 洞察 A')
+    expect(out[0].comment).toContain('纯 AI 洞察 B')
+  })
+
+  test('两个都无 finding 覆盖但行号不同 → 不合并', () => {
+    const reviews: Review[] = [
+      {startLine: 200, endLine: 200, comment: 'A'},
+      {startLine: 300, endLine: 300, comment: 'B'}
+    ]
+    const out = mergeReviewsByTopic(reviews, 'src/x.ts', [])
+    expect(out).toHaveLength(2)
+  })
+
+  test('日志输出 "greedy-clustered" 标记区分 v3 实现', () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const core = require('@actions/core') as {info: jest.Mock}
+    core.info.mockClear()
+    mergeReviewsByTopic(
+      [
+        {startLine: 1, endLine: 1, comment: 'A'},
+        {startLine: 1, endLine: 1, comment: 'B'}
+      ],
+      'src/x.ts',
+      []
+    )
+    const messages = core.info.mock.calls.map(c => c[0]).join('\n')
+    expect(messages).toMatch(/greedy-clustered/)
+  })
+})

@@ -17682,7 +17682,7 @@ function truncate(s, max) {
 var lib_inputs = __nccwpck_require__(6305);
 ;// CONCATENATED MODULE: ./lib/review-dedup.js
 /**
- * review-dedup.ts - AI 评论级去重（按"底层问题"合并）
+ * review-dedup.ts - AI 评论级去重（基于"共享 tool finding"的贪心聚类）
  *
  * 处理"LLM 对同一个 lint 工具发现写了多条评论"的情况。
  *
@@ -17691,84 +17691,153 @@ var lib_inputs = __nccwpck_require__(6305);
  *   - `lint-filter.ts::deduplicateResults` 在**lint 工具发现**层去重
  *     （如 ESLint 与 Biome 同时报 no-unused-vars 时合并）
  *   - 本模块在**LLM 解析后的 Review[]**层去重，针对模型自己对同一个工具
- *     发现写出多条评论（角度不同但谈的是同一个 bug）
+ *     发现写出多条评论
  *
  * ## 演进
  *
  *   - v1：精确 `(startLine, endLine)` match。LLM 把两条评论挂在不同行
- *     （一条 98-98，另一条 95-100）就漏掉 → 修复后用户仍看到重复
- *   - v2（本版本）：用**底层 lint 发现的 ruleId 集合**当 key。两条 review
- *     若关联到同一组 tool finding（如都覆盖 TS2345 在 line 98 的位置）就
- *     视为同一议题，合并到一条评论里
- *   - 无 tool finding 关联的纯 AI 洞察 → 退回 v1 的行号精确 match
+ *     （一条 98-98，另一条 95-100）就漏掉
+ *   - v2：用"重叠的 ruleId 集合"做 key。但要求**集合完全相等**，对
+ *     "review A 覆盖 {TS2345}，review B 覆盖 {TS2339, TS2345}"的部分
+ *     重叠场景仍然漏（key 不一样）—— 用户在 2026-05-13 报到的实际场景
+ *   - **v3（本版本）**：贪心聚类。两条评论只要**共享任意一个 tool finding
+ *     的 ruleId** 就视为同议题；通过greedy一次扫描自然形成传递闭包
+ *
+ * ## 设计权衡
+ *
+ * 贪心聚类有"过度合并"的理论风险：例如一条"函数级别"评论覆盖 5 个 finding，
+ * 另一条只覆盖其中 1 个 specific finding，它们会被合并。但在 PR review 实
+ * 际语境下，**合并 > 多条独立评论刷屏**：合并后的评论以 `---` 分隔保留所有
+ * 视角，reviewer 读得到全部内容，但只占一条 GitHub 评论位。
  *
  * 抽离为独立文件是为了让单元测试可以直接导入，无须把 review.ts 的全部运行时
  * 依赖（@actions/github / octokit / p-limit）一起拉起来。
  */
 /**
- * 计算"议题键"
+ * 判断 review 与 finding 在行号上是否重叠
  *
- * 思路：找出与 review 行号范围重叠的所有 tool finding，把它们的 ruleId
- * 排序去重拼成字符串 —— 这就是这条 review 谈论的"底层议题"。
- *
- * - 有重叠 finding → key 形如 `topic:TS2345`（同议题的不同行号 review 会合并）
- * - 无重叠 finding → key 形如 `range:98-98`（回退到精确行号匹配）
+ * 与 formatToolAttribution 使用的判定保持一致，保证"评论上挂着哪些 Tools 卡片"
+ * 与"评论按哪些 finding 去重"两者口径相同。
  */
-function computeTopicKey(review, findings) {
-    const overlapping = findings.filter(f => {
-        const fEnd = f.endLine ?? f.line;
-        return fEnd >= review.startLine && f.line <= review.endLine;
-    });
-    if (overlapping.length === 0) {
-        return `range:${review.startLine}-${review.endLine}`;
+function overlapsFinding(review, finding) {
+    const fEnd = finding.endLine ?? finding.line;
+    return fEnd >= review.startLine && finding.line <= review.endLine;
+}
+/** 判断两个 ruleId 集合是否有任何共同元素 */
+function shareAnyRuleId(a, b) {
+    // 优化：遍历较小的那个集合
+    const [smaller, larger] = a.size <= b.size ? [a, b] : [b, a];
+    for (const rid of smaller) {
+        if (larger.has(rid))
+            return true;
     }
-    const uniqueRuleIds = [...new Set(overlapping.map(f => f.ruleId))].sort();
-    return `topic:${uniqueRuleIds.join('|')}`;
+    return false;
 }
 /**
- * 把"谈论同一议题"的多条 AI 评论合并为一条
+ * 把"谈论同议题"的多条 AI 评论合并为一条
  *
- * 合并策略：按出现顺序拼接，中间插入 `\n\n---\n\n` 分隔符；保留所有视角的
- * 内容，只占一条 GitHub 评论位。
+ * 算法：贪心聚类。对每条 review，找出它与已有 group 中**任意一条** review
+ * 共享 ruleId 的情况 → 加入该 group；否则单独成 group。最后每个 group
+ * 合并成一条评论。
+ *
+ * 同议题判定：
+ *   - 至少有一条 finding 同时与两条 review 的行号范围重叠（即两条都覆盖
+ *     该 finding）
+ *   - 或者：两条 review 都没有重叠 finding，但行号范围完全相同（退回 v1
+ *     行为，保护"纯 AI 洞察"场景的精确匹配语义）
+ *
+ * 合并策略：
+ *   - 评论 body 按出现顺序拼接，中间插入 `\n\n---\n\n` 分隔符
+ *   - 行号范围扩大到能覆盖 group 内所有 review（GitHub 评论锚点更合理）
  *
  * @param reviews 来自 parseReview 的原始数组
  * @param filename 用于日志（便于排查"为啥又重复了"）
- * @param toolFindings 该文件中所有 lint 工具发现的简化视图（用于计算议题键）；
- *                    传 `[]` 时退化为按行号精确去重
- * @returns 合并后的数组
+ * @param toolFindings 该文件中所有 lint 工具发现的简化视图
+ *
+ * @returns 合并后的数组，保持原始顺序（每个 group 用第一条 review 的位置）
  */
 function mergeReviewsByTopic(reviews, filename, toolFindings) {
     // 仅在测试环境之外 require @actions/core，避免 jest 启动时直接拉起 GitHub runtime
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { info } = __nccwpck_require__(1078);
-    const byKey = new Map();
-    let mergedCount = 0;
-    for (const r of reviews) {
-        const key = computeTopicKey(r, toolFindings);
-        const existing = byKey.get(key);
-        if (existing == null) {
-            byKey.set(key, { ...r });
+    // Step 1: 为每条 review 计算其重叠的 ruleId 集合
+    const entries = reviews.map(r => {
+        const ruleIds = new Set();
+        for (const f of toolFindings) {
+            if (overlapsFinding(r, f))
+                ruleIds.add(f.ruleId);
+        }
+        return { review: { ...r }, ruleIds };
+    });
+    const groups = [];
+    for (const e of entries) {
+        let attachedGroup = null;
+        for (const g of groups) {
+            if (canMerge(e, g)) {
+                attachedGroup = g;
+                break;
+            }
+        }
+        if (attachedGroup != null) {
+            attachedGroup.members.push(e.review);
+            for (const rid of e.ruleIds)
+                attachedGroup.cumulativeRuleIds.add(rid);
         }
         else {
-            existing.comment = `${existing.comment.trimEnd()}\n\n---\n\n${r.comment.trimStart()}`;
-            // 合并时让评论的行号范围扩大到能覆盖两者（GitHub 评论锚点更合理）
-            existing.startLine = Math.min(existing.startLine, r.startLine);
-            existing.endLine = Math.max(existing.endLine, r.endLine);
-            mergedCount += 1;
+            groups.push({
+                members: [e.review],
+                cumulativeRuleIds: new Set(e.ruleIds)
+            });
         }
     }
+    // Step 3: 把每个 group 合并成一条 review
+    let mergedCount = 0;
+    const out = groups.map(g => {
+        if (g.members.length === 1)
+            return g.members[0];
+        mergedCount += g.members.length - 1;
+        const merged = { ...g.members[0] };
+        for (let k = 1; k < g.members.length; k++) {
+            const m = g.members[k];
+            merged.comment = `${merged.comment.trimEnd()}\n\n---\n\n${m.comment.trimStart()}`;
+            merged.startLine = Math.min(merged.startLine, m.startLine);
+            merged.endLine = Math.max(merged.endLine, m.endLine);
+        }
+        return merged;
+    });
     if (mergedCount > 0) {
-        info(`[review-dedup] ${filename}: merged ${mergedCount} duplicate comment(s) into ${byKey.size} unique entries (topic-based)`);
+        info(`[review-dedup] ${filename}: merged ${mergedCount} duplicate comment(s) into ${out.length} unique entries (greedy-clustered)`);
     }
-    return Array.from(byKey.values());
+    return out;
+}
+/**
+ * 判定 entry 是否可以加入 group
+ *
+ * 两种情况算 "可加入"：
+ * 1. entry 有 ruleId 且 group 累积的 ruleIds 中有任意一个相同
+ * 2. entry 和 group 中**任一**成员 ruleIds 都是空集（无 tool finding 覆盖），
+ *    且行号范围完全相同 —— 退回 v1 行为，保护纯 AI 洞察的语义
+ */
+function canMerge(entry, group) {
+    if (entry.ruleIds.size > 0 && group.cumulativeRuleIds.size > 0) {
+        return shareAnyRuleId(entry.ruleIds, group.cumulativeRuleIds);
+    }
+    if (entry.ruleIds.size === 0 && group.cumulativeRuleIds.size === 0) {
+        // 两边都无 tool finding 覆盖 → 用 v1 行为：精确行号匹配
+        return group.members.some(m => m.startLine === entry.review.startLine &&
+            m.endLine === entry.review.endLine);
+    }
+    // 一边有 ruleId 一边没有 → 不同类，不合并
+    return false;
 }
 /**
  * 向后兼容别名：按行号精确去重（v1 行为）
  *
- * 等价于调用 `mergeReviewsByTopic(reviews, filename, [])` —— 退化到 range 键。
+ * 等价于调用 `mergeReviewsByTopic(reviews, filename, [])` —— 所有 review
+ * 的 ruleIds 都是空集，全部退回到 v1 的精确行号匹配。
  *
  * @deprecated 新代码请用 `mergeReviewsByTopic` 并传入 toolFindings 让议题级
- *   去重生效；本别名仅为旧测试保留
+ *   去重生效；本别名仅为旧测试与外部调用方保留
  */
 function mergeReviewsByLineRange(reviews, filename) {
     return mergeReviewsByTopic(reviews, filename, []);
