@@ -87,7 +87,6 @@ export const configurationStub: CommandHandler = {
 export const ALL_STUBS: CommandHandler[] = [
   reviewStub,
   fullReviewStub,
-  resolveStub,
   summaryStub,
   pauseStub,
   resumeStub,

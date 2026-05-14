@@ -124,3 +124,4 @@ tags.lock
 .secrets
 bin/act
 .DS_Store
+settings.local.json
