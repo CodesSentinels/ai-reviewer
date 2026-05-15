@@ -85,7 +85,7 @@ flowchart TB
       FMT["formatter.ts<br/>三种输出格式"]
       DF["lint-filter.ts<br/>变更行 / 去重"]
       LD["language-detector.ts"]
-      TS["types.ts"]
+      TYPES["types.ts"]
     end
 
     subgraph Adapters["适配器层 — adapters/"]
@@ -93,7 +93,7 @@ flowchart TB
       EXEC["exec.ts<br/>共享 CLI 封装"]
       ES["EslintAdapter"]
       BI["BiomeAdapter"]
-      TS["TscAdapter<br/>(类型错误)"]
+      TSC["TscAdapter<br/>(类型错误)"]
       PR["PrettierAdapter<br/>(默认关闭)"]
     end
   end
@@ -101,7 +101,7 @@ flowchart TB
   subgraph Sandbox["沙箱目录 /tmp/ai-reviewer-lint-tools/<br/>(由 tool-installer.ts 自管，待审查项目侧零负担)"]
     direction LR
     CLI1["node_modules/.bin/eslint<br/>--format json"]
-    CLI2["node_modules/.bin/biome check<br/>--reporter=json"]
+    CLI2["node_modules/.bin/biome check<br/>--reporter=github"]
     CLI3["node_modules/.bin/prettier<br/>--check"]
   end
 

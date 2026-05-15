@@ -198,7 +198,7 @@ interface ToolAdapter {
 | 适配器 | InstallSpec | CLI 调用 | 输出解析 | 默认启用 |
 |:-------|:-----------|:---------|:---------|:---------|
 | ESLint | `{ kind: 'npm', package: 'eslint', binName: 'eslint', version: '^9.15.0' }` | `<bundled-bin> --format json --no-error-on-unmatched-pattern <files>` | JSON 数组，每元素 `{filePath, messages[]}` | ✅ |
-| Biome  | `{ kind: 'npm', package: '@biomejs/biome', binName: 'biome', version: '^2.3.0' }` | `<bundled-bin> check --reporter=json <files>` | `{diagnostics: [{category, severity, location.line_start, …}]}` | ✅ |
+| Biome  | `{ kind: 'npm', package: '@biomejs/biome', binName: 'biome', version: '^2.3.0' }` | `<bundled-bin> check --reporter=github <files>` | GitHub Actions 注解文本：先用 `^::(error\|warning\|notice) (.+?)::(.*)$` 拆出 level / kv 串 / message，再从 kv 串解析 `title` / `file` / `line` / `col` / `endLine` / `endColumn`。**切到 github reporter 是因为 2.4.x 把 JSON location 字段从 `line_start` 改成 `span[0]` 等，跨版本不稳** | ✅ |
 | **TypeScript** | `{ kind: 'npm', package: 'typescript', binName: 'tsc', version: '^5.6.0' }` | `<bundled-bin> --noEmit --pretty false`（**项目级，忽略 files 参数**） | 正则 `^(.+)\((\d+),(\d+)\): (error\|warning) (TS\d+): (.+)$` 解析单行错误，忽略续行 type chain | ✅ |
 | Prettier | `{ kind: 'npm', package: 'prettier', binName: 'prettier', version: '^3.0.0' }` | `<bundled-bin> --check --no-error-on-unmatched-pattern <files>` | stderr 中按行匹配 `[warn] <file>` | ❌（默认关闭：风格规则信噪比低，与 ESLint/Biome 重叠） |
 
@@ -474,17 +474,18 @@ review 突然报本地没的错"的诡异 bug**。要付出的代价仅是消费
 
 ## 9. 测试
 
-| 测试文件 | 覆盖范围 |
-|:---------|:---------|
-| [`__tests__/lint-filter.test.ts`](../__tests__/lint-filter.test.ts) | unified diff 行号提取、变更行窗口过滤、跨工具去重（含规则名归一化） |
-| [`__tests__/lint-orchestrator.test.ts`](../__tests__/lint-orchestrator.test.ts) | 启用/禁用、不可用工具的 ToolSummary、scan 抛异常的容忍、`disabled=true` 短路 |
-| [`__tests__/lint-prompt-injection.test.ts`](../__tests__/lint-prompt-injection.test.ts) | 杠杆 A 条件注入：lintContext 空/非空两条路径在最终 prompt 中的体现；token 节省下界 |
-| [`__tests__/lint-eslint-config-detection.test.ts`](../__tests__/lint-eslint-config-detection.test.ts) | 改进 A：项目缺少 ESLint 配置时 `detect()` 返回 available=false；覆盖 Flat Config / Legacy / package.json#eslintConfig / 损坏 package.json 等 7 种情形 |
-| [`__tests__/changed-lines.test.ts`](../__tests__/changed-lines.test.ts) | 集中 diff 扫描：`scanPatch` 单次 walk 产出 added/touched 两份集合；`buildPatchScans`/`toAddedLineMap`；纯删除 hunk / 多 hunk / 边界字符（"\\ No newline …"）等 8 种情形 |
-| [`__tests__/lint-tool-installer.test.ts`](../__tests__/lint-tool-installer.test.ts) | 多策略 dispatcher：npm 策略首次安装 / 缓存命中 / 沙箱目录初始化 / `npm install` 失败诊断 / `npm` 不存在 / 安装但 bin 缺失；binary 策略占位返回 7 种情形 |
-| [`__tests__/lint-tsc-adapter.test.ts`](../__tests__/lint-tsc-adapter.test.ts) | **TypeScript 适配器**：detect（沙箱失败 / version 失败 / 无 tsconfig / tsconfig.json 命中 / tsconfig.base.json 命中）+ scan 输出解析（单条 / 多条 / 续行忽略 / 绝对路径归一化 / 0 finding / spawnError）共 10 用例 |
+| 测试文件 | 用例数 | 覆盖范围 |
+|:---------|:------:|:---------|
+| [`__tests__/lint-filter.test.ts`](../__tests__/lint-filter.test.ts) | 8 | 变更行窗口过滤、跨工具去重（含规则名归一化） |
+| [`__tests__/lint-orchestrator.test.ts`](../__tests__/lint-orchestrator.test.ts) | 8 | 启用/禁用、不可用工具的 ToolSummary、scan 抛异常的容忍、`disabled=true` 短路、`toolVersionOverrides` 透传 / 部分覆盖 / 不覆盖 |
+| [`__tests__/lint-prompt-injection.test.ts`](../__tests__/lint-prompt-injection.test.ts) | 4 | 杠杆 A 条件注入：lintContext 空/非空两条路径在最终 prompt 中的体现；token 节省下界 |
+| [`__tests__/lint-eslint-config-detection.test.ts`](../__tests__/lint-eslint-config-detection.test.ts) | 7 | 改进 A：项目缺少 ESLint 配置时 `detect()` 返回 available=false；覆盖 Flat Config / Legacy / package.json#eslintConfig / 损坏 package.json 等情形 |
+| [`__tests__/lint-tool-installer.test.ts`](../__tests__/lint-tool-installer.test.ts) | 7 | 多策略 dispatcher：npm 策略首次安装 / 缓存命中 / 沙箱目录初始化 / `npm install` 失败诊断 / `npm` 不存在 / 安装但 bin 缺失；binary 策略占位返回 |
+| [`__tests__/lint-tsc-adapter.test.ts`](../__tests__/lint-tsc-adapter.test.ts) | 10 | **TypeScript 适配器**：detect（沙箱失败 / version 失败 / 无 tsconfig / tsconfig.json 命中 / tsconfig.base.json 命中）+ scan 输出解析（单条 / 多条 / 续行忽略 / 绝对路径归一化 / 0 finding / spawnError） |
+| [`__tests__/lint-biome-adapter.test.ts`](../__tests__/lint-biome-adapter.test.ts) | 8 | **Biome 适配器（GitHub reporter）**：解析 `::level title=...,file=...,line=...,col=...::msg` 行；endLine/endColumn 可选；title/category 缺失兜底；非 annotation 行忽略；2.4.x JSON 字段变动的回归保护 |
+| [`__tests__/changed-lines.test.ts`](../__tests__/changed-lines.test.ts) | 8 | 集中 diff 扫描：`scanPatch` 单次 walk 产出 added/touched 两份集合；`buildPatchScans`/`toAddedLineMap`；纯删除 hunk / 多 hunk / 边界字符（"\\ No newline …"）等 |
 
-执行：`npm test`（合并后总计 230 个用例全部通过）。
+执行：`npm test`（lint 子系统 8 个 suite 合计 60 个用例；全仓 18 个 suite 共 **295 个用例全部通过**）。
 
 ---
 
