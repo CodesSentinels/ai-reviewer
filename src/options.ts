@@ -61,6 +61,13 @@ export class Options {
    * installSpec.version 的默认值（即 ai-reviewer pin 的版本）。
    */
   toolVersionOverrides: Record<string, string>
+  /**
+   * Semgrep 规则集（来自 Action 输入 `semgrep_config`）。
+   *
+   * 仅当 `enable_semgrep=true` 时生效；默认 `p/default`（OWASP Top 10）。
+   * 详见 action.yml 中 `semgrep_config` 输入说明。
+   */
+  semgrepConfig: string
   commandAckReaction: string // 命令识别后在用户评论上打的表情（空/off/none 表示禁用）
 
   constructor(
@@ -88,6 +95,7 @@ export class Options {
     enableLintTools = true,
     toolEnableOverrides: Record<string, boolean> = {},
     toolVersionOverrides: Record<string, string> = {},
+    semgrepConfig = 'p/default',
     commandAckReaction = 'eyes'
   ) {
     this.debug = debug
@@ -116,6 +124,7 @@ export class Options {
     this.enableLintTools = enableLintTools
     this.toolEnableOverrides = toolEnableOverrides
     this.toolVersionOverrides = toolVersionOverrides
+    this.semgrepConfig = semgrepConfig
     this.commandAckReaction = commandAckReaction
   }
 
@@ -147,6 +156,7 @@ export class Options {
     info(`enable_lint_tools: ${this.enableLintTools}`)
     info(`tool_enable_overrides: ${JSON.stringify(this.toolEnableOverrides)}`)
     info(`tool_version_overrides: ${JSON.stringify(this.toolVersionOverrides)}`)
+    info(`semgrep_config: ${this.semgrepConfig}`)
     info(`command_ack_reaction: ${this.commandAckReaction}`)
   }
 

@@ -341,6 +341,7 @@ ${hunks.oldHunk}
         // 取代 .codesentinel.yaml：把 Action 输入收集到的开关传给 orchestrator
         toolEnableOverrides: options.toolEnableOverrides,
         toolVersionOverrides: options.toolVersionOverrides,
+        semgrepConfig: options.semgrepConfig,
         disabled: false
       })
       info(

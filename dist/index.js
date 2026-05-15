@@ -8601,6 +8601,8 @@ function sanitizeModelOutput(text) {
     out = out.replace(BARE_CITATION_AT_BOUNDARY_RE, '');
     // 第三步：清掉任何残留的孤立分隔符字符
     out = out.replace(SEPARATOR_RE, '');
+    console.log('输入文本：', JSON.stringify(text));
+    console.log('输出文本：', JSON.stringify(out));
     return out;
 }
 
@@ -11309,7 +11311,7 @@ __nccwpck_require__.r(__webpack_exports__);
 /* harmony import */ var _commands_early_reaction__WEBPACK_IMPORTED_MODULE_3__ = __nccwpck_require__(6360);
 /* harmony import */ var _options__WEBPACK_IMPORTED_MODULE_4__ = __nccwpck_require__(5341);
 /* harmony import */ var _prompts__WEBPACK_IMPORTED_MODULE_6__ = __nccwpck_require__(2379);
-/* harmony import */ var _review__WEBPACK_IMPORTED_MODULE_5__ = __nccwpck_require__(6877);
+/* harmony import */ var _review__WEBPACK_IMPORTED_MODULE_5__ = __nccwpck_require__(1218);
 /**
  * main.ts - GitHub Action 入口文件
  *
@@ -11334,17 +11336,19 @@ async function run() {
         eslint: (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_eslint'),
         biome: (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_biome'),
         tsc: (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_tsc'),
-        prettier: (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_prettier')
+        prettier: (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_prettier'),
+        semgrep: (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_semgrep')
     }, 
     // 工具版本覆盖：仅收集用户**显式填写**的值；空字符串视为"用默认版本"
     Object.fromEntries([
         ['eslint', 'eslint_version'],
         ['biome', 'biome_version'],
         ['tsc', 'tsc_version'],
-        ['prettier', 'prettier_version']
+        ['prettier', 'prettier_version'],
+        ['semgrep', 'semgrep_version']
     ]
         .map(([toolName, inputName]) => [toolName, (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)(inputName).trim()])
-        .filter(([, v]) => v.length > 0)), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('command_ack_reaction'));
+        .filter(([, v]) => v.length > 0)), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('semgrep_config'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('command_ack_reaction'));
     // 打印所有配置项，方便调试
     options.print();
     // 评论事件：在 Bot 初始化前尽快给用户评论打 ACK 表情
@@ -13632,8 +13636,15 @@ class Options {
      * installSpec.version 的默认值（即 ai-reviewer pin 的版本）。
      */
     toolVersionOverrides;
+    /**
+     * Semgrep 规则集（来自 Action 输入 `semgrep_config`）。
+     *
+     * 仅当 `enable_semgrep=true` 时生效；默认 `p/default`（OWASP Top 10）。
+     * 详见 action.yml 中 `semgrep_config` 输入说明。
+     */
+    semgrepConfig;
     commandAckReaction; // 命令识别后在用户评论上打的表情（空/off/none 表示禁用）
-    constructor(debug, disableReview, disableReleaseNotes, maxFiles = '0', reviewSimpleChanges = false, reviewCommentLGTM = false, pathFilters = null, systemMessage = '', openaiLightModel = 'gpt-5.4-nano', openaiHeavyModel = 'gpt-5.4-mini', openaiModelTemperature = '0.0', openaiRetries = '3', openaiTimeoutMS = '120000', openaiConcurrencyLimit = '6', githubConcurrencyLimit = '6', apiBaseUrl = 'https://api.openai.com/v1', language = 'en-US', enableDependencyAnalysis = true, maxDependencyFiles = '50', enableWebSearch = true, enableShell = true, enableLintTools = true, toolEnableOverrides = {}, toolVersionOverrides = {}, commandAckReaction = 'eyes') {
+    constructor(debug, disableReview, disableReleaseNotes, maxFiles = '0', reviewSimpleChanges = false, reviewCommentLGTM = false, pathFilters = null, systemMessage = '', openaiLightModel = 'gpt-5.4-nano', openaiHeavyModel = 'gpt-5.4-mini', openaiModelTemperature = '0.0', openaiRetries = '3', openaiTimeoutMS = '120000', openaiConcurrencyLimit = '6', githubConcurrencyLimit = '6', apiBaseUrl = 'https://api.openai.com/v1', language = 'en-US', enableDependencyAnalysis = true, maxDependencyFiles = '50', enableWebSearch = true, enableShell = true, enableLintTools = true, toolEnableOverrides = {}, toolVersionOverrides = {}, semgrepConfig = 'p/default', commandAckReaction = 'eyes') {
         this.debug = debug;
         this.disableReview = disableReview;
         this.disableReleaseNotes = disableReleaseNotes;
@@ -13660,6 +13671,7 @@ class Options {
         this.enableLintTools = enableLintTools;
         this.toolEnableOverrides = toolEnableOverrides;
         this.toolVersionOverrides = toolVersionOverrides;
+        this.semgrepConfig = semgrepConfig;
         this.commandAckReaction = commandAckReaction;
     }
     /** 打印所有配置项到日志，方便调试 */
@@ -13690,6 +13702,7 @@ class Options {
         (0,core.info)(`enable_lint_tools: ${this.enableLintTools}`);
         (0,core.info)(`tool_enable_overrides: ${JSON.stringify(this.toolEnableOverrides)}`);
         (0,core.info)(`tool_version_overrides: ${JSON.stringify(this.toolVersionOverrides)}`);
+        (0,core.info)(`semgrep_config: ${this.semgrepConfig}`);
         (0,core.info)(`command_ack_reaction: ${this.commandAckReaction}`);
     }
     /**
@@ -14280,7 +14293,7 @@ $lint_context
 
 /***/ }),
 
-/***/ 6877:
+/***/ 1218:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
 "use strict";
@@ -16427,8 +16440,10 @@ async function ensureToolInstalled(spec) {
     switch (spec.kind) {
         case 'npm':
             return await installViaNpm(spec);
+        case 'pip':
+            return await installViaPip(spec);
         case 'binary':
-            // Phase 2+ 落地：参考 golangci-lint / ruff / semgrep 的发布形态
+            // Phase 2+ 落地：参考 golangci-lint 等纯静态二进制的发布形态
             return {
                 ok: false,
                 reason: "binary install strategy not yet implemented (planned for Phase 2+); " +
@@ -16512,9 +16527,151 @@ async function installViaNpm(spec) {
     (0,core.info)(`lint/installer: ${spec.binName} ready at ${binPath}`);
     return { ok: true, binPath };
 }
+/**
+ * 沙箱内 Python 工具的安装目录（与 npm 工具的 node_modules/ 同级）
+ *
+ * 选 `--target=<dir>` 而非 `--user` 是因为：
+ *   - runner 上 `python3 -m pip install --user` 会装到 `~/.local/`，跨 job
+ *     不可控，也不便于 actions/cache 单独缓存一个子目录
+ *   - --target 让所有 Python 工具集中在沙箱里，与 npm 工具同款的缓存模型
+ */
+function getPipInstallDir() {
+    return external_path_.join(getInstallRoot(), 'python-tools');
+}
+/**
+ * 把 npm 风格的 caret/tilde range（`^1.95.0` / `~1.95.0` / `1.95.0`）
+ * 转成 pip 兼容的版本约束。pip 不认识 `^` —— 需要展开成 `>=,<` 形式。
+ *
+ *   ^1.95.0  →  >=1.95.0,<2          （锁主版本）
+ *   ~1.95.0  →  >=1.95.0,<1.96       （锁次版本）
+ *   1.95.0   →  ==1.95.0             （精确版本）
+ *   >=1.95   →  >=1.95               （原样透传，已经是 pip 语法）
+ *   *        →  ""                   （任意版本）
+ */
+function npmRangeToPipSpecifier(range) {
+    const trimmed = range.trim();
+    if (trimmed === '' || trimmed === '*' || trimmed === 'latest')
+        return '';
+    // 已经是 pip 语法（含 ==, >=, <=, >, <, ~=, !=）：原样返回
+    if (/^(==|>=|<=|>|<|~=|!=)/.test(trimmed))
+        return trimmed;
+    const caretMatch = trimmed.match(/^\^(\d+)\.(\d+)\.(\d+)$/);
+    if (caretMatch != null) {
+        const [, major, minor, patch] = caretMatch;
+        return `>=${major}.${minor}.${patch},<${parseInt(major, 10) + 1}`;
+    }
+    const tildeMatch = trimmed.match(/^~(\d+)\.(\d+)\.(\d+)$/);
+    if (tildeMatch != null) {
+        const [, major, minor, patch] = tildeMatch;
+        return `>=${major}.${minor}.${patch},<${major}.${parseInt(minor, 10) + 1}`;
+    }
+    // 形如 `1.95.0` 这种"裸版本号"：pip 视为精确等于
+    if (/^\d+\.\d+\.\d+$/.test(trimmed))
+        return `==${trimmed}`;
+    // 兜底：原样让 pip 自己尝试（如 `>=1.95,<2` 这类复合 range）
+    return trimmed;
+}
+/**
+ * pip 策略：跑 `python3 -m pip install --target=<sandbox>/python-tools <pkg><range>`
+ *
+ * 设计选择：
+ *   - 用 `python3 -m pip` 而非全局 `pip`，避免 Python 2/3 残留环境下歧义
+ *   - 用 `--target` 把所有依赖装到沙箱目录，console script 落在 bin/
+ *   - 不用 venv：venv 启动慢、跨 runner 缓存复杂；--target 同款隔离已足够
+ *   - 不用 pipx：pipx 在 ubuntu-latest 默认装了，但跨 runner 行为不一；
+ *     我们要的是"可预测、可缓存"，pip --target 是最稳的最小公倍数
+ *
+ * 失败诊断：
+ *   - python3 不存在 → spawnError，returned reason 明确指引
+ *   - pip install 失败 → exit 码 + stderr 首行
+ *   - 装完但 bin 缺失 → 防御性 false（罕见，但比静默有效）
+ */
+async function installViaPip(spec) {
+    const root = getInstallRoot();
+    const targetDir = getPipInstallDir();
+    const binPath = external_path_.join(targetDir, 'bin', spec.binName);
+    // 1) 缓存命中
+    if ((0,external_fs_.existsSync)(binPath)) {
+        (0,core.info)(`lint/installer: cache hit for ${spec.binName} (pip) → ${binPath}`);
+        return { ok: true, binPath };
+    }
+    // 2) 沙箱目录初始化
+    try {
+        if (!(0,external_fs_.existsSync)(root))
+            (0,external_fs_.mkdirSync)(root, { recursive: true });
+        if (!(0,external_fs_.existsSync)(targetDir))
+            (0,external_fs_.mkdirSync)(targetDir, { recursive: true });
+    }
+    catch (e) {
+        return {
+            ok: false,
+            reason: `failed to initialize pip sandbox dir ${targetDir}: ${e instanceof Error ? e.message : String(e)}`
+        };
+    }
+    // 3) 跑 pip install
+    const pipSpecifier = npmRangeToPipSpecifier(spec.version);
+    const pkgArg = pipSpecifier.length > 0 ? `${spec.package}${pipSpecifier}` : spec.package;
+    (0,core.info)(`lint/installer: installing ${spec.package} (pip range "${spec.version}" → "${pipSpecifier}") → ${targetDir}`);
+    const result = await runCommand({
+        command: 'python3',
+        args: [
+            '-m',
+            'pip',
+            'install',
+            '--quiet',
+            '--disable-pip-version-check',
+            '--no-warn-script-location',
+            `--target=${targetDir}`,
+            pkgArg
+        ],
+        cwd: root,
+        timeoutMs: INSTALL_TIMEOUT_MS,
+        // pip 把 console script 放到 --target 下的 bin/，需要把这条目录加到 PATH
+        // 让后续 `<binPath>` 调用能找到自己 import 的子模块（pip 5+ 默认行为）
+        env: {
+            // 让 Python 在 sys.path 中优先找沙箱目录，确保 console script 能 import semgrep
+            PYTHONPATH: targetDir,
+            // pip --target 模式下 console script 的 shebang 默认指向系统 python3，
+            // 但脚本里 `import semgrep` 仍需走 PYTHONPATH 才能找到包
+            PYTHONDONTWRITEBYTECODE: '1'
+        }
+    });
+    if (result.spawnError) {
+        return {
+            ok: false,
+            reason: result.spawnErrorMessage != null &&
+                result.spawnErrorMessage.includes('python3')
+                ? `python3 not found on runner: ${result.spawnErrorMessage}. ` +
+                    'ubuntu-latest GitHub-hosted runners ship Python 3 by default — ' +
+                    'if you are on a self-hosted runner, install Python 3.8+ first.'
+                : `failed to invoke python3 -m pip: ${result.spawnErrorMessage ?? ''}`
+        };
+    }
+    if (result.exitCode !== 0) {
+        const stderrSnippet = result.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 200) ?? '';
+        return {
+            ok: false,
+            reason: `pip install ${pkgArg} failed (exit=${result.exitCode}): ${stderrSnippet}`
+        };
+    }
+    if (!(0,external_fs_.existsSync)(binPath)) {
+        (0,core.warning)(`lint/installer: ${spec.package} installed via pip but bin not at ${binPath}`);
+        return {
+            ok: false,
+            reason: `package ${spec.package} installed but console script not at ${binPath} ` +
+                `(unexpected pip --target layout; check that the package declares a console_scripts entry for "${spec.binName}")`
+        };
+    }
+    (0,core.info)(`lint/installer: ${spec.binName} (pip) ready at ${binPath}`);
+    return { ok: true, binPath };
+}
 /** 仅供测试使用：返回当前沙箱根目录路径 */
 function _getInstallRootForTest() {
     return getInstallRoot();
+}
+/** 仅供测试使用：返回 pip 工具的安装目标目录 */
+function _getPipInstallDirForTest() {
+    return getPipInstallDir();
 }
 
 ;// CONCATENATED MODULE: ./lib/lint/adapters/eslint.js
@@ -17044,6 +17201,234 @@ class PrettierAdapter {
     }
 }
 
+;// CONCATENATED MODULE: ./lib/lint/adapters/semgrep.js
+/**
+ * lint/adapters/semgrep.ts — Semgrep SAST 适配器（Phase 4：通用安全扫描）
+ *
+ * Semgrep 是支持 30+ 语言的模式匹配 SAST，与 ESLint/Biome/tsc 互补：
+ *   - ESLint/Biome：JS/TS 风格 + 通用质量规则
+ *   - tsc：类型错误
+ *   - **Semgrep：跨语言安全模式**（SQL 注入、命令注入、硬编码秘密、不安全反序列化…）
+ *
+ * 设计选择：
+ *   - 安装策略 = pip：semgrep 是 Python 工具，没有真正的"单文件预编译二进制"。
+ *     发布形态主要是 `pip install semgrep`（也支持 docker）。我们选 pip，
+ *     落到沙箱 `/tmp/ai-reviewer-lint-tools/python-tools/bin/semgrep`。
+ *   - 默认规则集 = `p/default`：内置 OWASP-Top-10，离线可用、跨版本稳定。
+ *     用户可通过 `with: semgrep_config: '<other>'` 覆盖（如 `auto` / `p/security-audit`）。
+ *   - 默认 enable = **false**：与 Prettier 同款保守。Semgrep 冷启动 +15-30s，
+ *     SAST 适合 opt-in 而非默认开启（避免给所有用户加 review 等待时间）。
+ *
+ * 输出解析：`semgrep scan --json` 返回如下结构（截取关键字段）：
+ *   {
+ *     "results": [
+ *       {
+ *         "check_id": "python.lang.security.audit.dangerous-system-call.dangerous-system-call",
+ *         "path": "src/utils.py",
+ *         "start": {"line": 42, "col": 3},
+ *         "end":   {"line": 42, "col": 60},
+ *         "extra": {
+ *           "severity": "ERROR",            // "ERROR" | "WARNING" | "INFO"
+ *           "message": "Detected subprocess call ...",
+ *           "metadata": {"cwe": [...], "owasp": [...]},
+ *           "fix": "...optional..."         // 出现时表示可自动修复
+ *         }
+ *       }
+ *     ],
+ *     "errors": [...],   // 解析失败的文件等（与 results 同级，不进 LintResult）
+ *     "version": "1.95.0"
+ *   }
+ *
+ * Semgrep 的所有 finding 都是安全相关 → category 统一标 `security`，
+ * 这样在 PR 摘要 / 评论里能与 lint findings 形成鲜明对照。
+ */
+
+
+
+class SemgrepAdapter {
+    name = 'semgrep';
+    displayName = 'Semgrep';
+    /**
+     * Semgrep 支持 30+ 语言，这里列出本仓库最常见 + Phase 1/2/3 已覆盖的扩展名。
+     * 即使列表里没有的扩展，semgrep 在 `--config=p/default` 下也会智能跳过。
+     */
+    supportedLanguages = [
+        'javascript',
+        'typescript',
+        'python',
+        'go',
+        'ruby',
+        'java',
+        'c',
+        'cpp',
+        'csharp',
+        'php',
+        'rust',
+        'kotlin',
+        'swift',
+        'scala'
+    ];
+    fileExtensions = [
+        '.js',
+        '.jsx',
+        '.mjs',
+        '.cjs',
+        '.ts',
+        '.tsx',
+        '.mts',
+        '.cts',
+        '.py',
+        '.pyi',
+        '.go',
+        '.rb',
+        '.java',
+        '.c',
+        '.h',
+        '.cc',
+        '.cpp',
+        '.cs',
+        '.php',
+        '.rs',
+        '.kt',
+        '.kts',
+        '.swift',
+        '.scala'
+    ];
+    /** 默认关闭：冷启动开销 + 误报噪音 → 让用户显式 opt-in */
+    defaultEnabled = false;
+    installSpec = {
+        kind: 'pip',
+        package: 'semgrep',
+        binName: 'semgrep',
+        version: '^1.95.0'
+    };
+    /** 规则集；构造时可覆盖（来自 Action 输入 `semgrep_config`） */
+    config;
+    resolvedBinPath = '';
+    resolvedVersion = '';
+    /** 沙箱 python-tools 路径，注入到 PYTHONPATH 让 semgrep CLI 能 import 自己 */
+    pythonPath = '';
+    constructor(options) {
+        this.config = options?.config ?? 'p/default';
+    }
+    async detect(repoRoot, versionOverride) {
+        // 1) pip 装包
+        const spec = versionOverride != null && versionOverride.length > 0
+            ? { ...this.installSpec, version: versionOverride }
+            : this.installSpec;
+        const install = await ensureToolInstalled(spec);
+        if (!install.ok) {
+            return {
+                available: false,
+                reason: `bundled Semgrep install failed: ${install.reason ?? 'unknown'}`
+            };
+        }
+        this.resolvedBinPath = install.binPath;
+        // pip --target 的 bin 脚本依赖 PYTHONPATH 找到包代码
+        // 沙箱路径 = installBin 上两级（`<sandbox>/python-tools/bin/semgrep` → `<sandbox>/python-tools`）
+        this.pythonPath = this.resolvedBinPath
+            .replace(/[/\\]bin[/\\]semgrep$/, '');
+        // 2) `semgrep --version` 校验
+        const versionResult = await runCommand({
+            command: this.resolvedBinPath,
+            args: ['--version'],
+            cwd: repoRoot,
+            timeoutMs: 15_000,
+            env: { PYTHONPATH: this.pythonPath }
+        });
+        if (versionResult.spawnError || versionResult.exitCode !== 0) {
+            const stderrSnippet = versionResult.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 120) ?? '';
+            return {
+                available: false,
+                reason: `bundled semgrep --version failed: exit=${versionResult.exitCode}; stderr="${stderrSnippet}"`
+            };
+        }
+        const version = extractVersion(versionResult.stdout);
+        this.resolvedVersion = version;
+        (0,core.info)(`lint/semgrep: bundled bin=${this.resolvedBinPath}, version=${version}, config=${this.config}`);
+        return { available: true, version };
+    }
+    async scan(files, repoRoot) {
+        if (files.length === 0)
+            return [];
+        (0,core.info)(`lint/semgrep: scanning ${files.length} file(s) with config=${this.config}`);
+        const result = await runCommand({
+            command: this.resolvedBinPath,
+            args: [
+                'scan',
+                '--json',
+                '--quiet',
+                '--disable-version-check',
+                '--metrics=off',
+                `--config=${this.config}`,
+                ...files
+            ],
+            cwd: repoRoot,
+            timeoutMs: 120_000,
+            env: { PYTHONPATH: this.pythonPath }
+        });
+        if (result.spawnError) {
+            (0,core.info)(`lint/semgrep: spawn failed: ${result.spawnErrorMessage ?? ''}`);
+            return [];
+        }
+        // semgrep exit:
+        //   0 = no findings
+        //   1 = findings present（不是失败，按 lint 行业惯例）
+        //   2 = misconfig / 真正的错误
+        // 仅当 stdout 无可解析 JSON 时才视为失败
+        const parsed = parseJsonSafe(result.stdout, 'semgrep');
+        if (parsed == null) {
+            (0,core.info)(`lint/semgrep: no parseable JSON output (exit=${result.exitCode}); ` +
+                `stderr first line: "${result.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 200) ?? ''}"`);
+            return [];
+        }
+        const findings = [];
+        for (const r of parsed.results ?? []) {
+            // semgrep 报告路径默认是相对 cwd 的；少数模式下可能给绝对路径
+            let relFile = r.path;
+            if (relFile.startsWith(repoRoot)) {
+                relFile = relFile.substring(repoRoot.length).replace(/^[/\\]/, '');
+            }
+            findings.push({
+                tool: this.displayName,
+                toolVersion: this.resolvedVersion,
+                file: relFile,
+                line: r.start.line,
+                column: r.start.col,
+                endLine: r.end.line,
+                endColumn: r.end.col,
+                severity: mapSemgrepSeverity(r.extra?.severity),
+                ruleId: r.check_id,
+                message: r.extra?.message?.trim() ?? '',
+                fixable: typeof r.extra?.fix === 'string' && r.extra.fix.length > 0,
+                category: 'security'
+            });
+        }
+        (0,core.info)(`lint/semgrep: parsed ${findings.length} finding(s) from ${parsed.results?.length ?? 0} raw result(s)`);
+        return findings;
+    }
+}
+/**
+ * 把 semgrep 大写 severity 标准化到 LintResult 的小写枚举
+ *
+ *   'ERROR'   → 'error'
+ *   'WARNING' → 'warning'
+ *   'INFO'    → 'info'
+ *   缺失 / 未知 → 'warning'（保守兜底）
+ */
+function mapSemgrepSeverity(raw) {
+    switch ((raw ?? '').toUpperCase()) {
+        case 'ERROR':
+            return 'error';
+        case 'INFO':
+            return 'info';
+        case 'WARNING':
+            return 'warning';
+        default:
+            return 'warning';
+    }
+}
+
 ;// CONCATENATED MODULE: ./lib/lint/adapters/tsc.js
 /**
  * lint/adapters/tsc.ts - TypeScript Compiler (tsc --noEmit) 适配器
@@ -17324,13 +17709,15 @@ function deduplicateResults(results) {
 
 
 
+
 /** 内置适配器注册表 */
-function defaultAdapters() {
+function defaultAdapters(options) {
     return [
         new EslintAdapter(),
         new BiomeAdapter(),
         new TscAdapter(),
-        new PrettierAdapter()
+        new PrettierAdapter(),
+        new SemgrepAdapter({ config: options.semgrepConfig })
     ];
 }
 /**
@@ -17342,7 +17729,7 @@ async function runLintTools(options, adaptersOverride) {
         (0,core.info)('lint: orchestrator disabled, skipping');
         return emptyReport(startedAt);
     }
-    const adapters = adaptersOverride ?? defaultAdapters();
+    const adapters = adaptersOverride ?? defaultAdapters(options);
     const overrides = options.toolEnableOverrides ?? {};
     // 1) 选出"用户启用"的适配器：Action input override 优先，缺失时回退到 adapter.defaultEnabled
     const enabledAdapters = adapters.filter(a => {
@@ -18197,6 +18584,7 @@ ${hunks.oldHunk}
                 // 取代 .codesentinel.yaml：把 Action 输入收集到的开关传给 orchestrator
                 toolEnableOverrides: options.toolEnableOverrides,
                 toolVersionOverrides: options.toolVersionOverrides,
+                semgrepConfig: options.semgrepConfig,
                 disabled: false
             });
             (0,core.info)(`Phase 0b: lint scan completed in ${lintReport.durationMs}ms — ${lintReport.results.length} findings on changed lines from ${lintReport.toolSummaries.filter(s => s.available).length} tool(s)`);
