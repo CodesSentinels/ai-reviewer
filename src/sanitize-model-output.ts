@@ -105,5 +105,8 @@ export function sanitizeModelOutput(text: string): string {
   // 第三步：清掉任何残留的孤立分隔符字符
   out = out.replace(SEPARATOR_RE, '')
 
+  console.log('输入文本：', JSON.stringify(text))
+  console.log('输出文本：', JSON.stringify(out))
+
   return out
 }
