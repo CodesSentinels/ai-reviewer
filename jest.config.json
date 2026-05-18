@@ -8,5 +8,6 @@
   "moduleNameMapper": {
     "^p-limit$": "<rootDir>/__mocks__/p-limit.js"
   },
+  "setupFiles": ["<rootDir>/__mocks__/setup-node-globals.js"],
   "verbose": true
 }
