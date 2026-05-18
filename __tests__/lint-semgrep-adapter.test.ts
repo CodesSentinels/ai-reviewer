@@ -382,4 +382,22 @@ describe('SemgrepAdapter.scan', () => {
       expect.arrayContaining(['scan', '--json', '--config=p/security-audit'])
     )
   })
+
+  test('回归保护：detect + scan 都把 binDir 前置到 PATH（修复 execvp pysemgrep 找不到）', async () => {
+    // semgrep 二进制内部会 `execvp("pysemgrep")`，若 binDir 不在 PATH 会直接报
+    // `Unix_error: No such file or directory execvp pysemgrep`。
+    // 这条 test 锁住：每次调用 semgrep 时 env.PATH 都必须以 binDir 开头。
+    await detectThenScan(JSON.stringify({results: []}))
+
+    // 应至少调用 2 次 runCommand（--version + scan）
+    expect(runCommandMock.mock.calls.length).toBeGreaterThanOrEqual(2)
+    for (const [opts] of runCommandMock.mock.calls) {
+      const env = (opts as {env?: Record<string, string>}).env ?? {}
+      expect(env.PATH).toBeDefined()
+      // PATH 必须以 binDir 开头（沙箱 python-tools/bin），后面用 : 或 ; 分隔系统 PATH
+      expect(env.PATH).toMatch(/^\/tmp\/ai-reviewer-lint-tools\/python-tools\/bin[:;]/)
+      // PYTHONPATH 也必须存在（pip --target 模式 import 找代码用）
+      expect(env.PYTHONPATH).toBe('/tmp/ai-reviewer-lint-tools/python-tools')
+    }
+  })
 })

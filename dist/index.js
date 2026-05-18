@@ -17309,6 +17309,13 @@ class SemgrepAdapter {
     resolvedVersion = '';
     /** 沙箱 python-tools 路径，注入到 PYTHONPATH 让 semgrep CLI 能 import 自己 */
     pythonPath = '';
+    /**
+     * 沙箱 python-tools/bin 路径，必须前置到 PATH —— 否则 `semgrep` 二进制内
+     * `execvp("pysemgrep")` 会按 PATH 查找 Python 后端而找不到，报：
+     *   `Unix_error: No such file or directory execvp pysemgrep`
+     * 这是 semgrep 1.x 以来"OCaml 壳 + Python 后端"架构的固有约束。
+     */
+    binDir = '';
     constructor(options) {
         this.config = options?.config ?? 'p/default';
     }
@@ -17329,19 +17336,23 @@ class SemgrepAdapter {
             };
         }
         this.resolvedBinPath = install.binPath;
-        // pip --target 的 bin 脚本依赖 PYTHONPATH 找到包代码
-        // 沙箱路径 = installBin 上两级（`<sandbox>/python-tools/bin/semgrep` → `<sandbox>/python-tools`）
+        // pip --target 的 bin 脚本依赖 PYTHONPATH 找到包代码；
+        // 同时 semgrep 二进制内部会 `execvp("pysemgrep")`，所以 bin 目录必须前置到 PATH。
+        // `<sandbox>/python-tools/bin/semgrep` →
+        //   pythonPath = `<sandbox>/python-tools`  （注入 PYTHONPATH，import 找代码用）
+        //   binDir     = `<sandbox>/python-tools/bin`（注入 PATH，execvp pysemgrep 用）
         this.pythonPath = this.resolvedBinPath
             .replace(/[/\\]bin[/\\]semgrep$/, '');
-        (0,core.info)(`lint/semgrep[detect]: install ok — binPath=${this.resolvedBinPath}, pythonPath=${this.pythonPath}`);
+        this.binDir = this.resolvedBinPath.replace(/[/\\]semgrep$/, '');
+        (0,core.info)(`lint/semgrep[detect]: install ok — binPath=${this.resolvedBinPath}, pythonPath=${this.pythonPath}, binDir=${this.binDir}`);
         // 2) `semgrep --version` 校验
-        (0,core.info)(`lint/semgrep[detect]: invoking ${this.resolvedBinPath} --version (with PYTHONPATH injected)`);
+        (0,core.info)(`lint/semgrep[detect]: invoking ${this.resolvedBinPath} --version (with PYTHONPATH + PATH-prepend injected)`);
         const versionResult = await runCommand({
             command: this.resolvedBinPath,
             args: ['--version'],
             cwd: repoRoot,
             timeoutMs: 15_000,
-            env: { PYTHONPATH: this.pythonPath }
+            env: this.buildEnv()
         });
         if (versionResult.spawnError || versionResult.exitCode !== 0) {
             const stderrSnippet = versionResult.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 120) ?? '';
@@ -17383,7 +17394,7 @@ class SemgrepAdapter {
             args,
             cwd: repoRoot,
             timeoutMs: 120_000,
-            env: { PYTHONPATH: this.pythonPath }
+            env: this.buildEnv()
         });
         const elapsed = Date.now() - scanStart;
         const stderrFirstLine = result.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 200) ?? '';
@@ -17457,6 +17468,28 @@ class SemgrepAdapter {
         (0,core.info)(`lint/semgrep[scan]: parsed ${findings.length} finding(s) from ${rawCount} raw result(s) ` +
             `across ${files.length} input file(s) in ${elapsed}ms`);
         return findings;
+    }
+    /**
+     * 构造调用 semgrep 时的环境变量。
+     *
+     * 必须同时注入：
+     *   - PYTHONPATH：让 pip --target 装的 semgrep 包能被 Python import
+     *   - PATH（前置 binDir）：semgrep OCaml 二进制内部 `execvp("pysemgrep")` /
+     *     `execvp("osemgrep")` 都会按 PATH 查找子进程；如果 binDir 不在 PATH，
+     *     会直接报 `Unix_error: No such file or directory execvp pysemgrep`
+     *
+     * 也关掉 metrics + version-check 的子流程（这些子流程偶尔也走 execvp）。
+     */
+    buildEnv() {
+        return {
+            PYTHONPATH: this.pythonPath,
+            PYTHONDONTWRITEBYTECODE: '1',
+            // 前置沙箱 bin 目录到现有 PATH（process.env.PATH 会被 exec.ts 的 env 合并保留，
+            // 这里我们手动重写整条 PATH 以确保前置位置）
+            PATH: `${this.binDir}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}`,
+            // 关掉 metrics 上报，避免子进程意外触发额外 execvp
+            SEMGREP_SEND_METRICS: 'off'
+        };
     }
 }
 /**
