@@ -396,8 +396,148 @@ describe('SemgrepAdapter.scan', () => {
       expect(env.PATH).toBeDefined()
       // PATH 必须以 binDir 开头（沙箱 python-tools/bin），后面用 : 或 ; 分隔系统 PATH
       expect(env.PATH).toMatch(/^\/tmp\/ai-reviewer-lint-tools\/python-tools\/bin[:;]/)
-      // PYTHONPATH 也必须存在（pip --target 模式 import 找代码用）
-      expect(env.PYTHONPATH).toBe('/tmp/ai-reviewer-lint-tools/python-tools')
+      // PYTHONPATH 必须以沙箱 python-tools 开头（保留用户原 PYTHONPATH 在后）
+      expect(env.PYTHONPATH).toMatch(/^\/tmp\/ai-reviewer-lint-tools\/python-tools(?:[:;]|$)/)
     }
+  })
+
+  test('PYTHONPATH 保留用户原值（前置而非整体覆盖）', async () => {
+    const originalPyPath = process.env.PYTHONPATH
+    process.env.PYTHONPATH = '/user/custom/python/site-packages'
+    try {
+      await detectThenScan(JSON.stringify({results: []}))
+      const lastCall = runCommandMock.mock.calls[runCommandMock.mock.calls.length - 1][0] as {
+        env?: Record<string, string>
+      }
+      // 沙箱在前，用户的 PYTHONPATH 在后，中间用平台分隔符
+      expect(lastCall.env?.PYTHONPATH).toBe(
+        `/tmp/ai-reviewer-lint-tools/python-tools${
+          process.platform === 'win32' ? ';' : ':'
+        }/user/custom/python/site-packages`
+      )
+    } finally {
+      if (originalPyPath === undefined) delete process.env.PYTHONPATH
+      else process.env.PYTHONPATH = originalPyPath
+    }
+  })
+
+  test('extra.fix 被透传到 LintResult.suggestion，fixable=true', async () => {
+    const out = {
+      results: [
+        {
+          check_id: 'js.audit.eval',
+          path: 'a.js',
+          start: {line: 1, col: 1},
+          end: {line: 1, col: 10},
+          extra: {
+            severity: 'ERROR',
+            message: 'avoid eval',
+            fix: 'JSON.parse(input)'
+          }
+        }
+      ]
+    }
+    const results = await detectThenScan(JSON.stringify(out))
+    expect(results[0].suggestion).toBe('JSON.parse(input)')
+    expect(results[0].fixable).toBe(true)
+  })
+
+  test('extra.fix 缺失时 suggestion=undefined，fixable=false', async () => {
+    const out = {
+      results: [
+        {
+          check_id: 'r',
+          path: 'a.js',
+          start: {line: 1, col: 1},
+          end: {line: 1, col: 1},
+          extra: {severity: 'ERROR', message: 'm'}
+        }
+      ]
+    }
+    const results = await detectThenScan(JSON.stringify(out))
+    expect(results[0].suggestion).toBeUndefined()
+    expect(results[0].fixable).toBe(false)
+  })
+
+  test('metadata.cwe + metadata.owasp 被拼到 message 末尾，便于 LLM 引用漏洞分类', async () => {
+    const out = {
+      results: [
+        {
+          check_id: 'js.audit.eval',
+          path: 'a.js',
+          start: {line: 1, col: 1},
+          end: {line: 1, col: 10},
+          extra: {
+            severity: 'ERROR',
+            message: 'Detected eval() use.',
+            metadata: {
+              cwe: ['CWE-95: Improper Neutralization of Directives...'],
+              owasp: ['A03:2021 - Injection']
+            }
+          }
+        }
+      ]
+    }
+    const results = await detectThenScan(JSON.stringify(out))
+    expect(results[0].message).toContain('Detected eval() use.')
+    expect(results[0].message).toContain('CWE-95')
+    expect(results[0].message).toContain('OWASP A03:2021 - Injection')
+  })
+
+  test('metadata.cwe 为单字符串（非数组）也能解析', async () => {
+    const out = {
+      results: [
+        {
+          check_id: 'r',
+          path: 'a.js',
+          start: {line: 1, col: 1},
+          end: {line: 1, col: 1},
+          extra: {
+            severity: 'WARNING',
+            message: 'msg',
+            metadata: {cwe: 'CWE-79: XSS'}
+          }
+        }
+      ]
+    }
+    const results = await detectThenScan(JSON.stringify(out))
+    expect(results[0].message).toContain('CWE-79')
+  })
+
+  test('metadata 完全缺失时 message 不带分类后缀', async () => {
+    const out = {
+      results: [
+        {
+          check_id: 'r',
+          path: 'a.js',
+          start: {line: 1, col: 1},
+          end: {line: 1, col: 1},
+          extra: {severity: 'ERROR', message: 'bare message'}
+        }
+      ]
+    }
+    const results = await detectThenScan(JSON.stringify(out))
+    expect(results[0].message).toBe('bare message')
+  })
+
+  test('severity 映射扩展：CRITICAL / HIGH → error, MEDIUM → warning, LOW → info', async () => {
+    const out = {
+      results: [
+        {check_id: 'a', path: 'a.js', start: {line: 1, col: 1}, end: {line: 1, col: 1}, extra: {severity: 'CRITICAL'}},
+        {check_id: 'b', path: 'b.js', start: {line: 1, col: 1}, end: {line: 1, col: 1}, extra: {severity: 'HIGH'}},
+        {check_id: 'c', path: 'c.js', start: {line: 1, col: 1}, end: {line: 1, col: 1}, extra: {severity: 'MEDIUM'}},
+        {check_id: 'd', path: 'd.js', start: {line: 1, col: 1}, end: {line: 1, col: 1}, extra: {severity: 'LOW'}}
+      ]
+    }
+    const results = await detectThenScan(JSON.stringify(out))
+    expect(results.map(r => r.severity)).toEqual(['error', 'error', 'warning', 'info'])
+  })
+
+  test('防御：未调 detect 直接 scan → 返回 [] 且不调 runCommand', async () => {
+    const adapter = new SemgrepAdapter()
+    const before = runCommandMock.mock.calls.length
+    const results = await adapter.scan(['a.js'], '/repo')
+    expect(results).toEqual([])
+    expect(runCommandMock.mock.calls.length).toBe(before) // 没有任何子进程被调起
   })
 })

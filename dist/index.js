@@ -17215,7 +17215,8 @@ class PrettierAdapter {
  *   - 安装策略 = pip：semgrep 是 Python 工具，没有真正的"单文件预编译二进制"。
  *     发布形态主要是 `pip install semgrep`（也支持 docker）。我们选 pip，
  *     落到沙箱 `/tmp/ai-reviewer-lint-tools/python-tools/bin/semgrep`。
- *   - 默认规则集 = `p/default`：内置 OWASP-Top-10，离线可用、跨版本稳定。
+ *   - 默认规则集 = `p/default`：覆盖 OWASP-Top-10 的 Registry 配置。
+ *     **首次运行需联网拉取规则集**（从 semgrep.dev），后续命中本地缓存即离线可用。
  *     用户可通过 `with: semgrep_config: '<other>'` 覆盖（如 `auto` / `p/security-audit`）。
  *   - 默认 enable = **false**：与 Prettier 同款保守。Semgrep 冷启动 +15-30s，
  *     SAST 适合 opt-in 而非默认开启（避免给所有用户加 review 等待时间）。
@@ -17243,6 +17244,7 @@ class PrettierAdapter {
  * Semgrep 的所有 finding 都是安全相关 → category 统一标 `security`，
  * 这样在 PR 摘要 / 评论里能与 lint findings 形成鲜明对照。
  */
+
 
 
 
@@ -17339,11 +17341,12 @@ class SemgrepAdapter {
         // pip --target 的 bin 脚本依赖 PYTHONPATH 找到包代码；
         // 同时 semgrep 二进制内部会 `execvp("pysemgrep")`，所以 bin 目录必须前置到 PATH。
         // `<sandbox>/python-tools/bin/semgrep` →
-        //   pythonPath = `<sandbox>/python-tools`  （注入 PYTHONPATH，import 找代码用）
         //   binDir     = `<sandbox>/python-tools/bin`（注入 PATH，execvp pysemgrep 用）
-        this.pythonPath = this.resolvedBinPath
-            .replace(/[/\\]bin[/\\]semgrep$/, '');
-        this.binDir = this.resolvedBinPath.replace(/[/\\]semgrep$/, '');
+        //   pythonPath = `<sandbox>/python-tools`  （注入 PYTHONPATH，import 找代码用）
+        // 用 path.dirname 而不是正则剥离 —— 不依赖 binName 字面值是 'semgrep'，
+        // 也兼容 Windows 路径分隔符
+        this.binDir = external_path_.dirname(this.resolvedBinPath);
+        this.pythonPath = external_path_.dirname(this.binDir);
         (0,core.info)(`lint/semgrep[detect]: install ok — binPath=${this.resolvedBinPath}, pythonPath=${this.pythonPath}, binDir=${this.binDir}`);
         // 2) `semgrep --version` 校验
         (0,core.info)(`lint/semgrep[detect]: invoking ${this.resolvedBinPath} --version (with PYTHONPATH + PATH-prepend injected)`);
@@ -17369,6 +17372,12 @@ class SemgrepAdapter {
         return { available: true, version };
     }
     async scan(files, repoRoot) {
+        if (this.resolvedBinPath === '') {
+            // 防御：orchestrator 保证 detect 成功才会调 scan；这里仅锁住"绕过 orchestrator
+            // 直接 new SemgrepAdapter().scan(...)"的误用，避免给 runCommand 传空 command
+            (0,core.warning)('lint/semgrep[scan]: called before successful detect() — bin path empty, skipping');
+            return [];
+        }
         if (files.length === 0) {
             (0,core.info)('lint/semgrep[scan]: targets is empty (no matching file extensions in changed set) — skip');
             return [];
@@ -17442,6 +17451,14 @@ class SemgrepAdapter {
             if (relFile.startsWith(repoRoot)) {
                 relFile = relFile.substring(repoRoot.length).replace(/^[/\\]/, '');
             }
+            // 把 CWE / OWASP 分类拼到 message 末尾，帮 LLM 在评论里准确说出漏洞分类
+            // （Semgrep 默认 message 通常只描述"做了什么"，不带"属于哪类漏洞"）
+            const baseMessage = r.extra?.message?.trim() ?? '';
+            const tags = formatVulnTags(r.extra?.metadata);
+            const enrichedMessage = tags.length > 0 ? `${baseMessage}\n${tags}` : baseMessage;
+            const fixText = typeof r.extra?.fix === 'string' && r.extra.fix.length > 0
+                ? r.extra.fix.trim()
+                : undefined;
             findings.push({
                 tool: this.displayName,
                 toolVersion: this.resolvedVersion,
@@ -17452,8 +17469,11 @@ class SemgrepAdapter {
                 endColumn: r.end.col,
                 severity: mapSemgrepSeverity(r.extra?.severity),
                 ruleId: r.check_id,
-                message: r.extra?.message?.trim() ?? '',
-                fixable: typeof r.extra?.fix === 'string' && r.extra.fix.length > 0,
+                message: enrichedMessage,
+                // 把 semgrep 自带的自动修复文本透传给 LLM —— 评论里 AI 可以直接基于此
+                // 生成 diff 修复建议而不是凭空构造
+                suggestion: fixText,
+                fixable: fixText != null,
                 category: 'security'
             });
         }
@@ -17473,7 +17493,9 @@ class SemgrepAdapter {
      * 构造调用 semgrep 时的环境变量。
      *
      * 必须同时注入：
-     *   - PYTHONPATH：让 pip --target 装的 semgrep 包能被 Python import
+     *   - PYTHONPATH（**前置**到用户原有 PYTHONPATH，不整体覆盖）：让 pip --target
+     *     装的 semgrep 包能被 Python import；保留用户原值便于自托管 runner 的
+     *     自定义 Python 配置
      *   - PATH（前置 binDir）：semgrep OCaml 二进制内部 `execvp("pysemgrep")` /
      *     `execvp("osemgrep")` 都会按 PATH 查找子进程；如果 binDir 不在 PATH，
      *     会直接报 `Unix_error: No such file or directory execvp pysemgrep`
@@ -17481,32 +17503,78 @@ class SemgrepAdapter {
      * 也关掉 metrics + version-check 的子流程（这些子流程偶尔也走 execvp）。
      */
     buildEnv() {
+        const sep = process.platform === 'win32' ? ';' : ':';
+        const existingPythonPath = process.env.PYTHONPATH ?? '';
+        const existingPath = process.env.PATH ?? '';
         return {
-            PYTHONPATH: this.pythonPath,
+            // 前置：沙箱优先，但保留用户的 PYTHONPATH（如有）
+            PYTHONPATH: existingPythonPath.length > 0
+                ? `${this.pythonPath}${sep}${existingPythonPath}`
+                : this.pythonPath,
             PYTHONDONTWRITEBYTECODE: '1',
-            // 前置沙箱 bin 目录到现有 PATH（process.env.PATH 会被 exec.ts 的 env 合并保留，
-            // 这里我们手动重写整条 PATH 以确保前置位置）
-            PATH: `${this.binDir}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}`,
+            // 前置：沙箱 bin 优先，保证 execvp pysemgrep 能找到子进程
+            PATH: `${this.binDir}${sep}${existingPath}`,
             // 关掉 metrics 上报，避免子进程意外触发额外 execvp
             SEMGREP_SEND_METRICS: 'off'
         };
     }
 }
 /**
+ * 从 semgrep finding 的 metadata 中提取 CWE / OWASP 标签，格式化为
+ * 单行 `[CWE-95, OWASP A03:2021]` 形式，拼到 message 后供 LLM 消费。
+ *
+ * 单字符串 / 字符串数组两种格式都支持。空时返回空串。
+ */
+function formatVulnTags(metadata) {
+    if (metadata == null)
+        return '';
+    const parts = [];
+    const cwe = toStringArray(metadata.cwe);
+    for (const c of cwe) {
+        // CWE 完整字符串通常是 "CWE-95: Improper Neutralization..." —— 只取冒号前的 ID
+        const id = c.split(':')[0].trim();
+        if (id.length > 0)
+            parts.push(id);
+    }
+    const owasp = toStringArray(metadata.owasp);
+    for (const o of owasp) {
+        // OWASP 字符串通常是 "A03:2021 - Injection"；不去 colon，整段保留更可读
+        const trimmed = o.trim();
+        if (trimmed.length > 0)
+            parts.push(`OWASP ${trimmed}`);
+    }
+    if (parts.length === 0)
+        return '';
+    return `[${parts.join(', ')}]`;
+}
+/** 把 string | string[] | undefined 统一成 string[] */
+function toStringArray(v) {
+    if (typeof v === 'string')
+        return [v];
+    if (Array.isArray(v))
+        return v.filter((x) => typeof x === 'string');
+    return [];
+}
+/**
  * 把 semgrep 大写 severity 标准化到 LintResult 的小写枚举
  *
- *   'ERROR'   → 'error'
- *   'WARNING' → 'warning'
- *   'INFO'    → 'info'
- *   缺失 / 未知 → 'warning'（保守兜底）
+ *   'CRITICAL'/'HIGH' → 'error'   （semgrep 2.x+ 引入；旧版本不发，加上向后兼容也无害）
+ *   'ERROR'           → 'error'
+ *   'WARNING'/'MEDIUM'→ 'warning'
+ *   'INFO'/'LOW'      → 'info'
+ *   缺失 / 未知       → 'warning'（保守兜底）
  */
 function mapSemgrepSeverity(raw) {
     switch ((raw ?? '').toUpperCase()) {
+        case 'CRITICAL':
+        case 'HIGH':
         case 'ERROR':
             return 'error';
         case 'INFO':
+        case 'LOW':
             return 'info';
         case 'WARNING':
+        case 'MEDIUM':
             return 'warning';
         default:
             return 'warning';
