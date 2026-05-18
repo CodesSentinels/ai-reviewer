@@ -39,7 +39,7 @@
  * 这样在 PR 摘要 / 评论里能与 lint findings 形成鲜明对照。
  */
 
-import {info} from '@actions/core'
+import {info, warning} from '@actions/core'
 import {ensureToolInstalled} from '../tool-installer'
 import {
   type InstallSpec,
@@ -145,13 +145,26 @@ export class SemgrepAdapter implements ToolAdapter {
     repoRoot: string,
     versionOverride?: string
   ): Promise<ToolDetection> {
+    const detectStart = Date.now()
+    info(
+      `lint/semgrep[detect]: start repoRoot=${repoRoot}, versionOverride=${
+        versionOverride ?? '(default)'
+      }, config=${this.config}`
+    )
+
     // 1) pip 装包
     const spec: InstallSpec =
       versionOverride != null && versionOverride.length > 0
         ? {...this.installSpec, version: versionOverride}
         : this.installSpec
+    info(
+      `lint/semgrep[detect]: ensureToolInstalled(kind=pip, package=semgrep, version=${spec.version})`
+    )
     const install = await ensureToolInstalled(spec)
     if (!install.ok) {
+      warning(
+        `lint/semgrep[detect]: install failed after ${Date.now() - detectStart}ms — ${install.reason ?? 'unknown'}`
+      )
       return {
         available: false,
         reason: `bundled Semgrep install failed: ${install.reason ?? 'unknown'}`
@@ -162,8 +175,12 @@ export class SemgrepAdapter implements ToolAdapter {
     // 沙箱路径 = installBin 上两级（`<sandbox>/python-tools/bin/semgrep` → `<sandbox>/python-tools`）
     this.pythonPath = this.resolvedBinPath
       .replace(/[/\\]bin[/\\]semgrep$/, '')
+    info(
+      `lint/semgrep[detect]: install ok — binPath=${this.resolvedBinPath}, pythonPath=${this.pythonPath}`
+    )
 
     // 2) `semgrep --version` 校验
+    info(`lint/semgrep[detect]: invoking ${this.resolvedBinPath} --version (with PYTHONPATH injected)`)
     const versionResult = await runCommand({
       command: this.resolvedBinPath,
       args: ['--version'],
@@ -174,6 +191,10 @@ export class SemgrepAdapter implements ToolAdapter {
     if (versionResult.spawnError || versionResult.exitCode !== 0) {
       const stderrSnippet =
         versionResult.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 120) ?? ''
+      warning(
+        `lint/semgrep[detect]: --version failed exit=${versionResult.exitCode}, ` +
+          `spawnError=${versionResult.spawnError}, stderr="${stderrSnippet}"`
+      )
       return {
         available: false,
         reason: `bundled semgrep --version failed: exit=${versionResult.exitCode}; stderr="${stderrSnippet}"`
@@ -182,50 +203,97 @@ export class SemgrepAdapter implements ToolAdapter {
     const version = extractVersion(versionResult.stdout)
     this.resolvedVersion = version
     info(
-      `lint/semgrep: bundled bin=${this.resolvedBinPath}, version=${version}, config=${this.config}`
+      `lint/semgrep[detect]: ready in ${Date.now() - detectStart}ms — bin=${this.resolvedBinPath}, version=${version}, config=${this.config}`
     )
     return {available: true, version}
   }
 
   async scan(files: string[], repoRoot: string): Promise<LintResult[]> {
-    if (files.length === 0) return []
+    if (files.length === 0) {
+      info('lint/semgrep[scan]: targets is empty (no matching file extensions in changed set) — skip')
+      return []
+    }
+    const scanStart = Date.now()
     info(
-      `lint/semgrep: scanning ${files.length} file(s) with config=${this.config}`
+      `lint/semgrep[scan]: start config=${this.config}, files=${files.length} — sample: ${files
+        .slice(0, 5)
+        .join(', ')}${files.length > 5 ? ', ...' : ''}`
     )
 
+    const args = [
+      'scan',
+      '--json',
+      '--quiet',
+      '--disable-version-check',
+      '--metrics=off',
+      `--config=${this.config}`,
+      ...files
+    ]
+    info(
+      `lint/semgrep[scan]: invoking ${this.resolvedBinPath} ${args
+        .slice(0, 6)
+        .join(' ')} ... [${files.length} file arg(s)]`
+    )
     const result = await runCommand({
       command: this.resolvedBinPath,
-      args: [
-        'scan',
-        '--json',
-        '--quiet',
-        '--disable-version-check',
-        '--metrics=off',
-        `--config=${this.config}`,
-        ...files
-      ],
+      args,
       cwd: repoRoot,
       timeoutMs: 120_000, // 比其他工具略长：semgrep 在 ~100 文件上可能 30-60s
       env: {PYTHONPATH: this.pythonPath}
     })
 
+    const elapsed = Date.now() - scanStart
+    const stderrFirstLine =
+      result.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 200) ?? ''
+    info(
+      `lint/semgrep[scan]: returned in ${elapsed}ms — exit=${result.exitCode}, ` +
+        `timedOut=${result.timedOut}, spawnError=${result.spawnError}, ` +
+        `stdout_len=${result.stdout.length}, stderr_len=${result.stderr.length}` +
+        (stderrFirstLine.length > 0 ? `, stderr_first="${stderrFirstLine}"` : '')
+    )
+
     if (result.spawnError) {
-      info(`lint/semgrep: spawn failed: ${result.spawnErrorMessage ?? ''}`)
+      warning(
+        `lint/semgrep[scan]: spawn failed — ${result.spawnErrorMessage ?? ''}. ` +
+          `This usually means the semgrep console script lost its PYTHONPATH or python3 disappeared.`
+      )
+      return []
+    }
+    if (result.timedOut) {
+      warning(
+        `lint/semgrep[scan]: timed out after ${elapsed}ms (limit 120000ms). ` +
+          `Reduce file count or switch to a smaller --config (e.g. p/security-audit).`
+      )
       return []
     }
 
     // semgrep exit:
     //   0 = no findings
     //   1 = findings present（不是失败，按 lint 行业惯例）
-    //   2 = misconfig / 真正的错误
+    //   2 = misconfig / 真正的错误（含 registry 拉规则失败）
     // 仅当 stdout 无可解析 JSON 时才视为失败
     const parsed = parseJsonSafe<SemgrepOutput>(result.stdout, 'semgrep')
     if (parsed == null) {
-      info(
-        `lint/semgrep: no parseable JSON output (exit=${result.exitCode}); ` +
-          `stderr first line: "${result.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 200) ?? ''}"`
+      warning(
+        `lint/semgrep[scan]: no parseable JSON in stdout (exit=${result.exitCode}). ` +
+          `stderr first line: "${stderrFirstLine}". ` +
+          `Common causes: (a) semgrep can't reach semgrep.dev to fetch "${this.config}" rules — ` +
+          `try a self-contained config like p/ci or pre-cache rules; ` +
+          `(b) semgrep printed Python traceback to stderr; ` +
+          `(c) semgrep CLI was killed by signal. Raw stdout first 500 chars: "${result.stdout.substring(0, 500)}"`
       )
       return []
+    }
+
+    const rawCount = parsed.results?.length ?? 0
+    const errCount = parsed.errors?.length ?? 0
+    if (errCount > 0) {
+      // semgrep 把"无法解析的文件 / 规则加载错误"放在 errors 数组里 —— 重要诊断信号
+      const firstErr = JSON.stringify(parsed.errors?.[0] ?? {}).substring(0, 300)
+      warning(
+        `lint/semgrep[scan]: ${errCount} semgrep-level error(s) reported (this is separate from "findings"); ` +
+          `first: ${firstErr}`
+      )
     }
 
     const findings: LintResult[] = []
@@ -250,8 +318,20 @@ export class SemgrepAdapter implements ToolAdapter {
         category: 'security'
       })
     }
+
+    if (rawCount === 0) {
+      // 0 findings 本身不是错误（代码可能真的没问题），但在测试场景里多半是"规则没匹配上"
+      info(
+        `lint/semgrep[scan]: 0 findings. ` +
+          `If you expected findings on these files, check: ` +
+          `(1) does "${this.config}" cover the languages of the scanned files? ` +
+          `(2) is the project behind a corporate firewall blocking semgrep.dev? ` +
+          `(3) did semgrep silently skip the files (look at stderr_len above and rerun with --debug)`
+      )
+    }
     info(
-      `lint/semgrep: parsed ${findings.length} finding(s) from ${parsed.results?.length ?? 0} raw result(s)`
+      `lint/semgrep[scan]: parsed ${findings.length} finding(s) from ${rawCount} raw result(s) ` +
+        `across ${files.length} input file(s) in ${elapsed}ms`
     )
     return findings
   }

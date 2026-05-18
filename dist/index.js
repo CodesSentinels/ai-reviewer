@@ -16587,12 +16587,13 @@ function npmRangeToPipSpecifier(range) {
  *   - 装完但 bin 缺失 → 防御性 false（罕见，但比静默有效）
  */
 async function installViaPip(spec) {
+    const startedAt = Date.now();
     const root = getInstallRoot();
     const targetDir = getPipInstallDir();
     const binPath = external_path_.join(targetDir, 'bin', spec.binName);
     // 1) 缓存命中
     if ((0,external_fs_.existsSync)(binPath)) {
-        (0,core.info)(`lint/installer: cache hit for ${spec.binName} (pip) → ${binPath}`);
+        (0,core.info)(`lint/installer[pip]: cache hit for ${spec.binName} → ${binPath}`);
         return { ok: true, binPath };
     }
     // 2) 沙箱目录初始化
@@ -16611,7 +16612,7 @@ async function installViaPip(spec) {
     // 3) 跑 pip install
     const pipSpecifier = npmRangeToPipSpecifier(spec.version);
     const pkgArg = pipSpecifier.length > 0 ? `${spec.package}${pipSpecifier}` : spec.package;
-    (0,core.info)(`lint/installer: installing ${spec.package} (pip range "${spec.version}" → "${pipSpecifier}") → ${targetDir}`);
+    (0,core.info)(`lint/installer[pip]: installing ${spec.package} (range "${spec.version}" → pip "${pipSpecifier}") → ${targetDir}`);
     const result = await runCommand({
         command: 'python3',
         args: [
@@ -16626,17 +16627,15 @@ async function installViaPip(spec) {
         ],
         cwd: root,
         timeoutMs: INSTALL_TIMEOUT_MS,
-        // pip 把 console script 放到 --target 下的 bin/，需要把这条目录加到 PATH
-        // 让后续 `<binPath>` 调用能找到自己 import 的子模块（pip 5+ 默认行为）
         env: {
-            // 让 Python 在 sys.path 中优先找沙箱目录，确保 console script 能 import semgrep
+            // 让 Python 在 sys.path 中优先找沙箱目录，确保 console script 能 import 自己
             PYTHONPATH: targetDir,
-            // pip --target 模式下 console script 的 shebang 默认指向系统 python3，
-            // 但脚本里 `import semgrep` 仍需走 PYTHONPATH 才能找到包
             PYTHONDONTWRITEBYTECODE: '1'
         }
     });
+    const elapsed = Date.now() - startedAt;
     if (result.spawnError) {
+        (0,core.warning)(`lint/installer[pip]: spawn failed after ${elapsed}ms — ${result.spawnErrorMessage ?? ''}`);
         return {
             ok: false,
             reason: result.spawnErrorMessage != null &&
@@ -16649,20 +16648,22 @@ async function installViaPip(spec) {
     }
     if (result.exitCode !== 0) {
         const stderrSnippet = result.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 200) ?? '';
+        (0,core.warning)(`lint/installer[pip]: pip exit=${result.exitCode} after ${elapsed}ms, stderr_first="${stderrSnippet}", stderr_len=${result.stderr.length}`);
         return {
             ok: false,
             reason: `pip install ${pkgArg} failed (exit=${result.exitCode}): ${stderrSnippet}`
         };
     }
     if (!(0,external_fs_.existsSync)(binPath)) {
-        (0,core.warning)(`lint/installer: ${spec.package} installed via pip but bin not at ${binPath}`);
+        (0,core.warning)(`lint/installer[pip]: ${spec.package} installed (exit=0, ${elapsed}ms) but console script not at ${binPath}`);
         return {
             ok: false,
             reason: `package ${spec.package} installed but console script not at ${binPath} ` +
                 `(unexpected pip --target layout; check that the package declares a console_scripts entry for "${spec.binName}")`
         };
     }
-    (0,core.info)(`lint/installer: ${spec.binName} (pip) ready at ${binPath}`);
+    (0,core.info)(`lint/installer[pip]: ${spec.binName} ready at ${binPath} after ${elapsed}ms ` +
+        `(stdout_len=${result.stdout.length}, stderr_len=${result.stderr.length})`);
     return { ok: true, binPath };
 }
 /** 仅供测试使用：返回当前沙箱根目录路径 */
@@ -17312,12 +17313,16 @@ class SemgrepAdapter {
         this.config = options?.config ?? 'p/default';
     }
     async detect(repoRoot, versionOverride) {
+        const detectStart = Date.now();
+        (0,core.info)(`lint/semgrep[detect]: start repoRoot=${repoRoot}, versionOverride=${versionOverride ?? '(default)'}, config=${this.config}`);
         // 1) pip 装包
         const spec = versionOverride != null && versionOverride.length > 0
             ? { ...this.installSpec, version: versionOverride }
             : this.installSpec;
+        (0,core.info)(`lint/semgrep[detect]: ensureToolInstalled(kind=pip, package=semgrep, version=${spec.version})`);
         const install = await ensureToolInstalled(spec);
         if (!install.ok) {
+            (0,core.warning)(`lint/semgrep[detect]: install failed after ${Date.now() - detectStart}ms — ${install.reason ?? 'unknown'}`);
             return {
                 available: false,
                 reason: `bundled Semgrep install failed: ${install.reason ?? 'unknown'}`
@@ -17328,7 +17333,9 @@ class SemgrepAdapter {
         // 沙箱路径 = installBin 上两级（`<sandbox>/python-tools/bin/semgrep` → `<sandbox>/python-tools`）
         this.pythonPath = this.resolvedBinPath
             .replace(/[/\\]bin[/\\]semgrep$/, '');
+        (0,core.info)(`lint/semgrep[detect]: install ok — binPath=${this.resolvedBinPath}, pythonPath=${this.pythonPath}`);
         // 2) `semgrep --version` 校验
+        (0,core.info)(`lint/semgrep[detect]: invoking ${this.resolvedBinPath} --version (with PYTHONPATH injected)`);
         const versionResult = await runCommand({
             command: this.resolvedBinPath,
             args: ['--version'],
@@ -17338,6 +17345,8 @@ class SemgrepAdapter {
         });
         if (versionResult.spawnError || versionResult.exitCode !== 0) {
             const stderrSnippet = versionResult.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 120) ?? '';
+            (0,core.warning)(`lint/semgrep[detect]: --version failed exit=${versionResult.exitCode}, ` +
+                `spawnError=${versionResult.spawnError}, stderr="${stderrSnippet}"`);
             return {
                 available: false,
                 reason: `bundled semgrep --version failed: exit=${versionResult.exitCode}; stderr="${stderrSnippet}"`
@@ -17345,42 +17354,75 @@ class SemgrepAdapter {
         }
         const version = extractVersion(versionResult.stdout);
         this.resolvedVersion = version;
-        (0,core.info)(`lint/semgrep: bundled bin=${this.resolvedBinPath}, version=${version}, config=${this.config}`);
+        (0,core.info)(`lint/semgrep[detect]: ready in ${Date.now() - detectStart}ms — bin=${this.resolvedBinPath}, version=${version}, config=${this.config}`);
         return { available: true, version };
     }
     async scan(files, repoRoot) {
-        if (files.length === 0)
+        if (files.length === 0) {
+            (0,core.info)('lint/semgrep[scan]: targets is empty (no matching file extensions in changed set) — skip');
             return [];
-        (0,core.info)(`lint/semgrep: scanning ${files.length} file(s) with config=${this.config}`);
+        }
+        const scanStart = Date.now();
+        (0,core.info)(`lint/semgrep[scan]: start config=${this.config}, files=${files.length} — sample: ${files
+            .slice(0, 5)
+            .join(', ')}${files.length > 5 ? ', ...' : ''}`);
+        const args = [
+            'scan',
+            '--json',
+            '--quiet',
+            '--disable-version-check',
+            '--metrics=off',
+            `--config=${this.config}`,
+            ...files
+        ];
+        (0,core.info)(`lint/semgrep[scan]: invoking ${this.resolvedBinPath} ${args
+            .slice(0, 6)
+            .join(' ')} ... [${files.length} file arg(s)]`);
         const result = await runCommand({
             command: this.resolvedBinPath,
-            args: [
-                'scan',
-                '--json',
-                '--quiet',
-                '--disable-version-check',
-                '--metrics=off',
-                `--config=${this.config}`,
-                ...files
-            ],
+            args,
             cwd: repoRoot,
             timeoutMs: 120_000,
             env: { PYTHONPATH: this.pythonPath }
         });
+        const elapsed = Date.now() - scanStart;
+        const stderrFirstLine = result.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 200) ?? '';
+        (0,core.info)(`lint/semgrep[scan]: returned in ${elapsed}ms — exit=${result.exitCode}, ` +
+            `timedOut=${result.timedOut}, spawnError=${result.spawnError}, ` +
+            `stdout_len=${result.stdout.length}, stderr_len=${result.stderr.length}` +
+            (stderrFirstLine.length > 0 ? `, stderr_first="${stderrFirstLine}"` : ''));
         if (result.spawnError) {
-            (0,core.info)(`lint/semgrep: spawn failed: ${result.spawnErrorMessage ?? ''}`);
+            (0,core.warning)(`lint/semgrep[scan]: spawn failed — ${result.spawnErrorMessage ?? ''}. ` +
+                `This usually means the semgrep console script lost its PYTHONPATH or python3 disappeared.`);
+            return [];
+        }
+        if (result.timedOut) {
+            (0,core.warning)(`lint/semgrep[scan]: timed out after ${elapsed}ms (limit 120000ms). ` +
+                `Reduce file count or switch to a smaller --config (e.g. p/security-audit).`);
             return [];
         }
         // semgrep exit:
         //   0 = no findings
         //   1 = findings present（不是失败，按 lint 行业惯例）
-        //   2 = misconfig / 真正的错误
+        //   2 = misconfig / 真正的错误（含 registry 拉规则失败）
         // 仅当 stdout 无可解析 JSON 时才视为失败
         const parsed = parseJsonSafe(result.stdout, 'semgrep');
         if (parsed == null) {
-            (0,core.info)(`lint/semgrep: no parseable JSON output (exit=${result.exitCode}); ` +
-                `stderr first line: "${result.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 200) ?? ''}"`);
+            (0,core.warning)(`lint/semgrep[scan]: no parseable JSON in stdout (exit=${result.exitCode}). ` +
+                `stderr first line: "${stderrFirstLine}". ` +
+                `Common causes: (a) semgrep can't reach semgrep.dev to fetch "${this.config}" rules — ` +
+                `try a self-contained config like p/ci or pre-cache rules; ` +
+                `(b) semgrep printed Python traceback to stderr; ` +
+                `(c) semgrep CLI was killed by signal. Raw stdout first 500 chars: "${result.stdout.substring(0, 500)}"`);
             return [];
+        }
+        const rawCount = parsed.results?.length ?? 0;
+        const errCount = parsed.errors?.length ?? 0;
+        if (errCount > 0) {
+            // semgrep 把"无法解析的文件 / 规则加载错误"放在 errors 数组里 —— 重要诊断信号
+            const firstErr = JSON.stringify(parsed.errors?.[0] ?? {}).substring(0, 300);
+            (0,core.warning)(`lint/semgrep[scan]: ${errCount} semgrep-level error(s) reported (this is separate from "findings"); ` +
+                `first: ${firstErr}`);
         }
         const findings = [];
         for (const r of parsed.results ?? []) {
@@ -17404,7 +17446,16 @@ class SemgrepAdapter {
                 category: 'security'
             });
         }
-        (0,core.info)(`lint/semgrep: parsed ${findings.length} finding(s) from ${parsed.results?.length ?? 0} raw result(s)`);
+        if (rawCount === 0) {
+            // 0 findings 本身不是错误（代码可能真的没问题），但在测试场景里多半是"规则没匹配上"
+            (0,core.info)(`lint/semgrep[scan]: 0 findings. ` +
+                `If you expected findings on these files, check: ` +
+                `(1) does "${this.config}" cover the languages of the scanned files? ` +
+                `(2) is the project behind a corporate firewall blocking semgrep.dev? ` +
+                `(3) did semgrep silently skip the files (look at stderr_len above and rerun with --debug)`);
+        }
+        (0,core.info)(`lint/semgrep[scan]: parsed ${findings.length} finding(s) from ${rawCount} raw result(s) ` +
+            `across ${files.length} input file(s) in ${elapsed}ms`);
         return findings;
     }
 }
@@ -17732,13 +17783,18 @@ async function runLintTools(options, adaptersOverride) {
     const adapters = adaptersOverride ?? defaultAdapters(options);
     const overrides = options.toolEnableOverrides ?? {};
     // 1) 选出"用户启用"的适配器：Action input override 优先，缺失时回退到 adapter.defaultEnabled
-    const enabledAdapters = adapters.filter(a => {
+    //    同时给出每个适配器的启用判定细节，便于排查"semgrep 没跑起来到底是 default-false 还是 override-false"
+    const enabledAdapters = [];
+    const decisions = [];
+    for (const a of adapters) {
         const override = overrides[a.name];
-        return override === undefined ? a.defaultEnabled : override;
-    });
-    (0,core.info)(`lint: ${enabledAdapters.length}/${adapters.length} adapters enabled by Action inputs: [${enabledAdapters
-        .map(a => a.name)
-        .join(', ')}]`);
+        const enabled = override === undefined ? a.defaultEnabled : override;
+        const src = override === undefined ? `default=${a.defaultEnabled}` : `override=${override}`;
+        decisions.push(`${a.name}:${enabled ? 'on' : 'off'}(${src})`);
+        if (enabled)
+            enabledAdapters.push(a);
+    }
+    (0,core.info)(`lint: ${enabledAdapters.length}/${adapters.length} adapters enabled — [${decisions.join(', ')}]`);
     if (enabledAdapters.length === 0) {
         return emptyReport(startedAt);
     }

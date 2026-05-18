@@ -229,13 +229,14 @@ export function npmRangeToPipSpecifier(range: string): string {
  *   - 装完但 bin 缺失 → 防御性 false（罕见，但比静默有效）
  */
 async function installViaPip(spec: PipInstallSpec): Promise<InstallResult> {
+  const startedAt = Date.now()
   const root = getInstallRoot()
   const targetDir = getPipInstallDir()
   const binPath = path.join(targetDir, 'bin', spec.binName)
 
   // 1) 缓存命中
   if (existsSync(binPath)) {
-    info(`lint/installer: cache hit for ${spec.binName} (pip) → ${binPath}`)
+    info(`lint/installer[pip]: cache hit for ${spec.binName} → ${binPath}`)
     return {ok: true, binPath}
   }
 
@@ -256,7 +257,7 @@ async function installViaPip(spec: PipInstallSpec): Promise<InstallResult> {
   const pipSpecifier = npmRangeToPipSpecifier(spec.version)
   const pkgArg = pipSpecifier.length > 0 ? `${spec.package}${pipSpecifier}` : spec.package
   info(
-    `lint/installer: installing ${spec.package} (pip range "${spec.version}" → "${pipSpecifier}") → ${targetDir}`
+    `lint/installer[pip]: installing ${spec.package} (range "${spec.version}" → pip "${pipSpecifier}") → ${targetDir}`
   )
   const result = await runCommand({
     command: 'python3',
@@ -272,18 +273,18 @@ async function installViaPip(spec: PipInstallSpec): Promise<InstallResult> {
     ],
     cwd: root,
     timeoutMs: INSTALL_TIMEOUT_MS,
-    // pip 把 console script 放到 --target 下的 bin/，需要把这条目录加到 PATH
-    // 让后续 `<binPath>` 调用能找到自己 import 的子模块（pip 5+ 默认行为）
     env: {
-      // 让 Python 在 sys.path 中优先找沙箱目录，确保 console script 能 import semgrep
+      // 让 Python 在 sys.path 中优先找沙箱目录，确保 console script 能 import 自己
       PYTHONPATH: targetDir,
-      // pip --target 模式下 console script 的 shebang 默认指向系统 python3，
-      // 但脚本里 `import semgrep` 仍需走 PYTHONPATH 才能找到包
       PYTHONDONTWRITEBYTECODE: '1'
     }
   })
 
+  const elapsed = Date.now() - startedAt
   if (result.spawnError) {
+    warning(
+      `lint/installer[pip]: spawn failed after ${elapsed}ms — ${result.spawnErrorMessage ?? ''}`
+    )
     return {
       ok: false,
       reason:
@@ -298,6 +299,9 @@ async function installViaPip(spec: PipInstallSpec): Promise<InstallResult> {
   if (result.exitCode !== 0) {
     const stderrSnippet =
       result.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 200) ?? ''
+    warning(
+      `lint/installer[pip]: pip exit=${result.exitCode} after ${elapsed}ms, stderr_first="${stderrSnippet}", stderr_len=${result.stderr.length}`
+    )
     return {
       ok: false,
       reason: `pip install ${pkgArg} failed (exit=${result.exitCode}): ${stderrSnippet}`
@@ -305,7 +309,7 @@ async function installViaPip(spec: PipInstallSpec): Promise<InstallResult> {
   }
   if (!existsSync(binPath)) {
     warning(
-      `lint/installer: ${spec.package} installed via pip but bin not at ${binPath}`
+      `lint/installer[pip]: ${spec.package} installed (exit=0, ${elapsed}ms) but console script not at ${binPath}`
     )
     return {
       ok: false,
@@ -314,7 +318,10 @@ async function installViaPip(spec: PipInstallSpec): Promise<InstallResult> {
     }
   }
 
-  info(`lint/installer: ${spec.binName} (pip) ready at ${binPath}`)
+  info(
+    `lint/installer[pip]: ${spec.binName} ready at ${binPath} after ${elapsed}ms ` +
+      `(stdout_len=${result.stdout.length}, stderr_len=${result.stderr.length})`
+  )
   return {ok: true, binPath}
 }
 

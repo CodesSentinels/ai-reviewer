@@ -107,14 +107,21 @@ export async function runLintTools(
   const overrides = options.toolEnableOverrides ?? {}
 
   // 1) 选出"用户启用"的适配器：Action input override 优先，缺失时回退到 adapter.defaultEnabled
-  const enabledAdapters = adapters.filter(a => {
+  //    同时给出每个适配器的启用判定细节，便于排查"semgrep 没跑起来到底是 default-false 还是 override-false"
+  const enabledAdapters: ToolAdapter[] = []
+  const decisions: string[] = []
+  for (const a of adapters) {
     const override = overrides[a.name]
-    return override === undefined ? a.defaultEnabled : override
-  })
+    const enabled = override === undefined ? a.defaultEnabled : override
+    const src =
+      override === undefined ? `default=${a.defaultEnabled}` : `override=${override}`
+    decisions.push(`${a.name}:${enabled ? 'on' : 'off'}(${src})`)
+    if (enabled) enabledAdapters.push(a)
+  }
   info(
-    `lint: ${enabledAdapters.length}/${adapters.length} adapters enabled by Action inputs: [${enabledAdapters
-      .map(a => a.name)
-      .join(', ')}]`
+    `lint: ${enabledAdapters.length}/${adapters.length} adapters enabled — [${decisions.join(
+      ', '
+    )}]`
   )
   if (enabledAdapters.length === 0) {
     return emptyReport(startedAt)
