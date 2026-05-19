@@ -84,37 +84,47 @@ mutation ResolveThread($threadId: ID!) {
 
 ---
 
-## 任务清单（P0 优先完成）
+## 任务清单
 
-### P0 任务
+### ✅ 已完成（P0/P1）
 - [x] `review-thread.ts`：GraphQL 查询（含 cursor 分页循环）
 - [x] `review-thread.ts`：batch resolve + p-limit(6)
 - [x] `review-thread.ts`：getBotLogin（优先配置，fallback API）
 - [x] `resolve.ts`：handler 主逻辑（execute 函数）
-- [x] `resolve.ts`：resolveAllBotComments 对外接口
+- [x] `resolve.ts`：resolveAllBotComments 对外接口（供 Member C 调用）
 - [x] `bootstrap.ts`：接入（替换 stub → resolveHandler）
-- [x] `__tests__/resolve.test.ts`：单元测试（10 个用例）
-
-### P1 任务
+- [x] `__tests__/resolve.test.ts`：单元测试 10 个用例
+- [x] `__tests__/resolve.integration.test.ts`：集成测试 3 个用例（真实 GitHub API）
 - [x] 结果格式化 + 边界情况处理（0 条 / 全成功 / 部分失败 / 全失败）
-- [x] 部分失败降级处理
 
-### 附带改动
-- `src/commands/handlers/stubs.ts`：从 ALL_STUBS 移除 resolveStub
+### 附带改动（已完成）
+- `src/commands/handlers/stubs.ts`：从 ALL_STUBS 移除 resolveStub，并删除 resolveStub 定义
 - `__mocks__/p-limit.js`：新增全局 CommonJS shim（p-limit@4 为 ESM-only）
 - `jest.config.json`：增加 moduleNameMapper 指向 __mocks__/p-limit.js
 - `__tests__/command-dispatcher.test.ts`：stub 测试从 resolve → review（因 resolve 已实现）
 
 ---
 
-## 测试用例（7 个）
-1. 无待解决 thread → 返回 "没有找到" 消息
-2. 全部成功 → 返回 "✅ 已解决 N 条"
-3. 部分失败 → 返回 "⚠️ 共 N 条，成功 X，失败 Y"
-4. 全部失败 → 返回权限不足提示
-5. 分页场景（>100 threads）→ GraphQL 被调用 2+ 次，结果合并正确
-6. 非 Bot 发的 thread 被过滤 → 不被 resolve
-7. 已 resolved thread 被跳过 → isResolved=true 的 thread 不再调用 mutation
+## 待完成工作
+
+### 🧹 代码清理（P1）
+- [x] `src/commands/handlers/stubs.ts`：删除 `resolveStub` 定义及其注释
+
+### 🧪 单元测试补全（P1）
+- [x] `getBotLogin` 错误路径：`getAuthenticated()` 抛异常 → 返回 `__unknown_bot__` 哨兵值
+- [x] `resolveAllBotComments` 对外接口：2 个用例（空 thread / 正常 resolve）
+- [x] `batchResolve([])` 空数组：ok=0 failed=0，不调用 GraphQL
+
+### 🔗 集成测试完善（P2）✅
+- [x] 合并原 Test 2+3 为单个原子测试：fetch → batchResolve → 验证 ok=2 → re-fetch → 验证空，消除跨 test 状态依赖
+- [x] `resolveAllBotComments` 集成测试（Test 3）：测试体内自行新增 2 条 comment，再调用外部 API，完全独立
+- [x] 修复集成测试本地运行问题：`jest.mock` 替换 `src/octokit`，用 lazy getter 延迟实例化，绕过 `@octokit/auth-action` 的 Actions 环境检查
+
+**运行方式：**
+```bash
+GITHUB_TOKEN=<pat> INTEGRATION=true npx jest resolve.integration --no-coverage --runInBand
+```
+**验证结果（2026-05-19）：** 3/3 全绿，创建 PR → 添加 comment → resolve → 验证空 → cleanup 全流程正常
 
 ---
 

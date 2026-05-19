@@ -45,7 +45,7 @@ import {
   batchResolve,
   _resetBotLoginCache
 } from '../src/github/review-thread'
-import {resolveHandler} from '../src/commands/handlers/resolve'
+import {resolveHandler, resolveAllBotComments} from '../src/commands/handlers/resolve'
 import type {CommandContext} from '../src/commands/types'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -132,6 +132,13 @@ describe('getBotLogin', () => {
     await getBotLogin({} as never)
     expect(mockGetAuthenticated).not.toHaveBeenCalled()
     // getInput 只在第一次调用时生效（缓存命中后直接返回）
+  })
+
+  test('getAuthenticated 抛异常时返回 __unknown_bot__ 哨兵值', async () => {
+    mockGetInput.mockReturnValue('')
+    mockGetAuthenticated.mockRejectedValue(new Error('network error'))
+    const login = await getBotLogin({} as never)
+    expect(login).toBe('__unknown_bot__')
   })
 })
 
@@ -249,5 +256,50 @@ describe('resolveHandler.execute', () => {
     const result = await resolveHandler.execute(makeCtx())
     expect(result.message).toMatch(/❌/)
     expect(result.message).toMatch(/pull-requests/)
+  })
+})
+
+describe('batchResolve', () => {
+  test('空数组 → 返回 ok=0 failed=0，不调用 GraphQL', async () => {
+    const result = await batchResolve([])
+    expect(result).toEqual({ok: 0, failed: 0})
+    expect(mockGraphql).not.toHaveBeenCalled()
+  })
+})
+
+describe('resolveAllBotComments', () => {
+  test('无待解决 thread → 返回 {ok: 0, failed: 0}，不调用 mutation', async () => {
+    mockGetInput.mockReturnValue('cs-bot')
+    mockGraphql.mockResolvedValueOnce(makePageResponse([]))
+
+    const result = await resolveAllBotComments({
+      owner: 'org',
+      repo: 'repo',
+      prNumber: 1,
+      options: {} as never
+    })
+    expect(result).toEqual({ok: 0, failed: 0})
+    expect(mockGraphql).toHaveBeenCalledTimes(1) // 只有 query，无 mutation
+  })
+
+  test('有待解决 thread → 调用 mutation 并返回正确计数', async () => {
+    mockGetInput.mockReturnValue('cs-bot')
+    mockGraphql
+      .mockResolvedValueOnce(
+        makePageResponse([
+          {id: 't1', isResolved: false, authorLogin: 'cs-bot'},
+          {id: 't2', isResolved: false, authorLogin: 'cs-bot'}
+        ])
+      )
+      .mockResolvedValueOnce({resolveReviewThread: {thread: {isResolved: true}}})
+      .mockResolvedValueOnce({resolveReviewThread: {thread: {isResolved: true}}})
+
+    const result = await resolveAllBotComments({
+      owner: 'org',
+      repo: 'repo',
+      prNumber: 1,
+      options: {} as never
+    })
+    expect(result).toEqual({ok: 2, failed: 0})
   })
 })

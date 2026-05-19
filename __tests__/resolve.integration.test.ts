@@ -2,32 +2,65 @@
  * resolve.integration.test.ts — resolve 命令真实 GitHub API 集成测试
  *
  * 运行方式:
- *   INTEGRATION=true npx jest resolve.integration --no-coverage --runInBand
+ *   GITHUB_TOKEN=<token> INTEGRATION=true npx jest resolve.integration --no-coverage --runInBand
  *
  * 前提:
- *   gh auth login 已完成（或 GITHUB_TOKEN 环境变量已设置）
+ *   GITHUB_TOKEN 必须在运行前设置（@octokit/auth-action 在模块加载时检查，beforeAll 已太晚）
  *
  * 流程:
- *   1. 在 ai-reviewer-test 仓库创建测试分支 + 文件
- *   2. 创建 PR
- *   3. 以当前 Token 身份（模拟 Bot）添加 review comment（产生 review thread）
- *   4. fetchUnresolvedBotThreads → 验证能找到该 thread
- *   5. batchResolve → 验证全部 resolved
- *   6. fetchUnresolvedBotThreads → 验证返回空列表
- *   7. 清理: 关闭 PR + 删除分支
+ *   beforeAll: 创建分支 → 推文件 → 建 PR → 以当前 Token 身份添加 2 条 review comment
+ *   Test 1: fetchUnresolvedBotThreads 能找到 2 条未解决 thread
+ *   Test 2: batchResolve 解决所有 thread，再 fetch 验证返回空（原子断言，无跨 test 依赖）
+ *   Test 3: 测试体内新增 2 条 comment，resolveAllBotComments 完整解决（外部 API 验证）
+ *   afterAll: 关闭 PR + 删除分支
  *
- * 注意: 此文件不 mock 任何模块，直接使用真实 GitHub API。
+ * 注意: src/octokit 被替换为 @octokit/core 实例（绕过 @octokit/auth-action 的 Actions 环境检查），
+ *       测试仍调用真实的 GitHub API，不 mock 任何网络请求。
+ *       必须以 --runInBand 顺序运行，测试间共享同一个 PR。
  */
 
 // ─── Jest globals (explicit import required by this project's tsconfig) ───────
 
-import {describe, expect, test, beforeAll, afterAll} from '@jest/globals'
+import {describe, expect, test, beforeAll, afterAll, jest} from '@jest/globals'
 
 // ─── Skip unless INTEGRATION=true ────────────────────────────────────────────
 
 const describeIntegration = process.env.INTEGRATION ? describe : describe.skip
 
-// ─── Real imports (no mocks) ──────────────────────────────────────────────────
+// ─── Replace src/octokit with a real @octokit/core instance ──────────────────
+// @octokit/action uses @octokit/auth-action which requires the GITHUB_ACTIONS
+// environment. Swapping it for @octokit/core lets integration tests run locally
+// while still hitting the real GitHub API.
+
+jest.mock('../src/octokit', () => {
+  // Use @octokit/action's Octokit unchanged (all plugins: REST, paginate, graphql, retry…).
+  // The lazy getter runs inside beforeAll, where both env vars are already present:
+  //   GITHUB_ACTION — set by setup-node-globals.js (before any module loads)
+  //   GITHUB_TOKEN  — set by beforeAll via getGithubToken() before first octokit access
+  // So createActionAuth() inside new Octokit() passes its env checks without modification.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const {Octokit} = require('@octokit/action')
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let _instance: any = null
+
+  return {
+    get octokit() {
+      if (!_instance) {
+        if (!process.env.GITHUB_TOKEN) {
+          throw new Error(
+            'GITHUB_TOKEN must be set before running integration tests.\n' +
+              'Usage: GITHUB_TOKEN=<token> INTEGRATION=true npx jest resolve.integration --no-coverage --runInBand'
+          )
+        }
+        _instance = new Octokit()
+      }
+      return _instance
+    }
+  }
+})
+
+// ─── Imports (after mock registration) ───────────────────────────────────────
 
 import {execSync} from 'child_process'
 import {octokit} from '../src/octokit'
@@ -37,6 +70,7 @@ import {
   batchResolve,
   _resetBotLoginCache
 } from '../src/github/review-thread'
+import {resolveAllBotComments} from '../src/commands/handlers/resolve'
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -46,14 +80,15 @@ const REPO = 'ai-reviewer-test'
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function getGithubToken(): string {
-  // 1. Explicit env var
   if (process.env.GITHUB_TOKEN) return process.env.GITHUB_TOKEN
-  // 2. gh CLI
-  try {
-    return execSync('gh auth token', {encoding: 'utf8'}).trim()
-  } catch {
-    throw new Error('No GitHub token found. Run `gh auth login` or set GITHUB_TOKEN.')
-  }
+  // gh >= 2.x: gh auth token
+  try { const t = execSync('gh auth token', {encoding: 'utf8'}).trim(); if (t) return t } catch {}
+  // gh < 2.4: reads config file directly
+  try { const t = execSync('gh config get -h github.com oauth_token', {encoding: 'utf8'}).trim(); if (t) return t } catch {}
+  throw new Error(
+    'No GitHub token found. Provide one via:\n' +
+      '  GITHUB_TOKEN=<pat> INTEGRATION=true npx jest resolve.integration --no-coverage --runInBand'
+  )
 }
 
 // ─── Test suite ───────────────────────────────────────────────────────────────
@@ -68,10 +103,8 @@ describeIntegration('resolve command — integration with GitHub API', () => {
   // ── Setup ────────────────────────────────────────────────────────────────────
 
   beforeAll(async () => {
-    // Inject token so octokit (loaded at module level) can authenticate
-    const token = getGithubToken()
-    process.env.GITHUB_TOKEN = token
-
+    // Set GITHUB_TOKEN before first octokit access (lazy getter reads it on first use)
+    process.env.GITHUB_TOKEN = getGithubToken()
     _resetBotLoginCache()
 
     // Step 1: get default branch SHA ─────────────────────────────────────────
@@ -213,8 +246,9 @@ describeIntegration('resolve command — integration with GitHub API', () => {
   )
 
   test(
-    '2. batchResolve 能将所有 thread 标记为已解决，返回 ok=2 failed=0',
+    '2. batchResolve 将所有 thread 标记为已解决，resolve 后 fetch 返回空列表',
     async () => {
+      // fetch → resolve → re-fetch，在同一个 test 内验证前后状态，无跨 test 依赖
       const threads = await fetchUnresolvedBotThreads(
         {owner: OWNER, repo: REPO, prNumber},
         botLogin
@@ -222,23 +256,55 @@ describeIntegration('resolve command — integration with GitHub API', () => {
 
       const {ok, failed} = await batchResolve(threads)
       console.log(`  resolve 结果: ok=${ok} failed=${failed}`)
-
-      expect(failed).toBe(0)
       expect(ok).toBe(2)
+      expect(failed).toBe(0)
+
+      const remaining = await fetchUnresolvedBotThreads(
+        {owner: OWNER, repo: REPO, prNumber},
+        botLogin
+      )
+      console.log(`  resolve 后剩余未解决 thread: ${remaining.length}`)
+      expect(remaining.length).toBe(0)
     },
     30_000
   )
 
   test(
-    '3. resolve 完成后 fetchUnresolvedBotThreads 返回空列表',
+    '3. resolveAllBotComments 对外接口：新增 thread 后能完整 resolve，返回 ok=2 failed=0',
     async () => {
-      const threads = await fetchUnresolvedBotThreads(
-        {owner: OWNER, repo: REPO, prNumber},
-        botLogin
-      )
+      // 此时 PR 上已无未解决 thread（Test 2 已全部解决）。
+      // 在测试体内新增 2 条 review comment，使 resolveAllBotComments 有内容可操作。
+      await octokit.pulls.createReviewComment({
+        owner: OWNER,
+        repo: REPO,
+        pull_number: prNumber,
+        commit_id: headSha,
+        path: filePath,
+        line: 3,
+        side: 'RIGHT',
+        body: '🤖 [集成测试-T3] resolveAllBotComments 第一条'
+      })
+      await octokit.pulls.createReviewComment({
+        owner: OWNER,
+        repo: REPO,
+        pull_number: prNumber,
+        commit_id: headSha,
+        path: filePath,
+        line: 5,
+        side: 'RIGHT',
+        body: '🤖 [集成测试-T3] resolveAllBotComments 第二条'
+      })
+      console.log('  已新增 2 条 review comment')
 
-      console.log(`  resolve 后剩余未解决 thread: ${threads.length}`)
-      expect(threads.length).toBe(0)
+      const {ok, failed} = await resolveAllBotComments({
+        owner: OWNER,
+        repo: REPO,
+        prNumber,
+        options: {} as never
+      })
+      console.log(`  resolveAllBotComments 结果: ok=${ok} failed=${failed}`)
+      expect(ok).toBe(2)
+      expect(failed).toBe(0)
     },
     30_000
   )
