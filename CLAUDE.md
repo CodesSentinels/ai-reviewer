@@ -1,10 +1,4 @@
----
-name: CodeSentinel AI Reviewer 项目记忆
-description: 用于 Claude Code 加载项目记忆的入口文件，包含架构、设计、进度和代码审查指南
-type: memory
----
-
-# CodeSentinel AI Reviewer — 项目记忆加载器
+# CodeSentinel AI Reviewer — 项目指南
 
 ## 📚 核心文档引用
 
@@ -78,21 +72,6 @@ npx jest command-dispatcher --no-coverage
 ```bash
 npm run act                 # 使用 act 在本地模拟 GitHub Actions 环境
 ```
-
----
-
-## 📋 迭代状态
-
-### 迭代一（已完成）
-- ✅ PR 自动审查四阶段流水线
-- ✅ 命令交互框架（权限、限流、幂等）
-- ✅ help 命令实现
-- ✅ Member A 代码审查指南
-
-### 迭代二（进行中）
-- 🔄 Member A：命令框架完善、help 优化
-- 🔄 Member B：resolve 命令（冲突解决）
-- ⏳ Member C/D：其他命令实现（pause、resume、configuration）
 
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: 成员B resolve命令实现进度
-description: 用户正在推进的 @codesentinel resolve 命令实现状态、技术方案与任务清单，随开发进展同步更新
+description: @codesentinel resolve 命令完整实现记录：技术方案、GraphQL 查询、并发策略、测试用例（已完成）
 type: project
 originSessionId: 241598dd-e0dc-4f9d-b926-e93bfc101594
 ---
@@ -10,8 +10,8 @@ originSessionId: 241598dd-e0dc-4f9d-b926-e93bfc101594
 > **最后更新**: 2026-05-13（编码完成）
 > **分支**: `feat/resolveReviewThread`
 
-**Why:** 用户是负责此模块的成员 B，需要跟踪实现进度以便跨会话继续工作。
-**How to apply:** 每次推进代码时更新此文件的"当前状态"和"任务清单"，帮助未来对话快速恢复上下文。
+**Why:** 记录完整技术方案供后续命令实现参考（GraphQL 分页、p-limit 并发、Promise.allSettled 降级模式均可复用）。
+**How to apply:** 实现其他命令时参考此文件的并发策略和结果格式化模式。若分支已合并，可归档此文件。
 
 ---
 
@@ -21,7 +21,7 @@ originSessionId: 241598dd-e0dc-4f9d-b926-e93bfc101594
 
 ---
 
-## 技术方案（已设计，待实现）
+## 技术方案
 
 ### 核心执行流程
 ```
