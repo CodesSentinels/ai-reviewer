@@ -25,7 +25,11 @@ import {BiomeAdapter} from './adapters/biome'
 import {PrettierAdapter} from './adapters/prettier'
 import {SemgrepAdapter} from './adapters/semgrep'
 import {TscAdapter} from './adapters/tsc'
-import {deduplicateResults, filterByChangedLines} from './lint-filter'
+import {
+  collapseAdjacentFindings,
+  deduplicateResults,
+  filterByChangedLines
+} from './lint-filter'
 import {
   type LintReport,
   type LintResult,
@@ -225,24 +229,33 @@ export async function runLintTools(
     })
   )
 
-  // 4) 变更行过滤 + 去重
+  // 4) 变更行过滤 → 同行同款去重 → 跨行相邻同款合并
+  //
+  //    三步分工：
+  //    - filterByChangedLines：仅留 PR 变更行 ± tolerance 的 finding
+  //    - deduplicateResults：同行同规则同 message → 折叠为 1（去掉跨工具 / 多列重复）
+  //    - collapseAdjacentFindings：连续多行同款 → 合并为单个 range
+  //      （如 tsc 在 line 88/89 都报 'Cannot find name Buffer' → '88-89'）
   const changedFiltered = filterByChangedLines(allResults, changedLineMap)
   const deduped = deduplicateResults(changedFiltered)
+  const collapsed = collapseAdjacentFindings(deduped)
 
   // 按 (file, line) 排序便于阅读
-  deduped.sort((a, b) => {
+  collapsed.sort((a, b) => {
     if (a.file !== b.file) return a.file.localeCompare(b.file)
     return a.line - b.line
   })
 
-  // 5) 回填每个工具"实际写到 PR 评论的数量"（post-filter + post-dedup）
+  // 5) 回填每个工具"实际写到 PR 评论的数量"（post-filter + post-dedup + post-collapse）
   //    这样统计表能同时显示 "X / Y" — X=进了评论的, Y=工具原始扫描的，
   //    避免 tsc 这类项目级扫描器给出"43 errors 但只看到 3 条评论"的迷惑。
+  //    用 `collapsed` 计数：相邻合并后 88-89 算 1 条评论而非 2 条 —— 与
+  //    实际写到 PR 评论的数量保持一致。
   const onChangesByTool = new Map<
     string,
     {error: number; warning: number; info: number}
   >()
-  for (const r of deduped) {
+  for (const r of collapsed) {
     const c = onChangesByTool.get(r.tool) ?? {error: 0, warning: 0, info: 0}
     if (r.severity === 'error') c.error++
     else if (r.severity === 'warning') c.warning++
@@ -261,7 +274,7 @@ export async function runLintTools(
   }
 
   return {
-    results: deduped,
+    results: collapsed,
     toolSummaries,
     durationMs: Date.now() - startedAt,
     filesScanned: changedFiles.length
