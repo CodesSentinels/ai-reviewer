@@ -2,9 +2,8 @@
 
 ## 📚 核心文档引用
 
-### 架构与技术
-- **[整体架构](./memory/project_architecture.md)** — 技术栈、模块职责、事件路由、四阶段审查流水线、命令框架、B/C/D 接入方式
-- **[项目进度](./memory/project_progress.md)** — 当前迭代状态、已完成功能、未来规划
+### 记忆索引
+- **[记忆索引](./memory/MEMORY.md)** — 架构、进度、各命令实现记录的统一入口（新增命令只需更新此文件）
 
 ### 需求与设计
 - **[代码审查指南](./docs/05-member-a-code-review-guide.md)** — Members A 的代码审查规范
@@ -14,7 +13,6 @@
 
 ### 特性文档
 - **[依赖分析](./docs/nuxt-vue-dependency-analysis.md)** — 跨文件依赖分析、Nuxt/Vue 支持
-- **[Member B Resolve 设计](./memory/member_b_resolve.md)** — resolve 命令设计与实现
 
 ### 测试用例
 - **[用例集合](./test_case_docs/)** — 跨文件依赖、别名导入、Nuxt/Vue、Web 搜索等
@@ -117,7 +115,5 @@ npm run act                 # 使用 act 在本地模拟 GitHub Actions 环境
 
 ## 📞 获取帮助
 
-- 架构疑问 → 查看 [整体架构](./memory/project_architecture.md)
-- 命令系统 → 查看 [10 步调度器](./memory/project_architecture.md#命令交互框架调度器10-步流水线) 和具体 handler
+- 架构/进度/命令实现 → 查看 [记忆索引](./memory/MEMORY.md)
 - 依赖分析 → 查看 [特性文档](./docs/nuxt-vue-dependency-analysis.md)
-- 进度与规划 → 查看 [项目进度](./memory/project_progress.md)

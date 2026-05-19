@@ -4,13 +4,13 @@ description: 各迭代模块的完成状态、未完成任务清单、里程碑�
 type: project
 originSessionId: 241598dd-e0dc-4f9d-b926-e93bfc101594
 ---
-# CodeSentinel 开发进度（截至 2026-05-13）
+# CodeSentinel 开发进度（截至 2026-05-19）
 
 ## 完成情况总览
 ```
 迭代一（智能分析管线）    ████████████████████ 100%  ✅ 完成
 迭代二-成员A（命令框架）  ████████████████████ 100%  ✅ 完成
-迭代二-成员B（resolve）   ░░░░░░░░░░░░░░░░░░░░   0%  🔄 进行中（用户负责）
+迭代二-成员B（resolve）   ████████████████████ 100%  ✅ 完成（新增 14 单元测试，全项目 199 测试）
 迭代二-成员C（审查控制）  ░░░░░░░░░░░░░░░░░░░░   0%  ❌ 未开始
 迭代二-成员D（对话+噪音） ░░░░░░░░░░░░░░░░░░░░   0%  ❌ 未开始
 ```
@@ -46,17 +46,15 @@ originSessionId: 241598dd-e0dc-4f9d-b926-e93bfc101594
 
 ---
 
-## 🔄 进行中：迭代二成员 B（resolve 命令）
+## ✅ 已完成：迭代二成员 B（resolve 命令）
 
-> 用户当前正在推进此模块，见 `memory/member_b_resolve.md` 追踪详细进度
+分支：`feat/resolveReviewThread`。GraphQL 分页查询 + p-limit(6) 并发 + Promise.allSettled 降级，199 个测试（196 通过 / 3 跳过）。
 
-**需新增文件：**
-- `src/commands/handlers/resolve.ts`（核心 handler）
-- `src/github/review-thread.ts`（GraphQL 查询 + mutation，建议独立便于测试）
-
-**需修改文件：**
-- `src/commands/handlers/stubs.ts`：移除 `resolveStub`
-- `src/commands/bootstrap.ts`：将 `resolveStub` 替换为 `resolveHandler`（1 行改动）
+**已交付文件：**
+- `src/github/review-thread.ts`：GraphQL 查询 + mutation + getBotLogin
+- `src/commands/handlers/resolve.ts`：handler 主逻辑 + resolveAllBotComments 对外接口
+- `__tests__/resolve.test.ts`：14 个单元测试
+- `__tests__/resolve.integration.test.ts`：3 个集成测试（真实 GitHub API，2026-05-19 验证全绿）
 
 **对外提供接口：** `resolveAllBotComments({owner, repo, prNumber, options})` → 供成员 C 在新一轮审查前调用
 
@@ -96,7 +94,7 @@ originSessionId: 241598dd-e0dc-4f9d-b926-e93bfc101594
 | 里程碑 | 目标 | 状态 |
 |:---|:---|:---|
 | **M1 框架就绪** | 第 1 周末 | ✅ 已达成（A 骨架 + B/C/D stubs）|
-| **M2 P0 联调** | 第 2 周末 | 🔄 进行中（B 在实现 resolve）|
+| **M2 P0 联调** | 第 2 周末 | 🔄 进行中（B 已完成，C/D 待启动）|
 | **M3 完整功能** | 第 3 周末 | ❌ 未开始 |
 | **M4 验收** | 第 4 周 | ❌ 未开始 |
 

@@ -6,7 +6,7 @@ originSessionId: 241598dd-e0dc-4f9d-b926-e93bfc101594
 ---
 # 成员 B — `@codesentinel resolve` 实现进度
 
-> **当前状态**: ✅ 实现完成，192 个测试全绿
+> **当前状态**: ✅ 实现完成，199 个测试（196 通过 / 3 跳过）
 > **最后更新**: 2026-05-13（编码完成）
 > **分支**: `feat/resolveReviewThread`
 
@@ -80,7 +80,7 @@ mutation ResolveThread($threadId: ID!) {
 | `src/commands/handlers/resolve.ts` | **新建** | 核心 CommandHandler 实现 + resolveAllBotComments 对外接口 |
 | `src/commands/handlers/stubs.ts` | **修改** | 移除 resolveStub（或保留但不再注册）|
 | `src/commands/bootstrap.ts` | **修改** | 将 resolveStub 替换为 resolveHandler（1 行改动）|
-| `__tests__/resolve.test.ts` | **新建** | 单元测试（7 个用例，见下方）|
+| `__tests__/resolve.test.ts` | **新建** | 单元测试（14 个用例）|
 
 ---
 
@@ -93,7 +93,7 @@ mutation ResolveThread($threadId: ID!) {
 - [x] `resolve.ts`：handler 主逻辑（execute 函数）
 - [x] `resolve.ts`：resolveAllBotComments 对外接口（供 Member C 调用）
 - [x] `bootstrap.ts`：接入（替换 stub → resolveHandler）
-- [x] `__tests__/resolve.test.ts`：单元测试 10 个用例
+- [x] `__tests__/resolve.test.ts`：单元测试 14 个用例
 - [x] `__tests__/resolve.integration.test.ts`：集成测试 3 个用例（真实 GitHub API）
 - [x] 结果格式化 + 边界情况处理（0 条 / 全成功 / 部分失败 / 全失败）
 
