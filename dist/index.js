@@ -17271,10 +17271,28 @@ function filterByChangedLines(results, changedLineMap, tolerance = DEFAULT_CONTE
 /**
  * 对结果去重
  *
- * 当 ESLint 与 Biome 同时报告"同一行 + 相似 message"时，去掉重复。
- * 去重 key：file:line:column + 规则名前缀 + message 前 50 字符。
+ * 当 ESLint 与 Biome 同时报告"同一行 + 相似 message"时，去掉重复；
+ * 同样地，单个工具在一行多处触发同款规则（如 `(req: any, res: any) => any`
+ * 里的 3 个 `any`）也只保留 1 条 —— PR 评审视角下这是 1 件事，3 条评论
+ * 是噪声。
  *
+ * 去重 key：`file:line:ruleKey:msgKey`（**故意不含 column**）。
  * 保留策略：保留 severity 更高的那条；同级时保留出现最早的工具。
+ *
+ * ## 为什么 key 不含 column
+ *
+ * Biome 对一行多个 `any` 会报多条（col 25 / 40 / 55），ESLint 也类似。
+ * 但 🧰 Tools 卡片只显示 `[level] line-endLine: msg (rule)`，列号不可见。
+ * 含 column 时 N 条同款 finding 都会进 PR 评论区，渲染出来一模一样，
+ * 用户视感是"重复评论 bug"。
+ *
+ * 去掉 column 不会丢精确度 —— 我们仍在 LintResult.column 字段保留首次出
+ * 现的列号给行号定位用；只是把"为同款问题重复评论 N 次"折叠成 1 次。
+ *
+ * **不会误合并真正不同的 finding**：
+ *   - 不同行 → 不同 key（line 不同）→ 保留
+ *   - 同行不同规则 → 不同 ruleKey → 保留
+ *   - 同行同规则不同消息（如 'foo unused' vs 'bar unused'） → 不同 msgKey → 保留
  */
 function deduplicateResults(results) {
     const SEV_RANK = {
@@ -17282,23 +17300,88 @@ function deduplicateResults(results) {
         warning: 2,
         info: 1
     };
-    // 规则名归一化：去掉路径前缀，并剥离大小写/连字符/下划线，使
-    // ESLint("no-unused-vars") 与 Biome("lint/style/noUnusedVars") 视为同一规则
-    const normalizeRule = (rule) => {
-        const tail = rule.split('/').pop() ?? rule;
-        return tail.toLowerCase().replace(/[-_]/g, '');
-    };
     const map = new Map();
     for (const r of results) {
         const msgKey = r.message.substring(0, 50).toLowerCase().replace(/\s+/g, ' ');
         const ruleKey = normalizeRule(r.ruleId);
-        const key = `${r.file}:${r.line}:${r.column}:${ruleKey}:${msgKey}`;
+        // 故意不含 column —— 详见函数顶 doc comment
+        const key = `${r.file}:${r.line}:${ruleKey}:${msgKey}`;
         const existing = map.get(key);
         if (existing == null || SEV_RANK[r.severity] > SEV_RANK[existing.severity]) {
             map.set(key, r);
         }
     }
     return Array.from(map.values());
+}
+/**
+ * 规则名归一化：去掉路径前缀，剥离大小写/连字符/下划线。
+ * ESLint("no-unused-vars") 与 Biome("lint/style/noUnusedVars") 视为同一规则。
+ */
+function normalizeRule(rule) {
+    const tail = rule.split('/').pop() ?? rule;
+    return tail.toLowerCase().replace(/[-_]/g, '');
+}
+/**
+ * 把"相邻行的同款 finding"合并为单个范围。
+ *
+ * 应在 `deduplicateResults` 之后调用 —— 同行同款已经被合并，本函数只处理
+ * **跨行**的相邻同款。
+ *
+ * ## 合并条件（必须全部满足）
+ *   - 同 file
+ *   - 同 normalized ruleId
+ *   - 同 message 前 50 字符（前缀匹配，避免微小格式差异破坏合并）
+ *   - 同 severity
+ *   - 同 tool（不跨工具合并，避免"Biome 报 line 88 + ESLint 报 line 89"被误合）
+ *   - line[i+1] ≤ endLine[i] + 1（相邻或重叠；隔 ≥ 2 行不合并）
+ *
+ * ## 合并后结果
+ *   - `line` = min(原始 line)
+ *   - `endLine` = max(原始 endLine ?? line)
+ *   - 其他字段沿用第一条 finding（column / message / suggestion / ...）
+ *
+ * ## 典型场景
+ *   - tsc 报 line 88、89 都 `Cannot find name 'Buffer'` → 合并 `88-89`
+ *   - 同 unused-vars 但不同变量名（'foo' / 'bar'） → message 不同，**不**合并
+ *   - 88、90 同款（中间隔一行非问题代码） → **不**合并，是两段独立代码
+ */
+function collapseAdjacentFindings(results) {
+    // 1) 按"可合并组"分桶
+    const groups = new Map();
+    for (const r of results) {
+        const msgKey = r.message.substring(0, 50).toLowerCase().replace(/\s+/g, ' ');
+        const ruleKey = normalizeRule(r.ruleId);
+        const groupKey = `${r.file}:${ruleKey}:${msgKey}:${r.severity}:${r.tool}`;
+        const list = groups.get(groupKey) ?? [];
+        list.push(r);
+        groups.set(groupKey, list);
+    }
+    // 2) 每组内按起始行排序，相邻则合并
+    const out = [];
+    for (const list of groups.values()) {
+        if (list.length === 1) {
+            out.push(list[0]);
+            continue;
+        }
+        list.sort((a, b) => a.line - b.line || (a.endLine ?? a.line) - (b.endLine ?? b.line));
+        let current = { ...list[0] };
+        for (let i = 1; i < list.length; i++) {
+            const next = list[i];
+            const currentEnd = current.endLine ?? current.line;
+            const nextEnd = next.endLine ?? next.line;
+            if (next.line <= currentEnd + 1) {
+                // 相邻或重叠 → 扩展 current 的尾部
+                current.endLine = Math.max(currentEnd, nextEnd);
+            }
+            else {
+                // 隔 ≥ 2 行 → flush current，开新 segment
+                out.push(current);
+                current = { ...next };
+            }
+        }
+        out.push(current);
+    }
+    return out;
 }
 
 ;// CONCATENATED MODULE: ./lib/lint/orchestrator.js
@@ -17434,20 +17517,29 @@ async function runLintTools(options, adaptersOverride) {
         (0,core.info)(`lint/${adapter.name}: ${results.length} raw findings (${counts.error}E/${counts.warning}W/${counts.info}I) on ${targets.length} files in ${Date.now() - toolStart}ms`);
         allResults.push(...results);
     }));
-    // 4) 变更行过滤 + 去重
+    // 4) 变更行过滤 → 同行同款去重 → 跨行相邻同款合并
+    //
+    //    三步分工：
+    //    - filterByChangedLines：仅留 PR 变更行 ± tolerance 的 finding
+    //    - deduplicateResults：同行同规则同 message → 折叠为 1（去掉跨工具 / 多列重复）
+    //    - collapseAdjacentFindings：连续多行同款 → 合并为单个 range
+    //      （如 tsc 在 line 88/89 都报 'Cannot find name Buffer' → '88-89'）
     const changedFiltered = filterByChangedLines(allResults, changedLineMap);
     const deduped = deduplicateResults(changedFiltered);
+    const collapsed = collapseAdjacentFindings(deduped);
     // 按 (file, line) 排序便于阅读
-    deduped.sort((a, b) => {
+    collapsed.sort((a, b) => {
         if (a.file !== b.file)
             return a.file.localeCompare(b.file);
         return a.line - b.line;
     });
-    // 5) 回填每个工具"实际写到 PR 评论的数量"（post-filter + post-dedup）
+    // 5) 回填每个工具"实际写到 PR 评论的数量"（post-filter + post-dedup + post-collapse）
     //    这样统计表能同时显示 "X / Y" — X=进了评论的, Y=工具原始扫描的，
     //    避免 tsc 这类项目级扫描器给出"43 errors 但只看到 3 条评论"的迷惑。
+    //    用 `collapsed` 计数：相邻合并后 88-89 算 1 条评论而非 2 条 —— 与
+    //    实际写到 PR 评论的数量保持一致。
     const onChangesByTool = new Map();
-    for (const r of deduped) {
+    for (const r of collapsed) {
         const c = onChangesByTool.get(r.tool) ?? { error: 0, warning: 0, info: 0 };
         if (r.severity === 'error')
             c.error++;
@@ -17468,7 +17560,7 @@ async function runLintTools(options, adaptersOverride) {
         summary.infosOnChanges = c.info;
     }
     return {
-        results: deduped,
+        results: collapsed,
         toolSummaries,
         durationMs: Date.now() - startedAt,
         filesScanned: changedFiles.length
