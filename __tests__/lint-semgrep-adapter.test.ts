@@ -62,12 +62,26 @@ function mockInstallOk(): void {
   })
 }
 
-/** 帮助函数：让 --version 调用返回指定的 stdout */
+/** 帮助函数：让 --version 调用返回指定的 stdout；同时排进 --dump-config 探测的成功响应，
+ *  对应生产 detect() 中 version 之后的 probeRulePack() 调用 */
 function mockVersionOk(versionStdout = 'semgrep 1.95.0'): void {
   runCommandMock.mockResolvedValueOnce({
     exitCode: 0,
     timedOut: false,
     stdout: versionStdout,
+    stderr: '',
+    spawnError: false
+  })
+  // 紧跟在 --version 之后的 --dump-config 探测调用
+  runCommandMock.mockResolvedValueOnce({
+    exitCode: 0,
+    timedOut: false,
+    stdout: JSON.stringify({
+      rules: [
+        {id: 'javascript.lang.security.audit.detect-eval.detect-eval', severity: 'ERROR', languages: ['javascript', 'typescript']},
+        {id: 'python.lang.security.audit.dangerous-system-call.dangerous-system-call', severity: 'ERROR', languages: ['python']}
+      ]
+    }),
     stderr: '',
     spawnError: false
   })

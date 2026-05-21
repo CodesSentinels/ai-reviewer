@@ -79,6 +79,23 @@ interface SemgrepOutput {
   results: SemgrepResult[]
   errors?: unknown[]
   version?: string
+  /**
+   * semgrep 1.x+ 在 `--json` 里附带的目录/文件统计；不同版本字段不全
+   * 一致，统一按 `unknown` 取出后在日志里手动 narrow，避免接口噪音。
+   */
+  paths?: {
+    scanned?: string[]
+    skipped?: Array<{path?: string; reason?: string}>
+  }
+}
+
+/** `--dump-config` 输出的精简结构，仅消费 rules.id / languages / severity */
+interface SemgrepDumpedConfig {
+  rules?: Array<{
+    id?: string
+    severity?: string
+    languages?: string[]
+  }>
 }
 
 export class SemgrepAdapter implements ToolAdapter {
@@ -227,10 +244,108 @@ export class SemgrepAdapter implements ToolAdapter {
     }
     const version = extractVersion(versionResult.stdout)
     this.resolvedVersion = version
+
+    // 3) 规则集探测：用 --dump-config 独立验证 `--config=<x>` 真的解析并加载了规则。
+    //    这一步与后续 scan 解耦：即使代码 0 finding，也能从日志里看到"加载了 N 条规则"
+    //    的证据，避免"参数传对了但规则没生效"型的隐性失败。失败仅 warn，不影响 detect 结果。
+    await this.probeRulePack(repoRoot)
+
     info(
       `lint/semgrep[detect]: ready in ${Date.now() - detectStart}ms — bin=${this.resolvedBinPath}, version=${version}, config=${this.config}`
     )
     return {available: true, version}
+  }
+
+  /**
+   * 跑一次 `semgrep --config=<this.config> --dump-config`，把展开后的规则
+   * 统计输出到日志：规则总数、语言分布、严重度分布、前 5 个 rule_id。
+   *
+   * 用途：在 GitHub Action 日志里得到"规则真的被 semgrep 加载了"的物证。
+   * 这是排查 `p/default 配置传对了但 0 finding` 类问题最直接的手段。
+   *
+   * 失败容忍：任何错误（联网失败 / dump-config 不支持 / JSON 解析失败）只
+   * `warning`，不阻断 detect。即使探测失败，scan 阶段仍按原计划执行。
+   */
+  private async probeRulePack(repoRoot: string): Promise<void> {
+    const probeStart = Date.now()
+    info(
+      `lint/semgrep[probe]: dump-config for "${this.config}" — verifying rules are actually loaded (not just parameter pass-through)`
+    )
+    const probe = await runCommand({
+      command: this.resolvedBinPath,
+      args: ['--config', this.config, '--dump-config'],
+      cwd: repoRoot,
+      timeoutMs: 30_000,
+      env: this.buildEnv()
+    })
+
+    if (probe.spawnError || probe.timedOut || probe.exitCode !== 0) {
+      const stderrSnippet =
+        probe.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 200) ?? ''
+      warning(
+        `lint/semgrep[probe]: --dump-config failed (exit=${probe.exitCode}, timedOut=${probe.timedOut}). ` +
+          `Cannot verify rule pack "${this.config}" was actually loaded. ` +
+          `Most common cause: cannot reach semgrep.dev to fetch the ruleset. ` +
+          `stderr first line: "${stderrSnippet}"`
+      )
+      return
+    }
+
+    const dumped = parseJsonSafe<SemgrepDumpedConfig>(probe.stdout, 'semgrep[probe]')
+    if (dumped == null) {
+      warning(
+        `lint/semgrep[probe]: --dump-config returned non-JSON (exit=0). ` +
+          `Cannot verify rule pack contents. stdout first 200 chars: "${probe.stdout.substring(0, 200)}"`
+      )
+      return
+    }
+
+    const rules = dumped.rules ?? []
+    if (rules.length === 0) {
+      warning(
+        `lint/semgrep[probe]: rule pack "${this.config}" loaded 0 rules. ` +
+          `This almost certainly means the config name is wrong or the ruleset is empty. ` +
+          `Expected p/default to load 200-400 rules. Check action input semgrep_config.`
+      )
+      return
+    }
+
+    const langs = new Map<string, number>()
+    const severities = new Map<string, number>()
+    const prefixes = new Map<string, number>()
+    const sampleIds: string[] = []
+    for (const r of rules) {
+      const id = typeof r.id === 'string' ? r.id : ''
+      if (id.length > 0) {
+        // rule_id 命名空间一般是 `<lang>.<topic>.security.audit.<rule>` 或
+        // `<lang>.<framework>.<rule>` —— 取前两段作为指纹粒度足够区分来源
+        const prefix = id.split('.').slice(0, 2).join('.')
+        prefixes.set(prefix, (prefixes.get(prefix) ?? 0) + 1)
+        if (sampleIds.length < 5) sampleIds.push(id)
+      }
+      const sev = typeof r.severity === 'string' ? r.severity : 'UNKNOWN'
+      severities.set(sev, (severities.get(sev) ?? 0) + 1)
+      for (const l of r.languages ?? []) {
+        langs.set(l, (langs.get(l) ?? 0) + 1)
+      }
+    }
+
+    const fmtMap = (m: Map<string, number>, top = 10): string =>
+      [...m.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, top)
+        .map(([k, v]) => `${k}:${v}`)
+        .join(', ')
+
+    info(
+      `lint/semgrep[probe]: ✅ loaded ${rules.length} rule(s) from "${this.config}" in ${
+        Date.now() - probeStart
+      }ms`
+    )
+    info(`lint/semgrep[probe]: severity_breakdown = { ${fmtMap(severities)} }`)
+    info(`lint/semgrep[probe]: language_breakdown (top 10) = { ${fmtMap(langs)} }`)
+    info(`lint/semgrep[probe]: rule_id prefix breakdown (top 10) = { ${fmtMap(prefixes)} }`)
+    info(`lint/semgrep[probe]: sample rule_ids: ${sampleIds.join(' | ')}`)
   }
 
   async scan(files: string[], repoRoot: string): Promise<LintResult[]> {
@@ -329,6 +444,30 @@ export class SemgrepAdapter implements ToolAdapter {
       )
     }
 
+    // 扫描覆盖面：semgrep 自己上报"实际扫了哪些文件 / 跳过了哪些"。0 finding 多半
+    // 不是规则没生效，而是文件被 skipped（语言不匹配 / 大文件 / 二进制等）—— 把它显式打出来。
+    const scannedPaths = parsed.paths?.scanned ?? []
+    const skippedPaths = parsed.paths?.skipped ?? []
+    info(
+      `lint/semgrep[scan]: coverage — scanned=${scannedPaths.length}/${files.length} input file(s), ` +
+        `skipped=${skippedPaths.length}`
+    )
+    if (scannedPaths.length > 0) {
+      info(
+        `lint/semgrep[scan]: scanned files: ${scannedPaths.slice(0, 5).join(', ')}${
+          scannedPaths.length > 5 ? ', ...' : ''
+        }`
+      )
+    }
+    if (skippedPaths.length > 0) {
+      // 只取前 3 条，附带 reason；常见 reason: "too_big" / "wrong_language" / "always_skipped"
+      const skipSample = skippedPaths
+        .slice(0, 3)
+        .map(s => `${s.path ?? '?'}(${s.reason ?? '?'})`)
+        .join(', ')
+      info(`lint/semgrep[scan]: skipped sample: ${skipSample}`)
+    }
+
     const findings: LintResult[] = []
     for (const r of parsed.results ?? []) {
       // semgrep 报告路径默认是相对 cwd 的；少数模式下可能给绝对路径
@@ -374,7 +513,32 @@ export class SemgrepAdapter implements ToolAdapter {
           `If you expected findings on these files, check: ` +
           `(1) does "${this.config}" cover the languages of the scanned files? ` +
           `(2) is the project behind a corporate firewall blocking semgrep.dev? ` +
-          `(3) did semgrep silently skip the files (look at stderr_len above and rerun with --debug)`
+          `(3) did semgrep silently skip the files (look at "scanned/skipped" log line above)`
+      )
+    } else {
+      // finding 的 check_id 前缀分布 —— 用来验证规则来源（如 `javascript.lang.security.*`
+      // 多半来自 p/default；陌生前缀提示 config 被指向了其他规则集）
+      const findingPrefixes = new Map<string, number>()
+      const findingSeverities = new Map<string, number>()
+      for (const f of findings) {
+        const prefix = f.ruleId.split('.').slice(0, 2).join('.')
+        findingPrefixes.set(prefix, (findingPrefixes.get(prefix) ?? 0) + 1)
+        findingSeverities.set(f.severity, (findingSeverities.get(f.severity) ?? 0) + 1)
+      }
+      const fmtMap = (m: Map<string, number>): string =>
+        [...m.entries()]
+          .sort((a, b) => b[1] - a[1])
+          .map(([k, v]) => `${k}:${v}`)
+          .join(', ')
+      info(
+        `lint/semgrep[scan]: finding rule_id prefix breakdown = { ${fmtMap(findingPrefixes)} }`
+      )
+      info(`lint/semgrep[scan]: finding severity breakdown = { ${fmtMap(findingSeverities)} }`)
+      info(
+        `lint/semgrep[scan]: first 3 finding rule_ids: ${findings
+          .slice(0, 3)
+          .map(f => f.ruleId)
+          .join(' | ')}`
       )
     }
     info(
