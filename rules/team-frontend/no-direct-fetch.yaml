@@ -1,0 +1,47 @@
+rules:
+  - id: no-direct-fetch
+    message: |
+      不要直接调用 fetch()。请使用 apiClient（src/api/apiClient.ts），它统一处理：
+      鉴权、错误码、超时、重试、tracing。直接 fetch 会绕过这些保障。
+
+      允许的写法：
+        apiClient.get('/api/user')
+        apiClient.post('/api/order', body)
+
+      豁免场景（已在规则里排除）：
+        - 测试代码（*.test.ts / __tests__/）
+        - mock 注入（jest.mock / vi.mock / mockImplementation）
+        - apiClient 自身实现
+    severity: WARNING
+    languages: [typescript, javascript]
+    patterns:
+      # 主匹配：fetch 的三种调用形态
+      - pattern-either:
+          - pattern: fetch(...)
+          - pattern: window.fetch(...)
+          - pattern: globalThis.fetch(...)
+      # 测试 mock 注入的几种典型上下文 → 不算违规
+      - pattern-not-inside: |
+          jest.mock(...)
+      - pattern-not-inside: |
+          vi.mock(...)
+      - pattern-not-inside: |
+          $X.mockImplementation(...)
+    paths:
+      # 测试 / mock / stories 路径整体豁免
+      exclude:
+        - "**/*.test.{ts,tsx,js,jsx}"
+        - "**/*.spec.{ts,tsx,js,jsx}"
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+        - "**/mocks/**"
+        - "**/msw/**"
+        - "**/*.stories.{ts,tsx,js,jsx}"
+        # apiClient 自己内部当然要用 fetch；前导 `/` 显式锚定到仓库根，
+        # 不会误豁免子模块里的同名路径
+        - "/src/api/apiClient.ts"
+    metadata:
+      category: convention
+      team: frontend
+      level: P0
+      rationale: 统一通过 apiClient 走 API 调用，确保鉴权、错误、超时一致

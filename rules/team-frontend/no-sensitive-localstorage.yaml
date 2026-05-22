@@ -1,0 +1,47 @@
+rules:
+  - id: no-sensitive-localstorage
+    message: |
+      不要把敏感数据（token / password / jwt / secret / credential / session_id / api_key）
+      写进 localStorage / sessionStorage。它们以明文形式落到磁盘，任何 XSS 漏洞都
+      会直接泄露这些数据。
+
+      推荐做法：
+        - 访问 token：放 httpOnly + Secure + SameSite=Strict 的 cookie，前端碰不到
+        - 短期 token：放内存（React state / Zustand），页面刷新重新换
+        - 必须落地的敏感数据：IndexedDB + 加密（适合离线场景）
+    severity: ERROR
+    languages: [typescript, javascript]
+    patterns:
+      - pattern-either:
+          - pattern: localStorage.setItem($KEY, ...)
+          - pattern: sessionStorage.setItem($KEY, ...)
+          - pattern: window.localStorage.setItem($KEY, ...)
+          - pattern: window.sessionStorage.setItem($KEY, ...)
+          - pattern: globalThis.localStorage.setItem($KEY, ...)
+          - pattern: globalThis.sessionStorage.setItem($KEY, ...)
+      # 命中条件：第一个参数的源码包含敏感关键字。
+      # 故意 NOT 锚定到引号 —— 模板字面量在 semgrep 里源码表示不带 backtick，
+      # 加引号锚定会漏报 `my_secret`。纯子串匹配同时覆盖字符串字面量、模板字面量、
+      # 以及（已知边角）变量名包含 token/secret 的形式。
+      # 故意不收 'auth' 单词：避免 isAuthenticated / authProvider 这种 FP。
+      # 已知 FP：开发者用变量名 `userToken` 作为 key 会被命中 —— 这种情况罕见，
+      # 且 ERROR 级别下也值得人工 review，可接受。
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: (?i).*(token|secret|password|passwd|pwd|jwt|api[-_]?key|credential|session[-_]?id)
+    paths:
+      exclude:
+        - "**/*.test.{ts,tsx,js,jsx}"
+        - "**/*.spec.{ts,tsx,js,jsx}"
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+        - "**/mocks/**"
+        - "**/msw/**"
+        - "**/*.stories.{ts,tsx,js,jsx}"
+    metadata:
+      category: security
+      team: frontend
+      level: P0
+      cwe: "CWE-922: Insecure Storage of Sensitive Information"
+      owasp: "A02:2021 - Cryptographic Failures"
+      rationale: localStorage 明文存敏感数据是经典 XSS 后利用面
