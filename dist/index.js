@@ -17376,76 +17376,73 @@ class SemgrepAdapter {
         return { available: true, version };
     }
     /**
-     * 跑一次 `semgrep --config=<this.config> --dump-config`，把展开后的规则
-     * 统计输出到日志：规则总数、语言分布、严重度分布、前 5 个 rule_id。
+     * 跑一次 `semgrep scan --validate --config=<this.config>`，验证规则集真的
+     * 能被加载（且 yaml/Registry 解析通过），不实际扫描任何文件。
      *
      * 用途：在 GitHub Action 日志里得到"规则真的被 semgrep 加载了"的物证。
      * 这是排查 `p/default 配置传对了但 0 finding` 类问题最直接的手段。
      *
-     * 失败容忍：任何错误（联网失败 / dump-config 不支持 / JSON 解析失败）只
-     * `warning`，不阻断 detect。即使探测失败，scan 阶段仍按原计划执行。
+     * 为什么不用 `--dump-config`：semgrep 1.x 把 dump-config 收编到 scan 子命令
+     * 下，但 scan 同时要求 TARGETS 位置参数，没有 TARGETS 时返回 exit=2 + Usage。
+     * 加上 TARGETS 又会触发真扫描（即便有 --dump-config）。`--validate` 没有
+     * 这个矛盾：只加载并校验规则集然后退出。
+     *
+     * 失败容忍：任何错误（联网失败 / yaml 损坏 / --validate 不支持）只 `warning`，
+     * 不阻断 detect。即使探测失败，scan 阶段仍按原计划执行。
      */
     async probeRulePack(repoRoot) {
         const probeStart = Date.now();
-        (0,core.info)(`lint/semgrep[probe]: dump-config for "${this.config}" — verifying rules are actually loaded (not just parameter pass-through)`);
+        (0,core.info)(`lint/semgrep[probe]: validating rule pack "${this.config}" via semgrep scan --validate ` +
+            `(no targets needed — just confirms rules can be loaded & parsed)`);
         const probe = await runCommand({
             command: this.resolvedBinPath,
-            args: ['--config', this.config, '--dump-config'],
+            args: [
+                'scan',
+                '--validate',
+                '--disable-version-check',
+                '--metrics=off',
+                `--config=${this.config}`
+            ],
             cwd: repoRoot,
             timeoutMs: 30_000,
             env: this.buildEnv()
         });
+        const elapsed = Date.now() - probeStart;
         if (probe.spawnError || probe.timedOut || probe.exitCode !== 0) {
-            const stderrSnippet = probe.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 200) ?? '';
-            (0,core.warning)(`lint/semgrep[probe]: --dump-config failed (exit=${probe.exitCode}, timedOut=${probe.timedOut}). ` +
-                `Cannot verify rule pack "${this.config}" was actually loaded. ` +
-                `Most common cause: cannot reach semgrep.dev to fetch the ruleset. ` +
-                `stderr first line: "${stderrSnippet}"`);
+            const stderrSnippet = probe.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 300) ?? '';
+            const stdoutSnippet = probe.stdout.split('\n').find(l => l.trim().length > 0)?.substring(0, 200) ?? '';
+            (0,core.warning)(`lint/semgrep[probe]: --validate failed (exit=${probe.exitCode}, timedOut=${probe.timedOut}, ` +
+                `elapsed=${elapsed}ms). Rule pack "${this.config}" may NOT be loaded. ` +
+                `Common causes: (1) config name typo (2) cannot reach semgrep.dev to fetch ` +
+                `the ruleset (3) invalid yaml in a custom config file. ` +
+                `stderr: "${stderrSnippet}"` +
+                (stdoutSnippet.length > 0 ? ` stdout: "${stdoutSnippet}"` : ''));
             return;
         }
-        const dumped = parseJsonSafe(probe.stdout, 'semgrep[probe]');
-        if (dumped == null) {
-            (0,core.warning)(`lint/semgrep[probe]: --dump-config returned non-JSON (exit=0). ` +
-                `Cannot verify rule pack contents. stdout first 200 chars: "${probe.stdout.substring(0, 200)}"`);
-            return;
+        // semgrep --validate 在不同版本里有不同的输出：
+        //   1.x 通常往 stderr 打 "Configuration is valid - found N valid rule(s)" 一类的句子
+        //   有些版本完全静默（exit=0 即代表 valid）
+        //   有些版本在 stdout 把 rule path 打出来
+        // 这里两边都搜，能拿到 N 就给出 N，拿不到就只报"validated successfully"
+        const combined = `${probe.stderr}\n${probe.stdout}`;
+        const ruleCountMatch = combined.match(/(\d+)\s+(?:valid\s+)?rule/i);
+        const ruleCount = ruleCountMatch?.[1] ?? '?';
+        (0,core.info)(`lint/semgrep[probe]: ✅ "${this.config}" validates — ${ruleCount} rule(s) loaded in ${elapsed}ms` +
+            (ruleCount === '?'
+                ? ' (semgrep didn\'t print a rule count; exit=0 still proves config loaded)'
+                : ''));
+        // 把 stderr 头几行也打出来 —— semgrep 在 validate 时偶尔会附带规则来源 / 警告
+        // （如 "loaded rules from https://semgrep.dev/c/p/default" 或弃用提示），
+        // 对诊断"规则到底从哪来"很有价值
+        const stderrLines = probe.stderr
+            .split('\n')
+            .map(l => l.trim())
+            .filter(l => l.length > 0)
+            .slice(0, 5)
+            .map(l => l.substring(0, 200));
+        if (stderrLines.length > 0) {
+            (0,core.info)(`lint/semgrep[probe]: validate stderr (first 5 non-empty lines): ${stderrLines.join(' | ')}`);
         }
-        const rules = dumped.rules ?? [];
-        if (rules.length === 0) {
-            (0,core.warning)(`lint/semgrep[probe]: rule pack "${this.config}" loaded 0 rules. ` +
-                `This almost certainly means the config name is wrong or the ruleset is empty. ` +
-                `Expected p/default to load 200-400 rules. Check action input semgrep_config.`);
-            return;
-        }
-        const langs = new Map();
-        const severities = new Map();
-        const prefixes = new Map();
-        const sampleIds = [];
-        for (const r of rules) {
-            const id = typeof r.id === 'string' ? r.id : '';
-            if (id.length > 0) {
-                // rule_id 命名空间一般是 `<lang>.<topic>.security.audit.<rule>` 或
-                // `<lang>.<framework>.<rule>` —— 取前两段作为指纹粒度足够区分来源
-                const prefix = id.split('.').slice(0, 2).join('.');
-                prefixes.set(prefix, (prefixes.get(prefix) ?? 0) + 1);
-                if (sampleIds.length < 5)
-                    sampleIds.push(id);
-            }
-            const sev = typeof r.severity === 'string' ? r.severity : 'UNKNOWN';
-            severities.set(sev, (severities.get(sev) ?? 0) + 1);
-            for (const l of r.languages ?? []) {
-                langs.set(l, (langs.get(l) ?? 0) + 1);
-            }
-        }
-        const fmtMap = (m, top = 10) => [...m.entries()]
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, top)
-            .map(([k, v]) => `${k}:${v}`)
-            .join(', ');
-        (0,core.info)(`lint/semgrep[probe]: ✅ loaded ${rules.length} rule(s) from "${this.config}" in ${Date.now() - probeStart}ms`);
-        (0,core.info)(`lint/semgrep[probe]: severity_breakdown = { ${fmtMap(severities)} }`);
-        (0,core.info)(`lint/semgrep[probe]: language_breakdown (top 10) = { ${fmtMap(langs)} }`);
-        (0,core.info)(`lint/semgrep[probe]: rule_id prefix breakdown (top 10) = { ${fmtMap(prefixes)} }`);
-        (0,core.info)(`lint/semgrep[probe]: sample rule_ids: ${sampleIds.join(' | ')}`);
     }
     async scan(files, repoRoot) {
         if (this.resolvedBinPath === '') {
