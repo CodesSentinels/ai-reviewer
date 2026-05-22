@@ -1,7 +1,7 @@
 /******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
 
-/***/ 4936:
+/***/ 6016:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
 "use strict";
@@ -15,7 +15,7 @@ __nccwpck_require__.d(__webpack_exports__, {
 var core = __nccwpck_require__(1078);
 // EXTERNAL MODULE: external "child_process"
 var external_child_process_ = __nccwpck_require__(2081);
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/tslib.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/internal/tslib.mjs
 function __classPrivateFieldSet(receiver, state, value, kind, f) {
     if (kind === "m")
         throw new TypeError("Private method is not writable");
@@ -34,7 +34,7 @@ function __classPrivateFieldGet(receiver, state, kind, f) {
 }
 
 
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/utils/uuid.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/internal/utils/uuid.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 /**
  * https://stackoverflow.com/a/2117523
@@ -50,7 +50,7 @@ let uuid4 = function () {
     return '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, (c) => (+c ^ (randomByte() & (15 >> (+c / 4)))).toString(16));
 };
 //# sourceMappingURL=uuid.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/errors.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/internal/errors.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 function isAbortError(err) {
     return (typeof err === 'object' &&
@@ -87,7 +87,7 @@ const castToError = (err) => {
     return new Error(err);
 };
 //# sourceMappingURL=errors.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/core/error.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/core/error.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 class error_OpenAIError extends Error {
@@ -204,8 +204,39 @@ class InvalidWebhookSignatureError extends Error {
         super(message);
     }
 }
+/**
+ * Error thrown by the API server during OAuth token exchange.
+ * Can have status codes 400, 401, or 403.
+ * Other status codes from OAuth endpoints are raised as normal APIError types.
+ */
+class OAuthError extends APIError {
+    constructor(status, error, headers) {
+        let finalMessage = 'OAuth2 authentication error';
+        let error_code = undefined;
+        if (error && typeof error === 'object') {
+            const errorData = error;
+            error_code = errorData['error'];
+            const description = errorData['error_description'];
+            if (description && typeof description === 'string') {
+                finalMessage = description;
+            }
+            else if (error_code) {
+                finalMessage = error_code;
+            }
+        }
+        super(status, error, finalMessage, headers);
+        this.error_code = error_code;
+    }
+}
+class SubjectTokenProviderError extends error_OpenAIError {
+    constructor(message, provider, cause) {
+        super(message);
+        this.provider = provider;
+        this.cause = cause;
+    }
+}
 //# sourceMappingURL=error.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/utils/values.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/internal/utils/values.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 // https://url.spec.whatwg.org/#url-scheme-string
@@ -300,14 +331,14 @@ const safeJSON = (text) => {
     }
 };
 //# sourceMappingURL=values.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/utils/sleep.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/internal/utils/sleep.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 //# sourceMappingURL=sleep.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/version.mjs
-const VERSION = '6.27.0'; // x-release-please-version
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/version.mjs
+const VERSION = '6.34.0'; // x-release-please-version
 //# sourceMappingURL=version.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/detect-platform.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/internal/detect-platform.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 const isRunningInBrowser = () => {
@@ -465,7 +496,7 @@ const getPlatformHeaders = () => {
     return (_platformHeaders ?? (_platformHeaders = getPlatformProperties()));
 };
 //# sourceMappingURL=detect-platform.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/shims.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/internal/shims.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 function getDefaultFetch() {
     if (typeof fetch !== 'undefined') {
@@ -551,7 +582,7 @@ async function CancelReadableStream(stream) {
     await cancelPromise;
 }
 //# sourceMappingURL=shims.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/request-options.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/internal/request-options.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 const FallbackEncoder = ({ headers, body }) => {
     return {
@@ -562,7 +593,7 @@ const FallbackEncoder = ({ headers, body }) => {
     };
 };
 //# sourceMappingURL=request-options.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/qs/formats.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/internal/qs/formats.mjs
 const default_format = 'RFC3986';
 const default_formatter = (v) => String(v);
 const formatters = {
@@ -572,7 +603,7 @@ const formatters = {
 const RFC1738 = 'RFC1738';
 const RFC3986 = 'RFC3986';
 //# sourceMappingURL=formats.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/qs/utils.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/internal/qs/utils.mjs
 
 
 let has = (obj, key) => ((has = Object.hasOwn ?? Function.prototype.call.bind(Object.prototype.hasOwnProperty)),
@@ -790,7 +821,7 @@ function maybe_map(val, fn) {
     return fn(val);
 }
 //# sourceMappingURL=utils.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/qs/stringify.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/internal/qs/stringify.mjs
 
 
 
@@ -1065,14 +1096,14 @@ function stringify(object, opts = {}) {
     return joined.length > 0 ? prefix + joined : '';
 }
 //# sourceMappingURL=stringify.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/utils/query.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/internal/utils/query.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 function stringifyQuery(query) {
     return stringify(query, { arrayFormat: 'brackets' });
 }
 //# sourceMappingURL=query.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/utils/bytes.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/internal/utils/bytes.mjs
 function concatBytes(buffers) {
     let length = 0;
     for (const buffer of buffers) {
@@ -1099,7 +1130,7 @@ function decodeUTF8(bytes) {
         ((decoder = new globalThis.TextDecoder()), (decodeUTF8_ = decoder.decode.bind(decoder))))(bytes);
 }
 //# sourceMappingURL=bytes.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/decoders/line.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/internal/decoders/line.mjs
 var _LineDecoder_buffer, _LineDecoder_carriageReturnIndex;
 
 
@@ -1208,7 +1239,7 @@ function findDoubleNewlineIndex(buffer) {
     return -1;
 }
 //# sourceMappingURL=line.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/utils/log.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/internal/utils/log.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 const levelNumbers = {
@@ -1288,7 +1319,7 @@ const formatRequestDetails = (details) => {
     return details;
 };
 //# sourceMappingURL=log.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/core/streaming.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/core/streaming.mjs
 var _Stream_client;
 
 
@@ -1577,7 +1608,7 @@ function partition(str, delimiter) {
     return [str, '', ''];
 }
 //# sourceMappingURL=streaming.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/parse.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/internal/parse.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -1634,7 +1665,7 @@ function addRequestID(value, response) {
     });
 }
 //# sourceMappingURL=parse.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/core/api-promise.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/core/api-promise.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 var _APIPromise_client;
 
@@ -1707,7 +1738,7 @@ class APIPromise extends Promise {
 }
 _APIPromise_client = new WeakMap();
 //# sourceMappingURL=api-promise.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/core/pagination.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/core/pagination.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 var _AbstractPage_client;
 
@@ -1856,7 +1887,95 @@ class ConversationCursorPage extends AbstractPage {
     }
 }
 //# sourceMappingURL=pagination.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/uploads.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/auth/workload-identity-auth.mjs
+
+
+const SUBJECT_TOKEN_TYPES = {
+    jwt: 'urn:ietf:params:oauth:token-type:jwt',
+    id: 'urn:ietf:params:oauth:token-type:id_token',
+};
+const TOKEN_EXCHANGE_GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:token-exchange';
+class WorkloadIdentityAuth {
+    constructor(config, fetch) {
+        this.cachedToken = null;
+        this.refreshPromise = null;
+        this.tokenExchangeUrl = 'https://auth.openai.com/oauth/token';
+        this.config = config;
+        this.fetch = fetch ?? getDefaultFetch();
+    }
+    async getToken() {
+        if (!this.cachedToken || this.isTokenExpired(this.cachedToken)) {
+            if (this.refreshPromise) {
+                return await this.refreshPromise;
+            }
+            this.refreshPromise = this.refreshToken();
+            try {
+                const token = await this.refreshPromise;
+                return token;
+            }
+            finally {
+                this.refreshPromise = null;
+            }
+        }
+        if (this.needsRefresh(this.cachedToken) && !this.refreshPromise) {
+            this.refreshPromise = this.refreshToken().finally(() => {
+                this.refreshPromise = null;
+            });
+        }
+        return this.cachedToken.token;
+    }
+    async refreshToken() {
+        const subjectToken = await this.config.provider.getToken();
+        const response = await this.fetch(this.tokenExchangeUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                grant_type: TOKEN_EXCHANGE_GRANT_TYPE,
+                client_id: this.config.clientId,
+                subject_token: subjectToken,
+                subject_token_type: SUBJECT_TOKEN_TYPES[this.config.provider.tokenType],
+                identity_provider_id: this.config.identityProviderId,
+                service_account_id: this.config.serviceAccountId,
+            }),
+        });
+        if (!response.ok) {
+            const errorText = await response.text();
+            let body = undefined;
+            try {
+                body = JSON.parse(errorText);
+            }
+            catch { }
+            if (response.status === 400 || response.status === 401 || response.status === 403) {
+                throw new OAuthError(response.status, body, response.headers);
+            }
+            throw APIError.generate(response.status, body, `Token exchange failed with status ${response.status}`, response.headers);
+        }
+        const tokenResponse = (await response.json());
+        const expiresIn = tokenResponse.expires_in || 3600;
+        const expiresAt = Date.now() + expiresIn * 1000;
+        this.cachedToken = {
+            token: tokenResponse.access_token,
+            expiresAt,
+        };
+        return tokenResponse.access_token;
+    }
+    isTokenExpired(cachedToken) {
+        return Date.now() >= cachedToken.expiresAt;
+    }
+    needsRefresh(cachedToken) {
+        const bufferSeconds = this.config.refreshBufferSeconds ?? 1200;
+        const bufferMs = bufferSeconds * 1000;
+        return Date.now() >= cachedToken.expiresAt - bufferMs;
+    }
+    invalidateToken() {
+        this.cachedToken = null;
+        this.refreshPromise = null;
+    }
+}
+//# sourceMappingURL=workload-identity-auth.mjs.map
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/internal/uploads.mjs
 
 const checkFileSupport = () => {
     if (typeof File === 'undefined') {
@@ -1988,7 +2107,7 @@ const addFormValue = async (form, key, value) => {
     }
 };
 //# sourceMappingURL=uploads.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/to-file.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/internal/to-file.mjs
 
 
 /**
@@ -2077,10 +2196,10 @@ function propsForError(value) {
     return `; props: [${props.map((p) => `"${p}"`).join(', ')}]`;
 }
 //# sourceMappingURL=to-file.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/core/uploads.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/core/uploads.mjs
 
 //# sourceMappingURL=uploads.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/core/resource.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/core/resource.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 class APIResource {
     constructor(client) {
@@ -2088,7 +2207,7 @@ class APIResource {
     }
 }
 //# sourceMappingURL=resource.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/utils/path.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/internal/utils/path.mjs
 
 /**
  * Percent-encode everything that isn't safe to have in a path without encoding safe chars.
@@ -2163,7 +2282,7 @@ const createPathTagFunction = (pathEncoder = encodeURIPath) => function path(sta
  */
 const path = /* @__PURE__ */ createPathTagFunction(encodeURIPath);
 //# sourceMappingURL=path.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/chat/completions/messages.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/chat/completions/messages.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -2191,10 +2310,10 @@ class Messages extends APIResource {
     }
 }
 //# sourceMappingURL=messages.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/error.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/error.mjs
 
 //# sourceMappingURL=error.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/parser.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/lib/parser.mjs
 
 function isChatCompletionFunctionTool(tool) {
     return tool !== undefined && 'function' in tool && tool.function !== undefined;
@@ -2357,7 +2476,7 @@ function validateInputTools(tools) {
     }
 }
 //# sourceMappingURL=parser.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/chatCompletionUtils.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/lib/chatCompletionUtils.mjs
 const isAssistantMessage = (message) => {
     return message?.role === 'assistant';
 };
@@ -2368,7 +2487,7 @@ function isPresent(obj) {
     return obj != null;
 }
 //# sourceMappingURL=chatCompletionUtils.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/EventStream.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/lib/EventStream.mjs
 var _EventStream_instances, _EventStream_connectedPromise, _EventStream_resolveConnectedPromise, _EventStream_rejectConnectedPromise, _EventStream_endPromise, _EventStream_resolveEndPromise, _EventStream_rejectEndPromise, _EventStream_listeners, _EventStream_ended, _EventStream_errored, _EventStream_aborted, _EventStream_catchingPromiseCreated, _EventStream_handleError;
 
 
@@ -2555,7 +2674,7 @@ _EventStream_connectedPromise = new WeakMap(), _EventStream_resolveConnectedProm
     return this._emit('error', new error_OpenAIError(String(error)));
 };
 //# sourceMappingURL=EventStream.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/RunnableFunction.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/lib/RunnableFunction.mjs
 function isRunnableFunctionWithParse(fn) {
     return typeof fn.parse === 'function';
 }
@@ -2570,7 +2689,7 @@ class ParsingToolFunction {
     }
 }
 //# sourceMappingURL=RunnableFunction.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/AbstractChatCompletionRunner.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/lib/AbstractChatCompletionRunner.mjs
 var _AbstractChatCompletionRunner_instances, _AbstractChatCompletionRunner_getFinalContent, _AbstractChatCompletionRunner_getFinalMessage, _AbstractChatCompletionRunner_getFinalFunctionToolCall, _AbstractChatCompletionRunner_getFinalFunctionToolCallResult, _AbstractChatCompletionRunner_calculateTotalUsage, _AbstractChatCompletionRunner_validateParams, _AbstractChatCompletionRunner_stringifyFunctionCallResult;
 
 
@@ -2858,7 +2977,7 @@ _AbstractChatCompletionRunner_instances = new WeakSet(), _AbstractChatCompletion
             : JSON.stringify(rawContent));
 };
 //# sourceMappingURL=AbstractChatCompletionRunner.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/ChatCompletionRunner.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/lib/ChatCompletionRunner.mjs
 
 
 class ChatCompletionRunner extends AbstractChatCompletionRunner {
@@ -2879,7 +2998,7 @@ class ChatCompletionRunner extends AbstractChatCompletionRunner {
     }
 }
 //# sourceMappingURL=ChatCompletionRunner.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/_vendor/partial-json-parser/parser.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/_vendor/partial-json-parser/parser.mjs
 const STR = 0b000000001;
 const NUM = 0b000000010;
 const ARR = 0b000000100;
@@ -3121,10 +3240,10 @@ const _parseJSON = (jsonString, allow) => {
 const partialParse = (input) => parseJSON(input, Allow.ALL ^ Allow.NUM);
 
 //# sourceMappingURL=parser.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/streaming.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/streaming.mjs
 
 //# sourceMappingURL=streaming.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/ChatCompletionStream.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/lib/ChatCompletionStream.mjs
 var _ChatCompletionStream_instances, _ChatCompletionStream_params, _ChatCompletionStream_choiceEventStates, _ChatCompletionStream_currentChatCompletionSnapshot, _ChatCompletionStream_beginRequest, _ChatCompletionStream_getChoiceEventState, _ChatCompletionStream_addChunk, _ChatCompletionStream_emitToolCallDoneEvent, _ChatCompletionStream_emitContentDoneEvents, _ChatCompletionStream_endRequest, _ChatCompletionStream_getAutoParseableResponseFormat, _ChatCompletionStream_accumulateChatCompletion;
 
 
@@ -3614,7 +3733,7 @@ function assertIsEmpty(obj) {
 }
 function assertNever(_x) { }
 //# sourceMappingURL=ChatCompletionStream.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/ChatCompletionStreamingRunner.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/lib/ChatCompletionStreamingRunner.mjs
 
 class ChatCompletionStreamingRunner extends ChatCompletionStream {
     static fromReadableStream(stream) {
@@ -3635,7 +3754,7 @@ class ChatCompletionStreamingRunner extends ChatCompletionStream {
     }
 }
 //# sourceMappingURL=ChatCompletionStreamingRunner.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/chat/completions/completions.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/chat/completions/completions.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -3745,7 +3864,7 @@ class Completions extends APIResource {
 
 Completions.Messages = Messages;
 //# sourceMappingURL=completions.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/chat/chat.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/chat/chat.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -3758,18 +3877,18 @@ class Chat extends APIResource {
 }
 Chat.Completions = Completions;
 //# sourceMappingURL=chat.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/chat/completions/index.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/chat/completions/index.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
 
 //# sourceMappingURL=index.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/chat/index.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/chat/index.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
 //# sourceMappingURL=index.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/headers.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/internal/headers.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 const brand_privateNullableHeaders = /* @__PURE__ */ Symbol('brand.privateNullableHeaders');
@@ -3844,7 +3963,7 @@ const isEmptyHeaders = (headers) => {
     return true;
 };
 //# sourceMappingURL=headers.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/audio/speech.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/audio/speech.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -3862,7 +3981,7 @@ class Speech extends APIResource {
      * const speech = await client.audio.speech.create({
      *   input: 'input',
      *   model: 'string',
-     *   voice: 'ash',
+     *   voice: 'string',
      * });
      *
      * const content = await speech.blob();
@@ -3879,7 +3998,7 @@ class Speech extends APIResource {
     }
 }
 //# sourceMappingURL=speech.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/audio/transcriptions.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/audio/transcriptions.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -3897,7 +4016,7 @@ class Transcriptions extends APIResource {
     }
 }
 //# sourceMappingURL=transcriptions.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/audio/translations.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/audio/translations.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -3910,7 +4029,7 @@ class Translations extends APIResource {
     }
 }
 //# sourceMappingURL=translations.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/audio/audio.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/audio/audio.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -3931,7 +4050,7 @@ Audio.Transcriptions = Transcriptions;
 Audio.Translations = Translations;
 Audio.Speech = Speech;
 //# sourceMappingURL=audio.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/batches.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/batches.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -3968,7 +4087,7 @@ class Batches extends APIResource {
     }
 }
 //# sourceMappingURL=batches.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/assistants.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/beta/assistants.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -4038,7 +4157,7 @@ class Assistants extends APIResource {
     }
 }
 //# sourceMappingURL=assistants.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/realtime/sessions.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/beta/realtime/sessions.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -4067,7 +4186,7 @@ class Sessions extends APIResource {
     }
 }
 //# sourceMappingURL=sessions.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/realtime/transcription-sessions.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/beta/realtime/transcription-sessions.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -4096,7 +4215,7 @@ class TranscriptionSessions extends APIResource {
     }
 }
 //# sourceMappingURL=transcription-sessions.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/realtime/realtime.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/beta/realtime/realtime.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -4116,7 +4235,7 @@ class Realtime extends APIResource {
 Realtime.Sessions = Sessions;
 Realtime.TranscriptionSessions = TranscriptionSessions;
 //# sourceMappingURL=realtime.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/chatkit/sessions.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/beta/chatkit/sessions.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -4160,7 +4279,7 @@ class sessions_Sessions extends APIResource {
     }
 }
 //# sourceMappingURL=sessions.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/chatkit/threads.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/beta/chatkit/threads.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -4234,7 +4353,7 @@ class Threads extends APIResource {
     }
 }
 //# sourceMappingURL=threads.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/chatkit/chatkit.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/beta/chatkit/chatkit.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -4251,7 +4370,7 @@ class ChatKit extends APIResource {
 ChatKit.Sessions = sessions_Sessions;
 ChatKit.Threads = Threads;
 //# sourceMappingURL=chatkit.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/threads/messages.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/beta/threads/messages.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -4326,7 +4445,7 @@ class messages_Messages extends APIResource {
     }
 }
 //# sourceMappingURL=messages.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/threads/runs/steps.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/beta/threads/runs/steps.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -4366,7 +4485,7 @@ class Steps extends APIResource {
     }
 }
 //# sourceMappingURL=steps.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/utils/base64.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/internal/utils/base64.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -4422,7 +4541,7 @@ const toFloat32Array = (base64Str) => {
     }
 };
 //# sourceMappingURL=base64.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/utils.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/internal/utils.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -4432,7 +4551,7 @@ const toFloat32Array = (base64Str) => {
 
 
 //# sourceMappingURL=utils.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/AssistantStream.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/lib/AssistantStream.mjs
 var _AssistantStream_instances, _a, _AssistantStream_events, _AssistantStream_runStepSnapshots, _AssistantStream_messageSnapshots, _AssistantStream_messageSnapshot, _AssistantStream_finalRun, _AssistantStream_currentContentIndex, _AssistantStream_currentContent, _AssistantStream_currentToolCallIndex, _AssistantStream_currentToolCall, _AssistantStream_currentEvent, _AssistantStream_currentRunSnapshot, _AssistantStream_currentRunStepSnapshot, _AssistantStream_addEvent, _AssistantStream_endRequest, _AssistantStream_handleMessage, _AssistantStream_handleRunStep, _AssistantStream_handleEvent, _AssistantStream_accumulateRunStep, _AssistantStream_accumulateMessage, _AssistantStream_accumulateContent, _AssistantStream_handleRun;
 
 
@@ -4982,7 +5101,7 @@ _a = AssistantStream, _AssistantStream_addEvent = function _AssistantStream_addE
 };
 function AssistantStream_assertNever(_x) { }
 //# sourceMappingURL=AssistantStream.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/threads/runs/runs.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/beta/threads/runs/runs.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5164,7 +5283,7 @@ class Runs extends APIResource {
 }
 Runs.Steps = Steps;
 //# sourceMappingURL=runs.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/threads/threads.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/beta/threads/threads.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5259,7 +5378,7 @@ class threads_Threads extends APIResource {
 threads_Threads.Runs = Runs;
 threads_Threads.Messages = messages_Messages;
 //# sourceMappingURL=threads.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/beta.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/beta/beta.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5284,7 +5403,7 @@ Beta.ChatKit = ChatKit;
 Beta.Assistants = Assistants;
 Beta.Threads = threads_Threads;
 //# sourceMappingURL=beta.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/completions.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/completions.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 /**
@@ -5296,7 +5415,7 @@ class completions_Completions extends APIResource {
     }
 }
 //# sourceMappingURL=completions.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/containers/files/content.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/containers/files/content.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5315,7 +5434,7 @@ class Content extends APIResource {
     }
 }
 //# sourceMappingURL=content.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/containers/files/files.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/containers/files/files.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5367,7 +5486,7 @@ class Files extends APIResource {
 }
 Files.Content = Content;
 //# sourceMappingURL=files.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/containers/containers.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/containers/containers.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5410,7 +5529,7 @@ class Containers extends APIResource {
 }
 Containers.Files = Files;
 //# sourceMappingURL=containers.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/conversations/items.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/conversations/items.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5452,7 +5571,7 @@ class Items extends APIResource {
     }
 }
 //# sourceMappingURL=items.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/conversations/conversations.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/conversations/conversations.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5493,7 +5612,7 @@ class Conversations extends APIResource {
 }
 Conversations.Items = Items;
 //# sourceMappingURL=conversations.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/embeddings.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/embeddings.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5549,7 +5668,7 @@ class Embeddings extends APIResource {
     }
 }
 //# sourceMappingURL=embeddings.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/evals/runs/output-items.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/evals/runs/output-items.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5574,7 +5693,7 @@ class OutputItems extends APIResource {
     }
 }
 //# sourceMappingURL=output-items.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/evals/runs/runs.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/evals/runs/runs.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5630,7 +5749,7 @@ class runs_Runs extends APIResource {
 }
 runs_Runs.OutputItems = OutputItems;
 //# sourceMappingURL=runs.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/evals/evals.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/evals/evals.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5683,7 +5802,7 @@ class Evals extends APIResource {
 }
 Evals.Runs = runs_Runs;
 //# sourceMappingURL=evals.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/files.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/files.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5769,13 +5888,13 @@ class files_Files extends APIResource {
     }
 }
 //# sourceMappingURL=files.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/fine-tuning/methods.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/fine-tuning/methods.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 class Methods extends APIResource {
 }
 //# sourceMappingURL=methods.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/fine-tuning/alpha/graders.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/fine-tuning/alpha/graders.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 /**
@@ -5824,7 +5943,7 @@ class Graders extends APIResource {
     }
 }
 //# sourceMappingURL=graders.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/fine-tuning/alpha/alpha.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/fine-tuning/alpha/alpha.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5837,7 +5956,7 @@ class Alpha extends APIResource {
 }
 Alpha.Graders = Graders;
 //# sourceMappingURL=alpha.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/fine-tuning/checkpoints/permissions.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/fine-tuning/checkpoints/permissions.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5923,7 +6042,7 @@ class Permissions extends APIResource {
     }
 }
 //# sourceMappingURL=permissions.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/fine-tuning/checkpoints/checkpoints.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/fine-tuning/checkpoints/checkpoints.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5936,7 +6055,7 @@ class Checkpoints extends APIResource {
 }
 Checkpoints.Permissions = Permissions;
 //# sourceMappingURL=checkpoints.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/fine-tuning/jobs/checkpoints.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/fine-tuning/jobs/checkpoints.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -5963,7 +6082,7 @@ class checkpoints_Checkpoints extends APIResource {
     }
 }
 //# sourceMappingURL=checkpoints.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/fine-tuning/jobs/jobs.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/fine-tuning/jobs/jobs.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6085,7 +6204,7 @@ class Jobs extends APIResource {
 }
 Jobs.Checkpoints = checkpoints_Checkpoints;
 //# sourceMappingURL=jobs.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/fine-tuning/fine-tuning.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/fine-tuning/fine-tuning.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6110,13 +6229,13 @@ FineTuning.Jobs = Jobs;
 FineTuning.Checkpoints = Checkpoints;
 FineTuning.Alpha = Alpha;
 //# sourceMappingURL=fine-tuning.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/graders/grader-models.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/graders/grader-models.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 class GraderModels extends APIResource {
 }
 //# sourceMappingURL=grader-models.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/graders/graders.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/graders/graders.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6129,7 +6248,7 @@ class graders_Graders extends APIResource {
 }
 graders_Graders.GraderModels = GraderModels;
 //# sourceMappingURL=graders.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/images.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/images.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6158,7 +6277,7 @@ class Images extends APIResource {
     }
 }
 //# sourceMappingURL=images.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/models.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/models.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6190,7 +6309,7 @@ class Models extends APIResource {
     }
 }
 //# sourceMappingURL=models.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/moderations.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/moderations.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 /**
@@ -6206,7 +6325,7 @@ class Moderations extends APIResource {
     }
 }
 //# sourceMappingURL=moderations.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/realtime/calls.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/realtime/calls.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6278,7 +6397,7 @@ class Calls extends APIResource {
     }
 }
 //# sourceMappingURL=calls.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/realtime/client-secrets.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/realtime/client-secrets.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 class ClientSecrets extends APIResource {
@@ -6310,7 +6429,7 @@ class ClientSecrets extends APIResource {
     }
 }
 //# sourceMappingURL=client-secrets.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/realtime/realtime.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/realtime/realtime.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6327,7 +6446,7 @@ class realtime_Realtime extends APIResource {
 realtime_Realtime.ClientSecrets = ClientSecrets;
 realtime_Realtime.Calls = Calls;
 //# sourceMappingURL=realtime.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/ResponsesParser.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/lib/ResponsesParser.mjs
 
 
 function maybeParseResponse(response, params) {
@@ -6488,7 +6607,7 @@ function addOutputText(rsp) {
     rsp.output_text = texts.join('');
 }
 //# sourceMappingURL=ResponsesParser.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/responses/ResponseStream.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/lib/responses/ResponseStream.mjs
 var _ResponseStream_instances, _ResponseStream_params, _ResponseStream_currentResponseSnapshot, _ResponseStream_finalResponse, _ResponseStream_beginRequest, _ResponseStream_addEvent, _ResponseStream_endRequest, _ResponseStream_accumulateResponse;
 
 
@@ -6750,7 +6869,7 @@ function finalizeResponse(snapshot, params) {
     return maybeParseResponse(snapshot, params);
 }
 //# sourceMappingURL=ResponseStream.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/responses/input-items.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/responses/input-items.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6774,7 +6893,7 @@ class InputItems extends APIResource {
     }
 }
 //# sourceMappingURL=input-items.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/responses/input-tokens.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/responses/input-tokens.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 class InputTokens extends APIResource {
@@ -6794,7 +6913,7 @@ class InputTokens extends APIResource {
     }
 }
 //# sourceMappingURL=input-tokens.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/responses/responses.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/responses/responses.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6895,7 +7014,7 @@ class Responses extends APIResource {
 Responses.InputItems = InputItems;
 Responses.InputTokens = InputTokens;
 //# sourceMappingURL=responses.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/skills/content.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/skills/content.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6913,7 +7032,7 @@ class content_Content extends APIResource {
     }
 }
 //# sourceMappingURL=content.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/skills/versions/content.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/skills/versions/content.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6932,7 +7051,7 @@ class versions_content_Content extends APIResource {
     }
 }
 //# sourceMappingURL=content.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/skills/versions/versions.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/skills/versions/versions.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6977,7 +7096,7 @@ class Versions extends APIResource {
 }
 Versions.Content = versions_content_Content;
 //# sourceMappingURL=versions.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/skills/skills.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/skills/skills.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -7027,7 +7146,7 @@ class Skills extends APIResource {
 Skills.Content = content_Content;
 Skills.Versions = Versions;
 //# sourceMappingURL=skills.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/uploads/parts.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/uploads/parts.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -7054,7 +7173,7 @@ class Parts extends APIResource {
     }
 }
 //# sourceMappingURL=parts.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/uploads/uploads.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/uploads/uploads.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -7125,7 +7244,7 @@ class Uploads extends APIResource {
 }
 Uploads.Parts = Parts;
 //# sourceMappingURL=uploads.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/Util.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/lib/Util.mjs
 /**
  * Like `Promise.allSettled()` but throws an error if any promises are rejected.
  */
@@ -7148,7 +7267,7 @@ const allSettledWithThrow = async (promises) => {
     return values;
 };
 //# sourceMappingURL=Util.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/vector-stores/file-batches.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/vector-stores/file-batches.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -7278,7 +7397,7 @@ class FileBatches extends APIResource {
     }
 }
 //# sourceMappingURL=file-batches.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/vector-stores/files.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/vector-stores/files.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -7417,7 +7536,7 @@ class vector_stores_files_Files extends APIResource {
     }
 }
 //# sourceMappingURL=files.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/vector-stores/vector-stores.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/vector-stores/vector-stores.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -7497,7 +7616,7 @@ class VectorStores extends APIResource {
 VectorStores.Files = vector_stores_files_Files;
 VectorStores.FileBatches = FileBatches;
 //# sourceMappingURL=vector-stores.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/videos.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/videos.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -7509,7 +7628,7 @@ class Videos extends APIResource {
      * Create a new video generation job from a prompt and optional reference assets.
      */
     create(body, options) {
-        return this._client.post('/videos', maybeMultipartFormRequestOptions({ body, ...options }, this._client));
+        return this._client.post('/videos', multipartFormRequestOptions({ body, ...options }, this._client));
     }
     /**
      * Fetch the latest metadata for a generated video.
@@ -7530,6 +7649,12 @@ class Videos extends APIResource {
         return this._client.delete(path `/videos/${videoID}`, options);
     }
     /**
+     * Create a character from an uploaded video.
+     */
+    createCharacter(body, options) {
+        return this._client.post('/videos/characters', multipartFormRequestOptions({ body, ...options }, this._client));
+    }
+    /**
      * Download the generated video bytes or a derived preview asset.
      *
      * Streams the rendered video content for the specified video job.
@@ -7543,6 +7668,25 @@ class Videos extends APIResource {
         });
     }
     /**
+     * Create a new video generation job by editing a source video or existing
+     * generated video.
+     */
+    edit(body, options) {
+        return this._client.post('/videos/edits', multipartFormRequestOptions({ body, ...options }, this._client));
+    }
+    /**
+     * Create an extension of a completed video.
+     */
+    extend(body, options) {
+        return this._client.post('/videos/extensions', multipartFormRequestOptions({ body, ...options }, this._client));
+    }
+    /**
+     * Fetch a character.
+     */
+    getCharacter(characterID, options) {
+        return this._client.get(path `/videos/characters/${characterID}`, options);
+    }
+    /**
      * Create a remix of a completed video using a refreshed prompt.
      */
     remix(videoID, body, options) {
@@ -7550,7 +7694,7 @@ class Videos extends APIResource {
     }
 }
 //# sourceMappingURL=videos.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/webhooks/webhooks.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/webhooks/webhooks.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 var _Webhooks_instances, _Webhooks_validateSecret, _Webhooks_getRequiredHeader;
 
@@ -7648,15 +7792,15 @@ _Webhooks_instances = new WeakSet(), _Webhooks_validateSecret = function _Webhoo
     return value;
 };
 //# sourceMappingURL=webhooks.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/webhooks/index.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/webhooks/index.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 //# sourceMappingURL=index.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/webhooks.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/webhooks.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 //# sourceMappingURL=webhooks.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/index.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/resources/index.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -7682,7 +7826,7 @@ _Webhooks_instances = new WeakSet(), _Webhooks_validateSecret = function _Webhoo
 
 
 //# sourceMappingURL=index.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/utils/env.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/internal/utils/env.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 /**
  * Read an environment variable.
@@ -7701,7 +7845,7 @@ const env_readEnv = (env) => {
     return undefined;
 };
 //# sourceMappingURL=env.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/client.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/client.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 var _OpenAI_instances, client_a, _OpenAI_encoder, _OpenAI_baseURLOverridden;
 
@@ -7746,6 +7890,9 @@ var _OpenAI_instances, client_a, _OpenAI_encoder, _OpenAI_baseURLOverridden;
 
 
 
+
+
+const WORKLOAD_IDENTITY_API_KEY_PLACEHOLDER = 'workload-identity-auth';
 /**
  * API Client for interfacing with the OpenAI API.
  */
@@ -7766,7 +7913,7 @@ class client_OpenAI {
      * @param {Record<string, string | undefined>} opts.defaultQuery - Default query parameters to include with every request to the API.
      * @param {boolean} [opts.dangerouslyAllowBrowser=false] - By default, client-side use of this library is not allowed, as it risks exposing your secret API credentials to attackers.
      */
-    constructor({ baseURL = env_readEnv('OPENAI_BASE_URL'), apiKey = env_readEnv('OPENAI_API_KEY'), organization = env_readEnv('OPENAI_ORG_ID') ?? null, project = env_readEnv('OPENAI_PROJECT_ID') ?? null, webhookSecret = env_readEnv('OPENAI_WEBHOOK_SECRET') ?? null, ...opts } = {}) {
+    constructor({ baseURL = env_readEnv('OPENAI_BASE_URL'), apiKey = env_readEnv('OPENAI_API_KEY'), organization = env_readEnv('OPENAI_ORG_ID') ?? null, project = env_readEnv('OPENAI_PROJECT_ID') ?? null, webhookSecret = env_readEnv('OPENAI_WEBHOOK_SECRET') ?? null, workloadIdentity, ...opts } = {}) {
         _OpenAI_instances.add(this);
         _OpenAI_encoder.set(this, void 0);
         /**
@@ -7821,14 +7968,21 @@ class client_OpenAI {
         this.containers = new Containers(this);
         this.skills = new Skills(this);
         this.videos = new Videos(this);
-        if (apiKey === undefined) {
-            throw new error_OpenAIError('Missing credentials. Please pass an `apiKey`, or set the `OPENAI_API_KEY` environment variable.');
+        if (workloadIdentity) {
+            if (apiKey && apiKey !== WORKLOAD_IDENTITY_API_KEY_PLACEHOLDER) {
+                throw new error_OpenAIError('The `apiKey` and `workloadIdentity` arguments are mutually exclusive; only one can be passed at a time.');
+            }
+            apiKey = WORKLOAD_IDENTITY_API_KEY_PLACEHOLDER;
+        }
+        else if (apiKey === undefined) {
+            throw new error_OpenAIError('Missing credentials. Please pass an `apiKey`, `workloadIdentity`, or set the `OPENAI_API_KEY` environment variable.');
         }
         const options = {
             apiKey,
             organization,
             project,
             webhookSecret,
+            workloadIdentity,
             ...opts,
             baseURL: baseURL || `https://api.openai.com/v1`,
         };
@@ -7850,6 +8004,9 @@ class client_OpenAI {
         this.fetch = options.fetch ?? getDefaultFetch();
         __classPrivateFieldSet(this, _OpenAI_encoder, FallbackEncoder, "f");
         this._options = options;
+        if (workloadIdentity) {
+            this._workloadIdentityAuth = new WorkloadIdentityAuth(workloadIdentity, this.fetch);
+        }
         this.apiKey = typeof apiKey === 'string' ? apiKey : 'Missing Key';
         this.organization = organization;
         this.project = project;
@@ -7869,6 +8026,7 @@ class client_OpenAI {
             fetch: this.fetch,
             fetchOptions: this.fetchOptions,
             apiKey: this.apiKey,
+            workloadIdentity: this._options.workloadIdentity,
             organization: this.organization,
             project: this.project,
             webhookSecret: this.webhookSecret,
@@ -7924,8 +8082,9 @@ class client_OpenAI {
             new URL(path)
             : new URL(baseURL + (baseURL.endsWith('/') && path.startsWith('/') ? path.slice(1) : path));
         const defaultQuery = this.defaultQuery();
-        if (!isEmptyObj(defaultQuery)) {
-            query = { ...defaultQuery, ...query };
+        const pathQuery = Object.fromEntries(url.searchParams);
+        if (!isEmptyObj(defaultQuery) || !isEmptyObj(pathQuery)) {
+            query = { ...pathQuery, ...defaultQuery, ...query };
         }
         if (typeof query === 'object' && query && !Array.isArray(query)) {
             url.search = this.stringifyQuery(query);
@@ -7994,7 +8153,7 @@ class client_OpenAI {
             throw new APIUserAbortError();
         }
         const controller = new AbortController();
-        const response = await this.fetchWithTimeout(url, req, timeout, controller).catch(castToError);
+        const response = await this.fetchWithAuth(url, req, timeout, controller).catch(castToError);
         const headersTime = Date.now();
         if (response instanceof globalThis.Error) {
             const retryMessage = `retrying, ${retriesRemaining} attempts remaining`;
@@ -8024,6 +8183,9 @@ class client_OpenAI {
                 durationMs: headersTime - startTime,
                 message: response.message,
             }));
+            if (response instanceof OAuthError || response instanceof SubjectTokenProviderError) {
+                throw response;
+            }
             if (isTimeout) {
                 throw new APIConnectionTimeoutError();
             }
@@ -8035,6 +8197,20 @@ class client_OpenAI {
             .join('');
         const responseInfo = `[${requestLogID}${retryLogStr}${specialHeaders}] ${req.method} ${url} ${response.ok ? 'succeeded' : 'failed'} with status ${response.status} in ${headersTime - startTime}ms`;
         if (!response.ok) {
+            if (response.status === 401 &&
+                this._workloadIdentityAuth &&
+                !options.__metadata?.['hasStreamingBody'] &&
+                !options.__metadata?.['workloadIdentityTokenRefreshed']) {
+                await CancelReadableStream(response.body);
+                this._workloadIdentityAuth.invalidateToken();
+                return this.makeRequest({
+                    ...options,
+                    __metadata: {
+                        ...options.__metadata,
+                        workloadIdentityTokenRefreshed: true,
+                    },
+                }, retriesRemaining, retryOfRequestLogID ?? requestLogID);
+            }
             const shouldRetry = await this.shouldRetry(response);
             if (retriesRemaining && shouldRetry) {
                 const retryMessage = `retrying, ${retriesRemaining} attempts remaining`;
@@ -8084,6 +8260,18 @@ class client_OpenAI {
     requestAPIList(Page, options) {
         const request = this.makeRequest(options, null, undefined);
         return new PagePromise(this, request, Page);
+    }
+    async fetchWithAuth(url, init, timeout, controller) {
+        if (this._workloadIdentityAuth) {
+            const headers = init.headers;
+            const authHeader = headers.get('Authorization');
+            if (!authHeader || authHeader === `Bearer ${WORKLOAD_IDENTITY_API_KEY_PLACEHOLDER}`) {
+                const token = await this._workloadIdentityAuth.getToken();
+                headers.set('Authorization', `Bearer ${token}`);
+            }
+        }
+        const response = await this.fetchWithTimeout(url, init, timeout, controller);
+        return response;
     }
     async fetchWithTimeout(url, init, ms, controller) {
         const { signal, method, ...options } = init || {};
@@ -8181,7 +8369,13 @@ class client_OpenAI {
         if ('timeout' in options)
             validatePositiveInteger('timeout', options.timeout);
         options.timeout = options.timeout ?? this.timeout;
-        const { bodyHeaders, body } = this.buildBody({ options });
+        const { bodyHeaders, body, isStreamingBody } = this.buildBody({ options });
+        if (isStreamingBody) {
+            inputOptions.__metadata = {
+                ...inputOptions.__metadata,
+                hasStreamingBody: true,
+            };
+        }
         const reqHeaders = await this.buildHeaders({ options: inputOptions, method, bodyHeaders, retryCount });
         const req = {
             method,
@@ -8228,9 +8422,18 @@ class client_OpenAI {
     }
     buildBody({ options: { body, headers: rawHeaders } }) {
         if (!body) {
-            return { bodyHeaders: undefined, body: undefined };
+            return { bodyHeaders: undefined, body: undefined, isStreamingBody: false };
         }
         const headers = headers_buildHeaders([rawHeaders]);
+        const isReadableStream = typeof globalThis.ReadableStream !== 'undefined' &&
+            body instanceof globalThis.ReadableStream;
+        const isRetryableBody = !isReadableStream &&
+            (typeof body === 'string' ||
+                body instanceof ArrayBuffer ||
+                ArrayBuffer.isView(body) ||
+                (typeof globalThis.Blob !== 'undefined' && body instanceof globalThis.Blob) ||
+                body instanceof URLSearchParams ||
+                body instanceof FormData);
         if (
         // Pass raw type verbatim
         ArrayBuffer.isView(body) ||
@@ -8246,23 +8449,28 @@ class client_OpenAI {
             // `URLSearchParams` -> `application/x-www-form-urlencoded`
             body instanceof URLSearchParams ||
             // Send chunked stream (each chunk has own `length`)
-            (globalThis.ReadableStream && body instanceof globalThis.ReadableStream)) {
-            return { bodyHeaders: undefined, body: body };
+            isReadableStream) {
+            return { bodyHeaders: undefined, body: body, isStreamingBody: !isRetryableBody };
         }
         else if (typeof body === 'object' &&
             (Symbol.asyncIterator in body ||
                 (Symbol.iterator in body && 'next' in body && typeof body.next === 'function'))) {
-            return { bodyHeaders: undefined, body: ReadableStreamFrom(body) };
+            return {
+                bodyHeaders: undefined,
+                body: ReadableStreamFrom(body),
+                isStreamingBody: true,
+            };
         }
         else if (typeof body === 'object' &&
             headers.values.get('content-type') === 'application/x-www-form-urlencoded') {
             return {
                 bodyHeaders: { 'content-type': 'application/x-www-form-urlencoded' },
                 body: this.stringifyQuery(body),
+                isStreamingBody: false,
             };
         }
         else {
-            return __classPrivateFieldGet(this, _OpenAI_encoder, "f").call(this, { body, headers });
+            return { ...__classPrivateFieldGet(this, _OpenAI_encoder, "f").call(this, { body, headers }), isStreamingBody: false };
         }
     }
 }
@@ -8309,7 +8517,7 @@ client_OpenAI.Containers = Containers;
 client_OpenAI.Skills = Skills;
 client_OpenAI.Videos = Videos;
 //# sourceMappingURL=client.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/azure.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/azure.mjs
 
 
 
@@ -8402,7 +8610,7 @@ const _deployments_endpoints = new Set([
     '/images/edits',
 ]);
 //# sourceMappingURL=azure.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/index.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.34.0/node_modules/openai/index.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -8954,8 +9162,8 @@ __nccwpck_require__.d(__webpack_exports__, {
 var core = __nccwpck_require__(1078);
 // EXTERNAL MODULE: ./node_modules/.pnpm/@actions+github@5.1.1/node_modules/@actions/github/lib/github.js
 var github = __nccwpck_require__(3695);
-// EXTERNAL MODULE: ./lib/commands/bootstrap.js + 2 modules
-var bootstrap = __nccwpck_require__(6806);
+// EXTERNAL MODULE: ./lib/commands/bootstrap.js + 4 modules
+var bootstrap = __nccwpck_require__(5544);
 // EXTERNAL MODULE: ./lib/commands/registry.js
 var commands_registry = __nccwpck_require__(953);
 // EXTERNAL MODULE: ./lib/commands/parser.js
@@ -9681,7 +9889,7 @@ async function handleCommentEvent(deps) {
 
 /***/ }),
 
-/***/ 6806:
+/***/ 5544:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
 "use strict";
@@ -9756,6 +9964,167 @@ const helpHandler = {
     }
 };
 
+// EXTERNAL MODULE: ./node_modules/.pnpm/p-limit@4.0.0/node_modules/p-limit/index.js + 1 modules
+var p_limit = __nccwpck_require__(9272);
+// EXTERNAL MODULE: ./lib/octokit.js
+var octokit = __nccwpck_require__(2247);
+;// CONCATENATED MODULE: ./lib/github/review-thread.js
+
+
+
+// ─── GraphQL documents ───────────────────────────────────────────────────────
+const GET_REVIEW_THREADS = `
+  query GetReviewThreads(
+    $owner: String!
+    $repo: String!
+    $number: Int!
+    $after: String
+  ) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $number) {
+        reviewThreads(first: 100, after: $after) {
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+          nodes {
+            id
+            isResolved
+            comments(first: 1) {
+              nodes {
+                author {
+                  login
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+const RESOLVE_THREAD = `
+  mutation ResolveThread($threadId: ID!) {
+    resolveReviewThread(input: { threadId: $threadId }) {
+      thread {
+        isResolved
+      }
+    }
+  }
+`;
+// ─── Bot identity ─────────────────────────────────────────────────────────────
+let cachedBotLogin = null;
+async function review_thread_getBotLogin(options) {
+    if (cachedBotLogin !== null)
+        return cachedBotLogin;
+    // Prefer the configured bot_name to avoid an extra API call
+    const configured = (0,core.getInput)('bot_name').trim();
+    if (configured) {
+        cachedBotLogin = configured;
+        return cachedBotLogin;
+    }
+    // Fallback: ask GitHub who we are
+    try {
+        const { data } = await octokit/* octokit.users.getAuthenticated */.K.users.getAuthenticated();
+        cachedBotLogin = data.login;
+    }
+    catch (e) {
+        (0,core.warning)(`getBotLogin: failed to get authenticated user – ${String(e)}`);
+        // Use a clearly-invalid sentinel so callers get an empty result rather
+        // than silently resolving threads they shouldn't touch.
+        cachedBotLogin = '__unknown_bot__';
+    }
+    // options is only threaded through to keep the signature consistent with the
+    // rest of the codebase; actual config reads go through getInput directly.
+    void options;
+    return cachedBotLogin;
+}
+/** Visible for testing only */
+function _resetBotLoginCache() {
+    cachedBotLogin = null;
+}
+// ─── Query ────────────────────────────────────────────────────────────────────
+async function review_thread_fetchUnresolvedBotThreads(params, botLogin) {
+    const results = [];
+    let cursor = null;
+    do {
+        const data = await octokit/* octokit.graphql */.K.graphql(GET_REVIEW_THREADS, {
+            owner: params.owner,
+            repo: params.repo,
+            number: params.prNumber,
+            after: cursor ?? undefined
+        });
+        const page = data.repository.pullRequest.reviewThreads;
+        for (const node of page.nodes) {
+            const authorLogin = node.comments.nodes[0]?.author?.login ?? null;
+            if (!node.isResolved && authorLogin === botLogin) {
+                results.push({
+                    id: node.id,
+                    isResolved: node.isResolved,
+                    firstCommentAuthorLogin: authorLogin
+                });
+            }
+        }
+        cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+    } while (cursor !== null);
+    return results;
+}
+async function review_thread_batchResolve(threads) {
+    const limit = (0,p_limit/* default */.Z)(6);
+    let ok = 0;
+    let failed = 0;
+    await Promise.allSettled(threads.map(t => limit(async () => {
+        try {
+            await octokit/* octokit.graphql */.K.graphql(RESOLVE_THREAD, { threadId: t.id });
+            ok++;
+        }
+        catch (e) {
+            (0,core.warning)(`batchResolve: failed to resolve thread ${t.id} – ${String(e)}`);
+            failed++;
+        }
+    })));
+    return { ok, failed };
+}
+
+;// CONCATENATED MODULE: ./lib/commands/handlers/resolve.js
+
+// ─── Handler ──────────────────────────────────────────────────────────────────
+const resolveHandler = {
+    name: 'resolve',
+    description: '批量将所有 CodeSentinel 审查意见标记为已解决',
+    usage: '@ai-reviewer resolve',
+    needsAck: true,
+    minPermission: 'write',
+    execute
+};
+async function execute(ctx) {
+    const botLogin = await review_thread_getBotLogin(ctx.options);
+    const threads = await review_thread_fetchUnresolvedBotThreads({ owner: ctx.owner, repo: ctx.repo, prNumber: ctx.prNumber }, botLogin);
+    if (threads.length === 0) {
+        return { message: 'ℹ️ 没有找到待解决的 CodeSentinel 审查意见' };
+    }
+    const { ok, failed } = await review_thread_batchResolve(threads);
+    return { message: formatResult(ok, failed, threads.length) };
+}
+// ─── External API (for member C) ──────────────────────────────────────────────
+async function resolveAllBotComments(params) {
+    const botLogin = await getBotLogin(params.options);
+    const threads = await fetchUnresolvedBotThreads(params, botLogin);
+    if (threads.length === 0)
+        return { ok: 0, failed: 0 };
+    return batchResolve(threads);
+}
+// ─── Formatting ───────────────────────────────────────────────────────────────
+function formatResult(ok, failed, total) {
+    if (failed === 0) {
+        return `✅ 已解决 **${ok}** 条 CodeSentinel 审查意见`;
+    }
+    if (ok === 0) {
+        return `❌ 解决失败，请检查 Bot 权限（\`pull-requests: write\`）`;
+    }
+    return `⚠️ 共 **${total}** 条，成功解决 **${ok}** 条，**${failed}** 条失败（可手动解决）`;
+}
+
 ;// CONCATENATED MODULE: ./lib/commands/handlers/stubs.js
 function notImplemented(name) {
     return async (_ctx) => {
@@ -9765,15 +10134,6 @@ function notImplemented(name) {
         throw e;
     };
 }
-/** 成员 B */
-const resolveStub = {
-    name: 'resolve',
-    description: '批量将所有 CodeSentinel 审查意见标记为已解决',
-    usage: '@ai-reviewer resolve',
-    needsAck: true,
-    minPermission: 'write',
-    execute: notImplemented('resolve')
-};
 /** 成员 C */
 const reviewStub = {
     name: 'review',
@@ -9826,7 +10186,6 @@ const configurationStub = {
 const ALL_STUBS = [
     reviewStub,
     fullReviewStub,
-    resolveStub,
     summaryStub,
     pauseStub,
     resumeStub,
@@ -9846,12 +10205,14 @@ const ALL_STUBS = [
 
 
 
+
 let bootstrapped = false;
 function bootstrapCommands() {
     if (bootstrapped)
         return;
     const reg = (0,registry/* getRegistry */.JH)();
     reg.register(helpHandler);
+    reg.register(resolveHandler);
     for (const h of ALL_STUBS) {
         reg.register(h);
     }
@@ -9880,8 +10241,8 @@ __nccwpck_require__.d(__webpack_exports__, {
 var core = __nccwpck_require__(1078);
 // EXTERNAL MODULE: ./node_modules/.pnpm/@actions+github@5.1.1/node_modules/@actions/github/lib/github.js
 var github = __nccwpck_require__(3695);
-// EXTERNAL MODULE: ./lib/commands/bootstrap.js + 2 modules
-var bootstrap = __nccwpck_require__(6806);
+// EXTERNAL MODULE: ./lib/commands/bootstrap.js + 4 modules
+var bootstrap = __nccwpck_require__(5544);
 // EXTERNAL MODULE: ./lib/commands/registry.js
 var commands_registry = __nccwpck_require__(953);
 // EXTERNAL MODULE: ./lib/commands/parser.js
@@ -11192,12 +11553,12 @@ __nccwpck_require__.a(module, async (__webpack_handle_async_dependencies__, __we
 __nccwpck_require__.r(__webpack_exports__);
 /* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(1078);
 /* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__nccwpck_require__.n(_actions_core__WEBPACK_IMPORTED_MODULE_0__);
-/* harmony import */ var _bot__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(4936);
+/* harmony import */ var _bot__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(6016);
 /* harmony import */ var _command_handler__WEBPACK_IMPORTED_MODULE_2__ = __nccwpck_require__(1085);
 /* harmony import */ var _commands_early_reaction__WEBPACK_IMPORTED_MODULE_3__ = __nccwpck_require__(6360);
 /* harmony import */ var _options__WEBPACK_IMPORTED_MODULE_4__ = __nccwpck_require__(5341);
 /* harmony import */ var _prompts__WEBPACK_IMPORTED_MODULE_6__ = __nccwpck_require__(2379);
-/* harmony import */ var _review__WEBPACK_IMPORTED_MODULE_5__ = __nccwpck_require__(6439);
+/* harmony import */ var _review__WEBPACK_IMPORTED_MODULE_5__ = __nccwpck_require__(9502);
 /**
  * main.ts - GitHub Action 入口文件
  *
@@ -14041,7 +14402,7 @@ use web search to find and reference current documentation.
 
 /***/ }),
 
-/***/ 6439:
+/***/ 9502:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
 "use strict";
@@ -14057,168 +14418,8 @@ var core = __nccwpck_require__(1078);
 var external_child_process_ = __nccwpck_require__(2081);
 // EXTERNAL MODULE: ./node_modules/.pnpm/@actions+github@5.1.1/node_modules/@actions/github/lib/github.js
 var github = __nccwpck_require__(3695);
-;// CONCATENATED MODULE: ./node_modules/.pnpm/yocto-queue@1.2.2/node_modules/yocto-queue/index.js
-/*
-How it works:
-`this.#head` is an instance of `Node` which keeps track of its current value and nests another instance of `Node` that keeps the value that comes after it. When a value is provided to `.enqueue()`, the code needs to iterate through `this.#head`, going deeper and deeper to find the last value. However, iterating through every single item is slow. This problem is solved by saving a reference to the last value as `this.#tail` so that it can reference it to add a new value.
-*/
-
-class Node {
-	value;
-	next;
-
-	constructor(value) {
-		this.value = value;
-	}
-}
-
-class Queue {
-	#head;
-	#tail;
-	#size;
-
-	constructor() {
-		this.clear();
-	}
-
-	enqueue(value) {
-		const node = new Node(value);
-
-		if (this.#head) {
-			this.#tail.next = node;
-			this.#tail = node;
-		} else {
-			this.#head = node;
-			this.#tail = node;
-		}
-
-		this.#size++;
-	}
-
-	dequeue() {
-		const current = this.#head;
-		if (!current) {
-			return;
-		}
-
-		this.#head = this.#head.next;
-		this.#size--;
-
-		// Clean up tail reference when queue becomes empty
-		if (!this.#head) {
-			this.#tail = undefined;
-		}
-
-		return current.value;
-	}
-
-	peek() {
-		if (!this.#head) {
-			return;
-		}
-
-		return this.#head.value;
-
-		// TODO: Node.js 18.
-		// return this.#head?.value;
-	}
-
-	clear() {
-		this.#head = undefined;
-		this.#tail = undefined;
-		this.#size = 0;
-	}
-
-	get size() {
-		return this.#size;
-	}
-
-	* [Symbol.iterator]() {
-		let current = this.#head;
-
-		while (current) {
-			yield current.value;
-			current = current.next;
-		}
-	}
-
-	* drain() {
-		while (this.#head) {
-			yield this.dequeue();
-		}
-	}
-}
-
-;// CONCATENATED MODULE: ./node_modules/.pnpm/p-limit@4.0.0/node_modules/p-limit/index.js
-
-
-function pLimit(concurrency) {
-	if (!((Number.isInteger(concurrency) || concurrency === Number.POSITIVE_INFINITY) && concurrency > 0)) {
-		throw new TypeError('Expected `concurrency` to be a number from 1 and up');
-	}
-
-	const queue = new Queue();
-	let activeCount = 0;
-
-	const next = () => {
-		activeCount--;
-
-		if (queue.size > 0) {
-			queue.dequeue()();
-		}
-	};
-
-	const run = async (fn, resolve, args) => {
-		activeCount++;
-
-		const result = (async () => fn(...args))();
-
-		resolve(result);
-
-		try {
-			await result;
-		} catch {}
-
-		next();
-	};
-
-	const enqueue = (fn, resolve, args) => {
-		queue.enqueue(run.bind(undefined, fn, resolve, args));
-
-		(async () => {
-			// This function needs to wait until the next microtask before comparing
-			// `activeCount` to `concurrency`, because `activeCount` is updated asynchronously
-			// when the run function is dequeued and called. The comparison in the if-statement
-			// needs to happen asynchronously as well to get an up-to-date value for `activeCount`.
-			await Promise.resolve();
-
-			if (activeCount < concurrency && queue.size > 0) {
-				queue.dequeue()();
-			}
-		})();
-	};
-
-	const generator = (fn, ...args) => new Promise(resolve => {
-		enqueue(fn, resolve, args);
-	});
-
-	Object.defineProperties(generator, {
-		activeCount: {
-			get: () => activeCount,
-		},
-		pendingCount: {
-			get: () => queue.size,
-		},
-		clearQueue: {
-			value: () => {
-				queue.clear();
-			},
-		},
-	});
-
-	return generator;
-}
-
+// EXTERNAL MODULE: ./node_modules/.pnpm/p-limit@4.0.0/node_modules/p-limit/index.js + 1 modules
+var p_limit = __nccwpck_require__(9272);
 // EXTERNAL MODULE: ./lib/commenter.js
 var lib_commenter = __nccwpck_require__(4558);
 // EXTERNAL MODULE: ./lib/octokit.js
@@ -15951,8 +16152,8 @@ const ignoreKeyword = '@ai-reviewer: ignore';
 const codeReview = async (lightBot, heavyBot, options, prompts) => {
     const commenter = new lib_commenter/* Commenter */.Es();
     // 初始化并发控制器：分别限制 OpenAI 和 GitHub API 的并发数
-    const openaiConcurrencyLimit = pLimit(options.openaiConcurrencyLimit);
-    const githubConcurrencyLimit = pLimit(options.githubConcurrencyLimit);
+    const openaiConcurrencyLimit = (0,p_limit/* default */.Z)(options.openaiConcurrencyLimit);
+    const githubConcurrencyLimit = (0,p_limit/* default */.Z)(options.githubConcurrencyLimit);
     // ==================== 事件验证 ====================
     if (review_context.eventName !== 'pull_request' &&
         review_context.eventName !== 'pull_request_target') {
@@ -85788,6 +85989,181 @@ module.exports.__wbindgen_throw = function(arg0, arg1) {
 };
 ;
 
+
+
+/***/ }),
+
+/***/ 9272:
+/***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __nccwpck_require__) => {
+
+"use strict";
+
+// EXPORTS
+__nccwpck_require__.d(__webpack_exports__, {
+  "Z": () => (/* binding */ pLimit)
+});
+
+;// CONCATENATED MODULE: ./node_modules/.pnpm/yocto-queue@1.2.2/node_modules/yocto-queue/index.js
+/*
+How it works:
+`this.#head` is an instance of `Node` which keeps track of its current value and nests another instance of `Node` that keeps the value that comes after it. When a value is provided to `.enqueue()`, the code needs to iterate through `this.#head`, going deeper and deeper to find the last value. However, iterating through every single item is slow. This problem is solved by saving a reference to the last value as `this.#tail` so that it can reference it to add a new value.
+*/
+
+class Node {
+	value;
+	next;
+
+	constructor(value) {
+		this.value = value;
+	}
+}
+
+class Queue {
+	#head;
+	#tail;
+	#size;
+
+	constructor() {
+		this.clear();
+	}
+
+	enqueue(value) {
+		const node = new Node(value);
+
+		if (this.#head) {
+			this.#tail.next = node;
+			this.#tail = node;
+		} else {
+			this.#head = node;
+			this.#tail = node;
+		}
+
+		this.#size++;
+	}
+
+	dequeue() {
+		const current = this.#head;
+		if (!current) {
+			return;
+		}
+
+		this.#head = this.#head.next;
+		this.#size--;
+
+		// Clean up tail reference when queue becomes empty
+		if (!this.#head) {
+			this.#tail = undefined;
+		}
+
+		return current.value;
+	}
+
+	peek() {
+		if (!this.#head) {
+			return;
+		}
+
+		return this.#head.value;
+
+		// TODO: Node.js 18.
+		// return this.#head?.value;
+	}
+
+	clear() {
+		this.#head = undefined;
+		this.#tail = undefined;
+		this.#size = 0;
+	}
+
+	get size() {
+		return this.#size;
+	}
+
+	* [Symbol.iterator]() {
+		let current = this.#head;
+
+		while (current) {
+			yield current.value;
+			current = current.next;
+		}
+	}
+
+	* drain() {
+		while (this.#head) {
+			yield this.dequeue();
+		}
+	}
+}
+
+;// CONCATENATED MODULE: ./node_modules/.pnpm/p-limit@4.0.0/node_modules/p-limit/index.js
+
+
+function pLimit(concurrency) {
+	if (!((Number.isInteger(concurrency) || concurrency === Number.POSITIVE_INFINITY) && concurrency > 0)) {
+		throw new TypeError('Expected `concurrency` to be a number from 1 and up');
+	}
+
+	const queue = new Queue();
+	let activeCount = 0;
+
+	const next = () => {
+		activeCount--;
+
+		if (queue.size > 0) {
+			queue.dequeue()();
+		}
+	};
+
+	const run = async (fn, resolve, args) => {
+		activeCount++;
+
+		const result = (async () => fn(...args))();
+
+		resolve(result);
+
+		try {
+			await result;
+		} catch {}
+
+		next();
+	};
+
+	const enqueue = (fn, resolve, args) => {
+		queue.enqueue(run.bind(undefined, fn, resolve, args));
+
+		(async () => {
+			// This function needs to wait until the next microtask before comparing
+			// `activeCount` to `concurrency`, because `activeCount` is updated asynchronously
+			// when the run function is dequeued and called. The comparison in the if-statement
+			// needs to happen asynchronously as well to get an up-to-date value for `activeCount`.
+			await Promise.resolve();
+
+			if (activeCount < concurrency && queue.size > 0) {
+				queue.dequeue()();
+			}
+		})();
+	};
+
+	const generator = (fn, ...args) => new Promise(resolve => {
+		enqueue(fn, resolve, args);
+	});
+
+	Object.defineProperties(generator, {
+		activeCount: {
+			get: () => activeCount,
+		},
+		pendingCount: {
+			get: () => queue.size,
+		},
+		clearQueue: {
+			value: () => {
+				queue.clear();
+			},
+		},
+	});
+
+	return generator;
+}
 
 
 /***/ }),
