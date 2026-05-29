@@ -20,6 +20,7 @@ import type {Bot} from './bot'
 import type {Options} from './options'
 import type {Prompts} from './prompts'
 import {handleReviewComment} from './review-comment'
+import {registerUnitTestCommand} from './unit-test/register'
 
 // eslint-disable-next-line camelcase
 const context = github_context
@@ -35,6 +36,8 @@ export async function handleCommentEvent(
   deps: HandleCommentEventDeps
 ): Promise<void> {
   bootstrapCommands()
+  // 迭代四（unit-test）的命令需要 heavyBot 实例，单独注册以避免改动 A 的 CommandContext。
+  registerUnitTestCommand(deps.heavyBot)
 
   const outcome = await dispatchCommentEvent({options: deps.options})
 
