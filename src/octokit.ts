@@ -8,7 +8,7 @@
  *
  * 认证方式：优先使用 github_token input（PAT），否则使用 @octokit/action 默认认证
  */
-import {getInput, warning} from '@actions/core'
+import {getInput, warning, info} from '@actions/core'
 import {Octokit as ActionOctokit} from '@octokit/action'
 import {Octokit as CoreOctokit} from '@octokit/core'
 import {retry} from '@octokit/plugin-retry'
@@ -17,7 +17,7 @@ import {throttling} from '@octokit/plugin-throttling'
 // github_token input 传入 PAT 时，绕过 @octokit/action 强制的 integration token
 // getInput reads INPUT_GITHUB_TOKEN env var set by the Actions runner
 const patToken = getInput('github_token') || process.env.INPUT_GITHUB_TOKEN || ''
-warning(`[octokit] patToken present: ${patToken ? 'yes' : 'no'}, len=${patToken.length}`)
+info(`[octokit] using ${patToken ? 'PAT (CoreOctokit)' : 'ActionOctokit'}, patLen=${patToken.length}`)
 const BaseOctokit = patToken ? CoreOctokit : ActionOctokit
 
 // @ts-ignore - throttling 插件与 Octokit 的类型版本不兼容，运行时正常
