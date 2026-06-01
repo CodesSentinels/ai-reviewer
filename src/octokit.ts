@@ -14,7 +14,7 @@ import {retry} from '@octokit/plugin-retry'
 import {throttling} from '@octokit/plugin-throttling'
 
 // 获取 GitHub 认证令牌（优先使用 action 输入参数，其次使用环境变量）
-const token = getInput('token') || process.env.GITHUB_TOKEN
+const token = getInput('github_token') || process.env.GITHUB_TOKEN
 
 // 组合 Octokit 基础类与 throttling、retry 插件
 // @ts-ignore - throttling 插件与 @octokit/action 的类型版本不兼容，运行时正常

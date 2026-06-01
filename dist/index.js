@@ -11511,7 +11511,7 @@ __webpack_async_result__();
 
 
 // 获取 GitHub 认证令牌（优先使用 action 输入参数，其次使用环境变量）
-const token = (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('token') || process.env.GITHUB_TOKEN;
+const token = (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('github_token') || process.env.GITHUB_TOKEN;
 // 组合 Octokit 基础类与 throttling、retry 插件
 // @ts-ignore - throttling 插件与 @octokit/action 的类型版本不兼容，运行时正常
 const RetryAndThrottlingOctokit = _octokit_action__WEBPACK_IMPORTED_MODULE_1__.Octokit.plugin(_octokit_plugin_throttling__WEBPACK_IMPORTED_MODULE_2__.throttling, _octokit_plugin_retry__WEBPACK_IMPORTED_MODULE_3__.retry);

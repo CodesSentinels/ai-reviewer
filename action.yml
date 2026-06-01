@@ -5,10 +5,9 @@ branding:
   color: 'orange'
 author: 'AI Reviewer'
 inputs:
-  token:
+  github_token:
     required: false
-    description: 'GitHub token or PAT. Use a PAT with repo scope for resolveReviewThread support.'
-    default: ${{ github.token }}
+    description: 'GitHub PAT with repo scope. Required for resolveReviewThread. Falls back to GITHUB_TOKEN env.'
   debug:
     required: false
     description: 'Enable debug mode'
