@@ -97,9 +97,11 @@ export async function getBotLogin(options: Options): Promise<string> {
     cachedBotLogin = data.login
   } catch (e) {
     warning(`getBotLogin: failed to get authenticated user – ${String(e)}`)
-    // Use a clearly-invalid sentinel so callers get an empty result rather
-    // than silently resolving threads they shouldn't touch.
-    cachedBotLogin = '__unknown_bot__'
+    // GITHUB_TOKEN (integration token) lacks read:user scope so getAuthenticated()
+    // always throws in Actions. Fall back to the standard Actions bot login.
+    // GraphQL returns the login WITHOUT the "[bot]" suffix, so use 'github-actions'
+    // (not 'github-actions[bot]') to match the author field in reviewThread queries.
+    cachedBotLogin = 'github-actions'
   }
 
   return cachedBotLogin
