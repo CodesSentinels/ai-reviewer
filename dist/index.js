@@ -9845,9 +9845,10 @@ async function review_thread_getBotLogin(options) {
     catch (e) {
         (0,core.warning)(`getBotLogin: failed to get authenticated user – ${String(e)}`);
         // GITHUB_TOKEN (integration token) lacks read:user scope so getAuthenticated()
-        // always throws in Actions. Fall back to the standard Actions bot login so
-        // fetchUnresolvedBotThreads can still match comments authored by this token.
-        cachedBotLogin = 'github-actions[bot]';
+        // always throws in Actions. Fall back to the standard Actions bot login.
+        // GraphQL returns the login WITHOUT the "[bot]" suffix, so use 'github-actions'
+        // (not 'github-actions[bot]') to match the author field in reviewThread queries.
+        cachedBotLogin = 'github-actions';
     }
     return cachedBotLogin;
 }
