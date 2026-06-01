@@ -247,6 +247,43 @@ inputs:
       executes model-requested shell commands on the runner and sends the output
       back to the model.'
     default: 'true'
+  enable_lint_tools:
+    required: false
+    description:
+      'Master switch for static analysis (Linter/SAST). When false, all per-tool
+      enable_* flags are ignored and the whole Phase 0b lint scan is skipped.'
+    default: 'true'
+  enable_eslint:
+    required: false
+    description:
+      'Enable the ESLint adapter. Requires a project-side eslint config
+      (eslint.config.* or .eslintrc.*) — when missing, the adapter gracefully
+      degrades to unavailable. Tool itself is auto-installed by ai-reviewer;
+      consumer project does NOT need eslint in their package.json.'
+    default: 'true'
+  enable_biome:
+    required: false
+    description:
+      'Enable the Biome adapter. Zero project-side config required (Biome ships
+      a sensible recommended ruleset). Tool itself is auto-installed by
+      ai-reviewer; consumer project does NOT need @biomejs/biome in their
+      package.json.'
+    default: 'true'
+  enable_tsc:
+    required: false
+    description:
+      'Enable the TypeScript Compiler adapter (tsc --noEmit). Requires a
+      tsconfig.json at the repo root. Tool itself is auto-installed; consumer
+      project does NOT need typescript in their package.json (though most
+      TS projects already have it).'
+    default: 'true'
+  enable_prettier:
+    required: false
+    description:
+      'Enable the Prettier adapter. Disabled by default because most teams
+      already enforce Prettier via pre-commit hooks; enabling here can spam
+      "file is not formatted" warnings.'
+    default: 'false'
   command_ack_reaction:
     required: false
     description:

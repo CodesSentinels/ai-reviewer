@@ -21,6 +21,7 @@ export class Inputs {
   comment: string         // 当前用户的评论内容
   crossFileContext: string // 跨文件引用上下文（依赖分析生成，注入到审查提示词）
   analysisChain: string   // 分析链（逐步推理过程，由轻量模型生成，注入到审查提示词）
+  lintContext: string     // 静态分析工具结果上下文（Linter/SAST 适配器生成，注入到审查提示词）
 
   constructor(
     systemMessage = '',
@@ -36,7 +37,8 @@ export class Inputs {
     commentChain = 'no other comments on this patch',
     comment = 'no comment provided',
     crossFileContext = '',
-    analysisChain = ''
+    analysisChain = '',
+    lintContext = ''
   ) {
     this.systemMessage = systemMessage
     this.title = title
@@ -52,6 +54,7 @@ export class Inputs {
     this.comment = comment
     this.crossFileContext = crossFileContext
     this.analysisChain = analysisChain
+    this.lintContext = lintContext
   }
 
   /**
@@ -73,7 +76,8 @@ export class Inputs {
       this.commentChain,
       this.comment,
       this.crossFileContext,
-      this.analysisChain
+      this.analysisChain,
+      this.lintContext
     )
   }
 
@@ -133,6 +137,18 @@ export class Inputs {
     content = content.replace('$analysis_chain', analysisChainValue)
     if (hadPlaceholder) {
       info(`[render] $analysis_chain replaced: hasValue=${!!this.analysisChain}, valueLen=${analysisChainValue.length}, preview="${analysisChainValue.substring(0, 100).replace(/\n/g, '\\n')}"`)
+    }
+    // 静态分析工具结果：仅在 lintContext 非空时替换。
+    // 杠杆 A：当无 finding 时，prompts.renderReviewFileDiff 已整体移除
+    // "$lint_section" 段，故占位符不应出现；这里保留兜底替换以防未来其他模板
+    // 直接消费 $lint_context。
+    if (this.lintContext) {
+      content = content.replace('$lint_context', this.lintContext)
+    } else {
+      content = content.replace(
+        '$lint_context',
+        'No static analysis tool results available.'
+      )
     }
     return content
   }
