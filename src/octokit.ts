@@ -6,23 +6,24 @@
  * - @octokit/plugin-retry: 自动重试失败的 API 请求
  * - @octokit/plugin-throttling: 处理 GitHub API 速率限制
  *
- * 认证方式：通过 GITHUB_TOKEN 环境变量或 action 输入参数获取令牌
+ * 认证方式：优先使用 github_token input（PAT），否则使用 @octokit/action 默认认证
  */
 import {getInput, warning} from '@actions/core'
-import {Octokit} from '@octokit/action'
+import {Octokit as ActionOctokit} from '@octokit/action'
+import {Octokit as CoreOctokit} from '@octokit/core'
 import {retry} from '@octokit/plugin-retry'
 import {throttling} from '@octokit/plugin-throttling'
 
-// 获取 GitHub 认证令牌（优先使用 action 输入参数，其次使用环境变量）
-const token = getInput('github_token') || process.env.GITHUB_TOKEN
+// github_token input 传入 PAT 时，绕过 @octokit/action 强制的 integration token
+const patToken = getInput('github_token')
+const BaseOctokit = patToken ? CoreOctokit : ActionOctokit
 
-// 组合 Octokit 基础类与 throttling、retry 插件
-// @ts-ignore - throttling 插件与 @octokit/action 的类型版本不兼容，运行时正常
-const RetryAndThrottlingOctokit = Octokit.plugin(throttling, retry)
+// @ts-ignore - throttling 插件与 Octokit 的类型版本不兼容，运行时正常
+const RetryAndThrottlingOctokit = BaseOctokit.plugin(throttling, retry)
 
 // 导出配置好的 Octokit 单例实例
 export const octokit = new RetryAndThrottlingOctokit({
-  auth: `token ${token}`,
+  ...(patToken ? {auth: patToken} : {}),
   throttle: {
     // 主要速率限制回调：当 API 配额耗尽时触发
     onRateLimit: (
