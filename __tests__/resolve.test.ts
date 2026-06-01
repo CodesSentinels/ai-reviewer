@@ -164,6 +164,22 @@ describe('fetchUnresolvedBotThreads', () => {
     expect(threads[0].id).toBe('t2')
   })
 
+  test('[bot] 后缀归一化：REST 身份 github-actions[bot] 匹配 GraphQL 的 github-actions', async () => {
+    // getBotLogin (REST getAuthenticated) 返回带 [bot] 后缀，
+    // 而 GraphQL reviewThread author.login 不带后缀，需归一化后比对
+    mockGraphql.mockResolvedValueOnce(
+      makePageResponse([
+        {id: 't1', isResolved: false, authorLogin: 'github-actions'}
+      ])
+    )
+    const threads = await fetchUnresolvedBotThreads(
+      {owner: 'o', repo: 'r', prNumber: 1},
+      'github-actions[bot]'
+    )
+    expect(threads).toHaveLength(1)
+    expect(threads[0].id).toBe('t1')
+  })
+
   test('分页：GraphQL 被调用 2 次，结果合并正确', async () => {
     mockGraphql
       .mockResolvedValueOnce(

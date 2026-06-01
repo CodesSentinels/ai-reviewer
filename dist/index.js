@@ -12772,6 +12772,17 @@ async function review_thread_getBotLogin(options) {
 function _resetBotLoginCache() {
     cachedBotLogin = null;
 }
+/**
+ * Normalize a GitHub login for bot identity comparison.
+ *
+ * GitHub is inconsistent about the `[bot]` suffix on bot accounts:
+ *   - REST (`getAuthenticated`, comment.user.login) → `github-actions[bot]`
+ *   - GraphQL (reviewThread author.login)           → `github-actions`
+ * Stripping the suffix (and lowercasing) lets the two representations match.
+ */
+function normalizeLogin(login) {
+    return login.replace(/\[bot\]$/i, '').toLowerCase();
+}
 // ─── Query ────────────────────────────────────────────────────────────────────
 async function review_thread_fetchUnresolvedBotThreads(params, botLogin) {
     const results = [];
@@ -12784,9 +12795,12 @@ async function review_thread_fetchUnresolvedBotThreads(params, botLogin) {
             after: cursor ?? undefined
         });
         const page = data.repository.pullRequest.reviewThreads;
+        const normalizedBot = normalizeLogin(botLogin);
         for (const node of page.nodes) {
             const authorLogin = node.comments.nodes[0]?.author?.login ?? null;
-            if (!node.isResolved && authorLogin === botLogin) {
+            if (!node.isResolved &&
+                authorLogin !== null &&
+                normalizeLogin(authorLogin) === normalizedBot) {
                 results.push({
                     id: node.id,
                     isResolved: node.isResolved,
@@ -14299,7 +14313,7 @@ __nccwpck_require__.r(__webpack_exports__);
 /* harmony import */ var _commands_early_reaction__WEBPACK_IMPORTED_MODULE_3__ = __nccwpck_require__(6360);
 /* harmony import */ var _options__WEBPACK_IMPORTED_MODULE_4__ = __nccwpck_require__(5341);
 /* harmony import */ var _prompts__WEBPACK_IMPORTED_MODULE_6__ = __nccwpck_require__(2379);
-/* harmony import */ var _review__WEBPACK_IMPORTED_MODULE_5__ = __nccwpck_require__(3723);
+/* harmony import */ var _review__WEBPACK_IMPORTED_MODULE_5__ = __nccwpck_require__(9052);
 /**
  * main.ts - GitHub Action 入口文件
  *
@@ -17206,7 +17220,7 @@ $lint_context
 
 /***/ }),
 
-/***/ 3723:
+/***/ 9052:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
 "use strict";

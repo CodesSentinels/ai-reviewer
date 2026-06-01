@@ -110,6 +110,18 @@ export function _resetBotLoginCache(): void {
   cachedBotLogin = null
 }
 
+/**
+ * Normalize a GitHub login for bot identity comparison.
+ *
+ * GitHub is inconsistent about the `[bot]` suffix on bot accounts:
+ *   - REST (`getAuthenticated`, comment.user.login) → `github-actions[bot]`
+ *   - GraphQL (reviewThread author.login)           → `github-actions`
+ * Stripping the suffix (and lowercasing) lets the two representations match.
+ */
+function normalizeLogin(login: string): string {
+  return login.replace(/\[bot\]$/i, '').toLowerCase()
+}
+
 // ─── Query ────────────────────────────────────────────────────────────────────
 
 export async function fetchUnresolvedBotThreads(
@@ -133,9 +145,14 @@ export async function fetchUnresolvedBotThreads(
     const page: GetReviewThreadsResponse['repository']['pullRequest']['reviewThreads'] =
       data.repository.pullRequest.reviewThreads
 
+    const normalizedBot = normalizeLogin(botLogin)
     for (const node of page.nodes) {
       const authorLogin = node.comments.nodes[0]?.author?.login ?? null
-      if (!node.isResolved && authorLogin === botLogin) {
+      if (
+        !node.isResolved &&
+        authorLogin !== null &&
+        normalizeLogin(authorLogin) === normalizedBot
+      ) {
         results.push({
           id: node.id,
           isResolved: node.isResolved,
