@@ -112,30 +112,21 @@ beforeEach(() => {
 })
 
 describe('getBotLogin', () => {
-  test('优先返回 bot_name 配置', async () => {
-    mockGetInput.mockReturnValue('codesentinel[bot]')
+  test('始终调用 getAuthenticated 获取真实 GitHub 登录名', async () => {
+    mockGetAuthenticated.mockResolvedValue({data: {login: 'github-actions[bot]'}})
     const login = await getBotLogin({} as never)
-    expect(login).toBe('codesentinel[bot]')
-    expect(mockGetAuthenticated).not.toHaveBeenCalled()
-  })
-
-  test('配置为空时 fallback 到 getAuthenticated', async () => {
-    mockGetInput.mockReturnValue('')
-    mockGetAuthenticated.mockResolvedValue({data: {login: 'codesentinel-bot'}})
-    const login = await getBotLogin({} as never)
-    expect(login).toBe('codesentinel-bot')
+    expect(login).toBe('github-actions[bot]')
+    expect(mockGetAuthenticated).toHaveBeenCalledTimes(1)
   })
 
   test('缓存：第二次调用不再请求 API', async () => {
-    mockGetInput.mockReturnValue('cs-bot')
+    mockGetAuthenticated.mockResolvedValue({data: {login: 'github-actions[bot]'}})
     await getBotLogin({} as never)
     await getBotLogin({} as never)
-    expect(mockGetAuthenticated).not.toHaveBeenCalled()
-    // getInput 只在第一次调用时生效（缓存命中后直接返回）
+    expect(mockGetAuthenticated).toHaveBeenCalledTimes(1)
   })
 
   test('getAuthenticated 抛异常时返回 __unknown_bot__ 哨兵值', async () => {
-    mockGetInput.mockReturnValue('')
     mockGetAuthenticated.mockRejectedValue(new Error('network error'))
     const login = await getBotLogin({} as never)
     expect(login).toBe('__unknown_bot__')
@@ -202,7 +193,7 @@ describe('fetchUnresolvedBotThreads', () => {
 
 describe('resolveHandler.execute', () => {
   test('无待解决 thread → 返回 "没有找到" 消息', async () => {
-    mockGetInput.mockReturnValue('cs-bot')
+    mockGetAuthenticated.mockResolvedValue({data: {login: 'cs-bot'}})
     mockGraphql.mockResolvedValueOnce(makePageResponse([]))
 
     const result = await resolveHandler.execute(makeCtx())
@@ -210,7 +201,7 @@ describe('resolveHandler.execute', () => {
   })
 
   test('全部成功 → 返回 "✅ 已解决 N 条"', async () => {
-    mockGetInput.mockReturnValue('cs-bot')
+    mockGetAuthenticated.mockResolvedValue({data: {login: 'cs-bot'}})
     mockGraphql
       // query
       .mockResolvedValueOnce(
@@ -229,7 +220,7 @@ describe('resolveHandler.execute', () => {
   })
 
   test('部分失败 → 返回 "⚠️" 降级消息', async () => {
-    mockGetInput.mockReturnValue('cs-bot')
+    mockGetAuthenticated.mockResolvedValue({data: {login: 'cs-bot'}})
     mockGraphql
       .mockResolvedValueOnce(
         makePageResponse([
@@ -246,7 +237,7 @@ describe('resolveHandler.execute', () => {
   })
 
   test('全部失败 → 返回权限不足提示', async () => {
-    mockGetInput.mockReturnValue('cs-bot')
+    mockGetAuthenticated.mockResolvedValue({data: {login: 'cs-bot'}})
     mockGraphql
       .mockResolvedValueOnce(
         makePageResponse([{id: 't1', isResolved: false, authorLogin: 'cs-bot'}])
@@ -269,7 +260,7 @@ describe('batchResolve', () => {
 
 describe('resolveAllBotComments', () => {
   test('无待解决 thread → 返回 {ok: 0, failed: 0}，不调用 mutation', async () => {
-    mockGetInput.mockReturnValue('cs-bot')
+    mockGetAuthenticated.mockResolvedValue({data: {login: 'cs-bot'}})
     mockGraphql.mockResolvedValueOnce(makePageResponse([]))
 
     const result = await resolveAllBotComments({
@@ -283,7 +274,7 @@ describe('resolveAllBotComments', () => {
   })
 
   test('有待解决 thread → 调用 mutation 并返回正确计数', async () => {
-    mockGetInput.mockReturnValue('cs-bot')
+    mockGetAuthenticated.mockResolvedValue({data: {login: 'cs-bot'}})
     mockGraphql
       .mockResolvedValueOnce(
         makePageResponse([

@@ -89,14 +89,9 @@ let cachedBotLogin: string | null = null
 export async function getBotLogin(options: Options): Promise<string> {
   if (cachedBotLogin !== null) return cachedBotLogin
 
-  // Prefer the configured bot_name to avoid an extra API call
-  const configured = getInput('bot_name').trim()
-  if (configured) {
-    cachedBotLogin = configured
-    return cachedBotLogin
-  }
-
-  // Fallback: ask GitHub who we are
+  // bot_name is a display name, not a GitHub login — always use getAuthenticated()
+  // to get the real API identity that actually authored the review comments.
+  void options
   try {
     const {data} = await octokit.users.getAuthenticated()
     cachedBotLogin = data.login
@@ -106,10 +101,6 @@ export async function getBotLogin(options: Options): Promise<string> {
     // than silently resolving threads they shouldn't touch.
     cachedBotLogin = '__unknown_bot__'
   }
-
-  // options is only threaded through to keep the signature consistent with the
-  // rest of the codebase; actual config reads go through getInput directly.
-  void options
 
   return cachedBotLogin
 }
