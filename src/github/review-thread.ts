@@ -34,11 +34,6 @@ interface GetReviewThreadsResponse {
   }
 }
 
-interface ResolveThreadResponse {
-  resolveReviewThread: {
-    thread: {isResolved: boolean}
-  }
-}
 
 // ─── GraphQL documents ───────────────────────────────────────────────────────
 
@@ -181,7 +176,7 @@ export interface BatchResolveResult {
 // resolveReviewThread mutation requires a user PAT; GITHUB_TOKEN (integration
 // token) is rejected by GitHub with "Resource not accessible by integration".
 function getResolveGraphql(): (query: string, variables: Record<string, unknown>) => Promise<unknown> {
-  const pat = getInput('token')
+  const pat = getInput('resolve_token')
   if (pat) {
     return getOctokit(pat).graphql as (query: string, variables: Record<string, unknown>) => Promise<unknown>
   }

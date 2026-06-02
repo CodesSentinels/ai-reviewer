@@ -5,7 +5,7 @@ branding:
   color: 'orange'
 author: 'AI Reviewer'
 inputs:
-  token:
+  resolve_token:
     required: false
     description: 'Personal access token used for resolveReviewThread GraphQL mutation (GITHUB_TOKEN cannot perform this operation)'
     default: ''

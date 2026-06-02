@@ -9902,7 +9902,7 @@ async function review_thread_fetchUnresolvedBotThreads(params, botLogin) {
 // resolveReviewThread mutation requires a user PAT; GITHUB_TOKEN (integration
 // token) is rejected by GitHub with "Resource not accessible by integration".
 function getResolveGraphql() {
-    const pat = (0,core.getInput)('token');
+    const pat = (0,core.getInput)('resolve_token');
     if (pat) {
         return (0,github.getOctokit)(pat).graphql;
     }
