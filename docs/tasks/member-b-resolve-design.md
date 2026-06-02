@@ -471,3 +471,142 @@ for (const h of ALL_STUBS) { reg.register(h) }
 | **合计** | | **~14h（约 2 个工作日）** |
 
 PS. 实际预计5～7个工作日，包括代码审核、模块对接以及技术沟通
+
+---
+
+## 9. 生产踩坑记录（2026-06-02）
+
+> 在 `ai-reviewer-test` 真实 PR 验证阶段发现的问题，已全部修复并合入 `feat/resolveReviewThread` 分支。
+
+### 坑 1：`resolveReviewThread` mutation 不支持 `GITHUB_TOKEN`
+
+**现象**：用户发送 `@ai-reviewer resolve`，Bot 回复 `❌ 解决失败`，日志报错：
+
+```
+GraphqlResponseError: Request failed due to following response errors:
+ - Resource not accessible by integration
+```
+
+**根本原因**：GitHub 明确限制 integration token（即 `GITHUB_TOKEN`）不能调用 `resolveReviewThread` mutation。  
+这与 workflow 中声明的 `pull-requests: write` 权限**无关**——权限范围声明正确，问题在于 **token 类型**，而非 token 权限。  
+只有**用户级 PAT**（Personal Access Token）才能调用该 mutation。
+
+**修复方案**：在 `action.yml` 新增 `resolve_token` input，`batchResolve` 优先使用该 PAT 调用 mutation；使用方在 workflow 中传入 PAT secret：
+
+```yaml
+# action.yml
+inputs:
+  resolve_token:
+    required: false
+    description: 'Personal access token used for resolveReviewThread GraphQL mutation'
+    default: ''
+```
+
+```yaml
+# workflow
+- uses: CodesSentinels/ai-reviewer@feat/resolveReviewThread
+  env:
+    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  with:
+    resolve_token: ${{ secrets.BOT_PAT }}
+```
+
+**教训**：GitHub 文档对 integration token 的限制分散、不显眼。设计阶段若预判到此 mutation 需要特殊权限，应提前在文档中注明并预留配置接口。
+
+---
+
+### 坑 2：Bot 登录名在 REST 和 GraphQL 之间表示不一致
+
+**现象**：`fetchUnresolvedBotThreads` 总是返回空列表，Bot 回复"没有找到待解决意见"，但 PR 中明明有未 resolve 的 Bot 评论。
+
+**根本原因**：GitHub API 对 bot 账号的登录名表示不一致：
+
+| API | 返回值 |
+|:---|:---|
+| REST `getAuthenticated()` | `github-actions[bot]`（带 `[bot]` 后缀） |
+| GraphQL `reviewThread.comments[0].author.login` | `github-actions`（**不带**后缀） |
+
+`getBotLogin()` 调用 REST 拿到 `github-actions[bot]`，然后与 GraphQL 返回的 `github-actions` 做字符串比较 → 永远不等 → 所有 thread 被过滤掉。
+
+**修复方案**：`normalizeLogin()` 在比较前统一去掉 `[bot]` 后缀并转小写：
+
+```typescript
+function normalizeLogin(login: string): string {
+  return login.replace(/\[bot\]$/i, '').toLowerCase()
+}
+```
+
+同时 `getBotLogin()` 的 fallback 也直接返回 `'github-actions'`（不带后缀），与 GraphQL 的格式保持一致。
+
+**教训**：跨 API 使用同一身份字段时，务必验证两端的格式是否一致，不能假设同一账号在不同端点的表示相同。
+
+---
+
+### 坑 3：`@octokit/auth-action` 与 `token` input 名冲突
+
+**现象**：在 `action.yml` 添加 `token` input，workflow 同时传 `with.token` 和 `env.GITHUB_TOKEN`，Action 启动时立即崩溃：
+
+```
+Error: [@octokit/auth-action] The token variable is specified more than once.
+Use either `with.token`, `with.GITHUB_TOKEN`, or `env.GITHUB_TOKEN`.
+```
+
+**根本原因**：`@octokit/auth-action` 把 `with.token` 和 `env.GITHUB_TOKEN` 视为同一认证来源，二者同时存在即报错。这是之前 PAT 实验被 revert 的真实原因。
+
+**修复方案**：将 input 名从 `token` 改为 `resolve_token`。`@octokit/auth-action` 只检测固定的保留名（`token` / `GITHUB_TOKEN`），换一个名字即可完全绕开此限制，其余所有 API 调用继续正常使用 `GITHUB_TOKEN`。
+
+**教训**：使用 `@octokit/action` 作为基类时，`token` 和 `GITHUB_TOKEN` 是被保留的 input 名，自定义 input 应避免使用这两个名称。
+
+---
+
+### 坑 4：`@octokit/action` 的 `auth` 选项被 `createActionAuth` 覆盖
+
+**现象**：`octokit.ts` 中写了 `auth: \`token ${token}\``，但实际运行时始终使用 `GITHUB_TOKEN`，传入的 PAT 被忽略。
+
+**根本原因**：`@octokit/action` 使用 `createActionAuth` 作为 `authStrategy`，该策略**始终**从环境变量读取 `GITHUB_TOKEN`，完全忽略构造函数传入的 `auth` 选项。因此 `new Octokit({ auth: 'token xxx' })` 实际上等同于 `new Octokit()`。
+
+**修复方案**：对需要 PAT 的操作（仅限 resolve mutation），改用 `@actions/github` 的 `getOctokit(pat)` 创建独立实例：
+
+```typescript
+import {getOctokit} from '@actions/github'
+
+function getResolveGraphql() {
+  const pat = getInput('resolve_token')
+  if (pat) {
+    // getOctokit 底层用 @octokit/core，正确处理传入的 auth token
+    return getOctokit(pat).graphql
+  }
+  return (query, variables) => octokit.graphql(query, variables)
+}
+```
+
+其余所有调用保持使用全局 `octokit` 单例（`@octokit/action`），不受影响。
+
+**教训**：`@octokit/action` 不是通用的 Octokit 实例——它专门针对 GitHub Actions 环境绑定了 `GITHUB_TOKEN`。若需要使用不同 token，应创建基于 `@octokit/core` 或 `@actions/github` 的独立实例。
+
+---
+
+### 修复后的完整配置参考
+
+**`ai-reviewer` action 侧**（`action.yml`）：
+
+```yaml
+inputs:
+  resolve_token:
+    required: false
+    description: 'PAT for resolveReviewThread mutation (GITHUB_TOKEN not supported by GitHub API)'
+    default: ''
+```
+
+**使用方 workflow 侧**：
+
+```yaml
+- uses: CodesSentinels/ai-reviewer@feat/resolveReviewThread
+  env:
+    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # 用于其他所有 API 调用
+    OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+  with:
+    resolve_token: ${{ secrets.BOT_PAT }}       # 仅用于 resolveReviewThread mutation
+```
+
+`BOT_PAT` 需在仓库 Settings → Secrets → Actions 中配置，使用有 `repo` 或 `pull_requests: write` scope 的用户 PAT。
