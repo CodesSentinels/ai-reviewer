@@ -174,6 +174,7 @@ export async function fetchUnresolvedBotThreads(
 export interface BatchResolveResult {
   ok: number
   failed: number
+  errors: Error[]
 }
 
 export async function batchResolve(
@@ -181,7 +182,7 @@ export async function batchResolve(
 ): Promise<BatchResolveResult> {
   const limit = pLimit(6)
   let ok = 0
-  let failed = 0
+  const errors: Error[] = []
 
   await Promise.allSettled(
     threads.map(t =>
@@ -191,11 +192,11 @@ export async function batchResolve(
           ok++
         } catch (e) {
           warning(`batchResolve: failed to resolve thread ${t.id} – ${String(e)}`)
-          failed++
+          errors.push(e instanceof Error ? e : new Error(String(e)))
         }
       })
     )
   )
 
-  return {ok, failed}
+  return {ok, failed: errors.length, errors}
 }
