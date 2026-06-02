@@ -1,4 +1,5 @@
 import {getInput, warning} from '@actions/core'
+import {getOctokit} from '@actions/github'
 import pLimit from 'p-limit'
 import {octokit} from '../octokit'
 import type {Options} from '../options'
@@ -177,10 +178,21 @@ export interface BatchResolveResult {
   errors: Error[]
 }
 
+// resolveReviewThread mutation requires a user PAT; GITHUB_TOKEN (integration
+// token) is rejected by GitHub with "Resource not accessible by integration".
+function getResolveGraphql(): (query: string, variables: Record<string, unknown>) => Promise<unknown> {
+  const pat = getInput('token')
+  if (pat) {
+    return getOctokit(pat).graphql as (query: string, variables: Record<string, unknown>) => Promise<unknown>
+  }
+  return (query, variables) => octokit.graphql(query, variables)
+}
+
 export async function batchResolve(
   threads: ReviewThread[]
 ): Promise<BatchResolveResult> {
   const limit = pLimit(6)
+  const gql = getResolveGraphql()
   let ok = 0
   const errors: Error[] = []
 
@@ -188,7 +200,7 @@ export async function batchResolve(
     threads.map(t =>
       limit(async () => {
         try {
-          await octokit.graphql(RESOLVE_THREAD, {threadId: t.id})
+          await gql(RESOLVE_THREAD, {threadId: t.id})
           ok++
         } catch (e) {
           warning(`batchResolve: failed to resolve thread ${t.id} – ${String(e)}`)
