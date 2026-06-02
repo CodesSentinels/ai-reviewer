@@ -36,7 +36,9 @@ const octokitState: Record<string, any> = {
   listComments: jest.fn(),
   createComment: jest.fn(),
   updateComment: jest.fn(),
-  getCollaboratorPermissionLevel: jest.fn()
+  getCollaboratorPermissionLevel: jest.fn(),
+  getPull: jest.fn(),
+  updatePull: jest.fn()
 }
 
 jest.mock('../src/octokit', () => ({
@@ -45,6 +47,10 @@ jest.mock('../src/octokit', () => ({
       createComment: (...a: any[]) => octokitState.createComment(...a),
       updateComment: (...a: any[]) => octokitState.updateComment(...a),
       listComments: (...a: any[]) => octokitState.listComments(...a)
+    },
+    pulls: {
+      get: (...a: any[]) => octokitState.getPull(...a),
+      update: (...a: any[]) => octokitState.updatePull(...a)
     },
     repos: {
       getCollaboratorPermissionLevel: (...a: any[]) =>
@@ -116,11 +122,15 @@ beforeEach(() => {
   octokitState.createComment.mockReset()
   octokitState.updateComment.mockReset()
   octokitState.getCollaboratorPermissionLevel.mockReset()
+  octokitState.getPull.mockReset()
+  octokitState.updatePull.mockReset()
 
   // 默认: 不存在已处理标记
   octokitState.listComments.mockResolvedValue({data: []})
   octokitState.createComment.mockResolvedValue({data: {id: 9000}})
   octokitState.updateComment.mockResolvedValue({data: {id: 9000}})
+  octokitState.getPull.mockResolvedValue({data: {body: 'PR body'}})
+  octokitState.updatePull.mockResolvedValue({data: {id: 42}})
   // 默认: alice 有 write 权限
   octokitState.getCollaboratorPermissionLevel.mockResolvedValue({
     data: {permission: 'write'}
@@ -241,16 +251,48 @@ describe('dispatcher — 命令执行', () => {
     octokitState.getCollaboratorPermissionLevel.mockResolvedValue({
       data: {permission: 'read'}
     })
+    const triggerReview: any = jest.fn().mockResolvedValue(undefined as never)
     // 让 alice 成为 PR 作者
     const payload = buildIssueCommentPayload('@ai-reviewer review')
     payload.issue.user.login = 'alice'
     setEvent('issue_comment', payload)
-    const r = await dispatchCommentEvent({options: stubOptions})
-    // 权限通过 → 交给 review stub，stub 抛 NOT_IMPLEMENTED
+    const r = await dispatchCommentEvent({
+      options: stubOptions,
+      triggerReview
+    })
     expect(r.kind).toBe('executed')
     if (r.kind === 'executed') {
-      expect(r.error).toBe('NOT_IMPLEMENTED')
+      expect(r.ok).toBe(true)
     }
+    expect(triggerReview).toHaveBeenCalledWith('incremental')
+  })
+
+  test('full review 命令触发全量审查', async () => {
+    const triggerReview: any = jest.fn().mockResolvedValue(undefined as never)
+    setEvent(
+      'issue_comment',
+      buildIssueCommentPayload('@ai-reviewer full review')
+    )
+    const r = await dispatchCommentEvent({options: stubOptions, triggerReview})
+    expect(r).toEqual({kind: 'executed', command: 'full review', ok: true})
+    expect(triggerReview).toHaveBeenCalledWith('full')
+  })
+
+  test('summary 命令触发摘要重生成', async () => {
+    const triggerReview: any = jest.fn().mockResolvedValue(undefined as never)
+    setEvent('issue_comment', buildIssueCommentPayload('@ai-reviewer summary'))
+    const r = await dispatchCommentEvent({options: stubOptions, triggerReview})
+    expect(r).toEqual({kind: 'executed', command: 'summary', ok: true})
+    expect(triggerReview).toHaveBeenCalledWith('summary')
+  })
+
+  test('pause 命令写入暂停状态', async () => {
+    setEvent('issue_comment', buildIssueCommentPayload('@ai-reviewer pause'))
+    const r = await dispatchCommentEvent({options: stubOptions})
+    expect(r).toEqual({kind: 'executed', command: 'pause', ok: true})
+    expect(octokitState.updatePull).toHaveBeenCalled()
+    const updateCall: any = octokitState.updatePull.mock.calls[0][0]
+    expect(updateCall.body).toContain('state: paused')
   })
 })
 

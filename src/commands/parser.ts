@@ -8,7 +8,7 @@
  *   3. none         — 不包含 @bot 或没有任何有效触发
  *
  * 关键规则（见 §5.4 设计文档）:
- *   - 默认支持 @ai-reviewer 与 @codesentinel 两个 mention 别名
+ *   - 默认支持 @ai-reviewer、@codesentinel 与 @aireviewer 三个 mention 别名
  *   - bot mention 不区分大小写
  *   - 命令名不区分大小写（解析后归一化为小写）
  *   - 复合命令按最长前缀匹配（例: "full review" 先于 "full"）
@@ -20,7 +20,7 @@
 import type {ParseOutcome, ParsedCommand} from './types'
 
 /** 默认支持的 bot mention 别名（小写，已带 @） */
-export const DEFAULT_BOT_MENTIONS = ['@ai-reviewer', '@codesentinel']
+export const DEFAULT_BOT_MENTIONS = ['@ai-reviewer', '@codesentinel', '@aireviewer']
 
 /** 命令行长度上限 */
 export const MAX_COMMAND_LINE_LENGTH = 512

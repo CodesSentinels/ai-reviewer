@@ -17,8 +17,10 @@ import {context as github_context} from '@actions/github'
 import {bootstrapCommands} from './commands/bootstrap'
 import {dispatchCommentEvent} from './commands/dispatcher'
 import type {Bot} from './bot'
+import type {ReviewCommandMode} from './commands/types'
 import type {Options} from './options'
 import type {Prompts} from './prompts'
+import {codeReview} from './review'
 import {handleReviewComment} from './review-comment'
 
 // eslint-disable-next-line camelcase
@@ -36,7 +38,18 @@ export async function handleCommentEvent(
 ): Promise<void> {
   bootstrapCommands()
 
-  const outcome = await dispatchCommentEvent({options: deps.options})
+  const triggerReview = async (mode: ReviewCommandMode): Promise<void> => {
+    await codeReview(deps.lightBot, deps.heavyBot, deps.options, deps.prompts, {
+      mode: mode === 'incremental' ? 'incremental' : 'full',
+      source: 'command',
+      summaryOnly: mode === 'summary'
+    })
+  }
+
+  const outcome = await dispatchCommentEvent({
+    options: deps.options,
+    triggerReview
+  })
 
   info(`commentEvent dispatcher outcome: ${JSON.stringify(outcome)}`)
 

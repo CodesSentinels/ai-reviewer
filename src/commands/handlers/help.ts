@@ -48,7 +48,7 @@ export function buildHelpMessage(commands: CommandHandler[]): string {
 
   lines.push('')
   lines.push(
-    `> ${getInput('bot_icon') || '🤖'} Bot 同时支持 \`@ai-reviewer\` 与 \`@codesentinel\` 两个 mention。`
+    `> ${getInput('bot_icon') || '🤖'} Bot 支持 \`@ai-reviewer\`、\`@codesentinel\` 与 \`@aireviewer\` 三个 mention。`
   )
   return lines.join('\n')
 }

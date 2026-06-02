@@ -64,9 +64,10 @@ describe('buildHelpMessage', () => {
     expect(msg).not.toMatch(/别名/)
   })
 
-  test('输出提及两个 bot alias 的说明', () => {
+  test('输出提及 bot alias 的说明', () => {
     const msg = buildHelpMessage([mk('review')])
     expect(msg).toMatch(/@ai-reviewer/)
     expect(msg).toMatch(/@codesentinel/)
+    expect(msg).toMatch(/@aireviewer/)
   })
 })
