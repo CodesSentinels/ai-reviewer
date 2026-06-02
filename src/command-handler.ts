@@ -27,8 +27,9 @@ import {handleReviewComment} from './review-comment'
 const context = github_context
 
 export interface HandleCommentEventDeps {
-  heavyBot: Bot
-  lightBot: Bot
+  heavyBot?: Bot
+  lightBot?: Bot
+  getReviewBots?: () => {heavyBot: Bot; lightBot: Bot} | null
   options: Options
   prompts: Prompts
 }
@@ -39,7 +40,16 @@ export async function handleCommentEvent(
   bootstrapCommands()
 
   const triggerReview = async (mode: ReviewCommandMode): Promise<void> => {
-    await codeReview(deps.lightBot, deps.heavyBot, deps.options, deps.prompts, {
+    const bots =
+      deps.lightBot != null && deps.heavyBot != null
+        ? {lightBot: deps.lightBot, heavyBot: deps.heavyBot}
+        : deps.getReviewBots?.()
+
+    if (bots == null) {
+      throw new Error('OpenAI bot is unavailable for review command')
+    }
+
+    await codeReview(bots.lightBot, bots.heavyBot, deps.options, deps.prompts, {
       mode: mode === 'incremental' ? 'incremental' : 'full',
       source: 'command',
       summaryOnly: mode === 'summary'
@@ -56,7 +66,17 @@ export async function handleCommentEvent(
   if (outcome.kind === 'fallback_conversation') {
     // 既有对话式追问仅支持 pull_request_review_comment
     if (context.eventName === 'pull_request_review_comment') {
-      await handleReviewComment(deps.heavyBot, deps.options, deps.prompts)
+      const bots =
+        deps.heavyBot != null
+          ? {heavyBot: deps.heavyBot}
+          : deps.getReviewBots?.()
+      if (bots == null) {
+        info(
+          'commentEvent: conversation fallback skipped (OpenAI bot unavailable)'
+        )
+        return
+      }
+      await handleReviewComment(bots.heavyBot, deps.options, deps.prompts)
     } else {
       info(
         'commentEvent: conversation fallback skipped (issue_comment 对话由后续迭代支持)'

@@ -9696,7 +9696,13 @@ const command_handler_context = github.context;
 async function handleCommentEvent(deps) {
     (0,bootstrap/* bootstrapCommands */.K)();
     const triggerReview = async (mode) => {
-        await (0,review/* codeReview */.z)(deps.lightBot, deps.heavyBot, deps.options, deps.prompts, {
+        const bots = deps.lightBot != null && deps.heavyBot != null
+            ? { lightBot: deps.lightBot, heavyBot: deps.heavyBot }
+            : deps.getReviewBots?.();
+        if (bots == null) {
+            throw new Error('OpenAI bot is unavailable for review command');
+        }
+        await (0,review/* codeReview */.z)(bots.lightBot, bots.heavyBot, deps.options, deps.prompts, {
             mode: mode === 'incremental' ? 'incremental' : 'full',
             source: 'command',
             summaryOnly: mode === 'summary'
@@ -9710,7 +9716,14 @@ async function handleCommentEvent(deps) {
     if (outcome.kind === 'fallback_conversation') {
         // 既有对话式追问仅支持 pull_request_review_comment
         if (command_handler_context.eventName === 'pull_request_review_comment') {
-            await handleReviewComment(deps.heavyBot, deps.options, deps.prompts);
+            const bots = deps.heavyBot != null
+                ? { heavyBot: deps.heavyBot }
+                : deps.getReviewBots?.();
+            if (bots == null) {
+                (0,core.info)('commentEvent: conversation fallback skipped (OpenAI bot unavailable)');
+                return;
+            }
+            await handleReviewComment(bots.heavyBot, deps.options, deps.prompts);
         }
         else {
             (0,core.info)('commentEvent: conversation fallback skipped (issue_comment 对话由后续迭代支持)');
@@ -11304,6 +11317,27 @@ __nccwpck_require__.r(__webpack_exports__);
 
 
 
+function createBots(options) {
+    // 初始化轻量模型 Bot（默认 gpt-5.4-nano），用于快速生成文件摘要
+    let lightBot = null;
+    try {
+        lightBot = new _bot__WEBPACK_IMPORTED_MODULE_1__/* .Bot */ .r(options, new _options__WEBPACK_IMPORTED_MODULE_4__/* .OpenAIOptions */ .i0(options.openaiLightModel, options.lightTokenLimits, false, false));
+    }
+    catch (e) {
+        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Skipped: failed to create summary bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`);
+        return null;
+    }
+    // 初始化重量模型 Bot（默认 gpt-5.4-mini），用于深度代码审查和最终摘要生成
+    let heavyBot = null;
+    try {
+        heavyBot = new _bot__WEBPACK_IMPORTED_MODULE_1__/* .Bot */ .r(options, new _options__WEBPACK_IMPORTED_MODULE_4__/* .OpenAIOptions */ .i0(options.openaiHeavyModel, options.heavyTokenLimits, options.enableWebSearch, options.enableShell));
+    }
+    catch (e) {
+        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Skipped: failed to create review bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`);
+        return null;
+    }
+    return { lightBot, heavyBot };
+}
 async function run() {
     // 从 action.yml 中读取所有配置参数，构建 Options 配置对象
     const options = new _options__WEBPACK_IMPORTED_MODULE_4__/* .Options */ .Ei((0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('debug'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('disable_review'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('disable_release_notes'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_files'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('review_simple_changes'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('review_comment_lgtm'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getMultilineInput)('path_filters'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('system_message'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_light_model'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_heavy_model'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_model_temperature'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_retries'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_timeout_ms'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_concurrency_limit'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('github_concurrency_limit'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_base_url'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('language'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_dependency_analysis'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_dependency_files'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_web_search'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_shell'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('command_ack_reaction'));
@@ -11316,38 +11350,26 @@ async function run() {
     }
     // 构建提示词模板对象，包含用户自定义的摘要和发布说明提示词
     const prompts = new _prompts__WEBPACK_IMPORTED_MODULE_6__/* .Prompts */ .j((0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('summarize'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('summarize_release_notes'));
-    // 创建两个 Bot 实例：轻量 Bot 用于文件摘要，重量 Bot 用于深度代码审查
-    // 初始化轻量模型 Bot（默认 gpt-5.4-nano），用于快速生成文件摘要
-    let lightBot = null;
-    try {
-        lightBot = new _bot__WEBPACK_IMPORTED_MODULE_1__/* .Bot */ .r(options, new _options__WEBPACK_IMPORTED_MODULE_4__/* .OpenAIOptions */ .i0(options.openaiLightModel, options.lightTokenLimits, false, false));
-    }
-    catch (e) {
-        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Skipped: failed to create summary bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`);
-        return;
-    }
-    // 初始化重量模型 Bot（默认 gpt-5.4-mini），用于深度代码审查和最终摘要生成
-    let heavyBot = null;
-    try {
-        heavyBot = new _bot__WEBPACK_IMPORTED_MODULE_1__/* .Bot */ .r(options, new _options__WEBPACK_IMPORTED_MODULE_4__/* .OpenAIOptions */ .i0(options.openaiHeavyModel, options.heavyTokenLimits, options.enableWebSearch, options.enableShell));
-    }
-    catch (e) {
-        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Skipped: failed to create review bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`);
-        return;
-    }
     try {
         // 根据 GitHub 事件类型分发处理逻辑
         console.log(`GitHub event: ${process.env.GITHUB_EVENT_NAME}`);
         if (process.env.GITHUB_EVENT_NAME === 'pull_request' ||
             process.env.GITHUB_EVENT_NAME === 'pull_request_target') {
+            const bots = createBots(options);
+            if (bots == null)
+                return;
             // PR 事件：执行完整的代码审查流程（摘要 + 逐文件审查）
-            await (0,_review__WEBPACK_IMPORTED_MODULE_5__/* .codeReview */ .z)(lightBot, heavyBot, options, prompts);
+            await (0,_review__WEBPACK_IMPORTED_MODULE_5__/* .codeReview */ .z)(bots.lightBot, bots.heavyBot, options, prompts);
         }
         else if (process.env.GITHUB_EVENT_NAME === 'pull_request_review_comment' ||
             process.env.GITHUB_EVENT_NAME === 'issue_comment') {
             // 评论事件（顶层 issue_comment 或 review comment）
             // 先走命令调度，未命中命令时再透传给既有的对话式追问
-            await (0,_command_handler__WEBPACK_IMPORTED_MODULE_2__/* .handleCommentEvent */ ._)({ heavyBot, lightBot, options, prompts });
+            await (0,_command_handler__WEBPACK_IMPORTED_MODULE_2__/* .handleCommentEvent */ ._)({
+                options,
+                prompts,
+                getReviewBots: () => createBots(options)
+            });
         }
         else {
             (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)('Skipped: this action only works on push events or pull_request');
@@ -16245,24 +16267,29 @@ const codeReview = async (lightBot, heavyBot, options, prompts, runOptions = {})
             (0,core.warning)('Skipped: context.payload.pull_request is null');
             return null;
         }
-        try {
-            const contents = await octokit/* octokit.repos.getContent */.K.repos.getContent({
-                owner: review_repo.owner,
-                repo: review_repo.repo,
-                path: file.filename,
-                ref: review_context.payload.pull_request.base.sha
-            });
-            if (contents.data != null) {
-                if (!Array.isArray(contents.data)) {
-                    if (contents.data.type === 'file' &&
-                        contents.data.content != null) {
-                        fileContent = Buffer.from(contents.data.content, 'base64').toString();
+        if (file.status === 'added') {
+            (0,core.info)(`skip base content fetch for new file: ${file.filename}`);
+        }
+        else {
+            try {
+                const contents = await octokit/* octokit.repos.getContent */.K.repos.getContent({
+                    owner: review_repo.owner,
+                    repo: review_repo.repo,
+                    path: file.filename,
+                    ref: review_context.payload.pull_request.base.sha
+                });
+                if (contents.data != null) {
+                    if (!Array.isArray(contents.data)) {
+                        if (contents.data.type === 'file' &&
+                            contents.data.content != null) {
+                            fileContent = Buffer.from(contents.data.content, 'base64').toString();
+                        }
                     }
                 }
             }
-        }
-        catch (e) {
-            (0,core.warning)(`Failed to get file contents: ${e}. This is OK if it's a new file.`);
+            catch (e) {
+                (0,core.warning)(`Failed to get file contents: ${e}. This is OK if it's a new file.`);
+            }
         }
         // 提取文件的完整 diff patch
         let fileDiff = '';

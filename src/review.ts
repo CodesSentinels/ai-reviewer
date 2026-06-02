@@ -262,31 +262,35 @@ export const codeReview = async (
           warning('Skipped: context.payload.pull_request is null')
           return null
         }
-        try {
-          const contents = await octokit.repos.getContent({
-            owner: repo.owner,
-            repo: repo.repo,
-            path: file.filename,
-            ref: context.payload.pull_request.base.sha
-          })
-          if (contents.data != null) {
-            if (!Array.isArray(contents.data)) {
-              if (
-                contents.data.type === 'file' &&
-                contents.data.content != null
-              ) {
-                fileContent = Buffer.from(
-                  contents.data.content,
-                  'base64'
-                ).toString()
+        if (file.status === 'added') {
+          info(`skip base content fetch for new file: ${file.filename}`)
+        } else {
+          try {
+            const contents = await octokit.repos.getContent({
+              owner: repo.owner,
+              repo: repo.repo,
+              path: file.filename,
+              ref: context.payload.pull_request.base.sha
+            })
+            if (contents.data != null) {
+              if (!Array.isArray(contents.data)) {
+                if (
+                  contents.data.type === 'file' &&
+                  contents.data.content != null
+                ) {
+                  fileContent = Buffer.from(
+                    contents.data.content,
+                    'base64'
+                  ).toString()
+                }
               }
             }
+          } catch (e: any) {
+            warning(
+              `Failed to get file contents: ${e as string
+              }. This is OK if it's a new file.`
+            )
           }
-        } catch (e: any) {
-          warning(
-            `Failed to get file contents: ${e as string
-            }. This is OK if it's a new file.`
-          )
         }
 
         // 提取文件的完整 diff patch
