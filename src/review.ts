@@ -926,6 +926,12 @@ ${reviewsSkipped.length > 0
     )
   }
 
+  // summary-only 等跳过审查阶段的场景：保留既有的已审查 commit 记录，
+  // 否则 replace 摘要评论会清空增量审查标记，导致下次自动审查从 base 重审
+  if (runOptions.summaryOnly === true && existingCommitIdsBlock !== '') {
+    summarizeComment += `\n${existingCommitIdsBlock}`
+  }
+
   // 发布最终的摘要评论
   await commenter.comment(`${summarizeComment}`, SUMMARIZE_TAG, 'replace')
 }
