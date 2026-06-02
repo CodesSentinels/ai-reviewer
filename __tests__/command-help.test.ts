@@ -68,6 +68,5 @@ describe('buildHelpMessage', () => {
     const msg = buildHelpMessage([mk('review')])
     expect(msg).toMatch(/@ai-reviewer/)
     expect(msg).toMatch(/@codesentinel/)
-    expect(msg).toMatch(/@aireviewer/)
   })
 })

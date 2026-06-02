@@ -51,16 +51,10 @@ describe('parse — bot mention 识别', () => {
     expect(r.command?.name).toBe('help')
   })
 
-  test('默认支持 @aireviewer', () => {
-    const r = parse('@aireviewer help', opts)
-    expect(r.kind).toBe('command')
-    expect(r.command?.name).toBe('help')
-  })
 
   test('bot mention 忽略大小写', () => {
     expect(parse('@AI-Reviewer help', opts).command?.name).toBe('help')
     expect(parse('@CodeSentinel help', opts).command?.name).toBe('help')
-    expect(parse('@AIReviewer help', opts).command?.name).toBe('help')
   })
 
   test('前缀边界: foo@ai-reviewer 不触发', () => {

@@ -9794,7 +9794,7 @@ function buildHelpMessage(commands) {
         }
     }
     lines.push('');
-    lines.push(`> ${(0,core.getInput)('bot_icon') || '🤖'} Bot 支持 \`@ai-reviewer\`、\`@codesentinel\` 与 \`@aireviewer\` 三个 mention。`);
+    lines.push(`> ${(0,core.getInput)('bot_icon') || '🤖'} Bot 同时支持 \`@ai-reviewer\` 与 \`@codesentinel\` 两个 mention。`);
     return lines.join('\n');
 }
 const helpHandler = {
@@ -10155,7 +10155,7 @@ async function tryEarlyReaction(rawReaction) {
 /* harmony export */ });
 /* unused harmony exports MAX_COMMAND_LINE_LENGTH, MAX_ARG_LENGTH, MAX_ARGS_COUNT */
 /** 默认支持的 bot mention 别名（小写，已带 @） */
-const DEFAULT_BOT_MENTIONS = ['@ai-reviewer', '@codesentinel', '@aireviewer'];
+const DEFAULT_BOT_MENTIONS = ['@ai-reviewer', '@codesentinel'];
 /** 命令行长度上限 */
 const MAX_COMMAND_LINE_LENGTH = 512;
 /** 单个 arg 长度上限 */
