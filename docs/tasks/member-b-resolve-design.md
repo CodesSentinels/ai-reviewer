@@ -478,7 +478,7 @@ PS. 实际预计5～7个工作日，包括代码审核、模块对接以及技�
 
 > 在 `ai-reviewer-test` 真实 PR 验证阶段发现的问题，已全部修复并合入 `feat/resolveReviewThread` 分支。
 
-### 坑 1：`resolveReviewThread` mutation 不支持 `GITHUB_TOKEN`
+### 坑 1：`resolveReviewThread` mutation 在当前权限配置下不可用
 
 **现象**：用户发送 `@ai-reviewer resolve`，Bot 回复 `❌ 解决失败`，日志报错：
 
@@ -487,9 +487,15 @@ GraphqlResponseError: Request failed due to following response errors:
  - Resource not accessible by integration
 ```
 
-**根本原因**：GitHub 明确限制 integration token（即 `GITHUB_TOKEN`）不能调用 `resolveReviewThread` mutation。  
-这与 workflow 中声明的 `pull-requests: write` 权限**无关**——权限范围声明正确，问题在于 **token 类型**，而非 token 权限。  
-只有**用户级 PAT**（Personal Access Token）才能调用该 mutation。
+**根本原因**：`resolveReviewThread` mutation 需要 **`contents: write`** 权限，而当前 workflow 只声明了 `contents: read`。  
+"Resource not accessible by integration" 这个错误是 GitHub 对权限不足的 integration token 返回的通用报错。
+
+> **注**：没有官方文档明确说"GITHUB_TOKEN 永远不能调用此 mutation"。  
+> 理论上把 workflow permissions 改为 `contents: write` 后 `GITHUB_TOKEN` 也可能可用，但**未经验证**。  
+> 相关社区讨论见 [GitHub Community #44650](https://github.com/orgs/community/discussions/44650)。  
+> 我们采用 PAT 方案是因为它已被验证有效，且不需要给整个 workflow 额外的 `contents: write` 权限。
+
+**已验证的解法**：传入用户 PAT（`resolve_token` input），PAT 方案 100% 有效。
 
 **修复方案**：在 `action.yml` 新增 `resolve_token` input，`batchResolve` 优先使用该 PAT 调用 mutation；使用方在 workflow 中传入 PAT secret：
 
