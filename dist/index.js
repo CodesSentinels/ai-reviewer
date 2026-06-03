@@ -12700,11 +12700,14 @@ const helpHandler = {
     }
 };
 
+// EXTERNAL MODULE: ./node_modules/.pnpm/@actions+github@5.1.1/node_modules/@actions/github/lib/github.js
+var github = __nccwpck_require__(3695);
 // EXTERNAL MODULE: ./node_modules/.pnpm/p-limit@4.0.0/node_modules/p-limit/index.js + 1 modules
 var p_limit = __nccwpck_require__(9272);
 // EXTERNAL MODULE: ./lib/octokit.js
 var octokit = __nccwpck_require__(2247);
 ;// CONCATENATED MODULE: ./lib/github/review-thread.js
+
 
 
 
@@ -12818,13 +12821,24 @@ async function review_thread_fetchUnresolvedBotThreads(params, botLogin) {
     } while (cursor !== null);
     return results;
 }
+// resolveReviewThread is rejected by both GITHUB_TOKEN and GitHub App
+// installation tokens ("Resource not accessible by integration").
+// A classic PAT with repo scope is required.
+function getResolveGraphql() {
+    const pat = (0,core.getInput)('resolve_token');
+    if (pat) {
+        return (0,github.getOctokit)(pat).graphql;
+    }
+    return (query, variables) => octokit/* octokit.graphql */.K.graphql(query, variables);
+}
 async function review_thread_batchResolve(threads) {
     const limit = (0,p_limit/* default */.Z)(6);
+    const gql = getResolveGraphql();
     let ok = 0;
     const errors = [];
     await Promise.allSettled(threads.map(t => limit(async () => {
         try {
-            await octokit/* octokit.graphql */.K.graphql(RESOLVE_THREAD, { threadId: t.id });
+            await gql(RESOLVE_THREAD, { threadId: t.id });
             ok++;
         }
         catch (e) {
