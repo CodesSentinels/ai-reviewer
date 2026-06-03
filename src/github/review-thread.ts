@@ -1,5 +1,4 @@
 import {getInput, warning} from '@actions/core'
-import {getOctokit} from '@actions/github'
 import pLimit from 'p-limit'
 import {octokit} from '../octokit'
 import type {Options} from '../options'
@@ -85,16 +84,22 @@ let cachedBotLogin: string | null = null
 export async function getBotLogin(options: Options): Promise<string> {
   if (cachedBotLogin !== null) return cachedBotLogin
 
-  // bot_name is a display name, not a GitHub login — always use getAuthenticated()
-  // to get the real API identity that actually authored the review comments.
   void options
+
+  // Explicit override for custom GitHub App: installation tokens cannot call
+  // GET /user, so auto-detection would wrongly fall back to 'github-actions'.
+  const explicitLogin = getInput('bot_github_login')
+  if (explicitLogin) {
+    cachedBotLogin = explicitLogin
+    return cachedBotLogin
+  }
+
   try {
     const {data} = await octokit.users.getAuthenticated()
     cachedBotLogin = data.login
   } catch (e) {
     warning(`getBotLogin: failed to get authenticated user – ${String(e)}`)
-    // GITHUB_TOKEN (integration token) lacks read:user scope so getAuthenticated()
-    // always throws in Actions. Fall back to the standard Actions bot login.
+    // Default GITHUB_TOKEN (integration token) lacks read:user scope.
     // GraphQL returns the login WITHOUT the "[bot]" suffix, so use 'github-actions'
     // (not 'github-actions[bot]') to match the author field in reviewThread queries.
     cachedBotLogin = 'github-actions'
@@ -173,21 +178,10 @@ export interface BatchResolveResult {
   errors: Error[]
 }
 
-// resolveReviewThread mutation requires a user PAT; GITHUB_TOKEN (integration
-// token) is rejected by GitHub with "Resource not accessible by integration".
-function getResolveGraphql(): (query: string, variables: Record<string, unknown>) => Promise<unknown> {
-  const pat = getInput('resolve_token')
-  if (pat) {
-    return getOctokit(pat).graphql as (query: string, variables: Record<string, unknown>) => Promise<unknown>
-  }
-  return (query, variables) => octokit.graphql(query, variables)
-}
-
 export async function batchResolve(
   threads: ReviewThread[]
 ): Promise<BatchResolveResult> {
   const limit = pLimit(6)
-  const gql = getResolveGraphql()
   let ok = 0
   const errors: Error[] = []
 
@@ -195,7 +189,7 @@ export async function batchResolve(
     threads.map(t =>
       limit(async () => {
         try {
-          await gql(RESOLVE_THREAD, {threadId: t.id})
+          await octokit.graphql(RESOLVE_THREAD, {threadId: t.id})
           ok++
         } catch (e) {
           warning(`batchResolve: failed to resolve thread ${t.id} – ${String(e)}`)

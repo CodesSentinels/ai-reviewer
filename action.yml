@@ -5,9 +5,14 @@ branding:
   color: 'orange'
 author: 'AI Reviewer'
 inputs:
-  resolve_token:
+  bot_github_login:
     required: false
-    description: 'Personal access token used for resolveReviewThread GraphQL mutation (GITHUB_TOKEN cannot perform this operation)'
+    description: |
+      GitHub login of the bot account used to identify bot-authored review threads
+      for the resolve command (e.g. 'my-app[bot]' or just 'my-app').
+      Required when using a custom GitHub App — GitHub App installation tokens
+      cannot call GET /user, so auto-detection falls back to 'github-actions[bot]'
+      which would be wrong. Leave empty when using the default GITHUB_TOKEN.
     default: ''
   debug:
     required: false
