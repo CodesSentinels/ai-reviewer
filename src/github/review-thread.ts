@@ -202,7 +202,8 @@ export async function batchResolve(
     threads.map(t =>
       limit(async () => {
         try {
-          await gql(RESOLVE_THREAD, {threadId: t.id})
+          // await gql(RESOLVE_THREAD, {threadId: t.id})
+           await octokit.graphql(RESOLVE_THREAD, {threadId: t.id})
           ok++
         } catch (e) {
           warning(`batchResolve: failed to resolve thread ${t.id} – ${String(e)}`)

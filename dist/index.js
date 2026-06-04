@@ -12838,7 +12838,8 @@ async function review_thread_batchResolve(threads) {
     const errors = [];
     await Promise.allSettled(threads.map(t => limit(async () => {
         try {
-            await gql(RESOLVE_THREAD, { threadId: t.id });
+            // await gql(RESOLVE_THREAD, {threadId: t.id})
+            await octokit/* octokit.graphql */.K.graphql(RESOLVE_THREAD, { threadId: t.id });
             ok++;
         }
         catch (e) {
