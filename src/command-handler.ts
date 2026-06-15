@@ -7,9 +7,9 @@
  *   1. 启动命令注册表（只需一次）
  *   2. 调用 dispatcher 处理事件
  *   3. 当 dispatcher 判定为 "fallback_conversation" 时，
- *      透传给既有的 handleReviewComment（对话式追问），
+ *      透传给成员 D 的对话式追问处理器 handleConversation，
  *      但仅当事件是 pull_request_review_comment 时才透传
- *      （issue_comment 场景的对话由迭代二成员 D 后续扩展）。
+ *      （issue_comment 场景的对话暂不支持）。
  */
 import {info} from '@actions/core'
 // eslint-disable-next-line camelcase
@@ -19,7 +19,7 @@ import {dispatchCommentEvent} from './commands/dispatcher'
 import type {Bot} from './bot'
 import type {Options} from './options'
 import type {Prompts} from './prompts'
-import {handleReviewComment} from './review-comment'
+import {handleConversation} from './conversation'
 
 // eslint-disable-next-line camelcase
 const context = github_context
@@ -41,12 +41,12 @@ export async function handleCommentEvent(
   info(`commentEvent dispatcher outcome: ${JSON.stringify(outcome)}`)
 
   if (outcome.kind === 'fallback_conversation') {
-    // 既有对话式追问仅支持 pull_request_review_comment
+    // 对话式追问（成员 D · 2.3）仅支持 pull_request_review_comment
     if (context.eventName === 'pull_request_review_comment') {
-      await handleReviewComment(deps.heavyBot, deps.options, deps.prompts)
+      await handleConversation(deps.heavyBot, deps.options, deps.prompts)
     } else {
       info(
-        'commentEvent: conversation fallback skipped (issue_comment 对话由后续迭代支持)'
+        'commentEvent: conversation fallback skipped (issue_comment 对话暂不支持)'
       )
     }
   }
