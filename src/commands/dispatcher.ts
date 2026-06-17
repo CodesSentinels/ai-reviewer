@@ -116,6 +116,10 @@ export async function dispatchCommentEvent(
   const actorIsBot =
     comment.user?.type === 'Bot' || /\[bot\]$/i.test(actorLogin)
   if (actorIsBot) {
+    // 打印作者信息，便于排查"明明是人却被当成 bot"的情况
+    info(
+      `command dispatcher: ignored comment from bot (login=${actorLogin}, type=${comment.user?.type})`
+    )
     return {kind: 'ignored', reason: 'comment from bot'}
   }
 
