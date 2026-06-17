@@ -9,6 +9,7 @@
  * 随着 B/C/D 接入，应**逐个替换**本文件中的 stub 为真实 handler。
  */
 import type {CommandHandler, CommandContext, CommandResult} from '../types'
+import {getReviewState, setReviewState} from '../../review-state'
 
 function notImplemented(name: string): CommandHandler['execute'] {
   return async (_ctx: CommandContext): Promise<CommandResult> => {
@@ -26,7 +27,11 @@ export const reviewStub: CommandHandler = {
   usage: '@ai-reviewer review',
   needsAck: true,
   minPermission: 'write',
-  execute: notImplemented('review')
+  async execute(ctx: CommandContext): Promise<CommandResult> {
+    if (ctx.triggerReview == null) return await notImplemented('review')(ctx)
+    await ctx.triggerReview('incremental')
+    return {message: '增量审查已完成'}
+  }
 }
 
 export const fullReviewStub: CommandHandler = {
@@ -35,7 +40,12 @@ export const fullReviewStub: CommandHandler = {
   usage: '@ai-reviewer full review',
   needsAck: true,
   minPermission: 'write',
-  execute: notImplemented('full review')
+  async execute(ctx: CommandContext): Promise<CommandResult> {
+    if (ctx.triggerReview == null)
+      return await notImplemented('full review')(ctx)
+    await ctx.triggerReview('full')
+    return {message: '全量审查已完成'}
+  }
 }
 
 export const summaryStub: CommandHandler = {
@@ -44,7 +54,11 @@ export const summaryStub: CommandHandler = {
   usage: '@ai-reviewer summary',
   needsAck: true,
   minPermission: 'write',
-  execute: notImplemented('summary')
+  async execute(ctx: CommandContext): Promise<CommandResult> {
+    if (ctx.triggerReview == null) return await notImplemented('summary')(ctx)
+    await ctx.triggerReview('summary')
+    return {message: 'PR 摘要已重新生成'}
+  }
 }
 
 export const pauseStub: CommandHandler = {
@@ -53,7 +67,12 @@ export const pauseStub: CommandHandler = {
   usage: '@ai-reviewer pause',
   needsAck: false,
   minPermission: 'write',
-  execute: notImplemented('pause')
+  async execute(ctx: CommandContext): Promise<CommandResult> {
+    await setReviewState(ctx.prNumber, 'paused')
+    return {
+      message: '已暂停当前 PR 的自动审查。使用 `@ai-reviewer resume` 恢复。'
+    }
+  }
 }
 
 export const resumeStub: CommandHandler = {
@@ -62,7 +81,10 @@ export const resumeStub: CommandHandler = {
   usage: '@ai-reviewer resume',
   needsAck: false,
   minPermission: 'write',
-  execute: notImplemented('resume')
+  async execute(ctx: CommandContext): Promise<CommandResult> {
+    await setReviewState(ctx.prNumber, 'active')
+    return {message: '已恢复当前 PR 的自动审查。'}
+  }
 }
 
 export const configurationStub: CommandHandler = {
@@ -71,7 +93,30 @@ export const configurationStub: CommandHandler = {
   usage: '@ai-reviewer configuration',
   needsAck: false,
   minPermission: 'read',
-  execute: notImplemented('configuration')
+  async execute(ctx: CommandContext): Promise<CommandResult> {
+    const state = await getReviewState(ctx.prNumber)
+    const o = ctx.options
+    const message = `## 当前审查配置
+
+| 配置 | 值 |
+| :--- | :--- |
+| 自动审查状态 | \`${state}\` |
+| disable_review | \`${o.disableReview}\` |
+| disable_release_notes | \`${o.disableReleaseNotes}\` |
+| max_files | \`${o.maxFiles}\` |
+| review_simple_changes | \`${o.reviewSimpleChanges}\` |
+| review_comment_lgtm | \`${o.reviewCommentLGTM}\` |
+| openai_light_model | \`${o.openaiLightModel}\` |
+| openai_heavy_model | \`${o.openaiHeavyModel}\` |
+| openai_concurrency_limit | \`${o.openaiConcurrencyLimit}\` |
+| github_concurrency_limit | \`${o.githubConcurrencyLimit}\` |
+| enable_dependency_analysis | \`${o.enableDependencyAnalysis}\` |
+| max_dependency_files | \`${o.maxDependencyFiles}\` |
+| enable_web_search | \`${o.enableWebSearch}\` |
+| enable_shell | \`${o.enableShell}\` |
+| language | \`${o.language}\` |`
+    return {message}
+  }
 }
 
 export const ALL_STUBS: CommandHandler[] = [

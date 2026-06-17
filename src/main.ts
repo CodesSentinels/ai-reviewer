@@ -22,6 +22,48 @@ import {OpenAIOptions, Options} from './options'
 import {Prompts} from './prompts'
 import {codeReview} from './review'
 
+function createBots(options: Options): {lightBot: Bot; heavyBot: Bot} | null {
+  // 初始化轻量模型 Bot（默认 gpt-5.4-nano），用于快速生成文件摘要
+  let lightBot: Bot | null = null
+  try {
+    lightBot = new Bot(
+      options,
+      new OpenAIOptions(
+        options.openaiLightModel,
+        options.lightTokenLimits,
+        false,
+        false
+      )
+    )
+  } catch (e: any) {
+    warning(
+      `Skipped: failed to create summary bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`
+    )
+    return null
+  }
+
+  // 初始化重量模型 Bot（默认 gpt-5.4-mini），用于深度代码审查和最终摘要生成
+  let heavyBot: Bot | null = null
+  try {
+    heavyBot = new Bot(
+      options,
+      new OpenAIOptions(
+        options.openaiHeavyModel,
+        options.heavyTokenLimits,
+        options.enableWebSearch,
+        options.enableShell
+      )
+    )
+  } catch (e: any) {
+    warning(
+      `Skipped: failed to create review bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`
+    )
+    return null
+  }
+
+  return {lightBot, heavyBot}
+}
+
 async function run(): Promise<void> {
   // 从 action.yml 中读取所有配置参数，构建 Options 配置对象
   const options: Options = new Options(
@@ -74,46 +116,6 @@ async function run(): Promise<void> {
     getInput('summarize_release_notes')
   )
 
-  // 创建两个 Bot 实例：轻量 Bot 用于文件摘要，重量 Bot 用于深度代码审查
-
-  // 初始化轻量模型 Bot（默认 gpt-5.4-nano），用于快速生成文件摘要
-  let lightBot: Bot | null = null
-  try {
-    lightBot = new Bot(
-      options,
-      new OpenAIOptions(
-        options.openaiLightModel,
-        options.lightTokenLimits,
-        false,
-        false
-      )
-    )
-  } catch (e: any) {
-    warning(
-      `Skipped: failed to create summary bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`
-    )
-    return
-  }
-
-  // 初始化重量模型 Bot（默认 gpt-5.4-mini），用于深度代码审查和最终摘要生成
-  let heavyBot: Bot | null = null
-  try {
-    heavyBot = new Bot(
-      options,
-      new OpenAIOptions(
-        options.openaiHeavyModel,
-        options.heavyTokenLimits,
-        options.enableWebSearch,
-        options.enableShell
-      )
-    )
-  } catch (e: any) {
-    warning(
-      `Skipped: failed to create review bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`
-    )
-    return
-  }
-
   try {
     // 根据 GitHub 事件类型分发处理逻辑
     console.log(`GitHub event: ${process.env.GITHUB_EVENT_NAME}`)
@@ -121,15 +123,22 @@ async function run(): Promise<void> {
       process.env.GITHUB_EVENT_NAME === 'pull_request' ||
       process.env.GITHUB_EVENT_NAME === 'pull_request_target'
     ) {
+      const bots = createBots(options)
+      if (bots == null) return
+
       // PR 事件：执行完整的代码审查流程（摘要 + 逐文件审查）
-      await codeReview(lightBot, heavyBot, options, prompts)
+      await codeReview(bots.lightBot, bots.heavyBot, options, prompts)
     } else if (
       process.env.GITHUB_EVENT_NAME === 'pull_request_review_comment' ||
       process.env.GITHUB_EVENT_NAME === 'issue_comment'
     ) {
       // 评论事件（顶层 issue_comment 或 review comment）
       // 先走命令调度，未命中命令时再透传给既有的对话式追问
-      await handleCommentEvent({heavyBot, lightBot, options, prompts})
+      await handleCommentEvent({
+        options,
+        prompts,
+        getReviewBots: () => createBots(options)
+      })
     } else {
       warning('Skipped: this action only works on push events or pull_request')
     }

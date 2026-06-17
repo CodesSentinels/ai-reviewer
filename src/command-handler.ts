@@ -17,16 +17,20 @@ import {context as github_context} from '@actions/github'
 import {bootstrapCommands} from './commands/bootstrap'
 import {dispatchCommentEvent} from './commands/dispatcher'
 import type {Bot} from './bot'
+import type {ReviewCommandMode} from './commands/types'
 import type {Options} from './options'
 import type {Prompts} from './prompts'
+import {codeReview} from './review'
+import {handleReviewComment} from './review-comment'
 import {handleConversation} from './conversation'
 
 // eslint-disable-next-line camelcase
 const context = github_context
 
 export interface HandleCommentEventDeps {
-  heavyBot: Bot
-  lightBot: Bot
+  heavyBot?: Bot
+  lightBot?: Bot
+  getReviewBots?: () => {heavyBot: Bot; lightBot: Bot} | null
   options: Options
   prompts: Prompts
 }
@@ -36,14 +40,46 @@ export async function handleCommentEvent(
 ): Promise<void> {
   bootstrapCommands()
 
-  const outcome = await dispatchCommentEvent({options: deps.options})
+  const triggerReview = async (mode: ReviewCommandMode): Promise<void> => {
+    const bots =
+      deps.lightBot != null && deps.heavyBot != null
+        ? {lightBot: deps.lightBot, heavyBot: deps.heavyBot}
+        : deps.getReviewBots?.()
+
+    if (bots == null) {
+      throw new Error('OpenAI bot is unavailable for review command')
+    }
+
+    await codeReview(bots.lightBot, bots.heavyBot, deps.options, deps.prompts, {
+      mode: mode === 'incremental' ? 'incremental' : 'full',
+      source: 'command',
+      summaryOnly: mode === 'summary'
+    })
+  }
+
+  const outcome = await dispatchCommentEvent({
+    options: deps.options,
+    triggerReview
+  })
 
   info(`commentEvent dispatcher outcome: ${JSON.stringify(outcome)}`)
 
   if (outcome.kind === 'fallback_conversation') {
-    // 对话式追问（成员 D · 2.3）仅支持 pull_request_review_comment
     if (context.eventName === 'pull_request_review_comment') {
-      await handleConversation(deps.heavyBot, deps.options, deps.prompts)
+      const bots =
+        deps.heavyBot != null
+          ? {heavyBot: deps.heavyBot}
+          : deps.getReviewBots?.()
+      if (bots == null) {
+        info(
+          'commentEvent: conversation fallback skipped (OpenAI bot unavailable)'
+        )
+        return
+      }
+      await handleReviewComment(bots.heavyBot, deps.options, deps.prompts)
+
+      // 对话式追问（成员 D · 2.3）仅支持 pull_request_review_comment
+      await handleConversation(bots.heavyBot, deps.options, deps.prompts)
     } else {
       info(
         'commentEvent: conversation fallback skipped (issue_comment 对话暂不支持)'
