@@ -96,7 +96,8 @@ async function run(): Promise<void> {
       tsc: getBooleanInput('enable_tsc'),
       prettier: getBooleanInput('enable_prettier')
     },
-    getInput('command_ack_reaction')
+    getInput('command_ack_reaction'),
+    getInput('max_review_comments')
   )
 
   // 打印所有配置项，方便调试

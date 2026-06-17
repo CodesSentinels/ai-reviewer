@@ -21,7 +21,6 @@ import type {ReviewCommandMode} from './commands/types'
 import type {Options} from './options'
 import type {Prompts} from './prompts'
 import {codeReview} from './review'
-import {handleReviewComment} from './review-comment'
 import {handleConversation} from './conversation'
 
 // eslint-disable-next-line camelcase
@@ -76,9 +75,9 @@ export async function handleCommentEvent(
         )
         return
       }
-      await handleReviewComment(bots.heavyBot, deps.options, deps.prompts)
-
-      // 对话式追问（成员 D · 2.3）仅支持 pull_request_review_comment
+      // 对话式追问（成员 D · 2.3）仅支持 pull_request_review_comment。
+      // handleConversation 已取代旧的 handleReviewComment（含意图识别 / 轮次上限 /
+      // 上下文截断），两者都会向 thread 回帖，**不可同时调用**，否则重复回复 + 双倍 LLM 开销。
       await handleConversation(bots.heavyBot, deps.options, deps.prompts)
     } else {
       info(

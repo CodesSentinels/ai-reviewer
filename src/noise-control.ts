@@ -270,3 +270,92 @@ function firstLine(text: string): string {
   const line = (text ?? '').split('\n').find(l => l.trim().length > 0)
   return (line ?? '').trim()
 }
+
+/**
+ * 启发式严重级别分类：从一条审查评论的文本推断严重级别。
+ *
+ * 审查模型当前并不直接输出级别，这里用关键词（中英）做轻量分类，
+ * 用于噪音控制的排序 / 截断 / 折叠。按"高 → 低"顺序匹配，命中即返回。
+ * 无明显信号时归为 minor（既不抢占高优先级，也不会被当作纯提示丢弃）。
+ */
+export function classifyFindingSeverity(text: string): FindingSeverity {
+  const t = (text ?? '').toLowerCase()
+  const has = (...kw: string[]): boolean => kw.some(k => t.includes(k))
+
+  if (
+    has(
+      'security',
+      'vulnerab',
+      'injection',
+      'xss',
+      'csrf',
+      'rce',
+      'redos',
+      'secret',
+      'credential',
+      'hardcoded',
+      'api key',
+      '密钥',
+      '凭证',
+      '注入',
+      '漏洞',
+      '安全'
+    )
+  ) {
+    return 'critical'
+  }
+  if (
+    has(
+      'crash',
+      'null pointer',
+      'race condition',
+      'data loss',
+      'memory leak',
+      'leak',
+      'off-by-one',
+      'off by one',
+      'incorrect',
+      'unhandled',
+      'exception',
+      'await',
+      'deadlock',
+      '错误',
+      '正确性',
+      '缺陷',
+      '异常',
+      '泄露',
+      '崩溃'
+    )
+  ) {
+    return 'major'
+  }
+  if (
+    has(
+      'nit',
+      'typo',
+      'formatting',
+      'indentation',
+      'naming',
+      '拼写',
+      '格式',
+      '命名'
+    )
+  ) {
+    return 'nit'
+  }
+  if (
+    has(
+      'consider',
+      'recommend',
+      'prefer',
+      'readability',
+      'document',
+      '建议',
+      '可读性',
+      '推荐'
+    )
+  ) {
+    return 'minor'
+  }
+  return 'minor'
+}

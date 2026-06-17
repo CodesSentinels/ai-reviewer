@@ -8940,7 +8940,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
 
 /***/ }),
 
-/***/ 8981:
+/***/ 8280:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
 "use strict";
@@ -9274,7 +9274,7 @@ const context = github.context;
 /**
  * 主调度入口。
  * 调用方 (command-handler.ts) 负责:
- *   - 当返回 'fallback_conversation' 时，调用旧的 handleReviewComment
+ *   - 当返回 'fallback_conversation' 时，调用成员 D 的 handleConversation（对话式追问）
  */
 async function dispatchCommentEvent(deps) {
     const eventName = context.eventName;
@@ -9473,177 +9473,14 @@ function extractErrorCode(e) {
     return 'INTERNAL';
 }
 
-// EXTERNAL MODULE: ./lib/review.js + 13 modules
-var review = __nccwpck_require__(9052);
+// EXTERNAL MODULE: ./lib/review.js + 14 modules
+var review = __nccwpck_require__(9211);
 // EXTERNAL MODULE: ./lib/commenter.js
 var lib_commenter = __nccwpck_require__(4558);
 // EXTERNAL MODULE: ./lib/inputs.js
 var lib_inputs = __nccwpck_require__(6305);
 // EXTERNAL MODULE: ./lib/tokenizer.js
 var tokenizer = __nccwpck_require__(7525);
-;// CONCATENATED MODULE: ./lib/review-comment.js
-/**
- * review-comment.ts - PR 审查评论回复处理模块
- *
- * 处理 pull_request_review_comment 事件，即用户在 PR 的代码审查评论中发表回复。
- *
- * 触发条件（满足任一）：
- * 1. 评论对话链中已有 bot 的评论（继续对话）
- * 2. 评论内容中 @ai-reviewer（主动召唤 bot）
- *
- * 处理流程：
- * 1. 验证事件类型和 payload 数据
- * 2. 过滤 bot 自身发出的评论（避免自我回复循环）
- * 3. 获取评论对话链上下文
- * 4. 收集文件 diff、PR 摘要等辅助上下文
- * 5. 在 token 限制内打包所有上下文
- * 6. 调用 AI 生成回复并发布
- */
-
-// eslint-disable-next-line camelcase
-
-
-
-
-
-// eslint-disable-next-line camelcase
-const review_comment_context = github.context;
-const repo = review_comment_context.repo;
-/** 用户在评论中 @ bot 的关键词 */
-const ASK_BOT = '@ai-reviewer';
-/**
- * 处理 PR 审查评论回复事件的主函数
- *
- * @param heavyBot - 重量级 AI 模型（用于生成高质量回复）
- * @param options - 全局配置选项
- * @param prompts - 提示词模板
- */
-const handleReviewComment = async (heavyBot, options, prompts) => {
-    const commenter = new lib_commenter/* Commenter */.Es();
-    const inputs = new lib_inputs/* Inputs */.k();
-    // ===== 第一步：验证事件类型 =====
-    if (review_comment_context.eventName !== 'pull_request_review_comment') {
-        (0,core.warning)(`Skipped: ${review_comment_context.eventName} is not a pull_request_review_comment event`);
-        return;
-    }
-    if (!review_comment_context.payload) {
-        (0,core.warning)(`Skipped: ${review_comment_context.eventName} event is missing payload`);
-        return;
-    }
-    const comment = review_comment_context.payload.comment;
-    if (comment == null) {
-        (0,core.warning)(`Skipped: ${review_comment_context.eventName} event is missing comment`);
-        return;
-    }
-    if (review_comment_context.payload.pull_request == null ||
-        review_comment_context.payload.repository == null) {
-        (0,core.warning)(`Skipped: ${review_comment_context.eventName} event is missing pull_request`);
-        return;
-    }
-    // 填充 PR 基本信息到 inputs
-    inputs.title = review_comment_context.payload.pull_request.title;
-    if (review_comment_context.payload.pull_request.body) {
-        inputs.description = commenter.getDescription(review_comment_context.payload.pull_request.body);
-    }
-    // ===== 第二步：只处理新创建的评论 =====
-    if (review_comment_context.payload.action !== 'created') {
-        (0,core.warning)(`Skipped: ${review_comment_context.eventName} event is not created`);
-        return;
-    }
-    // ===== 第三步：过滤 bot 自身的评论（避免自我回复循环） =====
-    if (!comment.body.includes(lib_commenter/* COMMENT_TAG */.Rs) &&
-        !comment.body.includes(lib_commenter/* COMMENT_REPLY_TAG */.aD)) {
-        const pullNumber = review_comment_context.payload.pull_request.number;
-        // 填充评论相关信息
-        inputs.comment = `${comment.user.login}: ${comment.body}`;
-        inputs.diff = comment.diff_hunk; // 评论所在的 diff 片段
-        inputs.filename = comment.path; // 评论所在的文件路径
-        // 获取完整的评论对话链
-        const { chain: commentChain, topLevelComment } = await commenter.getCommentChain(pullNumber, comment);
-        if (!topLevelComment) {
-            (0,core.warning)('Failed to find the top-level comment to reply to');
-            return;
-        }
-        inputs.commentChain = commentChain;
-        // ===== 第四步：判断是否需要 AI 回复 =====
-        // 条件：对话链中已有 bot 评论（COMMENT_TAG/COMMENT_REPLY_TAG），
-        //       或用户主动 @ai-reviewer
-        if (commentChain.includes(lib_commenter/* COMMENT_TAG */.Rs) ||
-            commentChain.includes(lib_commenter/* COMMENT_REPLY_TAG */.aD) ||
-            comment.body.includes(ASK_BOT)) {
-            // ===== 第五步：收集文件 diff 上下文 =====
-            let fileDiff = '';
-            try {
-                // 获取文件的完整 diff（base 到 head 的对比）
-                const diffAll = await octokit/* octokit.repos.compareCommits */.K.repos.compareCommits({
-                    owner: repo.owner,
-                    repo: repo.repo,
-                    base: review_comment_context.payload.pull_request.base.sha,
-                    head: review_comment_context.payload.pull_request.head.sha
-                });
-                if (diffAll.data) {
-                    const files = diffAll.data.files;
-                    if (files != null) {
-                        const file = files.find(f => f.filename === comment.path);
-                        if (file != null && file.patch) {
-                            fileDiff = file.patch;
-                        }
-                    }
-                }
-            }
-            catch (error) {
-                (0,core.warning)(`Failed to get file diff: ${error}, skipping.`);
-            }
-            // 如果评论中没有 diff 片段，使用完整的文件 diff 替代
-            if (inputs.diff.length === 0) {
-                if (fileDiff.length > 0) {
-                    inputs.diff = fileDiff;
-                    fileDiff = '';
-                }
-                else {
-                    await commenter.reviewCommentReply(pullNumber, topLevelComment, 'Cannot reply to this comment as diff could not be found.');
-                    return;
-                }
-            }
-            // ===== 第六步：在 token 限制内打包上下文 =====
-            let tokens = (0,tokenizer/* getTokenCount */.V)(prompts.renderComment(inputs));
-            // 检查基础提示词是否已超出 token 限制
-            if (tokens > options.heavyTokenLimits.requestTokens) {
-                await commenter.reviewCommentReply(pullNumber, topLevelComment, 'Cannot reply to this comment as diff being commented is too large and exceeds the token limit.');
-                return;
-            }
-            // 尝试将完整文件 diff 加入上下文（如果 token 预算允许）
-            if (fileDiff.length > 0) {
-                const fileDiffCount = prompts.comment.split('$file_diff').length - 1;
-                const fileDiffTokens = (0,tokenizer/* getTokenCount */.V)(fileDiff);
-                if (fileDiffCount > 0 &&
-                    tokens + fileDiffTokens * fileDiffCount <=
-                        options.heavyTokenLimits.requestTokens) {
-                    tokens += fileDiffTokens * fileDiffCount;
-                    inputs.fileDiff = fileDiff;
-                }
-            }
-            // 尝试将 PR 精简摘要加入上下文（如果 token 预算允许）
-            const summary = await commenter.findCommentWithTag(lib_commenter/* SUMMARIZE_TAG */.Rp, pullNumber);
-            if (summary) {
-                const shortSummary = commenter.getShortSummary(summary.body);
-                const shortSummaryTokens = (0,tokenizer/* getTokenCount */.V)(shortSummary);
-                if (tokens + shortSummaryTokens <=
-                    options.heavyTokenLimits.requestTokens) {
-                    tokens += shortSummaryTokens;
-                    inputs.shortSummary = shortSummary;
-                }
-            }
-            // ===== 第七步：调用 AI 生成回复并发布 =====
-            const [reply] = await heavyBot.chat(prompts.renderComment(inputs), {});
-            await commenter.reviewCommentReply(pullNumber, topLevelComment, reply);
-        }
-    }
-    else {
-        (0,core.info)(`Skipped: ${review_comment_context.eventName} event is from the bot itself`);
-    }
-};
-
 ;// CONCATENATED MODULE: ./lib/conversation.js
 /**
  * conversation.ts - 对话式追问交互（迭代二 · 成员 D · 2.3）
@@ -9939,7 +9776,6 @@ const handleConversation = async (heavyBot, options, prompts) => {
 
 
 
-
 // eslint-disable-next-line camelcase
 const command_handler_context = github.context;
 async function handleCommentEvent(deps) {
@@ -9971,8 +9807,9 @@ async function handleCommentEvent(deps) {
                 (0,core.info)('commentEvent: conversation fallback skipped (OpenAI bot unavailable)');
                 return;
             }
-            await handleReviewComment(bots.heavyBot, deps.options, deps.prompts);
-            // 对话式追问（成员 D · 2.3）仅支持 pull_request_review_comment
+            // 对话式追问（成员 D · 2.3）仅支持 pull_request_review_comment。
+            // handleConversation 已取代旧的 handleReviewComment（含意图识别 / 轮次上限 /
+            // 上下文截断），两者都会向 thread 回帖，**不可同时调用**，否则重复回复 + 双倍 LLM 开销。
             await handleConversation(bots.heavyBot, deps.options, deps.prompts);
         }
         else {
@@ -11733,11 +11570,11 @@ __nccwpck_require__.r(__webpack_exports__);
 /* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(1078);
 /* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__nccwpck_require__.n(_actions_core__WEBPACK_IMPORTED_MODULE_0__);
 /* harmony import */ var _bot__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(4936);
-/* harmony import */ var _command_handler__WEBPACK_IMPORTED_MODULE_2__ = __nccwpck_require__(8981);
+/* harmony import */ var _command_handler__WEBPACK_IMPORTED_MODULE_2__ = __nccwpck_require__(8280);
 /* harmony import */ var _commands_early_reaction__WEBPACK_IMPORTED_MODULE_3__ = __nccwpck_require__(6360);
 /* harmony import */ var _options__WEBPACK_IMPORTED_MODULE_4__ = __nccwpck_require__(5341);
 /* harmony import */ var _prompts__WEBPACK_IMPORTED_MODULE_6__ = __nccwpck_require__(2379);
-/* harmony import */ var _review__WEBPACK_IMPORTED_MODULE_5__ = __nccwpck_require__(9052);
+/* harmony import */ var _review__WEBPACK_IMPORTED_MODULE_5__ = __nccwpck_require__(9211);
 /**
  * main.ts - GitHub Action 入口文件
  *
@@ -11784,7 +11621,7 @@ async function run() {
         biome: (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_biome'),
         tsc: (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_tsc'),
         prettier: (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_prettier')
-    }, (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('command_ack_reaction'));
+    }, (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('command_ack_reaction'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_review_comments'));
     // 打印所有配置项，方便调试
     options.print();
     // 评论事件：在 Bot 初始化前尽快给用户评论打 ACK 表情
@@ -14050,7 +13887,8 @@ class Options {
      */
     toolEnableOverrides;
     commandAckReaction; // 命令识别后在用户评论上打的表情（空/off/none 表示禁用）
-    constructor(debug, disableReview, disableReleaseNotes, maxFiles = '0', reviewSimpleChanges = false, reviewCommentLGTM = false, pathFilters = null, systemMessage = '', openaiLightModel = 'gpt-5.4-nano', openaiHeavyModel = 'gpt-5.4-mini', openaiModelTemperature = '0.0', openaiRetries = '3', openaiTimeoutMS = '120000', openaiConcurrencyLimit = '6', githubConcurrencyLimit = '6', apiBaseUrl = 'https://api.openai.com/v1', language = 'en-US', enableDependencyAnalysis = true, maxDependencyFiles = '50', enableWebSearch = true, enableShell = true, enableLintTools = true, toolEnableOverrides = {}, commandAckReaction = 'eyes') {
+    maxReviewComments; // 单次审查最多发布的行级评论数，按严重级别截断（0 表示不限制）
+    constructor(debug, disableReview, disableReleaseNotes, maxFiles = '0', reviewSimpleChanges = false, reviewCommentLGTM = false, pathFilters = null, systemMessage = '', openaiLightModel = 'gpt-5.4-nano', openaiHeavyModel = 'gpt-5.4-mini', openaiModelTemperature = '0.0', openaiRetries = '3', openaiTimeoutMS = '120000', openaiConcurrencyLimit = '6', githubConcurrencyLimit = '6', apiBaseUrl = 'https://api.openai.com/v1', language = 'en-US', enableDependencyAnalysis = true, maxDependencyFiles = '50', enableWebSearch = true, enableShell = true, enableLintTools = true, toolEnableOverrides = {}, commandAckReaction = 'eyes', maxReviewComments = '20') {
         this.debug = debug;
         this.disableReview = disableReview;
         this.disableReleaseNotes = disableReleaseNotes;
@@ -14077,6 +13915,7 @@ class Options {
         this.enableLintTools = enableLintTools;
         this.toolEnableOverrides = toolEnableOverrides;
         this.commandAckReaction = commandAckReaction;
+        this.maxReviewComments = parseInt(maxReviewComments);
     }
     /** 打印所有配置项到日志，方便调试 */
     print() {
@@ -14106,6 +13945,7 @@ class Options {
         (0,core.info)(`enable_lint_tools: ${this.enableLintTools}`);
         (0,core.info)(`tool_enable_overrides: ${JSON.stringify(this.toolEnableOverrides)}`);
         (0,core.info)(`command_ack_reaction: ${this.commandAckReaction}`);
+        (0,core.info)(`max_review_comments: ${this.maxReviewComments}`);
     }
     /**
      * 检查文件路径是否通过过滤规则
@@ -14718,7 +14558,7 @@ async function setReviewState(pullNumber, state) {
 
 /***/ }),
 
-/***/ 9052:
+/***/ 9211:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
 "use strict";
@@ -18035,6 +17875,221 @@ function truncate(s, max) {
 
 // EXTERNAL MODULE: ./lib/inputs.js
 var lib_inputs = __nccwpck_require__(6305);
+;// CONCATENATED MODULE: ./lib/noise-control.js
+/**
+ * noise-control.ts - 评论噪音控制（迭代二 · 成员 D · 2.5）
+ *
+ * 避免 Bot 评论过多干扰开发者，提供：
+ *
+ *   1. 同类评论合并去重  —— 相同文件 / 相同类别的问题合并为一条
+ *   2. 单次评论数量上限  —— 默认 N=20，按优先级截断
+ *   3. 低优先级折叠      —— Minor / Nit / Info 级别用 <details> 折叠
+ *   4. PR 顶部汇总评论    —— 概述所有发现（按严重级别统计）
+ *
+ * 对外提供（供成员 C 在审查完成后调用，见拆分文档 §5 接口契约）：
+ *   - formatComments(findings, options)        通用评论渲染（去重 + 截断 + 折叠）
+ *   - postSummaryComment(prNumber, findings)   PR 顶部汇总评论
+ *   - prepareFindings(findings, options)        去重 + 排序 + 截断后的结构化结果
+ */
+
+
+/** 严重级别排序权重（数值越大优先级越高） */
+const SEVERITY_RANK = {
+    critical: 4,
+    major: 3,
+    minor: 2,
+    nit: 1,
+    info: 0
+};
+/** 严重级别的展示样式 */
+const SEVERITY_DISPLAY = {
+    critical: { emoji: '🔴', label: '严重' },
+    major: { emoji: '🟠', label: '重要' },
+    minor: { emoji: '🟡', label: '次要' },
+    nit: { emoji: '⚪', label: '吹毛求疵' },
+    info: { emoji: 'ℹ️', label: '提示' }
+};
+const DEFAULT_MAX_COMMENTS = 20;
+const DEFAULT_FOLD_SEVERITIES = ['minor', 'nit', 'info'];
+/** 标识噪音控制汇总评论（独立于迭代一的 SUMMARIZE_TAG，避免互相覆盖） */
+const FINDINGS_SUMMARY_TAG = '<!-- This is an auto-generated comment: findings summary by AI Reviewer -->';
+/**
+ * 同类评论合并去重。
+ *
+ * 合并键 = 文件路径 + 类别 + 归一化标题（无标题则取正文首行）。
+ * 命中同一键的发现合并为一条，保留**最高严重级别**与首条正文，
+ * 并在标题后标注合并数量。
+ */
+function dedupeFindings(findings) {
+    const map = new Map();
+    const order = [];
+    for (const f of findings) {
+        const titleKey = (f.title ?? firstLine(f.body)).trim().toLowerCase();
+        const key = `${f.path}|${f.category ?? ''}|${titleKey}`;
+        const existing = map.get(key);
+        if (existing) {
+            existing.count++;
+            // 保留更高的严重级别
+            if (SEVERITY_RANK[f.severity] > SEVERITY_RANK[existing.finding.severity]) {
+                existing.finding = { ...existing.finding, severity: f.severity };
+            }
+        }
+        else {
+            map.set(key, { finding: { ...f }, count: 1 });
+            order.push(key);
+        }
+    }
+    return order.map(key => {
+        const { finding, count } = map.get(key);
+        if (count > 1) {
+            const base = finding.title ?? firstLine(finding.body);
+            return { ...finding, title: `${base}（合并 ${count} 处同类问题）` };
+        }
+        return finding;
+    });
+}
+/**
+ * 去重 + 按严重级别排序 + 截断到上限。
+ * 返回结构化结果，供调用方逐条发布行级评论。
+ *
+ * @returns kept: 保留的发现（已排序）；truncated: 被截断丢弃的数量
+ */
+function prepareFindings(findings, options = {}) {
+    const maxComments = options.maxComments ?? DEFAULT_MAX_COMMENTS;
+    const deduped = options.dedupe === false ? [...findings] : dedupeFindings(findings);
+    // 按严重级别降序稳定排序
+    const sorted = deduped
+        .map((f, i) => ({ f, i }))
+        .sort((a, b) => {
+        const diff = SEVERITY_RANK[b.f.severity] - SEVERITY_RANK[a.f.severity];
+        return diff !== 0 ? diff : a.i - b.i;
+    })
+        .map(x => x.f);
+    if (maxComments > 0 && sorted.length > maxComments) {
+        return {
+            kept: sorted.slice(0, maxComments),
+            truncated: sorted.length - maxComments
+        };
+    }
+    return { kept: sorted, truncated: 0 };
+}
+/**
+ * 通用评论渲染：去重 + 截断 + 折叠。
+ *
+ * 高优先级发现直接展开列出；低优先级发现折叠进 <details>。
+ * 超出数量上限时追加截断提示。
+ *
+ * @returns 渲染后的 markdown 字符串（无发现时返回空字符串）
+ */
+function formatComments(findings, options = {}) {
+    if (!findings || findings.length === 0) {
+        return '';
+    }
+    const foldSet = new Set(options.foldSeverities ?? DEFAULT_FOLD_SEVERITIES);
+    const { kept, truncated } = prepareFindings(findings, options);
+    const highPriority = kept.filter(f => !foldSet.has(f.severity));
+    const lowPriority = kept.filter(f => foldSet.has(f.severity));
+    const parts = [];
+    for (const f of highPriority) {
+        parts.push(renderFinding(f));
+    }
+    if (lowPriority.length > 0) {
+        const inner = lowPriority.map(renderFinding).join('\n\n');
+        parts.push(`<details>\n<summary>低优先级建议（${lowPriority.length} 条，已折叠）</summary>\n\n${inner}\n\n</details>`);
+    }
+    if (truncated > 0) {
+        parts.push(`> _另有 ${truncated} 条较低优先级的发现因数量上限未展示。_`);
+    }
+    return parts.join('\n\n');
+}
+/** 渲染单条发现 */
+function renderFinding(f) {
+    const { emoji, label } = SEVERITY_DISPLAY[f.severity];
+    const loc = f.startLine === f.endLine
+        ? `${f.path}:${f.startLine}`
+        : `${f.path}:${f.startLine}-${f.endLine}`;
+    const title = f.title ?? firstLine(f.body);
+    const category = f.category ? ` · \`${f.category}\`` : '';
+    return `${emoji} **[${label}]** \`${loc}\`${category}\n\n${title === firstLine(f.body) ? f.body : `**${title}**\n\n${f.body}`}`;
+}
+/**
+ * 生成 PR 顶部汇总评论的正文（按严重级别统计 + 渲染发现列表）。
+ * 单独导出以便单测。
+ */
+function buildSummaryBody(findings, options = {}) {
+    if (!findings || findings.length === 0) {
+        return `### 🛡️ CodeSentinel 审查摘要\n\n本次审查未发现需要关注的问题。✅`;
+    }
+    // 统计（基于去重后的结果，保证与展示一致）
+    const deduped = options.dedupe === false ? findings : dedupeFindings(findings);
+    const counts = {
+        critical: 0,
+        major: 0,
+        minor: 0,
+        nit: 0,
+        info: 0
+    };
+    for (const f of deduped) {
+        counts[f.severity]++;
+    }
+    const order = ['critical', 'major', 'minor', 'nit', 'info'];
+    const rows = order
+        .filter(s => counts[s] > 0)
+        .map(s => {
+        const { emoji, label } = SEVERITY_DISPLAY[s];
+        return `| ${emoji} ${label} | ${counts[s]} |`;
+    })
+        .join('\n');
+    const table = `| 级别 | 数量 |\n| :--- | :---: |\n${rows}`;
+    const body = formatComments(findings, options);
+    return `### 🛡️ CodeSentinel 审查摘要\n\n本次审查共发现 **${deduped.length}** 个问题：\n\n${table}\n\n---\n\n${body}`;
+}
+/**
+ * 发布 / 更新 PR 顶部汇总评论。
+ *
+ * 供成员 C 在审查完成后调用（拆分文档 §5：D → C 接口契约）。
+ * 使用 FINDINGS_SUMMARY_TAG 做幂等替换，重复调用只更新同一条评论。
+ *
+ * @param prNumber  PR 编号（保留以对齐接口契约；实际目标由 Commenter 依据
+ *                  GitHub context 决定，与既有 review 流程一致）
+ * @param findings  审查发现列表
+ * @param options   噪音控制配置
+ * @param commenter 可选，注入自定义 Commenter（便于测试）
+ */
+async function postSummaryComment(prNumber, findings, options = {}, commenter = new lib_commenter/* Commenter */.Es()) {
+    const body = buildSummaryBody(findings, options);
+    (0,core.info)(`noise-control: posting findings summary for PR #${prNumber} (${findings.length} findings)`);
+    await commenter.comment(body, FINDINGS_SUMMARY_TAG, 'replace');
+}
+function firstLine(text) {
+    const line = (text ?? '').split('\n').find(l => l.trim().length > 0);
+    return (line ?? '').trim();
+}
+/**
+ * 启发式严重级别分类：从一条审查评论的文本推断严重级别。
+ *
+ * 审查模型当前并不直接输出级别，这里用关键词（中英）做轻量分类，
+ * 用于噪音控制的排序 / 截断 / 折叠。按"高 → 低"顺序匹配，命中即返回。
+ * 无明显信号时归为 minor（既不抢占高优先级，也不会被当作纯提示丢弃）。
+ */
+function classifyFindingSeverity(text) {
+    const t = (text ?? '').toLowerCase();
+    const has = (...kw) => kw.some(k => t.includes(k));
+    if (has('security', 'vulnerab', 'injection', 'xss', 'csrf', 'rce', 'redos', 'secret', 'credential', 'hardcoded', 'api key', '密钥', '凭证', '注入', '漏洞', '安全')) {
+        return 'critical';
+    }
+    if (has('crash', 'null pointer', 'race condition', 'data loss', 'memory leak', 'leak', 'off-by-one', 'off by one', 'incorrect', 'unhandled', 'exception', 'await', 'deadlock', '错误', '正确性', '缺陷', '异常', '泄露', '崩溃')) {
+        return 'major';
+    }
+    if (has('nit', 'typo', 'formatting', 'indentation', 'naming', '拼写', '格式', '命名')) {
+        return 'nit';
+    }
+    if (has('consider', 'recommend', 'prefer', 'readability', 'document', '建议', '可读性', '推荐')) {
+        return 'minor';
+    }
+    return 'minor';
+}
+
 // EXTERNAL MODULE: ./lib/review-state.js
 var review_state = __nccwpck_require__(3337);
 // EXTERNAL MODULE: ./lib/tokenizer.js
@@ -18057,6 +18112,7 @@ var tokenizer = __nccwpck_require__(7525);
 
 
 // eslint-disable-next-line camelcase
+
 
 
 
@@ -18499,7 +18555,9 @@ ${lib_commenter/* RAW_SUMMARY_END_TAG */.rV}
 ${lib_commenter/* SHORT_SUMMARY_START_TAG */.O$}
 ${inputs.shortSummary}
 ${lib_commenter/* SHORT_SUMMARY_END_TAG */.Zb}
-${dependencyContext != null ? `\n${formatDependencySummary(dependencyContext)}` : ''}
+${dependencyContext != null
+        ? `\n${formatDependencySummary(dependencyContext)}`
+        : ''}
 ${lintReport != null ? `\n${formatLintSummary(lintReport)}` : ''}
 ---
 
@@ -18546,7 +18604,11 @@ ${summariesFailed.length > 0
             .map(([filename]) => filename);
         const reviewsFailed = [];
         let lgtmCount = 0; // LGTM 评论计数（被过滤掉的）
-        let reviewCount = 0; // 实际发布的审查评论计数
+        let reviewCount = 0; // 收集到的审查发现总数（去重/截断前）
+        // 噪音控制（成员 D · §2.5）：先把所有文件的发现收集起来，
+        // 待并行审查全部完成后统一去重 / 排序 / 截断，再发布行级评论 + PR 顶部汇总。
+        // 注意: doReview 并行执行，但 JS 单线程下 Array.push 是安全的。
+        const findings = [];
         /**
          * 对单个文件执行代码审查
          *
@@ -18701,8 +18763,14 @@ ${commentChain}
                                 }
                             }
                             (0,core.info)(`[analysis_chain] ${filename}: comment line ${review.startLine}-${review.endLine}, hasChain=${shouldAttachAnalysisChain}, finalLen=${commentWithChain.length}`);
-                            // 将审查评论加入缓冲区
-                            await commenter.bufferReviewComment(filename, review.startLine, review.endLine, commentWithChain);
+                            // 收集为 Finding（不立即 buffer），统一在审查完成后做噪音控制
+                            findings.push({
+                                path: filename,
+                                startLine: review.startLine,
+                                endLine: review.endLine,
+                                severity: classifyFindingSeverity(review.comment),
+                                body: commentWithChain
+                            });
                         }
                         catch (e) {
                             reviewsFailed.push(`${filename} comment failed (${e})`);
@@ -18731,6 +18799,21 @@ ${commentChain}
             }
         }
         await Promise.all(reviewPromises);
+        // 噪音控制（成员 D · §2.5）：按严重级别排序 + 截断到上限（默认 20）。
+        // 行级评论保留每个位置（dedupe:false），避免把不同代码行的同类问题合并导致丢失位置；
+        // 同类合并仅用于下方 PR 顶部汇总评论的概览统计。
+        const { kept: keptFindings, truncated: truncatedFindings } = prepareFindings(findings, { dedupe: false, maxComments: options.maxReviewComments });
+        if (truncatedFindings > 0) {
+            (0,core.info)(`noise-control: ${findings.length} findings → posting ${keptFindings.length}, truncated ${truncatedFindings} low-priority`);
+        }
+        for (const f of keptFindings) {
+            try {
+                await commenter.bufferReviewComment(f.path, f.startLine, f.endLine, f.body);
+            }
+            catch (e) {
+                reviewsFailed.push(`${f.path} comment failed (${e})`);
+            }
+        }
         // 追加审查统计信息到状态消息
         statusMsg += `
 ${reviewsFailed.length > 0
@@ -18755,6 +18838,9 @@ ${reviewsSkipped.length > 0
 <summary>Review comments generated (${reviewCount + lgtmCount})</summary>
 
 * Review: ${reviewCount}
+* Posted (after noise control): ${keptFindings.length}${truncatedFindings > 0
+            ? ` — truncated ${truncatedFindings} lower-priority`
+            : ''}
 * LGTM: ${lgtmCount}
 
 </details>
@@ -18781,6 +18867,13 @@ ${reviewsSkipped.length > 0
         summarizeComment += `\n${commenter.addReviewedCommitId(existingCommitIdsBlock, review_context.payload.pull_request.head.sha)}`;
         // 批量提交所有缓冲的审查评论
         await commenter.submitReview(review_context.payload.pull_request.number, commits[commits.length - 1].sha, statusMsg);
+        // 噪音控制（成员 D · §2.5）：在 PR 顶部发布按严重级别统计的发现汇总评论
+        // （独立 FINDINGS_SUMMARY_TAG，与上面的 SUMMARIZE_TAG 摘要互不覆盖）。
+        if (findings.length > 0) {
+            await postSummaryComment(review_context.payload.pull_request.number, findings, {
+                maxComments: options.maxReviewComments
+            });
+        }
     }
     // summary-only 等跳过审查阶段的场景：保留既有的已审查 commit 记录，
     // 否则 replace 摘要评论会清空增量审查标记，导致下次自动审查从 base 重审

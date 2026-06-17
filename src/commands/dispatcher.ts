@@ -59,7 +59,7 @@ export interface DispatcherDeps {
 /**
  * 主调度入口。
  * 调用方 (command-handler.ts) 负责:
- *   - 当返回 'fallback_conversation' 时，调用旧的 handleReviewComment
+ *   - 当返回 'fallback_conversation' 时，调用成员 D 的 handleConversation（对话式追问）
  */
 export async function dispatchCommentEvent(
   deps: DispatcherDeps

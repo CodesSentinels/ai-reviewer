@@ -78,10 +78,13 @@ flowchart TB
 | 文件 | 说明 | 状态 |
 | :--- | :--- | :--- |
 | `src/conversation.ts` | §2.3 对话追问：意图识别 / 上下文收集 / Prompt 组装 / LLM 调用 / 回帖 / 截断 / 轮次上限 | 新增 |
-| `src/noise-control.ts` | §2.5 噪音控制：`Finding` 类型 / 去重 / 截断 / 折叠 / 汇总评论 | 新增 |
-| `src/command-handler.ts` | 将 `fallback_conversation` 接到 `handleConversation`（替换旧的 `handleReviewComment`） | 修改 |
+| `src/noise-control.ts` | §2.5 噪音控制：`Finding` 类型 / 去重 / 截断 / 折叠 / 汇总评论 / 严重级别分类 | 新增 |
+| `src/command-handler.ts` | 将 `fallback_conversation` 接到 `handleConversation` | 修改 |
+| `src/review-comment.ts` | 旧对话处理器，已被 `handleConversation` 取代 | **删除** |
+| `src/review.ts` | 审查管线接入噪音控制（收集 Finding → 排序/截断 → 汇总评论）；成员 C 的文件，已获授权改动 | 修改 |
+| `src/options.ts` / `src/main.ts` / `action.yml` | 新增 `max_review_comments` 配置项（默认 20，≤0 不限制） | 修改 |
 | `__tests__/conversation.test.ts` | 对话纯逻辑单测 | 新增 |
-| `__tests__/noise-control.test.ts` | 噪音控制单测 | 新增 |
+| `__tests__/noise-control.test.ts` | 噪音控制单测（含严重级别分类） | 新增 |
 
 ---
 
@@ -205,9 +208,22 @@ export interface Finding {
 | :--- | :--- |
 | 同类合并 | 合并键 = `path \| category \| 归一化(title 或正文首行)`；命中同键合并为一条，**保留最高严重级别**，标题追加"（合并 N 处同类问题）" |
 | 排序 | 按严重级别降序（critical > major > minor > nit > info），同级保持原序（稳定） |
-| 截断 | `maxComments` 默认 20；超出部分丢弃并在末尾提示"另有 N 条未展示" |
+| 截断 | `maxComments` 默认 20，**可经 Action 输入 `max_review_comments` 配置**（≤0 表示不限制）；超出部分丢弃并在末尾提示"另有 N 条未展示" |
 | 折叠 | `foldSeverities` 默认 `[minor, nit, info]`，折叠进 `<details>` |
 | 幂等 | 汇总评论使用独立 `FINDINGS_SUMMARY_TAG`，与迭代一 `SUMMARIZE_TAG` 隔离，重复调用只更新同一条 |
+
+### 4.4 严重级别分类（`classifyFindingSeverity`）
+
+审查模型当前不直接输出严重级别，`classifyFindingSeverity(text)` 用中英关键词做轻量启发式分类，供排序 / 截断 / 折叠使用，按"高 → 低"匹配：
+
+| 级别 | 命中关键词（示例） |
+| :--- | :--- |
+| critical | security / vulnerability / injection / secret / hardcoded / 密钥 / 注入 / 漏洞 |
+| major | crash / leak / off-by-one / unhandled / exception / await / 错误 / 异常 / 泄露 |
+| nit | nit / typo / formatting / naming / 拼写 / 格式 / 命名 |
+| minor | consider / recommend / readability / 建议 / 可读性（**及无明显信号的默认值**） |
+
+> 后续可让审查 prompt 直接输出级别字段，替换该启发式以提升准确度。
 
 ---
 
@@ -237,27 +253,31 @@ export async function postSummaryComment(
 ): Promise<void>
 
 export interface NoiseControlOptions {
-  maxComments?: number              // 默认 20
+  maxComments?: number              // 默认 20，由 max_review_comments 配置
   foldSeverities?: FindingSeverity[] // 默认 [minor, nit, info]
   dedupe?: boolean                  // 默认 true
 }
 ```
 
-**集成建议（C 在审查完成后）**：
+**已集成进 `review.ts` 审查管线**（成员 C 文件，已获授权）：审查阶段把每条解析结果收集为 `Finding`（用 `classifyFindingSeverity` 标级别），全部文件完成后统一处理：
 
 ```ts
-import {postSummaryComment, prepareFindings} from '../noise-control'
+import {prepareFindings, postSummaryComment, classifyFindingSeverity} from './noise-control'
 
-// 1. 行级评论按优先级截断后逐条发布
-const {kept} = prepareFindings(findings)
+// 1. 行级评论：排序 + 截断（dedupe:false 保留每个代码位置），再逐条发布
+const {kept} = prepareFindings(findings, {
+  dedupe: false,
+  maxComments: options.maxReviewComments
+})
 for (const f of kept) {
   await commenter.bufferReviewComment(f.path, f.startLine, f.endLine, f.body)
 }
-// 2. PR 顶部发布一条汇总评论
-await postSummaryComment(prNumber, findings)
+await commenter.submitReview(...)
+// 2. PR 顶部发布一条按级别统计的汇总评论
+await postSummaryComment(prNumber, findings, {maxComments: options.maxReviewComments})
 ```
 
-> ⚠️ **待对齐**：`dedupeFindings` 合并同类发现时仅保留首条的行号范围。若 C 用 `prepareFindings().kept` 发布**行级**评论，被合并的其它行将无评论。建议二者择一：去重只用于汇总视图，或将合并位置收敛进正文。
+> ✅ **dedupe 行号丢失问题已解决**：行级评论用 `dedupe: false`，**保留每个代码位置**，绝不合并不同行；同类合并（`dedupeFindings`）仅用于 PR 顶部汇总评论的概览统计。
 
 ---
 
@@ -268,9 +288,9 @@ await postSummaryComment(prNumber, findings)
 | 文件 | 覆盖 |
 | :--- | :--- |
 | `conversation.test.ts` | 意图识别（@bot / 进行中对话 / Bot 自评论排除）、轮次统计、对话历史截断+压缩 |
-| `noise-control.test.ts` | 同类合并、排序+截断、低优先级折叠、截断提示、汇总正文统计表、幂等 tag |
+| `noise-control.test.ts` | 同类合并、排序+截断（含 ≤0 不限制）、低优先级折叠、截断提示、汇总正文统计表、严重级别分类、幂等 tag |
 
-纯逻辑函数（`isFollowUpQuestion` / `countBotTurns` / `truncateConversationChain` / `dedupeFindings` / `prepareFindings` / `formatComments` / `buildSummaryBody`）均可脱离 GitHub/OpenAI 独立运行。
+纯逻辑函数（`isFollowUpQuestion` / `countBotTurns` / `truncateConversationChain` / `dedupeFindings` / `prepareFindings` / `formatComments` / `buildSummaryBody` / `classifyFindingSeverity`）均可脱离 GitHub/OpenAI 独立运行。
 
 ### 6.2 端到端测试（`ai-reviewer-test/`）
 
@@ -286,10 +306,17 @@ await postSummaryComment(prNumber, findings)
 | 无限对话消耗资源 | 反复追问 | `MAX_CONVERSATION_TURNS` 轮次上限 + 友好终止提示 |
 | 误把普通评论当追问 | 噪音回帖 | 多条件意图识别 + Bot 自评论/标签排除 |
 | 汇总评论覆盖摘要 | 与迭代一 `SUMMARIZE_TAG` 冲突 | 使用独立 `FINDINGS_SUMMARY_TAG` |
-| 噪音控制尚未接入实时管线 | `review.ts` 当前直接发评论 | 由成员 C 在审查完成后调用本模块；当前以单测保障逻辑正确性 |
+| 严重级别分类不准 | 关键词启发式有误判 | 影响仅限排序/折叠；后续可由审查 prompt 直接产出级别 |
+| 截断丢失低优先级发现 | N 上限截掉低优先级评论 | 按严重级别排序后再截断；`max_review_comments` 可调，`≤0` 关闭上限 |
 
 ---
 
-## 8. 与成员 B/C 的冲突边界
+## 8. 与成员 B/C 的冲突边界（合并 B/C 后复核）
 
-成员 D 仅新增 `conversation.ts` / `noise-control.ts` 两个文件，并修改 `command-handler.ts`（B/C 均未触碰）。**不注册任何命令**，因此不涉及 `bootstrap.ts` / `stubs.ts`（B）与 `dispatcher.ts` / `reply.ts`（C）。经 `git diff` 核对，与 `feat/resolveReviewThread`（B）、`feature/cmd`（C）无文件级交集。
+- **D 独有文件**：`conversation.ts` / `noise-control.ts`（B/C 均未触碰），以及已删除的 `review-comment.ts`。
+- **共享文件改动**：
+  - `command-handler.ts` —— B/C 未触碰。合并时一度出现 `handleReviewComment` 与 `handleConversation` **双重回帖** bug，已修复为只调用 `handleConversation`。
+  - `review.ts` —— **成员 C 的文件**，D 在此接入噪音控制（已获用户授权）。改动集中在审查发布阶段，未触碰 C 的增量/全量/状态逻辑。
+  - `options.ts` / `main.ts` / `action.yml` —— 仅在末尾追加 `max_review_comments`，不影响既有位置传参。
+- **D 不注册任何命令**，因此不涉及 `bootstrap.ts` / `stubs.ts`（B）、`dispatcher.ts` / `reply.ts`（C）的命令逻辑。
+- 已知遗留：`resolve.test.ts` 4 个失败为 B 合并带入的既有问题，与 D 无关。
