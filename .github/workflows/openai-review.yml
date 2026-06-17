@@ -9,6 +9,8 @@ on:
     types: [opened, synchronize, reopened]
   pull_request_review_comment:
     types: [created]
+  issue_comment:
+    types: [created]
 
 concurrency:
   group:
@@ -27,7 +29,10 @@ jobs:
           ref: ${{github.event.pull_request.head.ref}}
           submodules: false
       - name: Install ripgrep
-        run: sudo apt-get install -y ripgrep
+        run: |
+          if ! command -v rg &>/dev/null; then
+            sudo apt-get update && sudo apt-get install -y ripgrep
+          fi
       - uses: ./
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
