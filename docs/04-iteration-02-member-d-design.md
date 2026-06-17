@@ -153,6 +153,14 @@ flowchart TD
 | 对话链中已存在 Bot 评论（进行中对话） | ✅ 触发（即使本条未 @） |
 | 以上皆否 | ❌ 不触发（普通评论，不打扰） |
 
+> ⚠️ **上游约束（重要）**：`isFollowUpQuestion` 运行在成员 A 的 dispatcher **之后**。
+> 当前 dispatcher 对 `pull_request_review_comment` 也做 **bot mention 前置过滤**——
+> 评论不含 `@ai-reviewer`/`@codesentinel` 时直接返回 `ignored("no bot mention")`，
+> **不会**进入 `fallback_conversation`。因此"对话链中已有 Bot 评论即触发（即使本条未 @）"
+> 这条规则**在实践中暂不生效**：续轮追问仍需每条都 @bot。
+> 若要支持 thread 内无 @ 续问，需放宽 dispatcher 的过滤（属成员 A/C 的 `dispatcher.ts`，
+> 改动需与 A/C 协调，避免冲突）。
+
 ---
 
 ## 4. 噪音控制（§2.5）数据流
