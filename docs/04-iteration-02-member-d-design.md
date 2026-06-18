@@ -156,13 +156,13 @@ flowchart TD
 | 对话链中已存在 Bot 评论（进行中对话） | ✅ 触发（即使本条未 @） |
 | 以上皆否 | ❌ 不触发（普通评论，不打扰） |
 
-> ⚠️ **上游约束（重要）**：`isFollowUpQuestion` 运行在成员 A 的 dispatcher **之后**。
-> 当前 dispatcher 对 `pull_request_review_comment` 也做 **bot mention 前置过滤**——
-> 评论不含 `@ai-reviewer`/`@codesentinel` 时直接返回 `ignored("no bot mention")`，
-> **不会**进入 `fallback_conversation`。因此"对话链中已有 Bot 评论即触发（即使本条未 @）"
-> 这条规则**在实践中暂不生效**：续轮追问仍需每条都 @bot。
-> 若要支持 thread 内无 @ 续问，需放宽 dispatcher 的过滤（属成员 A/C 的 `dispatcher.ts`，
-> 改动需与 A/C 协调，避免冲突）。
+> ✅ **dispatcher 已放宽 mention 门禁（支持续轮无 @）**：`isFollowUpQuestion` 运行在
+> dispatcher 之后。dispatcher 现对 `pull_request_review_comment` 做如下处理——
+> 评论命中 mention → 走对话；**未命中 mention 但是 thread 内回复（`in_reply_to_id` 存在）
+> → 也进入 `fallback_conversation`**，由 `handleConversation` 用上表规则判定（链中有 Bot
+> 评论才回帖，纯人类讨论不打扰）。因此"对话链中已有 Bot 评论即触发（即使本条未 @）"现已生效。
+>
+> 仅 **review thread 外的顶层评论** 且无 mention 时，仍 `ignored("no bot mention")`。
 
 ---
 
@@ -318,5 +318,6 @@ await postSummaryComment(prNumber, findings, {maxComments: options.maxReviewComm
   - `command-handler.ts` —— B/C 未触碰。合并时一度出现 `handleReviewComment` 与 `handleConversation` **双重回帖** bug，已修复为只调用 `handleConversation`。
   - `review.ts` —— **成员 C 的文件**，D 在此接入噪音控制（已获用户授权）。改动集中在审查发布阶段，未触碰 C 的增量/全量/状态逻辑。
   - `options.ts` / `main.ts` / `action.yml` —— 仅在末尾追加 `max_review_comments`，不影响既有位置传参。
-- **D 不注册任何命令**，因此不涉及 `bootstrap.ts` / `stubs.ts`（B）、`dispatcher.ts` / `reply.ts`（C）的命令逻辑。
+  - `dispatcher.ts` —— **成员 A/C 的文件**，D 仅在 `outcome.kind === 'none'` 分支放宽：review thread 内的回复（`in_reply_to_id` 存在）即使无 mention 也走 `fallback_conversation`（支持续轮无 @ 追问）；另加了一行 bot 过滤诊断日志。未改动命令解析/路由/权限逻辑。
+- **D 不注册任何命令**，因此不涉及 `bootstrap.ts` / `stubs.ts`（B）、`reply.ts`（C）。
 - 已知遗留：`resolve.test.ts` 4 个失败为 B 合并带入的既有问题，与 D 无关。
