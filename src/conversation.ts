@@ -53,23 +53,22 @@ const CHAIN_SEPARATOR = '\n---\n'
 /**
  * 追问意图识别：判断一条评论是否应触发 bot 对话回复。
  *
- * 命中规则（满足任一即视为追问）：
- *   - 评论显式 @ 了机器人；或
- *   - 当前对话链中已存在 bot 评论（说明这是一次进行中的对话）
+ * 触发条件：**评论必须显式 @ 了机器人**（首轮与续轮一致），
+ * 以避免把 thread 内真人之间的讨论误当成追问。
  *
  * 排除规则（优先级最高）：
  *   - 评论来自 bot 自身（避免自我触发循环）
+ *   - 评论正文含 bot 专属标签（视为 bot 文案）
  *
  * @returns true 表示需要 bot 介入回复
  */
 export function isFollowUpQuestion(opts: {
   commentBody: string
-  commentChain: string
   authorIsBot: boolean
   mentions?: string[]
   botCommentTags?: string[]
 }): boolean {
-  const {commentBody, commentChain, authorIsBot} = opts
+  const {commentBody, authorIsBot} = opts
   if (authorIsBot) {
     return false
   }
@@ -82,12 +81,7 @@ export function isFollowUpQuestion(opts: {
 
   const mentions = (opts.mentions ?? BOT_MENTIONS).map(m => m.toLowerCase())
   const lowerBody = body.toLowerCase()
-  const mentioned = mentions.some(m => lowerBody.includes(m))
-
-  const chain = commentChain ?? ''
-  const chainHasBot = botTags.some(tag => chain.includes(tag))
-
-  return mentioned || chainHasBot
+  return mentions.some(m => lowerBody.includes(m))
 }
 
 /**
@@ -235,15 +229,14 @@ export const handleConversation = async (
     return
   }
 
-  // ===== 4. 追问意图识别 =====
+  // ===== 4. 追问意图识别（必须 @bot） =====
   if (
     !isFollowUpQuestion({
       commentBody: comment.body,
-      commentChain: rawChain,
       authorIsBot: false
     })
   ) {
-    info('conversation: not a follow-up question, skip')
+    info('conversation: not a follow-up question (no @mention), skip')
     return
   }
 
@@ -347,7 +340,16 @@ export const handleConversation = async (
     warning('conversation: empty reply from model, skip posting')
     return
   }
-  await commenter.reviewCommentReply(pullNumber, topLevelComment, reply)
+  // 由我们用真实评论者用户名前缀回复（模型已被要求不要自行 @）。
+  // 防御性去掉模型可能仍残留的开头 "@user"（历史 prompt 遗留），避免误链到真实账号 user。
+  const cleanedReply = reply.replace(/^\s*@user[，,：:\s]*/i, '').trimStart()
+  const authorLogin: string = comment.user?.login ?? ''
+  const mention = authorLogin ? `@${authorLogin} ` : ''
+  await commenter.reviewCommentReply(
+    pullNumber,
+    topLevelComment,
+    `${mention}${cleanedReply}`
+  )
   info(
     `conversation: replied on PR #${pullNumber} thread (top-level comment ${topLevelComment.id})`
   )

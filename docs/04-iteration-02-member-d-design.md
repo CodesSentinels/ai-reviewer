@@ -148,43 +148,41 @@ flowchart TD
 
 ### 3.3 意图识别规则（`isFollowUpQuestion`）
 
+> **策略：对话必须显式 @bot 才触发（首轮与续轮一致）**，以避免把 thread 内真人之间的讨论误当成追问。
+
 | 条件 | 结果 |
 | :--- | :--- |
 | 评论来自 Bot 自身 | ❌ 不触发（最高优先级排除，防自我循环） |
 | 评论正文含 Bot 专属 HTML 标签 | ❌ 不触发（视为 Bot 文案） |
 | 评论显式 `@ai-reviewer` / `@codesentinel` | ✅ 触发 |
-| 对话链中已存在 Bot 评论（进行中对话） | ✅ 触发（即使本条未 @） |
-| 以上皆否 | ❌ 不触发（普通评论，不打扰） |
+| 以上皆否（含 thread 内未 @ 的续轮回复） | ❌ 不触发 |
 
-> ✅ **dispatcher 已放宽 mention 门禁（支持续轮无 @）**：`isFollowUpQuestion` 运行在
-> dispatcher 之后。dispatcher 现对 `pull_request_review_comment` 做如下处理——
-> 评论命中 mention → 走对话；**未命中 mention 但是 thread 内回复（`in_reply_to_id` 存在）
-> → 也进入 `fallback_conversation`**，由 `handleConversation` 用上表规则判定（链中有 Bot
-> 评论才回帖，纯人类讨论不打扰）。因此"对话链中已有 Bot 评论即触发（即使本条未 @）"现已生效。
->
-> 仅 **review thread 外的顶层评论** 且无 mention 时，仍 `ignored("no bot mention")`。
+> **两层一致**：dispatcher 对 `issue_comment` / `pull_request_review_comment` 都做 mention
+> 前置过滤——不含 `@bot` → `ignored("no bot mention")`，不进 `fallback_conversation`；
+> `isFollowUpQuestion` 同样以 mention 为唯一触发条件。因此 **thread 内续轮也必须每条都 @bot**。
 
 ---
 
 ## 4. 噪音控制（§2.5）数据流
 
-### 4.1 渲染流水线
+### 4.1 渲染流水线（实时管线）
+
+审查管线（`review.ts`）的实际接法：**不发 PR 顶部汇总评论**，而是把严重级别以
+`severityBadge` 徽标内嵌到**每一条行级评论**顶部，再按严重级别排序 + 截断后逐条发布。
 
 ```mermaid
 flowchart TD
-    F["findings: Finding[]"] --> DD["dedupeFindings 同类合并"]
-    DD --> SR["按严重级别排序"]
-    SR --> TR["截断到 maxComments=20"]
-    TR --> SP{"按 foldSeverities 分流"}
-    SP -- "critical/major" --> HI["展开列出"]
-    SP -- "minor/nit/info" --> LO["折叠进 details 标签"]
-    HI --> OUT["formatComments 输出 markdown"]
-    LO --> OUT
-    TR -- "被截断数量" --> NOTE["追加『未展示 N 条』提示"]
-    NOTE --> OUT
-    OUT --> SUM["buildSummaryBody + 严重级别统计表"]
-    SUM --> POST["postSummaryComment → Commenter.comment(FINDINGS_SUMMARY_TAG, replace)"]
+    F["每条解析结果 review.comment"] --> CL["classifyFindingSeverity 启发式分级"]
+    CL --> BD["severityBadge 生成警示框徽标，置于评论顶部"]
+    BD --> COL["收集为 findings: Finding[]"]
+    COL --> PF["prepareFindings(dedupe:false) 按严重级别排序 + 截断到 max_review_comments"]
+    PF --> BUF["逐条 bufferReviewComment → submitReview"]
+    PF -- "被截断数量" --> ST["审查状态区显示 Posted / truncated"]
 ```
+
+> `formatComments` / `buildSummaryBody` / `postSummaryComment`（折叠 + 统计表 + 顶部汇总评论）
+> 作为 **D→C 的可选工具**保留并有单测覆盖，但**默认不在实时管线中调用**——按需求方反馈，
+> 严重级别改为分散到每条行级评论，避免顶部再多一条与发现重复的汇总评论。
 
 ### 4.2 `Finding` 数据结构
 
@@ -259,12 +257,16 @@ export interface NoiseControlOptions {
 }
 ```
 
-**已集成进 `review.ts` 审查管线**（成员 C 文件，已获授权）：审查阶段把每条解析结果收集为 `Finding`（用 `classifyFindingSeverity` 标级别），全部文件完成后统一处理：
+**已集成进 `review.ts` 审查管线**（成员 C 文件，已获授权）：审查阶段把每条解析结果收集为 `Finding`（用 `classifyFindingSeverity` 标级别，并以 `severityBadge` 内嵌徽标），全部文件完成后统一排序 + 截断后逐条发布：
 
 ```ts
-import {prepareFindings, postSummaryComment, classifyFindingSeverity} from './noise-control'
+import {prepareFindings, classifyFindingSeverity, severityBadge} from './noise-control'
 
-// 1. 行级评论：排序 + 截断（dedupe:false 保留每个代码位置），再逐条发布
+// 收集时把严重级别徽标置于每条评论顶部
+const severity = classifyFindingSeverity(review.comment)
+findings.push({path, startLine, endLine, severity, body: `${severityBadge(severity)}\n\n${comment}`})
+
+// 排序 + 截断（dedupe:false 保留每个代码位置），逐条发布
 const {kept} = prepareFindings(findings, {
   dedupe: false,
   maxComments: options.maxReviewComments
@@ -273,11 +275,10 @@ for (const f of kept) {
   await commenter.bufferReviewComment(f.path, f.startLine, f.endLine, f.body)
 }
 await commenter.submitReview(...)
-// 2. PR 顶部发布一条按级别统计的汇总评论
-await postSummaryComment(prNumber, findings, {maxComments: options.maxReviewComments})
+// 不再发 PR 顶部汇总评论：严重级别已分散到每条行级评论
 ```
 
-> ✅ **dedupe 行号丢失问题已解决**：行级评论用 `dedupe: false`，**保留每个代码位置**，绝不合并不同行；同类合并（`dedupeFindings`）仅用于 PR 顶部汇总评论的概览统计。
+> ✅ **dedupe 行号丢失问题已规避**：行级评论用 `dedupe: false`，**保留每个代码位置**，绝不合并不同行。`dedupeFindings` / `formatComments` / `postSummaryComment` 仍作为可选工具保留（供 C 自定义汇总视图），但实时管线默认不调用。
 
 ---
 
@@ -318,6 +319,6 @@ await postSummaryComment(prNumber, findings, {maxComments: options.maxReviewComm
   - `command-handler.ts` —— B/C 未触碰。合并时一度出现 `handleReviewComment` 与 `handleConversation` **双重回帖** bug，已修复为只调用 `handleConversation`。
   - `review.ts` —— **成员 C 的文件**，D 在此接入噪音控制（已获用户授权）。改动集中在审查发布阶段，未触碰 C 的增量/全量/状态逻辑。
   - `options.ts` / `main.ts` / `action.yml` —— 仅在末尾追加 `max_review_comments`，不影响既有位置传参。
-  - `dispatcher.ts` —— **成员 A/C 的文件**，D 仅在 `outcome.kind === 'none'` 分支放宽：review thread 内的回复（`in_reply_to_id` 存在）即使无 mention 也走 `fallback_conversation`（支持续轮无 @ 追问）；另加了一行 bot 过滤诊断日志。未改动命令解析/路由/权限逻辑。
+  - `dispatcher.ts` —— **成员 A/C 的文件**，D 仅加了一行 bot 过滤诊断日志（打印作者 login/type，便于排查）。**保留 mention 前置门禁**（对话必须 @bot），未改动命令解析/路由/权限逻辑。
 - **D 不注册任何命令**，因此不涉及 `bootstrap.ts` / `stubs.ts`（B）、`reply.ts`（C）。
 - 已知遗留：`resolve.test.ts` 4 个失败为 B 合并带入的既有问题，与 D 无关。

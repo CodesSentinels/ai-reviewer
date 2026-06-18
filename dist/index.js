@@ -9334,14 +9334,7 @@ async function dispatchCommentEvent(deps) {
     };
     const outcome = (0,parser/* parse */.Qc)(comment.body, parseOpts);
     if (outcome.kind === 'none') {
-        // 续轮追问：review thread 内的回复（in_reply_to_id 存在）即使未 @bot，
-        // 也交给对话处理器判定——handleConversation 会检查对话链中是否已有 bot 评论，
-        // 仅在"进行中的 bot 对话"里才回帖，纯人类讨论不会被打扰。
-        if (eventName === 'pull_request_review_comment' &&
-            comment.in_reply_to_id != null) {
-            (0,core.info)(`command dispatcher: no mention but in-thread reply (in_reply_to_id=${comment.in_reply_to_id}) → conversation fallback`);
-            return { kind: 'fallback_conversation' };
-        }
+        // 对话必须显式 @bot 才触发（包括续轮），避免与真人之间的普通讨论冲突。
         return { kind: 'ignored', reason: 'no bot mention' };
     }
     if (outcome.kind === 'conversation') {
@@ -9373,7 +9366,12 @@ async function dispatchCommentEvent(deps) {
     const processed = await hasBeenProcessed(owner, repoName, prNumber, comment.id, parsed.name);
     if (processed) {
         (0,core.info)(`command dispatcher: skip duplicate commentId=${comment.id} cmd=${parsed.name}`);
-        return { kind: 'executed', command: parsed.name, ok: false, error: 'DUPLICATE' };
+        return {
+            kind: 'executed',
+            command: parsed.name,
+            ok: false,
+            error: 'DUPLICATE'
+        };
     }
     // 速率限制
     const rl = checkRateLimit(actorLogin);
@@ -9532,17 +9530,17 @@ const CHAIN_SEPARATOR = '\n---\n';
 /**
  * 追问意图识别：判断一条评论是否应触发 bot 对话回复。
  *
- * 命中规则（满足任一即视为追问）：
- *   - 评论显式 @ 了机器人；或
- *   - 当前对话链中已存在 bot 评论（说明这是一次进行中的对话）
+ * 触发条件：**评论必须显式 @ 了机器人**（首轮与续轮一致），
+ * 以避免把 thread 内真人之间的讨论误当成追问。
  *
  * 排除规则（优先级最高）：
  *   - 评论来自 bot 自身（避免自我触发循环）
+ *   - 评论正文含 bot 专属标签（视为 bot 文案）
  *
  * @returns true 表示需要 bot 介入回复
  */
 function isFollowUpQuestion(opts) {
-    const { commentBody, commentChain, authorIsBot } = opts;
+    const { commentBody, authorIsBot } = opts;
     if (authorIsBot) {
         return false;
     }
@@ -9554,10 +9552,7 @@ function isFollowUpQuestion(opts) {
     }
     const mentions = (opts.mentions ?? BOT_MENTIONS).map(m => m.toLowerCase());
     const lowerBody = body.toLowerCase();
-    const mentioned = mentions.some(m => lowerBody.includes(m));
-    const chain = commentChain ?? '';
-    const chainHasBot = botTags.some(tag => chain.includes(tag));
-    return mentioned || chainHasBot;
+    return mentions.some(m => lowerBody.includes(m));
 }
 /**
  * 统计对话链中 bot 已回复的轮次。
@@ -9677,13 +9672,12 @@ const handleConversation = async (heavyBot, options, prompts) => {
         (0,core.warning)('conversation: cannot locate top-level comment, abort');
         return;
     }
-    // ===== 4. 追问意图识别 =====
+    // ===== 4. 追问意图识别（必须 @bot） =====
     if (!isFollowUpQuestion({
         commentBody: comment.body,
-        commentChain: rawChain,
         authorIsBot: false
     })) {
-        (0,core.info)('conversation: not a follow-up question, skip');
+        (0,core.info)('conversation: not a follow-up question (no @mention), skip');
         return;
     }
     // ===== 5. 对话轮次上限控制 =====
@@ -9761,7 +9755,12 @@ const handleConversation = async (heavyBot, options, prompts) => {
         (0,core.warning)('conversation: empty reply from model, skip posting');
         return;
     }
-    await commenter.reviewCommentReply(pullNumber, topLevelComment, reply);
+    // 由我们用真实评论者用户名前缀回复（模型已被要求不要自行 @）。
+    // 防御性去掉模型可能仍残留的开头 "@user"（历史 prompt 遗留），避免误链到真实账号 user。
+    const cleanedReply = reply.replace(/^\s*@user[，,：:\s]*/i, '').trimStart();
+    const authorLogin = comment.user?.login ?? '';
+    const mention = authorLogin ? `@${authorLogin} ` : '';
+    await commenter.reviewCommentReply(pullNumber, topLevelComment, `${mention}${cleanedReply}`);
     (0,core.info)(`conversation: replied on PR #${pullNumber} thread (top-level comment ${topLevelComment.id})`);
 };
 
@@ -14391,8 +14390,9 @@ If the comment contains instructions/requests for you, please comply.
 For example, if the comment is asking you to generate documentation
 comments on the code, in your reply please generate the required code.
 
-In your reply, please make sure to begin the reply by tagging the user
-with "@user".
+Do NOT start your reply with an @mention, a username, or a greeting
+(such as "@user" or "Hi") — the bot prepends the correct @mention of the
+actual commenter automatically. Just provide the reply content directly.
 
 ## Comment format
 
@@ -17911,16 +17911,32 @@ const SEVERITY_RANK = {
     nit: 1,
     info: 0
 };
-/** 严重级别的展示样式 */
+/** 严重级别的展示样式（emoji + 中文标签 + GitHub 警示框类型 + 一句话说明） */
 const SEVERITY_DISPLAY = {
-    critical: { emoji: '🔴', label: '严重' },
-    major: { emoji: '🟠', label: '重要' },
-    minor: { emoji: '🟡', label: '次要' },
-    nit: { emoji: '⚪', label: '吹毛求疵' },
-    info: { emoji: 'ℹ️', label: '提示' }
+    critical: {
+        emoji: '🔴',
+        label: '严重',
+        alert: 'CAUTION',
+        hint: '需优先修复'
+    },
+    major: { emoji: '🟠', label: '重要', alert: 'WARNING', hint: '建议尽快处理' },
+    minor: { emoji: '🟡', label: '次要', alert: 'NOTE', hint: '可酌情优化' },
+    nit: { emoji: '⚪', label: '吹毛求疵', alert: 'TIP', hint: '锦上添花' },
+    info: { emoji: 'ℹ️', label: '提示', alert: 'NOTE', hint: '' }
 };
+/**
+ * 行级评论的严重级别徽标。
+ *
+ * 用 GitHub 警示框（`> [!CAUTION]` 等）渲染成带颜色的标题块，配合 emoji + 中文标签，
+ * 让每条行级评论一眼能看出严重级别（取代原先在 PR 顶部单独发的汇总评论）。
+ */
+function severityBadge(severity) {
+    const { emoji, label, alert, hint } = SEVERITY_DISPLAY[severity];
+    const tail = hint ? ` — ${hint}` : '';
+    return `> [!${alert}]\n> ${emoji} **${label}**${tail}`;
+}
 const DEFAULT_MAX_COMMENTS = 20;
-const DEFAULT_FOLD_SEVERITIES = ['minor', 'nit', 'info'];
+const DEFAULT_FOLD_SEVERITIES = (/* unused pure expression or super */ null && (['minor', 'nit', 'info']));
 /** 标识噪音控制汇总评论（独立于迭代一的 SUMMARIZE_TAG，避免互相覆盖） */
 const FINDINGS_SUMMARY_TAG = '<!-- This is an auto-generated comment: findings summary by AI Reviewer -->';
 /**
@@ -18066,9 +18082,9 @@ function buildSummaryBody(findings, options = {}) {
  * @param options   噪音控制配置
  * @param commenter 可选，注入自定义 Commenter（便于测试）
  */
-async function postSummaryComment(prNumber, findings, options = {}, commenter = new lib_commenter/* Commenter */.Es()) {
+async function postSummaryComment(prNumber, findings, options = {}, commenter = new Commenter()) {
     const body = buildSummaryBody(findings, options);
-    (0,core.info)(`noise-control: posting findings summary for PR #${prNumber} (${findings.length} findings)`);
+    info(`noise-control: posting findings summary for PR #${prNumber} (${findings.length} findings)`);
     await commenter.comment(body, FINDINGS_SUMMARY_TAG, 'replace');
 }
 function firstLine(text) {
@@ -18773,13 +18789,15 @@ ${commentChain}
                                 }
                             }
                             (0,core.info)(`[analysis_chain] ${filename}: comment line ${review.startLine}-${review.endLine}, hasChain=${shouldAttachAnalysisChain}, finalLen=${commentWithChain.length}`);
-                            // 收集为 Finding（不立即 buffer），统一在审查完成后做噪音控制
+                            // 收集为 Finding（不立即 buffer），统一在审查完成后做噪音控制。
+                            // 严重级别以警示框徽标的形式直接置于每条行级评论顶部（取代 PR 顶部汇总评论）。
+                            const severity = classifyFindingSeverity(review.comment);
                             findings.push({
                                 path: filename,
                                 startLine: review.startLine,
                                 endLine: review.endLine,
-                                severity: classifyFindingSeverity(review.comment),
-                                body: commentWithChain
+                                severity,
+                                body: `${severityBadge(severity)}\n\n${commentWithChain}`
                             });
                         }
                         catch (e) {
@@ -18875,15 +18893,8 @@ ${reviewsSkipped.length > 0
 `;
         // 将最新的 head commit SHA 添加到已审查列表
         summarizeComment += `\n${commenter.addReviewedCommitId(existingCommitIdsBlock, review_context.payload.pull_request.head.sha)}`;
-        // 批量提交所有缓冲的审查评论
+        // 批量提交所有缓冲的审查评论（严重级别已内嵌在每条评论顶部，不再单独发汇总评论）
         await commenter.submitReview(review_context.payload.pull_request.number, commits[commits.length - 1].sha, statusMsg);
-        // 噪音控制（成员 D · §2.5）：在 PR 顶部发布按严重级别统计的发现汇总评论
-        // （独立 FINDINGS_SUMMARY_TAG，与上面的 SUMMARIZE_TAG 摘要互不覆盖）。
-        if (findings.length > 0) {
-            await postSummaryComment(review_context.payload.pull_request.number, findings, {
-                maxComments: options.maxReviewComments
-            });
-        }
     }
     // summary-only 等跳过审查阶段的场景：保留既有的已审查 commit 记录，
     // 否则 replace 摘要评论会清空增量审查标记，导致下次自动审查从 base 重审

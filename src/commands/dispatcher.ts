@@ -132,18 +132,7 @@ export async function dispatchCommentEvent(
   const outcome = parse(comment.body, parseOpts)
 
   if (outcome.kind === 'none') {
-    // 续轮追问：review thread 内的回复（in_reply_to_id 存在）即使未 @bot，
-    // 也交给对话处理器判定——handleConversation 会检查对话链中是否已有 bot 评论，
-    // 仅在"进行中的 bot 对话"里才回帖，纯人类讨论不会被打扰。
-    if (
-      eventName === 'pull_request_review_comment' &&
-      comment.in_reply_to_id != null
-    ) {
-      info(
-        `command dispatcher: no mention but in-thread reply (in_reply_to_id=${comment.in_reply_to_id}) → conversation fallback`
-      )
-      return {kind: 'fallback_conversation'}
-    }
+    // 对话必须显式 @bot 才触发（包括续轮），避免与真人之间的普通讨论冲突。
     return {kind: 'ignored', reason: 'no bot mention'}
   }
   if (outcome.kind === 'conversation') {
@@ -187,7 +176,12 @@ export async function dispatchCommentEvent(
     info(
       `command dispatcher: skip duplicate commentId=${comment.id} cmd=${parsed.name}`
     )
-    return {kind: 'executed', command: parsed.name, ok: false, error: 'DUPLICATE'}
+    return {
+      kind: 'executed',
+      command: parsed.name,
+      ok: false,
+      error: 'DUPLICATE'
+    }
   }
 
   // 速率限制
@@ -272,8 +266,7 @@ export async function dispatchCommentEvent(
   // 执行
   try {
     const result = await handler.execute(ctx)
-    const message =
-      result?.message ?? `✅ 命令 \`${parsed.name}\` 执行完成`
+    const message = result?.message ?? `✅ 命令 \`${parsed.name}\` 执行完成`
     await reply.success(message, ackId)
     return {kind: 'executed', command: parsed.name, ok: true}
   } catch (e) {

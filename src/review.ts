@@ -44,8 +44,8 @@ import {
 import {Inputs} from './inputs'
 import {
   classifyFindingSeverity,
-  postSummaryComment,
   prepareFindings,
+  severityBadge,
   type Finding
 } from './noise-control'
 import {octokit} from './octokit'
@@ -932,13 +932,15 @@ ${commentChain}
               info(
                 `[analysis_chain] ${filename}: comment line ${review.startLine}-${review.endLine}, hasChain=${shouldAttachAnalysisChain}, finalLen=${commentWithChain.length}`
               )
-              // 收集为 Finding（不立即 buffer），统一在审查完成后做噪音控制
+              // 收集为 Finding（不立即 buffer），统一在审查完成后做噪音控制。
+              // 严重级别以警示框徽标的形式直接置于每条行级评论顶部（取代 PR 顶部汇总评论）。
+              const severity = classifyFindingSeverity(review.comment)
               findings.push({
                 path: filename,
                 startLine: review.startLine,
                 endLine: review.endLine,
-                severity: classifyFindingSeverity(review.comment),
-                body: commentWithChain
+                severity,
+                body: `${severityBadge(severity)}\n\n${commentWithChain}`
               })
             } catch (e: any) {
               reviewsFailed.push(`${filename} comment failed (${e as string})`)
@@ -1061,20 +1063,12 @@ ${
       context.payload.pull_request.head.sha
     )}`
 
-    // 批量提交所有缓冲的审查评论
+    // 批量提交所有缓冲的审查评论（严重级别已内嵌在每条评论顶部，不再单独发汇总评论）
     await commenter.submitReview(
       context.payload.pull_request.number,
       commits[commits.length - 1].sha,
       statusMsg
     )
-
-    // 噪音控制（成员 D · §2.5）：在 PR 顶部发布按严重级别统计的发现汇总评论
-    // （独立 FINDINGS_SUMMARY_TAG，与上面的 SUMMARIZE_TAG 摘要互不覆盖）。
-    if (findings.length > 0) {
-      await postSummaryComment(context.payload.pull_request.number, findings, {
-        maxComments: options.maxReviewComments
-      })
-    }
   }
 
   // summary-only 等跳过审查阶段的场景：保留既有的已审查 commit 记录，

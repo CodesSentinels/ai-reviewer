@@ -27,12 +27,11 @@ import {
 const BOT_REPLY = '<!-- BOT_REPLY -->'
 const BOT_COMMENT = '<!-- BOT_COMMENT -->'
 
-describe('isFollowUpQuestion — 意图识别', () => {
+describe('isFollowUpQuestion — 意图识别（必须 @bot）', () => {
   test('bot 自身评论不触发', () => {
     expect(
       isFollowUpQuestion({
         commentBody: '@ai-reviewer 在吗',
-        commentChain: '',
         authorIsBot: true
       })
     ).toBe(false)
@@ -42,7 +41,6 @@ describe('isFollowUpQuestion — 意图识别', () => {
     expect(
       isFollowUpQuestion({
         commentBody: '@ai-reviewer 为什么这样写？',
-        commentChain: '',
         authorIsBot: false
       })
     ).toBe(true)
@@ -52,27 +50,24 @@ describe('isFollowUpQuestion — 意图识别', () => {
     expect(
       isFollowUpQuestion({
         commentBody: '@CodeSentinel 解释一下',
-        commentChain: '',
         authorIsBot: false
       })
     ).toBe(true)
   })
 
-  test('进行中对话（链中已有 bot 评论）即使未 @ 也触发', () => {
+  test('续轮未 @bot 不触发（避免与真人评论冲突）', () => {
     expect(
       isFollowUpQuestion({
         commentBody: '还是不太懂',
-        commentChain: `user: 问题\n---\nbot: 回答 ${BOT_REPLY}`,
         authorIsBot: false
       })
-    ).toBe(true)
+    ).toBe(false)
   })
 
-  test('既无 mention 也无 bot 对话历史则不触发', () => {
+  test('普通评论（无 mention）不触发', () => {
     expect(
       isFollowUpQuestion({
         commentBody: 'LGTM 我也觉得',
-        commentChain: 'user: 普通讨论',
         authorIsBot: false
       })
     ).toBe(false)
@@ -82,7 +77,6 @@ describe('isFollowUpQuestion — 意图识别', () => {
     expect(
       isFollowUpQuestion({
         commentBody: `回复内容 ${BOT_COMMENT}`,
-        commentChain: '',
         authorIsBot: false
       })
     ).toBe(false)

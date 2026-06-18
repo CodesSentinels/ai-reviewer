@@ -56,16 +56,33 @@ const SEVERITY_RANK: Record<FindingSeverity, number> = {
   info: 0
 }
 
-/** 严重级别的展示样式 */
+/** 严重级别的展示样式（emoji + 中文标签 + GitHub 警示框类型 + 一句话说明） */
 const SEVERITY_DISPLAY: Record<
   FindingSeverity,
-  {emoji: string; label: string}
+  {emoji: string; label: string; alert: string; hint: string}
 > = {
-  critical: {emoji: '🔴', label: '严重'},
-  major: {emoji: '🟠', label: '重要'},
-  minor: {emoji: '🟡', label: '次要'},
-  nit: {emoji: '⚪', label: '吹毛求疵'},
-  info: {emoji: 'ℹ️', label: '提示'}
+  critical: {
+    emoji: '🔴',
+    label: '严重',
+    alert: 'CAUTION',
+    hint: '需优先修复'
+  },
+  major: {emoji: '🟠', label: '重要', alert: 'WARNING', hint: '建议尽快处理'},
+  minor: {emoji: '🟡', label: '次要', alert: 'NOTE', hint: '可酌情优化'},
+  nit: {emoji: '⚪', label: '吹毛求疵', alert: 'TIP', hint: '锦上添花'},
+  info: {emoji: 'ℹ️', label: '提示', alert: 'NOTE', hint: ''}
+}
+
+/**
+ * 行级评论的严重级别徽标。
+ *
+ * 用 GitHub 警示框（`> [!CAUTION]` 等）渲染成带颜色的标题块，配合 emoji + 中文标签，
+ * 让每条行级评论一眼能看出严重级别（取代原先在 PR 顶部单独发的汇总评论）。
+ */
+export function severityBadge(severity: FindingSeverity): string {
+  const {emoji, label, alert, hint} = SEVERITY_DISPLAY[severity]
+  const tail = hint ? ` — ${hint}` : ''
+  return `> [!${alert}]\n> ${emoji} **${label}**${tail}`
 }
 
 const DEFAULT_MAX_COMMENTS = 20

@@ -28,6 +28,7 @@ import {
   buildSummaryBody,
   postSummaryComment,
   classifyFindingSeverity,
+  severityBadge,
   FINDINGS_SUMMARY_TAG,
   type Finding
 } from '../src/noise-control'
@@ -169,6 +170,20 @@ describe('classifyFindingSeverity — 启发式分级', () => {
     expect(classifyFindingSeverity('this changes the default currency')).toBe(
       'minor'
     )
+  })
+})
+
+describe('severityBadge — 行级评论严重级别徽标', () => {
+  test('critical 渲染为 CAUTION 警示框 + 中文标签', () => {
+    const badge = severityBadge('critical')
+    expect(badge).toContain('> [!CAUTION]')
+    expect(badge).toContain('🔴 **严重**')
+  })
+
+  test('各级别映射到不同的 GitHub 警示框类型', () => {
+    expect(severityBadge('major')).toContain('[!WARNING]')
+    expect(severityBadge('minor')).toContain('[!NOTE]')
+    expect(severityBadge('nit')).toContain('[!TIP]')
   })
 })
 
