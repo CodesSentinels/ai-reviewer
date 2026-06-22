@@ -130,10 +130,10 @@ describe('getBotLogin', () => {
     expect(mockGetAuthenticated).toHaveBeenCalledTimes(1)
   })
 
-  test('getAuthenticated 抛异常时返回 __unknown_bot__ 哨兵值', async () => {
+  test('getAuthenticated 抛异常时 fallback 到 github-actions（不带 [bot] 后缀，便于与 GraphQL author 比对）', async () => {
     mockGetAuthenticated.mockRejectedValue(new Error('network error'))
     const login = await getBotLogin({} as never)
-    expect(login).toBe('__unknown_bot__')
+    expect(login).toBe('github-actions')
   })
 })
 
@@ -279,7 +279,7 @@ describe('resolveHandler.execute', () => {
 describe('batchResolve', () => {
   test('空数组 → 返回 ok=0 failed=0，不调用 GraphQL', async () => {
     const result = await batchResolve([])
-    expect(result).toEqual({ok: 0, failed: 0})
+    expect(result).toEqual({ok: 0, failed: 0, errors: []})
     expect(mockGraphql).not.toHaveBeenCalled()
   })
 })
