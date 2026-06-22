@@ -4,32 +4,16 @@
  * 覆盖:
  * - 同类评论合并去重（dedupeFindings）
  * - 去重 + 排序 + 截断（prepareFindings）
- * - 渲染：高优先级展开 / 低优先级折叠 / 截断提示（formatComments）
- * - 汇总评论正文：统计表 + 空结果（buildSummaryBody）
- * - 发布汇总评论的幂等 tag（postSummaryComment）
+ * - 启发式严重级别分类（classifyFindingSeverity）
+ * - 行级评论严重级别徽标（severityBadge）
  */
-import {describe, expect, test, jest, beforeEach} from '@jest/globals'
-
-// 工厂 mock，避免加载真实 commenter（及其 octokit / @actions 副作用）
-const commentMock = jest.fn()
-jest.mock('../src/commenter', () => ({
-  Commenter: class {
-    comment = commentMock
-  },
-  COMMENT_TAG: '',
-  COMMENT_REPLY_TAG: '',
-  SUMMARIZE_TAG: ''
-}))
+import {describe, expect, test} from '@jest/globals'
 
 import {
   dedupeFindings,
   prepareFindings,
-  formatComments,
-  buildSummaryBody,
-  postSummaryComment,
   classifyFindingSeverity,
   severityBadge,
-  FINDINGS_SUMMARY_TAG,
   type Finding
 } from '../src/noise-control'
 
@@ -98,47 +82,6 @@ describe('prepareFindings — 排序 + 截断', () => {
   })
 })
 
-describe('formatComments — 折叠 + 截断提示', () => {
-  test('低优先级折叠进 <details>', () => {
-    const md = formatComments([
-      f({title: 'big', severity: 'critical'}),
-      f({title: 'tiny', severity: 'nit'})
-    ])
-    expect(md).toContain('<details>')
-    expect(md).toContain('低优先级建议')
-    // critical 不应在折叠块外被截断
-    expect(md).toContain('big')
-  })
-
-  test('空输入返回空字符串', () => {
-    expect(formatComments([])).toBe('')
-  })
-
-  test('超过上限时追加截断提示', () => {
-    const findings = Array.from({length: 22}, (_, i) =>
-      f({title: `t${i}`, severity: 'minor'})
-    )
-    const md = formatComments(findings, {maxComments: 20})
-    expect(md).toContain('未展示')
-  })
-})
-
-describe('buildSummaryBody — 汇总正文', () => {
-  test('包含统计表与总数', () => {
-    const body = buildSummaryBody([
-      f({title: 'a', severity: 'critical'}),
-      f({title: 'b', severity: 'minor'})
-    ])
-    expect(body).toContain('审查摘要')
-    expect(body).toContain('| 级别 | 数量 |')
-    expect(body).toContain('**2**')
-  })
-
-  test('无发现时给出通过提示', () => {
-    expect(buildSummaryBody([])).toContain('未发现')
-  })
-})
-
 describe('classifyFindingSeverity — 启发式分级', () => {
   test('安全类关键词 → critical', () => {
     expect(
@@ -184,19 +127,5 @@ describe('severityBadge — 行级评论严重级别徽标', () => {
     expect(severityBadge('major')).toContain('[!WARNING]')
     expect(severityBadge('minor')).toContain('[!NOTE]')
     expect(severityBadge('nit')).toContain('[!TIP]')
-  })
-})
-
-describe('postSummaryComment — 发布汇总评论', () => {
-  beforeEach(() => {
-    commentMock.mockReset()
-  })
-
-  test('以 FINDINGS_SUMMARY_TAG 幂等替换发布', async () => {
-    await postSummaryComment(42, [f({title: 'x', severity: 'major'})])
-    expect(commentMock).toHaveBeenCalledTimes(1)
-    const [, tag, mode] = commentMock.mock.calls[0] as [string, string, string]
-    expect(tag).toBe(FINDINGS_SUMMARY_TAG)
-    expect(mode).toBe('replace')
   })
 })

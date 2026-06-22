@@ -28,6 +28,7 @@ import {
   SUMMARIZE_TAG
 } from './commenter'
 import {buildPatchScans} from './changed-lines'
+import {PRIMARY_BOT_MENTION} from './constants'
 import {
   analyzeDependencies,
   formatCrossFileContext,
@@ -63,7 +64,7 @@ const MAX_CROSS_FILE_CONTEXT_TOKENS = 1500
 const repo = context.repo
 
 /** 在 PR 描述中添加此关键词可跳过 AI 审查 */
-const ignoreKeyword = '@ai-reviewer: ignore'
+const ignoreKeyword = `${PRIMARY_BOT_MENTION}: ignore`
 
 export interface CodeReviewRunOptions {
   mode?: 'incremental' | 'full'
@@ -1044,16 +1045,16 @@ ${
 <details>
 <summary>Tips</summary>
 
-### Chat with ${botName} Bot (\`@ai-reviewer\`)
+### Chat with ${botName} Bot (\`${PRIMARY_BOT_MENTION}\`)
 - Reply on review comments left by this bot to ask follow-up questions. A review comment is a comment on a diff or a file.
-- Invite the bot into a review comment chain by tagging \`@ai-reviewer\` in a reply.
+- Invite the bot into a review comment chain by tagging \`${PRIMARY_BOT_MENTION}\` in a reply.
 
 ### Code suggestions
 - The bot may make code suggestions, but please review them carefully before committing since the line number ranges may be misaligned.
 - You can edit the comment made by the bot and manually tweak the suggestion if it is slightly off.
 
 ### Pausing incremental reviews
-- Add \`@ai-reviewer: ignore\` anywhere in the PR description to pause further reviews from the bot.
+- Add \`${ignoreKeyword}\` anywhere in the PR description to pause further reviews from the bot.
 
 </details>
 `

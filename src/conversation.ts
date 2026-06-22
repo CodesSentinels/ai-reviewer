@@ -26,6 +26,7 @@ import {
   COMMENT_TAG,
   SUMMARIZE_TAG
 } from './commenter'
+import {BOT_MENTIONS} from './constants'
 import {Inputs} from './inputs'
 import {octokit} from './octokit'
 import {type Options} from './options'
@@ -35,8 +36,8 @@ import {getTokenCount} from './tokenizer'
 // eslint-disable-next-line camelcase
 const context = github_context
 
-/** 默认的 bot mention 别名（小写匹配，与命令解析器保持一致） */
-export const BOT_MENTIONS = ['@ai-reviewer', '@codesentinel']
+/** 默认的 bot mention 别名（小写匹配，与命令解析器保持一致）。共享自 constants。 */
+export {BOT_MENTIONS}
 
 /** 标识 bot 在对话链中出现过的标签（用于轮次统计 / 意图识别） */
 export const BOT_COMMENT_TAGS = [COMMENT_TAG, COMMENT_REPLY_TAG]

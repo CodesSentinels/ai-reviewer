@@ -5,13 +5,14 @@ import {
   fetchUnresolvedBotThreads,
   batchResolve
 } from '../../github/review-thread'
+import {PRIMARY_BOT_MENTION} from '../../constants'
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
 export const resolveHandler: CommandHandler = {
   name: 'resolve',
   description: '批量将所有 CodeSentinel 审查意见标记为已解决',
-  usage: '@ai-reviewer resolve',
+  usage: `${PRIMARY_BOT_MENTION} resolve`,
   needsAck: true,
   minPermission: 'write',
   execute
@@ -48,11 +49,17 @@ export async function resolveAllBotComments(params: {
 
 // ─── Formatting ───────────────────────────────────────────────────────────────
 
-function formatResult(ok: number, failed: number, total: number, errors: Error[]): string {
+function formatResult(
+  ok: number,
+  failed: number,
+  total: number,
+  errors: Error[]
+): string {
   if (failed === 0) {
     return `✅ 已解决 **${ok}** 条 CodeSentinel 审查意见`
   }
-  const errDetail = errors.length > 0 ? `\n\n错误详情：\`${errors[0].message}\`` : ''
+  const errDetail =
+    errors.length > 0 ? `\n\n错误详情：\`${errors[0].message}\`` : ''
   if (ok === 0) {
     return `❌ 解决失败（共 **${total}** 条）${errDetail}`
   }
