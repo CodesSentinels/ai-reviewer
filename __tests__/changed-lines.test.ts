@@ -13,12 +13,7 @@ jest.mock('@actions/core', () => ({
   warning: jest.fn()
 }))
 
-import {
-  buildPatchScans,
-  extractChangedLinesFromPatch,
-  scanPatch,
-  toAddedLineMap
-} from '../src/changed-lines'
+import {buildPatchScans, scanPatch, toAddedLineMap} from '../src/changed-lines'
 
 describe('scanPatch — 单次 walk 同时产出 added/touched', () => {
   test('混合 + / - / 上下文：addedLines 仅 +，touchedLines 含 - 位置', () => {
@@ -73,16 +68,6 @@ describe('scanPatch — 单次 walk 同时产出 added/touched', () => {
     const {addedLines, touchedLines} = scanPatch(patch)
     expect(Array.from(addedLines)).toEqual([2])
     expect(Array.from(touchedLines).sort((a, b) => a - b)).toEqual([2])
-  })
-})
-
-describe('extractChangedLinesFromPatch — 兼容旧调用方', () => {
-  test('与 scanPatch().addedLines 等价', () => {
-    const patch = `@@ -1,1 +1,2 @@
- a
-+b`
-    const set = extractChangedLinesFromPatch(patch)
-    expect(Array.from(set)).toEqual([2])
   })
 })
 

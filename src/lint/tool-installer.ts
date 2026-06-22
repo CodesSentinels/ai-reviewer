@@ -60,7 +60,7 @@ export async function ensureToolInstalled(
       return {
         ok: false,
         reason:
-          "binary install strategy not yet implemented (planned for Phase 2+); " +
+          'binary install strategy not yet implemented (planned for Phase 2+); ' +
           'add downloader in tool-installer.ts when needed'
       }
   }
@@ -97,7 +97,8 @@ async function installViaNpm(spec: NpmInstallSpec): Promise<InstallResult> {
             name: 'ai-reviewer-lint-tools',
             private: true,
             version: '0.0.0',
-            description: 'ai-reviewer 内部 lint 工具沙箱（自动管理，请勿手动修改）'
+            description:
+              'ai-reviewer 内部 lint 工具沙箱（自动管理，请勿手动修改）'
           },
           null,
           2
@@ -139,7 +140,10 @@ async function installViaNpm(spec: NpmInstallSpec): Promise<InstallResult> {
   }
   if (result.exitCode !== 0) {
     const stderrSnippet =
-      result.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 200) ?? ''
+      result.stderr
+        .split('\n')
+        .find(l => l.trim().length > 0)
+        ?.substring(0, 200) ?? ''
     return {
       ok: false,
       reason: `npm install ${spec.package}@${spec.version} failed (exit=${result.exitCode}): ${stderrSnippet}`
@@ -157,9 +161,4 @@ async function installViaNpm(spec: NpmInstallSpec): Promise<InstallResult> {
 
   info(`lint/installer: ${spec.binName} ready at ${binPath}`)
   return {ok: true, binPath}
-}
-
-/** 仅供测试使用：返回当前沙箱根目录路径 */
-export function _getInstallRootForTest(): string {
-  return getInstallRoot()
 }

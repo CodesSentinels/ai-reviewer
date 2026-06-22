@@ -2,8 +2,6 @@
  * lint-filter.test.ts - Linter/SAST 后处理（过滤 + 去重）测试
  *
  * 覆盖：
- * - extractChangedLinesFromPatch 解析 unified diff 的 +/-/' ' 行号推进逻辑
- *   （位于 src/changed-lines.ts —— 仍在此处一并测试，省得拆两个文件）
  * - filterByChangedLines 仅保留命中变更窗口的工具结果
  * - deduplicateResults 跨工具同位置去重，保留更高严重级别
  */
@@ -16,43 +14,11 @@ jest.mock('@actions/core', () => ({
 }))
 
 import {
-  buildChangedLineMap,
-  extractChangedLinesFromPatch
-} from '../src/changed-lines'
-import {
   collapseAdjacentFindings,
   deduplicateResults,
   filterByChangedLines
 } from '../src/lint/lint-filter'
 import {type LintResult} from '../src/lint/types'
-
-describe('extractChangedLinesFromPatch', () => {
-  test('extracts new file line numbers for + lines only', () => {
-    const patch = `@@ -10,3 +10,4 @@
- context
--old
-+new1
-+new2
- trail`
-    const lines = extractChangedLinesFromPatch(patch)
-    expect(Array.from(lines).sort((a, b) => a - b)).toEqual([11, 12])
-  })
-
-  test('handles multiple hunks', () => {
-    const patch = `@@ -1,1 +1,2 @@
- a
-+b
-@@ -10,1 +11,2 @@
- c
-+d`
-    const lines = extractChangedLinesFromPatch(patch)
-    expect(Array.from(lines).sort((a, b) => a - b)).toEqual([2, 12])
-  })
-
-  test('returns empty set for empty patch', () => {
-    expect(extractChangedLinesFromPatch('').size).toBe(0)
-  })
-})
 
 describe('filterByChangedLines', () => {
   const mkResult = (
@@ -296,26 +262,5 @@ describe('collapseAdjacentFindings', () => {
     const out = collapseAdjacentFindings([mk(90), mk(88), mk(89)])
     expect(out.length).toBe(1)
     expect(out[0]).toMatchObject({line: 88, endLine: 90})
-  })
-})
-
-describe('buildChangedLineMap', () => {
-  test('maps each filename to its changed line set', () => {
-    const filesAndChanges: Array<
-      [string, string, string, Array<[number, number, string]>]
-    > = [
-      [
-        'src/a.ts',
-        '',
-        `@@ -1,1 +1,2 @@
- a
-+b`,
-        []
-      ],
-      ['src/b.ts', '', '', []]
-    ]
-    const map = buildChangedLineMap(filesAndChanges)
-    expect(Array.from(map.get('src/a.ts')!).sort()).toEqual([2])
-    expect(map.get('src/b.ts')!.size).toBe(0)
   })
 })

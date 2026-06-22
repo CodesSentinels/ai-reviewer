@@ -11,7 +11,6 @@
  *   beforeAll: 创建分支 → 推文件 → 建 PR → 以当前 Token 身份添加 2 条 review comment
  *   Test 1: fetchUnresolvedBotThreads 能找到 2 条未解决 thread
  *   Test 2: batchResolve 解决所有 thread，再 fetch 验证返回空（原子断言，无跨 test 依赖）
- *   Test 3: 测试体内新增 2 条 comment，resolveAllBotComments 完整解决（外部 API 验证）
  *   Test 4: 用户在 PR 上 @mention "@ai-reviewer resolve" → dispatchCommentEvent 完整走通 → threads 被 resolve
  *   afterAll: 关闭 PR + 删除分支
  *
@@ -87,7 +86,6 @@ import {
   batchResolve,
   _resetBotLoginCache
 } from '../src/github/review-thread'
-import {resolveAllBotComments} from '../src/commands/handlers/resolve'
 import {dispatchCommentEvent} from '../src/commands/dispatcher'
 import {bootstrapCommands, _resetBootstrap} from '../src/commands/bootstrap'
 import {_resetPermissionCache} from '../src/commands/permission'
@@ -103,9 +101,17 @@ const REPO = 'ai-reviewer-test'
 function getGithubToken(): string {
   if (process.env.GITHUB_TOKEN) return process.env.GITHUB_TOKEN
   // gh >= 2.x: gh auth token
-  try { const t = execSync('gh auth token', {encoding: 'utf8'}).trim(); if (t) return t } catch {}
+  try {
+    const t = execSync('gh auth token', {encoding: 'utf8'}).trim()
+    if (t) return t
+  } catch {}
   // gh < 2.4: reads config file directly
-  try { const t = execSync('gh config get -h github.com oauth_token', {encoding: 'utf8'}).trim(); if (t) return t } catch {}
+  try {
+    const t = execSync('gh config get -h github.com oauth_token', {
+      encoding: 'utf8'
+    }).trim()
+    if (t) return t
+  } catch {}
   throw new Error(
     'No GitHub token found. Provide one via:\n' +
       '  GITHUB_TOKEN=<pat> INTEGRATION=true npx jest resolve.integration --no-coverage --runInBand'
@@ -222,95 +228,91 @@ describeIntegration('resolve command — integration with GitHub API', () => {
     console.log(`✅ 已添加 2 条 review comments（身份: ${botLogin}）`)
   }, 90_000)
 
-  test(
-    '4. 用户 @mention "@ai-reviewer resolve" → dispatchCommentEvent 完整走通，threads 被批量 resolve',
-    async () => {
-      // Test 4 requires a PAT: the dispatcher filters out Bot self-comments
-      // (comment.user.type === 'Bot' or login ends with [bot]).
-      // With a human PAT, botLogin is a plain username and can act as both
-      // the review-comment author and the @mention actor.
-      if (/\[bot\]$/i.test(botLogin)) {
-        console.log(
-          `  ⚠️  跳过 E2E dispatch 测试: token 身份 "${botLogin}" 是 Bot，` +
-            '调度器会过滤 Bot 自评论。请使用个人 PAT 运行此测试。'
-        )
-        return
-      }
-
-      _resetPermissionCache()
-      _resetRateLimit()
-
-      // 添加 2 条新的 review comments（前几个 test 已全部 resolve 完）
-      await octokit.pulls.createReviewComment({
-        owner: OWNER,
-        repo: REPO,
-        pull_number: prNumber,
-        commit_id: headSha,
-        path: filePath,
-        line: 3,
-        side: 'RIGHT',
-        body: '🤖 [集成测试-T4] E2E dispatch 第一条审查意见'
-      })
-      await octokit.pulls.createReviewComment({
-        owner: OWNER,
-        repo: REPO,
-        pull_number: prNumber,
-        commit_id: headSha,
-        path: filePath,
-        line: 5,
-        side: 'RIGHT',
-        body: '🤖 [集成测试-T4] E2E dispatch 第二条审查意见'
-      })
-      console.log('  已添加 2 条新 review comments')
-
-      // 用户在 PR 上发评论 "@ai-reviewer resolve"（触发评论）
-      const {data: triggerComment} = await octokit.issues.createComment({
-        owner: OWNER,
-        repo: REPO,
-        issue_number: prNumber,
-        body: '@ai-reviewer resolve'
-      })
-      console.log(`  触发评论已创建: id=${triggerComment.id}`)
-
-      // 构造 webhook context，模拟 GitHub 发送的 issue_comment 事件
-      // actor = botLogin（PAT 持有者），type='User' 绕过 Bot 自评论过滤
-      // isPrAuthor = true（issue.user.login === comment.user.login），提供额外的权限豁免路径
-      mockGHContext.eventName = 'issue_comment'
-      mockGHContext.repo = {owner: OWNER, repo: REPO}
-      mockGHContext.payload = {
-        action: 'created',
-        issue: {
-          number: prNumber,
-          pull_request: {},
-          user: {login: botLogin}
-        },
-        comment: {
-          id: triggerComment.id,
-          body: '@ai-reviewer resolve',
-          user: {login: botLogin, type: 'User'}
-        }
-      }
-
-      // 执行完整调度链：parser → 权限校验 → ACK → handler.execute → reply.success
-      const result = await dispatchCommentEvent({options: {} as never})
-      console.log(`  dispatch 结果: ${JSON.stringify(result)}`)
-
-      expect(result.kind).toBe('executed')
-      if (result.kind === 'executed') {
-        expect(result.command).toBe('resolve')
-        expect(result.ok).toBe(true)
-      }
-
-      // 验证 threads 已真实 resolve
-      const remaining = await fetchUnresolvedBotThreads(
-        {owner: OWNER, repo: REPO, prNumber},
-        botLogin
+  test('4. 用户 @mention "@ai-reviewer resolve" → dispatchCommentEvent 完整走通，threads 被批量 resolve', async () => {
+    // Test 4 requires a PAT: the dispatcher filters out Bot self-comments
+    // (comment.user.type === 'Bot' or login ends with [bot]).
+    // With a human PAT, botLogin is a plain username and can act as both
+    // the review-comment author and the @mention actor.
+    if (/\[bot\]$/i.test(botLogin)) {
+      console.log(
+        `  ⚠️  跳过 E2E dispatch 测试: token 身份 "${botLogin}" 是 Bot，` +
+          '调度器会过滤 Bot 自评论。请使用个人 PAT 运行此测试。'
       )
-      console.log(`  resolve 后剩余未解决 thread: ${remaining.length}`)
-      expect(remaining.length).toBe(0)
-    },
-    60_000
-  )
+      return
+    }
+
+    _resetPermissionCache()
+    _resetRateLimit()
+
+    // 添加 2 条新的 review comments（前几个 test 已全部 resolve 完）
+    await octokit.pulls.createReviewComment({
+      owner: OWNER,
+      repo: REPO,
+      pull_number: prNumber,
+      commit_id: headSha,
+      path: filePath,
+      line: 3,
+      side: 'RIGHT',
+      body: '🤖 [集成测试-T4] E2E dispatch 第一条审查意见'
+    })
+    await octokit.pulls.createReviewComment({
+      owner: OWNER,
+      repo: REPO,
+      pull_number: prNumber,
+      commit_id: headSha,
+      path: filePath,
+      line: 5,
+      side: 'RIGHT',
+      body: '🤖 [集成测试-T4] E2E dispatch 第二条审查意见'
+    })
+    console.log('  已添加 2 条新 review comments')
+
+    // 用户在 PR 上发评论 "@ai-reviewer resolve"（触发评论）
+    const {data: triggerComment} = await octokit.issues.createComment({
+      owner: OWNER,
+      repo: REPO,
+      issue_number: prNumber,
+      body: '@ai-reviewer resolve'
+    })
+    console.log(`  触发评论已创建: id=${triggerComment.id}`)
+
+    // 构造 webhook context，模拟 GitHub 发送的 issue_comment 事件
+    // actor = botLogin（PAT 持有者），type='User' 绕过 Bot 自评论过滤
+    // isPrAuthor = true（issue.user.login === comment.user.login），提供额外的权限豁免路径
+    mockGHContext.eventName = 'issue_comment'
+    mockGHContext.repo = {owner: OWNER, repo: REPO}
+    mockGHContext.payload = {
+      action: 'created',
+      issue: {
+        number: prNumber,
+        pull_request: {},
+        user: {login: botLogin}
+      },
+      comment: {
+        id: triggerComment.id,
+        body: '@ai-reviewer resolve',
+        user: {login: botLogin, type: 'User'}
+      }
+    }
+
+    // 执行完整调度链：parser → 权限校验 → ACK → handler.execute → reply.success
+    const result = await dispatchCommentEvent({options: {} as never})
+    console.log(`  dispatch 结果: ${JSON.stringify(result)}`)
+
+    expect(result.kind).toBe('executed')
+    if (result.kind === 'executed') {
+      expect(result.command).toBe('resolve')
+      expect(result.ok).toBe(true)
+    }
+
+    // 验证 threads 已真实 resolve
+    const remaining = await fetchUnresolvedBotThreads(
+      {owner: OWNER, repo: REPO, prNumber},
+      botLogin
+    )
+    console.log(`  resolve 后剩余未解决 thread: ${remaining.length}`)
+    expect(remaining.length).toBe(0)
+  }, 60_000)
 
   // ── Cleanup ──────────────────────────────────────────────────────────────────
 
@@ -340,87 +342,43 @@ describeIntegration('resolve command — integration with GitHub API', () => {
 
   // ── Tests ─────────────────────────────────────────────────────────────────────
 
-  test(
-    '1. fetchUnresolvedBotThreads 能找到 Bot 发出的 2 条未解决 review thread',
-    async () => {
-      const threads = await fetchUnresolvedBotThreads(
-        {owner: OWNER, repo: REPO, prNumber},
-        botLogin
+  test('1. fetchUnresolvedBotThreads 能找到 Bot 发出的 2 条未解决 review thread', async () => {
+    const threads = await fetchUnresolvedBotThreads(
+      {owner: OWNER, repo: REPO, prNumber},
+      botLogin
+    )
+
+    console.log(`  找到 ${threads.length} 条未解决 thread`)
+    threads.forEach((t, i) =>
+      console.log(
+        `  Thread[${i}]: id=${t.id} isResolved=${t.isResolved} author=${t.firstCommentAuthorLogin}`
       )
+    )
 
-      console.log(`  找到 ${threads.length} 条未解决 thread`)
-      threads.forEach((t, i) =>
-        console.log(`  Thread[${i}]: id=${t.id} isResolved=${t.isResolved} author=${t.firstCommentAuthorLogin}`)
-      )
+    expect(threads.length).toBe(2)
+    expect(threads.every(t => !t.isResolved)).toBe(true)
+    expect(threads.every(t => t.firstCommentAuthorLogin === botLogin)).toBe(
+      true
+    )
+  }, 30_000)
 
-      expect(threads.length).toBe(2)
-      expect(threads.every(t => !t.isResolved)).toBe(true)
-      expect(threads.every(t => t.firstCommentAuthorLogin === botLogin)).toBe(true)
-    },
-    30_000
-  )
+  test('2. batchResolve 将所有 thread 标记为已解决，resolve 后 fetch 返回空列表', async () => {
+    // fetch → resolve → re-fetch，在同一个 test 内验证前后状态，无跨 test 依赖
+    const threads = await fetchUnresolvedBotThreads(
+      {owner: OWNER, repo: REPO, prNumber},
+      botLogin
+    )
 
-  test(
-    '2. batchResolve 将所有 thread 标记为已解决，resolve 后 fetch 返回空列表',
-    async () => {
-      // fetch → resolve → re-fetch，在同一个 test 内验证前后状态，无跨 test 依赖
-      const threads = await fetchUnresolvedBotThreads(
-        {owner: OWNER, repo: REPO, prNumber},
-        botLogin
-      )
+    const {ok, failed} = await batchResolve(threads)
+    console.log(`  resolve 结果: ok=${ok} failed=${failed}`)
+    expect(ok).toBe(2)
+    expect(failed).toBe(0)
 
-      const {ok, failed} = await batchResolve(threads)
-      console.log(`  resolve 结果: ok=${ok} failed=${failed}`)
-      expect(ok).toBe(2)
-      expect(failed).toBe(0)
-
-      const remaining = await fetchUnresolvedBotThreads(
-        {owner: OWNER, repo: REPO, prNumber},
-        botLogin
-      )
-      console.log(`  resolve 后剩余未解决 thread: ${remaining.length}`)
-      expect(remaining.length).toBe(0)
-    },
-    30_000
-  )
-
-  test(
-    '3. resolveAllBotComments 对外接口：新增 thread 后能完整 resolve，返回 ok=2 failed=0',
-    async () => {
-      // 此时 PR 上已无未解决 thread（Test 2 已全部解决）。
-      // 在测试体内新增 2 条 review comment，使 resolveAllBotComments 有内容可操作。
-      await octokit.pulls.createReviewComment({
-        owner: OWNER,
-        repo: REPO,
-        pull_number: prNumber,
-        commit_id: headSha,
-        path: filePath,
-        line: 3,
-        side: 'RIGHT',
-        body: '🤖 [集成测试-T3] resolveAllBotComments 第一条'
-      })
-      await octokit.pulls.createReviewComment({
-        owner: OWNER,
-        repo: REPO,
-        pull_number: prNumber,
-        commit_id: headSha,
-        path: filePath,
-        line: 5,
-        side: 'RIGHT',
-        body: '🤖 [集成测试-T3] resolveAllBotComments 第二条'
-      })
-      console.log('  已新增 2 条 review comment')
-
-      const {ok, failed} = await resolveAllBotComments({
-        owner: OWNER,
-        repo: REPO,
-        prNumber,
-        options: {} as never
-      })
-      console.log(`  resolveAllBotComments 结果: ok=${ok} failed=${failed}`)
-      expect(ok).toBe(2)
-      expect(failed).toBe(0)
-    },
-    30_000
-  )
+    const remaining = await fetchUnresolvedBotThreads(
+      {owner: OWNER, repo: REPO, prNumber},
+      botLogin
+    )
+    console.log(`  resolve 后剩余未解决 thread: ${remaining.length}`)
+    expect(remaining.length).toBe(0)
+  }, 30_000)
 })

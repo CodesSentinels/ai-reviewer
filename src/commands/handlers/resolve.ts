@@ -1,5 +1,4 @@
 import type {CommandHandler, CommandContext, CommandResult} from '../types'
-import type {Options} from '../../options'
 import {
   getBotLogin,
   fetchUnresolvedBotThreads,
@@ -31,20 +30,6 @@ async function execute(ctx: CommandContext): Promise<CommandResult> {
 
   const {ok, failed, errors} = await batchResolve(threads)
   return {message: formatResult(ok, failed, threads.length, errors)}
-}
-
-// ─── External API (for member C) ──────────────────────────────────────────────
-
-export async function resolveAllBotComments(params: {
-  owner: string
-  repo: string
-  prNumber: number
-  options: Options
-}): Promise<{ok: number; failed: number}> {
-  const botLogin = await getBotLogin(params.options)
-  const threads = await fetchUnresolvedBotThreads(params, botLogin)
-  if (threads.length === 0) return {ok: 0, failed: 0}
-  return batchResolve(threads)
 }
 
 // ─── Formatting ───────────────────────────────────────────────────────────────
