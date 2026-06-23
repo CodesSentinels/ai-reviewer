@@ -287,31 +287,30 @@ inputs:
   eslint_version:
     required: false
     description:
-      'Pin a specific ESLint version (semver range, e.g. "^8.57.0" or "~9.15.0").
-      Default empty = use the version pinned in ai-reviewer (currently ^9.15.0).
-      Set this to your team''s local version to avoid behaviour drift between
-      local lint and PR review (e.g. when your project still uses ESLint 8).'
-    default: ''
+      'ESLint version (semver range) installed into ai-reviewer''s sandbox.
+      This default IS the version pinned by ai-reviewer — override it with your
+      team''s local version to avoid behaviour drift between local lint and PR
+      review (e.g. "^8.57.0" when your project still uses ESLint 8).'
+    default: '^9.15.0'
   biome_version:
     required: false
     description:
-      'Pin a specific Biome version (semver range). Default empty = use the
-      version pinned in ai-reviewer (currently ^2.3.0).'
-    default: ''
+      'Biome version (semver range) installed into ai-reviewer''s sandbox.
+      This default IS the pinned version; override to match your project.'
+    default: '^2.3.0'
   tsc_version:
     required: false
     description:
-      'Pin a specific TypeScript version (semver range). Default empty = use
-      the version pinned in ai-reviewer (currently ^5.6.0). Most projects can
-      leave this blank; only set if your code uses TS features that differ
-      across major versions.'
-    default: ''
+      'TypeScript version (semver range) installed into ai-reviewer''s sandbox.
+      This default IS the pinned version. Most projects can leave it; only
+      override if your code uses TS features that differ across major versions.'
+    default: '^5.6.0'
   prettier_version:
     required: false
     description:
-      'Pin a specific Prettier version (semver range). Default empty = use the
-      version pinned in ai-reviewer (currently ^3.0.0).'
-    default: ''
+      'Prettier version (semver range) installed into ai-reviewer''s sandbox.
+      This default IS the pinned version; override to match your project.'
+    default: '^3.0.0'
   command_ack_reaction:
     required: false
     description:

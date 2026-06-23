@@ -9,7 +9,14 @@
  * 不真实执行 npm — runCommand 全部 mock，纯单元测试。
  */
 
-import {describe, expect, jest, test, beforeEach, afterEach} from '@jest/globals'
+import {
+  describe,
+  expect,
+  jest,
+  test,
+  beforeEach,
+  afterEach
+} from '@jest/globals'
 import {existsSync, mkdtempSync, rmSync, statSync, writeFileSync} from 'fs'
 import * as path from 'path'
 
@@ -49,10 +56,7 @@ jest.mock('os', () => {
 })
 
 import {ensureToolInstalled} from '../src/lint/tool-installer'
-import {
-  type BinaryInstallSpec,
-  type NpmInstallSpec
-} from '../src/lint/types'
+import {type BinaryInstallSpec, type NpmInstallSpec} from '../src/lint/types'
 
 const npmSpec: NpmInstallSpec = {
   kind: 'npm',
@@ -101,7 +105,13 @@ describe('ensureToolInstalled — npm 策略', () => {
 
     expect(result.ok).toBe(true)
     expect(result.binPath).toBe(
-      path.join(testTmp, 'ai-reviewer-lint-tools', 'node_modules', '.bin', 'eslint')
+      path.join(
+        testTmp,
+        'ai-reviewer-lint-tools',
+        'node_modules',
+        '.bin',
+        'eslint'
+      )
     )
     expect(existsSync(result.binPath as string)).toBe(true)
     // npm install 应被调用一次
@@ -109,8 +119,30 @@ describe('ensureToolInstalled — npm 策略', () => {
     const call = runCommandMock.mock.calls[0][0] as Record<string, unknown>
     expect(call.command).toBe('npm')
     expect(call.args).toEqual(
-      expect.arrayContaining(['install', 'eslint@^9.15.0', '--legacy-peer-deps'])
+      expect.arrayContaining([
+        'install',
+        'eslint@^9.15.0',
+        '--legacy-peer-deps'
+      ])
     )
+  })
+
+  test('version 缺省 → 安装 latest（install target 不带 @<range>）', async () => {
+    mockNpmInstallSuccess('eslint')
+    // 退化场景：未经 Action 直接调用，spec 不含 version
+    const specNoVersion: NpmInstallSpec = {
+      kind: 'npm',
+      package: 'eslint',
+      binName: 'eslint'
+    }
+    const result = await ensureToolInstalled(specNoVersion)
+
+    expect(result.ok).toBe(true)
+    expect(runCommandMock).toHaveBeenCalledTimes(1)
+    const call = runCommandMock.mock.calls[0][0] as Record<string, unknown>
+    // 安装目标应为裸包名 'eslint'，而不是 'eslint@undefined'
+    expect(call.args).toEqual(expect.arrayContaining(['install', 'eslint']))
+    expect(call.args).not.toEqual(expect.arrayContaining(['eslint@undefined']))
   })
 
   test('缓存命中：bin 已存在 → 不再调用 npm install', async () => {
