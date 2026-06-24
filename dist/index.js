@@ -13050,13 +13050,17 @@ function formatResult(ok, failed, total, failedItems) {
     }
     const errDetail = failedItems.length > 0
         ? `\n\n失败详情：\n${failedItems
-            .map(({ thread, error }) => `• \`${threadLabel(thread)}\`: ${error.message}`)
+            .map(({ thread, error }) => `- \`${threadLabel(thread)}\`：${flattenError(error.message)}`)
             .join('\n')}`
         : '';
     if (ok === 0) {
         return `❌ 解决失败（共 **${total}** 条）${errDetail}`;
     }
     return `⚠️ 共 **${total}** 条，成功解决 **${ok}** 条，**${failed}** 条失败（可手动解决）${errDetail}`;
+}
+/** 将多行错误信息压成单行，避免错误中的 ` - ` 被 Markdown 当作嵌套列表渲染 */
+function flattenError(message) {
+    return message.replace(/\s+/g, ' ').trim();
 }
 
 // EXTERNAL MODULE: ./lib/review-state.js
