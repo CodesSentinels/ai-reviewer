@@ -9424,7 +9424,8 @@ async function dispatchCommentEvent(deps) {
         commentNodeId,
         threadNodeId,
         reply,
-        options: deps.options
+        options: deps.options,
+        triggerReview: deps.triggerReview
     };
     // ACK
     let ackId = null;
@@ -9472,6 +9473,8 @@ function extractErrorCode(e) {
     return 'INTERNAL';
 }
 
+// EXTERNAL MODULE: ./lib/review.js + 4 modules
+var review = __nccwpck_require__(6439);
 // EXTERNAL MODULE: ./lib/commenter.js
 var lib_commenter = __nccwpck_require__(4558);
 // EXTERNAL MODULE: ./lib/inputs.js
@@ -9661,16 +9664,40 @@ const handleReviewComment = async (heavyBot, options, prompts) => {
 
 
 
+
 // eslint-disable-next-line camelcase
 const command_handler_context = github.context;
 async function handleCommentEvent(deps) {
     (0,bootstrap/* bootstrapCommands */.K)();
-    const outcome = await dispatchCommentEvent({ options: deps.options });
+    const triggerReview = async (mode) => {
+        const bots = deps.lightBot != null && deps.heavyBot != null
+            ? { lightBot: deps.lightBot, heavyBot: deps.heavyBot }
+            : deps.getReviewBots?.();
+        if (bots == null) {
+            throw new Error('OpenAI bot is unavailable for review command');
+        }
+        await (0,review/* codeReview */.z)(bots.lightBot, bots.heavyBot, deps.options, deps.prompts, {
+            mode: mode === 'incremental' ? 'incremental' : 'full',
+            source: 'command',
+            summaryOnly: mode === 'summary'
+        });
+    };
+    const outcome = await dispatchCommentEvent({
+        options: deps.options,
+        triggerReview
+    });
     (0,core.info)(`commentEvent dispatcher outcome: ${JSON.stringify(outcome)}`);
     if (outcome.kind === 'fallback_conversation') {
         // 既有对话式追问仅支持 pull_request_review_comment
         if (command_handler_context.eventName === 'pull_request_review_comment') {
-            await handleReviewComment(deps.heavyBot, deps.options, deps.prompts);
+            const bots = deps.heavyBot != null
+                ? { heavyBot: deps.heavyBot }
+                : deps.getReviewBots?.();
+            if (bots == null) {
+                (0,core.info)('commentEvent: conversation fallback skipped (OpenAI bot unavailable)');
+                return;
+            }
+            await handleReviewComment(bots.heavyBot, deps.options, deps.prompts);
         }
         else {
             (0,core.info)('commentEvent: conversation fallback skipped (issue_comment 对话由后续迭代支持)');
@@ -9756,7 +9783,10 @@ const helpHandler = {
     }
 };
 
+// EXTERNAL MODULE: ./lib/review-state.js
+var review_state = __nccwpck_require__(3337);
 ;// CONCATENATED MODULE: ./lib/commands/handlers/stubs.js
+
 function notImplemented(name) {
     return async (_ctx) => {
         // 调度器会把抛出的标记型错误转成 NOT_IMPLEMENTED 反馈
@@ -9781,7 +9811,12 @@ const reviewStub = {
     usage: '@ai-reviewer review',
     needsAck: true,
     minPermission: 'write',
-    execute: notImplemented('review')
+    async execute(ctx) {
+        if (ctx.triggerReview == null)
+            return await notImplemented('review')(ctx);
+        await ctx.triggerReview('incremental');
+        return { message: '增量审查已完成' };
+    }
 };
 const fullReviewStub = {
     name: 'full review',
@@ -9789,7 +9824,12 @@ const fullReviewStub = {
     usage: '@ai-reviewer full review',
     needsAck: true,
     minPermission: 'write',
-    execute: notImplemented('full review')
+    async execute(ctx) {
+        if (ctx.triggerReview == null)
+            return await notImplemented('full review')(ctx);
+        await ctx.triggerReview('full');
+        return { message: '全量审查已完成' };
+    }
 };
 const summaryStub = {
     name: 'summary',
@@ -9797,7 +9837,12 @@ const summaryStub = {
     usage: '@ai-reviewer summary',
     needsAck: true,
     minPermission: 'write',
-    execute: notImplemented('summary')
+    async execute(ctx) {
+        if (ctx.triggerReview == null)
+            return await notImplemented('summary')(ctx);
+        await ctx.triggerReview('summary');
+        return { message: 'PR 摘要已重新生成' };
+    }
 };
 const pauseStub = {
     name: 'pause',
@@ -9805,7 +9850,12 @@ const pauseStub = {
     usage: '@ai-reviewer pause',
     needsAck: false,
     minPermission: 'write',
-    execute: notImplemented('pause')
+    async execute(ctx) {
+        await (0,review_state/* setReviewState */.DU)(ctx.prNumber, 'paused');
+        return {
+            message: '已暂停当前 PR 的自动审查。使用 `@ai-reviewer resume` 恢复。'
+        };
+    }
 };
 const resumeStub = {
     name: 'resume',
@@ -9813,7 +9863,10 @@ const resumeStub = {
     usage: '@ai-reviewer resume',
     needsAck: false,
     minPermission: 'write',
-    execute: notImplemented('resume')
+    async execute(ctx) {
+        await (0,review_state/* setReviewState */.DU)(ctx.prNumber, 'active');
+        return { message: '已恢复当前 PR 的自动审查。' };
+    }
 };
 const configurationStub = {
     name: 'configuration',
@@ -9821,7 +9874,30 @@ const configurationStub = {
     usage: '@ai-reviewer configuration',
     needsAck: false,
     minPermission: 'read',
-    execute: notImplemented('configuration')
+    async execute(ctx) {
+        const state = await (0,review_state/* getReviewState */.Zr)(ctx.prNumber);
+        const o = ctx.options;
+        const message = `## 当前审查配置
+
+| 配置 | 值 |
+| :--- | :--- |
+| 自动审查状态 | \`${state}\` |
+| disable_review | \`${o.disableReview}\` |
+| disable_release_notes | \`${o.disableReleaseNotes}\` |
+| max_files | \`${o.maxFiles}\` |
+| review_simple_changes | \`${o.reviewSimpleChanges}\` |
+| review_comment_lgtm | \`${o.reviewCommentLGTM}\` |
+| openai_light_model | \`${o.openaiLightModel}\` |
+| openai_heavy_model | \`${o.openaiHeavyModel}\` |
+| openai_concurrency_limit | \`${o.openaiConcurrencyLimit}\` |
+| github_concurrency_limit | \`${o.githubConcurrencyLimit}\` |
+| enable_dependency_analysis | \`${o.enableDependencyAnalysis}\` |
+| max_dependency_files | \`${o.maxDependencyFiles}\` |
+| enable_web_search | \`${o.enableWebSearch}\` |
+| enable_shell | \`${o.enableShell}\` |
+| language | \`${o.language}\` |`;
+        return { message };
+    }
 };
 const ALL_STUBS = [
     reviewStub,
@@ -11215,6 +11291,27 @@ __nccwpck_require__.r(__webpack_exports__);
 
 
 
+function createBots(options) {
+    // 初始化轻量模型 Bot（默认 gpt-5.4-nano），用于快速生成文件摘要
+    let lightBot = null;
+    try {
+        lightBot = new _bot__WEBPACK_IMPORTED_MODULE_1__/* .Bot */ .r(options, new _options__WEBPACK_IMPORTED_MODULE_4__/* .OpenAIOptions */ .i0(options.openaiLightModel, options.lightTokenLimits, false, false));
+    }
+    catch (e) {
+        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Skipped: failed to create summary bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`);
+        return null;
+    }
+    // 初始化重量模型 Bot（默认 gpt-5.4-mini），用于深度代码审查和最终摘要生成
+    let heavyBot = null;
+    try {
+        heavyBot = new _bot__WEBPACK_IMPORTED_MODULE_1__/* .Bot */ .r(options, new _options__WEBPACK_IMPORTED_MODULE_4__/* .OpenAIOptions */ .i0(options.openaiHeavyModel, options.heavyTokenLimits, options.enableWebSearch, options.enableShell));
+    }
+    catch (e) {
+        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Skipped: failed to create review bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`);
+        return null;
+    }
+    return { lightBot, heavyBot };
+}
 async function run() {
     // 从 action.yml 中读取所有配置参数，构建 Options 配置对象
     const options = new _options__WEBPACK_IMPORTED_MODULE_4__/* .Options */ .Ei((0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('debug'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('disable_review'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('disable_release_notes'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_files'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('review_simple_changes'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('review_comment_lgtm'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getMultilineInput)('path_filters'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('system_message'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_light_model'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_heavy_model'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_model_temperature'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_retries'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_timeout_ms'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_concurrency_limit'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('github_concurrency_limit'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_base_url'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('language'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_dependency_analysis'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_dependency_files'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_web_search'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_shell'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('command_ack_reaction'));
@@ -11227,38 +11324,26 @@ async function run() {
     }
     // 构建提示词模板对象，包含用户自定义的摘要和发布说明提示词
     const prompts = new _prompts__WEBPACK_IMPORTED_MODULE_6__/* .Prompts */ .j((0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('summarize'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('summarize_release_notes'));
-    // 创建两个 Bot 实例：轻量 Bot 用于文件摘要，重量 Bot 用于深度代码审查
-    // 初始化轻量模型 Bot（默认 gpt-5.4-nano），用于快速生成文件摘要
-    let lightBot = null;
-    try {
-        lightBot = new _bot__WEBPACK_IMPORTED_MODULE_1__/* .Bot */ .r(options, new _options__WEBPACK_IMPORTED_MODULE_4__/* .OpenAIOptions */ .i0(options.openaiLightModel, options.lightTokenLimits, false, false));
-    }
-    catch (e) {
-        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Skipped: failed to create summary bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`);
-        return;
-    }
-    // 初始化重量模型 Bot（默认 gpt-5.4-mini），用于深度代码审查和最终摘要生成
-    let heavyBot = null;
-    try {
-        heavyBot = new _bot__WEBPACK_IMPORTED_MODULE_1__/* .Bot */ .r(options, new _options__WEBPACK_IMPORTED_MODULE_4__/* .OpenAIOptions */ .i0(options.openaiHeavyModel, options.heavyTokenLimits, options.enableWebSearch, options.enableShell));
-    }
-    catch (e) {
-        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Skipped: failed to create review bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`);
-        return;
-    }
     try {
         // 根据 GitHub 事件类型分发处理逻辑
         console.log(`GitHub event: ${process.env.GITHUB_EVENT_NAME}`);
         if (process.env.GITHUB_EVENT_NAME === 'pull_request' ||
             process.env.GITHUB_EVENT_NAME === 'pull_request_target') {
+            const bots = createBots(options);
+            if (bots == null)
+                return;
             // PR 事件：执行完整的代码审查流程（摘要 + 逐文件审查）
-            await (0,_review__WEBPACK_IMPORTED_MODULE_5__/* .codeReview */ .z)(lightBot, heavyBot, options, prompts);
+            await (0,_review__WEBPACK_IMPORTED_MODULE_5__/* .codeReview */ .z)(bots.lightBot, bots.heavyBot, options, prompts);
         }
         else if (process.env.GITHUB_EVENT_NAME === 'pull_request_review_comment' ||
             process.env.GITHUB_EVENT_NAME === 'issue_comment') {
             // 评论事件（顶层 issue_comment 或 review comment）
             // 先走命令调度，未命中命令时再透传给既有的对话式追问
-            await (0,_command_handler__WEBPACK_IMPORTED_MODULE_2__/* .handleCommentEvent */ ._)({ heavyBot, lightBot, options, prompts });
+            await (0,_command_handler__WEBPACK_IMPORTED_MODULE_2__/* .handleCommentEvent */ ._)({
+                options,
+                prompts,
+                getReviewBots: () => createBots(options)
+            });
         }
         else {
             (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)('Skipped: this action only works on push events or pull_request');
@@ -14041,6 +14126,71 @@ use web search to find and reference current documentation.
 
 /***/ }),
 
+/***/ 3337:
+/***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
+
+"use strict";
+/* harmony export */ __nccwpck_require__.d(__webpack_exports__, {
+/* harmony export */   "DU": () => (/* binding */ setReviewState),
+/* harmony export */   "Zr": () => (/* binding */ getReviewState),
+/* harmony export */   "mf": () => (/* binding */ getReviewStateFromBody)
+/* harmony export */ });
+/* unused harmony exports REVIEW_STATE_START_TAG, REVIEW_STATE_END_TAG, writeReviewStateToBody */
+/* harmony import */ var _actions_github__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(3695);
+/* harmony import */ var _actions_github__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__nccwpck_require__.n(_actions_github__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var _octokit__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(2247);
+
+
+const context = _actions_github__WEBPACK_IMPORTED_MODULE_0__.context;
+const repo = context.repo;
+const REVIEW_STATE_START_TAG = '<!-- codesentinel-review-state:start -->';
+const REVIEW_STATE_END_TAG = '<!-- codesentinel-review-state:end -->';
+function getReviewStateFromBody(body = '') {
+    const start = body.indexOf(REVIEW_STATE_START_TAG);
+    const end = body.indexOf(REVIEW_STATE_END_TAG);
+    if (start === -1 || end === -1)
+        return 'active';
+    const block = body.slice(start + REVIEW_STATE_START_TAG.length, end);
+    return block.includes('state: paused') ? 'paused' : 'active';
+}
+function writeReviewStateToBody(body, state) {
+    const start = body.indexOf(REVIEW_STATE_START_TAG);
+    const end = body.indexOf(REVIEW_STATE_END_TAG);
+    const stateBlock = `${REVIEW_STATE_START_TAG}
+state: ${state}
+${REVIEW_STATE_END_TAG}`;
+    if (start !== -1 && end !== -1) {
+        const before = body.slice(0, start).trimEnd();
+        const after = body.slice(end + REVIEW_STATE_END_TAG.length).trim();
+        return [before, stateBlock, after].filter(Boolean).join('\n\n');
+    }
+    return [body.trimEnd(), stateBlock].filter(Boolean).join('\n\n');
+}
+async function getReviewState(pullNumber) {
+    const pr = await _octokit__WEBPACK_IMPORTED_MODULE_1__/* .octokit.pulls.get */ .K.pulls.get({
+        owner: repo.owner,
+        repo: repo.repo,
+        pull_number: pullNumber
+    });
+    return getReviewStateFromBody(pr.data.body ?? '');
+}
+async function setReviewState(pullNumber, state) {
+    const pr = await _octokit__WEBPACK_IMPORTED_MODULE_1__/* .octokit.pulls.get */ .K.pulls.get({
+        owner: repo.owner,
+        repo: repo.repo,
+        pull_number: pullNumber
+    });
+    await _octokit__WEBPACK_IMPORTED_MODULE_1__/* .octokit.pulls.update */ .K.pulls.update({
+        owner: repo.owner,
+        repo: repo.repo,
+        pull_number: pullNumber,
+        body: writeReviewStateToBody(pr.data.body ?? '', state)
+    });
+}
+
+
+/***/ }),
+
 /***/ 6439:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
@@ -15905,6 +16055,8 @@ function formatDependencySummary(ctx) {
 
 // EXTERNAL MODULE: ./lib/inputs.js
 var lib_inputs = __nccwpck_require__(6305);
+// EXTERNAL MODULE: ./lib/review-state.js
+var review_state = __nccwpck_require__(3337);
 // EXTERNAL MODULE: ./lib/tokenizer.js
 var tokenizer = __nccwpck_require__(7525);
 ;// CONCATENATED MODULE: ./lib/review.js
@@ -15933,6 +16085,7 @@ var tokenizer = __nccwpck_require__(7525);
 
 
 
+
 // eslint-disable-next-line camelcase
 const review_context = github.context;
 /** 跨文件上下文注入的 token 上限 */
@@ -15948,19 +16101,38 @@ const ignoreKeyword = '@ai-reviewer: ignore';
  * @param options - 全局配置选项
  * @param prompts - 提示词模板
  */
-const codeReview = async (lightBot, heavyBot, options, prompts) => {
+const codeReview = async (lightBot, heavyBot, options, prompts, runOptions = {}) => {
     const commenter = new lib_commenter/* Commenter */.Es();
+    const fromCommand = runOptions.source === 'command';
+    const reviewMode = runOptions.mode ?? 'incremental';
     // 初始化并发控制器：分别限制 OpenAI 和 GitHub API 的并发数
     const openaiConcurrencyLimit = pLimit(options.openaiConcurrencyLimit);
     const githubConcurrencyLimit = pLimit(options.githubConcurrencyLimit);
     // ==================== 事件验证 ====================
     if (review_context.eventName !== 'pull_request' &&
-        review_context.eventName !== 'pull_request_target') {
+        review_context.eventName !== 'pull_request_target' &&
+        !fromCommand) {
         (0,core.warning)(`Skipped: current event is ${review_context.eventName}, only support pull_request event`);
         return;
     }
+    if (review_context.payload.pull_request == null && fromCommand) {
+        const issueNumber = review_context.payload.issue?.number;
+        if (issueNumber != null) {
+            const pr = await octokit/* octokit.pulls.get */.K.pulls.get({
+                owner: review_repo.owner,
+                repo: review_repo.repo,
+                pull_number: issueNumber
+            });
+            review_context.payload.pull_request = pr.data;
+        }
+    }
     if (review_context.payload.pull_request == null) {
         (0,core.warning)('Skipped: context.payload.pull_request is null');
+        return;
+    }
+    if (!fromCommand &&
+        (0,review_state/* getReviewStateFromBody */.mf)(review_context.payload.pull_request.body ?? '') === 'paused') {
+        (0,core.info)('Skipped: review automation is paused for this PR');
         return;
     }
     // ==================== 填充 PR 基本信息 ====================
@@ -15997,7 +16169,11 @@ const codeReview = async (lightBot, heavyBot, options, prompts) => {
         highestReviewedCommitId = commenter.getHighestReviewedCommitId(allCommitIds, commenter.getReviewedCommitIds(existingCommitIdsBlock));
     }
     // 确定 diff 的起始 commit
-    if (highestReviewedCommitId === '' ||
+    if (reviewMode === 'full') {
+        (0,core.info)(`Will review full diff from the base commit: ${review_context.payload.pull_request.base.sha}`);
+        highestReviewedCommitId = review_context.payload.pull_request.base.sha;
+    }
+    else if (highestReviewedCommitId === '' ||
         highestReviewedCommitId === review_context.payload.pull_request.head.sha) {
         // 首次审查或已是最新：从 base 分支开始
         (0,core.info)(`Will review from the base commit: ${review_context.payload.pull_request.base.sha}`);
@@ -16065,24 +16241,29 @@ const codeReview = async (lightBot, heavyBot, options, prompts) => {
             (0,core.warning)('Skipped: context.payload.pull_request is null');
             return null;
         }
-        try {
-            const contents = await octokit/* octokit.repos.getContent */.K.repos.getContent({
-                owner: review_repo.owner,
-                repo: review_repo.repo,
-                path: file.filename,
-                ref: review_context.payload.pull_request.base.sha
-            });
-            if (contents.data != null) {
-                if (!Array.isArray(contents.data)) {
-                    if (contents.data.type === 'file' &&
-                        contents.data.content != null) {
-                        fileContent = Buffer.from(contents.data.content, 'base64').toString();
+        if (file.status === 'added') {
+            (0,core.info)(`skip base content fetch for new file: ${file.filename}`);
+        }
+        else {
+            try {
+                const contents = await octokit/* octokit.repos.getContent */.K.repos.getContent({
+                    owner: review_repo.owner,
+                    repo: review_repo.repo,
+                    path: file.filename,
+                    ref: review_context.payload.pull_request.base.sha
+                });
+                if (contents.data != null) {
+                    if (!Array.isArray(contents.data)) {
+                        if (contents.data.type === 'file' &&
+                            contents.data.content != null) {
+                            fileContent = Buffer.from(contents.data.content, 'base64').toString();
+                        }
                     }
                 }
             }
-        }
-        catch (e) {
-            (0,core.warning)(`Failed to get file contents: ${e}. This is OK if it's a new file.`);
+            catch (e) {
+                (0,core.warning)(`Failed to get file contents: ${e}. This is OK if it's a new file.`);
+            }
         }
         // 提取文件的完整 diff patch
         let fileDiff = '';
@@ -16341,7 +16522,7 @@ ${summariesFailed.length > 0
         : ''}
 `;
     // ==================== 阶段四：逐文件代码审查 ====================
-    if (!options.disableReview) {
+    if (!options.disableReview && runOptions.summaryOnly !== true) {
         // 筛选出需要审查的文件（分类为 NEEDS_REVIEW 的文件）
         const filesAndChangesReview = filesAndChanges.filter(([filename]) => {
             const needsReview = summaries.find(([summaryFilename]) => summaryFilename === filename)?.[2] ?? true;
@@ -16573,6 +16754,11 @@ ${reviewsSkipped.length > 0
         summarizeComment += `\n${commenter.addReviewedCommitId(existingCommitIdsBlock, review_context.payload.pull_request.head.sha)}`;
         // 批量提交所有缓冲的审查评论
         await commenter.submitReview(review_context.payload.pull_request.number, commits[commits.length - 1].sha, statusMsg);
+    }
+    // summary-only 等跳过审查阶段的场景：保留既有的已审查 commit 记录，
+    // 否则 replace 摘要评论会清空增量审查标记，导致下次自动审查从 base 重审
+    if (runOptions.summaryOnly === true && existingCommitIdsBlock !== '') {
+        summarizeComment += `\n${existingCommitIdsBlock}`;
     }
     // 发布最终的摘要评论
     await commenter.comment(`${summarizeComment}`, lib_commenter/* SUMMARIZE_TAG */.Rp, 'replace');
