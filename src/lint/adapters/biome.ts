@@ -110,9 +110,16 @@ export class BiomeAdapter implements ToolAdapter {
   private resolvedVersion = ''
   private resolvedBinPath = ''
 
-  async detect(repoRoot: string): Promise<ToolDetection> {
+  async detect(
+    repoRoot: string,
+    versionOverride?: string
+  ): Promise<ToolDetection> {
     // 1) 让 installer 装到沙箱（待审查项目不需要 @biomejs/biome）
-    const install = await ensureToolInstalled(this.installSpec)
+    const spec: InstallSpec =
+      versionOverride && versionOverride.length > 0
+        ? {...this.installSpec, version: versionOverride}
+        : this.installSpec
+    const install = await ensureToolInstalled(spec)
     if (!install.ok) {
       return {
         available: false,

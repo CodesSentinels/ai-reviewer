@@ -82,9 +82,16 @@ export class TscAdapter implements ToolAdapter {
   private resolvedVersion = ''
   private resolvedBinPath = ''
 
-  async detect(repoRoot: string): Promise<ToolDetection> {
+  async detect(
+    repoRoot: string,
+    versionOverride?: string
+  ): Promise<ToolDetection> {
     // 1) 沙箱安装 typescript
-    const install = await ensureToolInstalled(this.installSpec)
+    const spec: InstallSpec =
+      versionOverride && versionOverride.length > 0
+        ? {...this.installSpec, version: versionOverride}
+        : this.installSpec
+    const install = await ensureToolInstalled(spec)
     if (!install.ok) {
       return {
         available: false,

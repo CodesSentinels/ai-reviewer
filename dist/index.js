@@ -1,7 +1,7 @@
 /******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
 
-/***/ 4936:
+/***/ 1854:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
 "use strict";
@@ -8513,6 +8513,99 @@ async function pRetry(input, options) {
 	});
 }
 
+;// CONCATENATED MODULE: ./lib/sanitize-model-output.js
+/**
+ * sanitize-model-output.ts - 清理 LLM 文本输出中的"引用标记"
+ *
+ * OpenAI（及兼容 API）的模型在使用 web_search / browse / file_search 等工具时，
+ * 会在自然语言文本里插入"citation marker"以指向某个搜索结果。在 ChatGPT 网页端
+ * 这些标记会被渲染为可点击的内联引用，但通过 API 拿到的 raw 文本里它们以原样
+ * 出现，看起来像乱码。
+ *
+ * 已观察到的形态（持续更新）：
+ *
+ *   1. 私有区（U+E000-U+F8FF）包裹：
+ *        `<E200>cite<E200>turn0search0<E201>`
+ *      早期 OpenAI 模型常用，PUA 字符在 GitHub PR 评论里通常显示为豆腐块。
+ *
+ *   2. **Block Elements（U+2580-U+259F）包裹**：
+ *        `▌cite▌turn0search0▌`
+ *      2026-05 起观察到的新格式，用 `▌`（U+258C LEFT HALF BLOCK）做分隔符。
+ *      用户上报"评论区出现乱码"的实际形态。
+ *
+ *   3. 零宽空白（U+200B-U+200F）混杂：偶尔出现在标记中间。
+ *
+ *   4. 完全裸文本：分隔符被前端或复制粘贴吞掉时，剩 `citeturn0search0` 这种。
+ *
+ * ai-reviewer 把 LLM 输出直接贴到 GitHub PR 评论，所以必须先剥这些标记，否则
+ * 评审者看到的就是一串无意义的字符。
+ *
+ * 设计原则：
+ *   - 只剥已知的 citation marker 模式，**不动**其他文本
+ *   - 不尝试还原成 markdown 链接（拿不到原始 URL；OpenAI Responses API 把
+ *     URL 放在 annotations 字段，而非 inline 文本里）—— 直接删除是最稳妥的
+ *   - **不**做全局空白折叠（会破坏代码块缩进）；只把紧贴标记的空白连同删除
+ */
+/**
+ * 引用分隔符的字符集：PUA + Block Elements + 零宽空白
+ *
+ * 用 character class 同时覆盖三类。未来再出新形态在这里加范围即可。
+ */
+const SEPARATOR_CHARS = '\\uE000-\\uF8FF\\u2580-\\u259F\\u200B-\\u200F';
+/** 匹配单个"分隔符"字符（孤立残留时清掉） */
+const SEPARATOR_RE = new RegExp(`[${SEPARATOR_CHARS}]`, 'g');
+/**
+ * source 后缀列表（已知的 OpenAI 工具名）—— 保留扩展空间，将来出新工具就在
+ * 这里加。
+ */
+const SOURCE_SUFFIXES = 'search|file|sg|tab|news|video|image|web|browser';
+/**
+ * 匹配"完整的"分隔符包裹引用，**显式覆盖 `cite ... turnN sourceN` 全结构**。
+ *
+ * 早期版本写 `[sep]+cite[\s\S]*?[sep]+` 时，遇到 `▌cite▌turn0search0▌`（分隔符
+ * 在 cite 与 turn 之间出现一次）会因为 lazy 匹配在中间那个 `▌` 处停下，留下
+ * `turn0search0▌` 没剥掉。所以这里把后缀模式也加进来，确保整段一次性吃掉。
+ *
+ * 允许中间穿插任意分隔符 / 字母（OpenAI 见过 `▌cite▌turn0search0▌`、
+ * `<E200>cite<ZWSP>turn0search0<E201>`、`citenavturn0search0` 等多种排列）。
+ */
+const WRAPPED_CITATION_RE = new RegExp(`[${SEPARATOR_CHARS}]+cite[${SEPARATOR_CHARS}a-z]{0,12}turn\\d+(?:${SOURCE_SUFFIXES})\\d+[${SEPARATOR_CHARS}]*`, 'gi');
+/**
+ * Pass 1：匹配"前面带空白"的裸引用标记，**连同前导空白一起**删掉。
+ * 这处理最常见的"句子中间穿插引用"情形：`text X text` → `text text`。
+ */
+const BARE_CITATION_WITH_LEADING_WS_RE = new RegExp(`[ \\t]+cite[a-z]{0,12}turn\\d+(?:${SOURCE_SUFFIXES})\\d+`, 'gi');
+/**
+ * Pass 2：匹配"无前导空白"的裸引用标记（行首、紧跟非空白字符等），**连同
+ * 后续空白一起**删掉。这处理 CJK 文本紧跟标记（中文标点前后无空格）以及标
+ * 记出现在字符串/段落开头的情形。
+ */
+const BARE_CITATION_AT_BOUNDARY_RE = new RegExp(`cite[a-z]{0,12}turn\\d+(?:${SOURCE_SUFFIXES})\\d+[ \\t]*`, 'gi');
+/**
+ * 清理模型输出中的引用标记
+ *
+ * **不**做全局的空白折叠或换行折叠 —— 这会破坏 markdown 代码块、diff 块、
+ * 表格等有意义的空白结构。只把标记本身和**紧贴标记**的空白删掉。
+ *
+ * @param text LLM 原始返回的文本
+ * @returns 剥离引用标记后的文本；输入是空串/null 时原样返回
+ */
+function sanitizeModelOutput(text) {
+    if (text == null || text.length === 0)
+        return text;
+    let out = text;
+    // 第一步：剥离完整的分隔符包裹引用（PUA / Block Elements / 混合）
+    out = out.replace(WRAPPED_CITATION_RE, '');
+    // 第二步：处理裸文本形式 — 先吃"带前导空白"的（最常见），再吃边界处的
+    out = out.replace(BARE_CITATION_WITH_LEADING_WS_RE, '');
+    out = out.replace(BARE_CITATION_AT_BOUNDARY_RE, '');
+    // 第三步：清掉任何残留的孤立分隔符字符
+    out = out.replace(SEPARATOR_RE, '');
+    console.log('输入文本：', JSON.stringify(text));
+    console.log('输出文本：', JSON.stringify(out));
+    return out;
+}
+
 ;// CONCATENATED MODULE: ./lib/bot.js
 /**
  * bot.ts - OpenAI API 封装层
@@ -8524,6 +8617,7 @@ async function pRetry(input, options) {
  * 4. 系统消息构建（包含知识截止日期、当前日期、语言设置）
  * 5. 可选的 web search 工具支持（用于验证 API 用法）
  */
+
 
 
 
@@ -8731,6 +8825,14 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
             // 移除响应中可能存在的多余前缀 "with "
             if (responseText.startsWith('with ')) {
                 responseText = responseText.substring(5);
+            }
+            // 剥离 LLM 内置工具（web_search / browse / file_search）插入的 citation
+            // marker（看起来像乱码的 `citeturn0search0` 之类）。详见
+            // src/sanitize-model-output.ts 头部注释。
+            const beforeLen = responseText.length;
+            responseText = sanitizeModelOutput(responseText);
+            if (responseText.length !== beforeLen) {
+                (0,core.info)(`[sanitize] stripped citation markers: ${beforeLen} → ${responseText.length} chars`);
             }
             if (this.options.debug) {
                 // info(`openai responses: ${responseText}`)
@@ -9277,11 +9379,16 @@ const context = github.context;
  *   - 当返回 'fallback_conversation' 时，调用成员 D 的 handleConversation（对话式追问）
  */
 async function dispatchCommentEvent(deps) {
+    // [事件白名单] 仅放行 issue_comment / pull_request_review_comment 两类带评论的事件；
+    // 其余事件（push、pull_request、schedule 等）不携带用户评论，直接忽略，
+    // 同时把 eventName 收窄为 CommandEventName 供后续分支安全使用。
     const eventName = context.eventName;
     if (eventName !== 'issue_comment' &&
         eventName !== 'pull_request_review_comment') {
         return { kind: 'ignored', reason: `unsupported event: ${eventName}` };
     }
+    // [action 校验] 只处理"新建评论"(created)，忽略 edited / deleted 等动作，
+    // 避免编辑历史评论时重复触发命令。
     const payload = context.payload;
     if (!payload || payload.action !== 'created') {
         return { kind: 'ignored', reason: `action not created` };
@@ -9295,6 +9402,8 @@ async function dispatchCommentEvent(deps) {
     let commentNodeId;
     let threadNodeId;
     if (eventName === 'issue_comment') {
+        // [issue_comment 分支] PR 主评论区。GitHub 中 PR 复用 issue 模型，
+        // 只有当该 issue 关联 pull_request 时才是 PR 评论；否则是普通 issue，忽略。
         if (!payload.issue?.pull_request) {
             return { kind: 'ignored', reason: 'issue_comment on non-PR issue' };
         }
@@ -9304,21 +9413,26 @@ async function dispatchCommentEvent(deps) {
         prAuthor = payload.issue.user?.login ?? '';
     }
     else {
+        // [pull_request_review_comment 分支] 代码 diff 上的行级评论。
+        // 缺少 pull_request 字段属于异常 payload，忽略。
         if (!payload.pull_request) {
             return { kind: 'ignored', reason: 'review_comment missing pull_request' };
         }
         prNumber = payload.pull_request.number;
         comment = payload.comment;
+        // 行级评论 payload 自带 head/base SHA，可直接用于后续 diff 定位
         headSha = payload.pull_request.head?.sha ?? '';
         baseSha = payload.pull_request.base?.sha ?? '';
         prAuthor = payload.pull_request.user?.login ?? '';
         commentNodeId = comment?.node_id;
         // review_thread 的 nodeId 需要另查 GraphQL；此处置空由 B 在 handler 中补齐
     }
+    // [字段完整性校验] 评论体非字符串或缺 PR number 则无法解析命令，忽略。
     if (!comment || typeof comment.body !== 'string' || !prNumber) {
         return { kind: 'ignored', reason: 'missing comment body or pr number' };
     }
-    // 过滤 bot 自身（避免自我触发）
+    // [bot 自评论过滤] 通过 user.type 或登录名 `xxx[bot]` 后缀识别机器人，
+    // 防止 bot 自己回帖再次触发命令造成死循环。
     const actorLogin = comment.user?.login ?? '';
     const actorIsBot = comment.user?.type === 'Bot' || /\[bot\]$/i.test(actorLogin);
     if (actorIsBot) {
@@ -9327,20 +9441,23 @@ async function dispatchCommentEvent(deps) {
         return { kind: 'ignored', reason: 'comment from bot' };
     }
     // 命令解析
-    const registry = (0,commands_registry/* getRegistry */.JH)();
+    const registry = (0,commands_registry/* getRegistry */.J)();
     const parseOpts = {
         registeredCommands: registry.getRegisteredNames(),
         botMentions: deps.botMentions ?? parser/* DEFAULT_BOT_MENTIONS */.gC
     };
     const outcome = (0,parser/* parse */.Qc)(comment.body, parseOpts);
+    // [解析结果分支] parser 返回三种形态：
     if (outcome.kind === 'none') {
-        // 对话必须显式 @bot 才触发（包括续轮），避免与真人之间的普通讨论冲突。
+        // none：未 @bot 或非命令。对话必须显式 @bot 才触发（包括续轮），
+        // 避免与真人之间的普通讨论冲突。
         return { kind: 'ignored', reason: 'no bot mention' };
     }
     if (outcome.kind === 'conversation') {
+        // conversation：@bot 但非已注册命令 → 交回 command-handler 走对话式追问 fallback。
         return { kind: 'fallback_conversation' };
     }
-    // outcome.kind === 'command'
+    // outcome.kind === 'command'：解析出一条已知命令，进入执行流程。
     // 即便解析出错，也尽量构造 reply 以反馈用户
     const owner = context.repo.owner;
     const repoName = context.repo.repo;
@@ -9352,6 +9469,7 @@ async function dispatchCommentEvent(deps) {
         originalCommentId: comment.id,
         commandName: cmdNameForReply
     });
+    // [解析错误] 命令名识别成功但参数非法等（如 INVALID_ARGS），直接回帖报错并结束。
     if (outcome.error) {
         await reply.error(outcome.error.code, outcome.error.detail);
         return {
@@ -9362,7 +9480,8 @@ async function dispatchCommentEvent(deps) {
         };
     }
     const parsed = outcome.command;
-    // 幂等检查: 同一 commentId × 同一 command 是否已有回复
+    // [幂等检查] 同一 commentId × 同一 command 是否已有回复；
+    // Actions 可能因重试/重复投递触发多次，命中则跳过避免重复执行。
     const processed = await hasBeenProcessed(owner, repoName, prNumber, comment.id, parsed.name);
     if (processed) {
         (0,core.info)(`command dispatcher: skip duplicate commentId=${comment.id} cmd=${parsed.name}`);
@@ -9373,7 +9492,7 @@ async function dispatchCommentEvent(deps) {
             error: 'DUPLICATE'
         };
     }
-    // 速率限制
+    // [速率限制] 按操作者维度限流；超限则回帖提示重试时间并结束。
     const rl = checkRateLimit(actorLogin);
     if (!rl.allowed) {
         await reply.error('RATE_LIMITED', `请 ${Math.ceil((rl.retryAfterMs ?? 0) / 1000)} 秒后再试`);
@@ -9384,7 +9503,7 @@ async function dispatchCommentEvent(deps) {
             error: 'RATE_LIMITED'
         };
     }
-    // 查找 handler
+    // [查找 handler] 从注册表取命令处理器；命令名虽通过解析但未注册（如已下线）则报 UNKNOWN_COMMAND。
     const handler = registry.get(parsed.name);
     if (!handler) {
         await reply.error('UNKNOWN_COMMAND', `\`${parsed.name}\``);
@@ -9395,7 +9514,8 @@ async function dispatchCommentEvent(deps) {
             error: 'UNKNOWN_COMMAND'
         };
     }
-    // 权限: 查询 + 校验
+    // [权限校验] 查询操作者在仓库的权限等级，结合"是否为 PR 作者"判断能否执行该命令；
+    // 不满足则回帖 FORBIDDEN 并结束。
     const permission = await getPermission({
         owner,
         repo: repoName,
@@ -9435,12 +9555,13 @@ async function dispatchCommentEvent(deps) {
         options: deps.options,
         triggerReview: deps.triggerReview
     };
-    // ACK
+    // [ACK 回复] 仅对声明 needsAck 的耗时命令先回一条"正在执行"，
+    // 后续 success/error 会复用该 ackId 原地更新，避免刷屏。
     let ackId = null;
     if (handler.needsAck) {
         ackId = await reply.ack(`正在执行 \`${parsed.name}\` …`);
     }
-    // 执行
+    // [执行] 调用 handler，成功回 success；
     try {
         const result = await handler.execute(ctx);
         const message = result?.message ?? `✅ 命令 \`${parsed.name}\` 执行完成`;
@@ -9448,6 +9569,7 @@ async function dispatchCommentEvent(deps) {
         return { kind: 'executed', command: parsed.name, ok: true };
     }
     catch (e) {
+        // 抛错则归一化错误码后回 error，并打 warning 便于排查。
         const code = extractErrorCode(e);
         const detail = e instanceof Error ? e.message : String(e);
         await reply.error(code, detail, ackId);
@@ -9460,10 +9582,17 @@ async function dispatchCommentEvent(deps) {
         };
     }
 }
+/**
+ * 把任意抛出的异常归一化为已知 ErrorCode。
+ * 仅当 e 是对象、带 string 类型的 code、且 code 属于白名单时才采用，
+ * 否则一律兜底为 'INTERNAL'。
+ */
 function extractErrorCode(e) {
+    // 非对象或无 code 字段 → 走末尾 INTERNAL 兜底
     if (e && typeof e === 'object' && 'code' in e) {
         const c = e.code;
         if (typeof c === 'string') {
+            // code 必须命中已知错误码白名单，防止把任意字符串当成合法 ErrorCode
             if ([
                 'UNKNOWN_COMMAND',
                 'INVALID_ARGS',
@@ -9481,10 +9610,12 @@ function extractErrorCode(e) {
     return 'INTERNAL';
 }
 
-// EXTERNAL MODULE: ./lib/review.js + 14 modules
-var review = __nccwpck_require__(9211);
+// EXTERNAL MODULE: ./lib/review.js + 17 modules
+var review = __nccwpck_require__(8726);
 // EXTERNAL MODULE: ./lib/commenter.js
 var lib_commenter = __nccwpck_require__(4558);
+// EXTERNAL MODULE: ./lib/constants.js
+var constants = __nccwpck_require__(2098);
 // EXTERNAL MODULE: ./lib/inputs.js
 var lib_inputs = __nccwpck_require__(6305);
 // EXTERNAL MODULE: ./lib/tokenizer.js
@@ -9515,10 +9646,11 @@ var tokenizer = __nccwpck_require__(7525);
 
 
 
+
 // eslint-disable-next-line camelcase
 const conversation_context = github.context;
-/** 默认的 bot mention 别名（小写匹配，与命令解析器保持一致） */
-const BOT_MENTIONS = ['@ai-reviewer', '@codesentinel'];
+/** 默认的 bot mention 别名（小写匹配，与命令解析器保持一致）。共享自 constants。 */
+
 /** 标识 bot 在对话链中出现过的标签（用于轮次统计 / 意图识别） */
 const BOT_COMMENT_TAGS = [lib_commenter/* COMMENT_TAG */.Rs, lib_commenter/* COMMENT_REPLY_TAG */.aD];
 /** 单个 thread 的对话轮次上限（bot 已回复的次数），超过后停止追问 */
@@ -9550,7 +9682,7 @@ function isFollowUpQuestion(opts) {
     if (botTags.some(tag => body.includes(tag))) {
         return false;
     }
-    const mentions = (opts.mentions ?? BOT_MENTIONS).map(m => m.toLowerCase());
+    const mentions = (opts.mentions ?? constants/* BOT_MENTIONS */.T).map(m => m.toLowerCase());
     const lowerBody = body.toLowerCase();
     return mentions.some(m => lowerBody.includes(m));
 }
@@ -9846,6 +9978,8 @@ __nccwpck_require__.d(__webpack_exports__, {
 var core = __nccwpck_require__(1078);
 // EXTERNAL MODULE: ./lib/commands/registry.js
 var registry = __nccwpck_require__(953);
+// EXTERNAL MODULE: ./lib/constants.js
+var constants = __nccwpck_require__(2098);
 ;// CONCATENATED MODULE: ./lib/commands/handlers/help.js
 /**
  * commands/handlers/help.ts - help 命令的参考实现（成员 A 交付）
@@ -9855,6 +9989,7 @@ var registry = __nccwpck_require__(953);
  * - 按注册顺序输出命令名、描述、用法
  * - 提供 buildHelpMessage() 纯函数，便于单测
  */
+
 
 
 /**
@@ -9877,7 +10012,7 @@ function buildHelpMessage(commands) {
     });
     for (const c of ordered) {
         const perm = c.minPermission ?? 'write';
-        const usage = c.usage ?? `@ai-reviewer ${c.name}`;
+        const usage = c.usage ?? `${constants/* PRIMARY_BOT_MENTION */.a} ${c.name}`;
         lines.push(`| \`${usage}\` | ${c.description} | \`${perm}\` |`);
     }
     if (ordered.some(c => (c.aliases?.length ?? 0) > 0)) {
@@ -9890,17 +10025,17 @@ function buildHelpMessage(commands) {
         }
     }
     lines.push('');
-    lines.push(`> ${(0,core.getInput)('bot_icon') || '🤖'} Bot 同时支持 \`@ai-reviewer\` 与 \`@codesentinel\` 两个 mention。`);
+    lines.push(`> ${(0,core.getInput)('bot_icon') || '🤖'} Bot 同时支持 ${constants/* BOT_MENTIONS.map */.T.map(m => `\`${m}\``).join(' 与 ')} 共 ${constants/* BOT_MENTIONS.length */.T.length} 个 mention。`);
     return lines.join('\n');
 }
 const helpHandler = {
     name: 'help',
     description: '显示所有支持的命令及用法',
-    usage: '@ai-reviewer help',
+    usage: `${constants/* PRIMARY_BOT_MENTION */.a} help`,
     needsAck: false,
     minPermission: 'read',
     async execute(_ctx) {
-        const cmds = (0,registry/* getRegistry */.JH)().listCommands();
+        const cmds = (0,registry/* getRegistry */.J)().listCommands();
         return { message: buildHelpMessage(cmds) };
     }
 };
@@ -9958,20 +10093,24 @@ const RESOLVE_THREAD = `
 `;
 // ─── Bot identity ─────────────────────────────────────────────────────────────
 let cachedBotLogin = null;
-async function review_thread_getBotLogin(options) {
+async function getBotLogin(options) {
     if (cachedBotLogin !== null)
         return cachedBotLogin;
-    // bot_name is a display name, not a GitHub login — always use getAuthenticated()
-    // to get the real API identity that actually authored the review comments.
     void options;
+    // Explicit override for custom GitHub App: installation tokens cannot call
+    // GET /user, so auto-detection would wrongly fall back to 'github-actions'.
+    const explicitLogin = (0,core.getInput)('bot_github_login');
+    if (explicitLogin) {
+        cachedBotLogin = explicitLogin;
+        return cachedBotLogin;
+    }
     try {
         const { data } = await octokit/* octokit.users.getAuthenticated */.K.users.getAuthenticated();
         cachedBotLogin = data.login;
     }
     catch (e) {
         (0,core.warning)(`getBotLogin: failed to get authenticated user – ${String(e)}`);
-        // GITHUB_TOKEN (integration token) lacks read:user scope so getAuthenticated()
-        // always throws in Actions. Fall back to the standard Actions bot login.
+        // Default GITHUB_TOKEN (integration token) lacks read:user scope.
         // GraphQL returns the login WITHOUT the "[bot]" suffix, so use 'github-actions'
         // (not 'github-actions[bot]') to match the author field in reviewThread queries.
         cachedBotLogin = 'github-actions';
@@ -9994,7 +10133,7 @@ function normalizeLogin(login) {
     return login.replace(/\[bot\]$/i, '').toLowerCase();
 }
 // ─── Query ────────────────────────────────────────────────────────────────────
-async function review_thread_fetchUnresolvedBotThreads(params, botLogin) {
+async function fetchUnresolvedBotThreads(params, botLogin) {
     const results = [];
     let cursor = null;
     do {
@@ -10022,8 +10161,9 @@ async function review_thread_fetchUnresolvedBotThreads(params, botLogin) {
     } while (cursor !== null);
     return results;
 }
-// resolveReviewThread mutation requires a user PAT; GITHUB_TOKEN (integration
-// token) is rejected by GitHub with "Resource not accessible by integration".
+// resolveReviewThread is rejected by both GITHUB_TOKEN and GitHub App
+// installation tokens ("Resource not accessible by integration").
+// A classic PAT with repo scope is required.
 function getResolveGraphql() {
     const pat = (0,core.getInput)('resolve_token');
     if (pat) {
@@ -10031,14 +10171,15 @@ function getResolveGraphql() {
     }
     return (query, variables) => octokit/* octokit.graphql */.K.graphql(query, variables);
 }
-async function review_thread_batchResolve(threads) {
+async function batchResolve(threads) {
     const limit = (0,p_limit/* default */.Z)(6);
     const gql = getResolveGraphql();
     let ok = 0;
     const errors = [];
     await Promise.allSettled(threads.map(t => limit(async () => {
         try {
-            await gql(RESOLVE_THREAD, { threadId: t.id });
+            // await gql(RESOLVE_THREAD, {threadId: t.id})
+            await octokit/* octokit.graphql */.K.graphql(RESOLVE_THREAD, { threadId: t.id });
             ok++;
         }
         catch (e) {
@@ -10051,31 +10192,24 @@ async function review_thread_batchResolve(threads) {
 
 ;// CONCATENATED MODULE: ./lib/commands/handlers/resolve.js
 
+
 // ─── Handler ──────────────────────────────────────────────────────────────────
 const resolveHandler = {
     name: 'resolve',
     description: '批量将所有 CodeSentinel 审查意见标记为已解决',
-    usage: '@ai-reviewer resolve',
+    usage: `${constants/* PRIMARY_BOT_MENTION */.a} resolve`,
     needsAck: true,
     minPermission: 'write',
     execute
 };
 async function execute(ctx) {
-    const botLogin = await review_thread_getBotLogin(ctx.options);
-    const threads = await review_thread_fetchUnresolvedBotThreads({ owner: ctx.owner, repo: ctx.repo, prNumber: ctx.prNumber }, botLogin);
+    const botLogin = await getBotLogin(ctx.options);
+    const threads = await fetchUnresolvedBotThreads({ owner: ctx.owner, repo: ctx.repo, prNumber: ctx.prNumber }, botLogin);
     if (threads.length === 0) {
         return { message: 'ℹ️ 没有找到待解决的 CodeSentinel 审查意见' };
     }
-    const { ok, failed, errors } = await review_thread_batchResolve(threads);
+    const { ok, failed, errors } = await batchResolve(threads);
     return { message: formatResult(ok, failed, threads.length, errors) };
-}
-// ─── External API (for member C) ──────────────────────────────────────────────
-async function resolveAllBotComments(params) {
-    const botLogin = await getBotLogin(params.options);
-    const threads = await fetchUnresolvedBotThreads(params, botLogin);
-    if (threads.length === 0)
-        return { ok: 0, failed: 0 };
-    return batchResolve(threads);
 }
 // ─── Formatting ───────────────────────────────────────────────────────────────
 function formatResult(ok, failed, total, errors) {
@@ -10084,7 +10218,12 @@ function formatResult(ok, failed, total, errors) {
     }
     const errDetail = errors.length > 0 ? `\n\n错误详情：\`${errors[0].message}\`` : '';
     if (ok === 0) {
-        return `❌ 解决失败（共 **${total}** 条）${errDetail}`;
+        // 全部失败时几乎一定是权限问题：resolveReviewThread mutation 需要用户 PAT，
+        // GITHUB_TOKEN 会被 GitHub 拒为 "Resource not accessible by integration"。
+        // 给出可操作提示，避免用户只看到一句干巴巴的 forbidden。
+        const permissionHint = '\n\n💡 这通常是权限不足：解决评论线程需要把用户 PAT 配置到 `resolve_token`，' +
+            '或在 workflow 中授予 `permissions: pull-requests: write`。';
+        return `❌ 解决失败（共 **${total}** 条）${errDetail}${permissionHint}`;
     }
     return `⚠️ 共 **${total}** 条，成功解决 **${ok}** 条，**${failed}** 条失败（可手动解决）${errDetail}`;
 }
@@ -10092,6 +10231,7 @@ function formatResult(ok, failed, total, errors) {
 // EXTERNAL MODULE: ./lib/review-state.js
 var review_state = __nccwpck_require__(3337);
 ;// CONCATENATED MODULE: ./lib/commands/handlers/stubs.js
+
 
 function notImplemented(name) {
     return async (_ctx) => {
@@ -10105,7 +10245,7 @@ function notImplemented(name) {
 const reviewStub = {
     name: 'review',
     description: '触发增量审查（仅审查自上次审查以来的新增变更）',
-    usage: '@ai-reviewer review',
+    usage: `${constants/* PRIMARY_BOT_MENTION */.a} review`,
     needsAck: true,
     minPermission: 'write',
     async execute(ctx) {
@@ -10118,7 +10258,7 @@ const reviewStub = {
 const fullReviewStub = {
     name: 'full review',
     description: '触发全量审查（从 base 到 HEAD 的完整 diff）',
-    usage: '@ai-reviewer full review',
+    usage: `${constants/* PRIMARY_BOT_MENTION */.a} full review`,
     needsAck: true,
     minPermission: 'write',
     async execute(ctx) {
@@ -10131,7 +10271,7 @@ const fullReviewStub = {
 const summaryStub = {
     name: 'summary',
     description: '基于当前最新代码重新生成 PR 摘要',
-    usage: '@ai-reviewer summary',
+    usage: `${constants/* PRIMARY_BOT_MENTION */.a} summary`,
     needsAck: true,
     minPermission: 'write',
     async execute(ctx) {
@@ -10144,20 +10284,20 @@ const summaryStub = {
 const pauseStub = {
     name: 'pause',
     description: '暂停对当前 PR 的自动审查',
-    usage: '@ai-reviewer pause',
+    usage: `${constants/* PRIMARY_BOT_MENTION */.a} pause`,
     needsAck: false,
     minPermission: 'write',
     async execute(ctx) {
         await (0,review_state/* setReviewState */.DU)(ctx.prNumber, 'paused');
         return {
-            message: '已暂停当前 PR 的自动审查。使用 `@ai-reviewer resume` 恢复。'
+            message: `已暂停当前 PR 的自动审查。使用 \`${constants/* PRIMARY_BOT_MENTION */.a} resume\` 恢复。`
         };
     }
 };
 const resumeStub = {
     name: 'resume',
     description: '恢复对当前 PR 的自动审查',
-    usage: '@ai-reviewer resume',
+    usage: `${constants/* PRIMARY_BOT_MENTION */.a} resume`,
     needsAck: false,
     minPermission: 'write',
     async execute(ctx) {
@@ -10168,7 +10308,7 @@ const resumeStub = {
 const configurationStub = {
     name: 'configuration',
     description: '显示当前仓库的审查配置',
-    usage: '@ai-reviewer configuration',
+    usage: `${constants/* PRIMARY_BOT_MENTION */.a} configuration`,
     needsAck: false,
     minPermission: 'read',
     async execute(ctx) {
@@ -10223,7 +10363,7 @@ let bootstrapped = false;
 function bootstrapCommands() {
     if (bootstrapped)
         return;
-    const reg = (0,registry/* getRegistry */.JH)();
+    const reg = (0,registry/* getRegistry */.J)();
     reg.register(helpHandler);
     reg.register(resolveHandler);
     for (const h of ALL_STUBS) {
@@ -10391,7 +10531,7 @@ async function tryEarlyReaction(rawReaction) {
         if (actorIsBot)
             return;
         (0,bootstrap/* bootstrapCommands */.K)();
-        const registry = (0,commands_registry/* getRegistry */.JH)();
+        const registry = (0,commands_registry/* getRegistry */.J)();
         const outcome = (0,parser/* parse */.Qc)(comment.body, {
             registeredCommands: registry.getRegisteredNames(),
             botMentions: parser/* DEFAULT_BOT_MENTIONS */.gC
@@ -10426,8 +10566,29 @@ async function tryEarlyReaction(rawReaction) {
 /* harmony export */   "gC": () => (/* binding */ DEFAULT_BOT_MENTIONS)
 /* harmony export */ });
 /* unused harmony exports MAX_COMMAND_LINE_LENGTH, MAX_ARG_LENGTH, MAX_ARGS_COUNT */
-/** 默认支持的 bot mention 别名（小写，已带 @） */
-const DEFAULT_BOT_MENTIONS = ['@ai-reviewer', '@codesentinel'];
+/* harmony import */ var _constants__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(2098);
+/**
+ * commands/parser.ts - 命令解析器
+ *
+ * 输入: 评论原文 + 已注册命令列表
+ * 输出: ParseOutcome，三种情形:
+ *   1. command      — 命中白名单的命令（可能带参数）
+ *   2. conversation — 包含 @bot 但未命中命令（走对话 fallback）
+ *   3. none         — 不包含 @bot 或没有任何有效触发
+ *
+ * 关键规则（见 §5.4 设计文档）:
+ *   - 默认支持 @ai-reviewer 与 @codesentinel 两个 mention 别名
+ *   - bot mention 不区分大小写
+ *   - 命令名不区分大小写（解析后归一化为小写）
+ *   - 复合命令按最长前缀匹配（例: "full review" 先于 "full"）
+ *   - 仅处理第一行的命令体，换行后的内容进入 rawAfter
+ *   - 单条评论只识别第一个命令，其余忽略
+ *   - 参数字符集白名单: [A-Za-z0-9_\-./:=]；出现 shell 元字符 → INVALID_ARGS
+ *   - 长度上限: 命令行 ≤ 512 字符, 单个 arg ≤ 128 字符, arg 数量 ≤ 16
+ */
+
+/** 默认支持的 bot mention 别名（小写，已带 @）。共享自 constants.BOT_MENTIONS。 */
+const DEFAULT_BOT_MENTIONS = [..._constants__WEBPACK_IMPORTED_MODULE_0__/* .BOT_MENTIONS */ .T];
 /** 命令行长度上限 */
 const MAX_COMMAND_LINE_LENGTH = 512;
 /** 单个 arg 长度上限 */
@@ -10596,9 +10757,9 @@ function truncate(s, n) {
 
 "use strict";
 /* harmony export */ __nccwpck_require__.d(__webpack_exports__, {
-/* harmony export */   "JH": () => (/* binding */ getRegistry)
+/* harmony export */   "J": () => (/* binding */ getRegistry)
 /* harmony export */ });
-/* unused harmony exports registerCommand, CommandRegistry */
+/* unused harmony export CommandRegistry */
 class CommandRegistry {
     handlers = new Map();
     /** 规范名 → 注册顺序，help 命令按注册顺序输出 */
@@ -10649,9 +10810,6 @@ class CommandRegistry {
     }
 }
 const globalRegistry = new CommandRegistry();
-function registerCommand(handler) {
-    globalRegistry.register(handler);
-}
 function getRegistry() {
     return globalRegistry;
 }
@@ -11442,6 +11600,37 @@ ${commentBody}`;
 
 /***/ }),
 
+/***/ 2098:
+/***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
+
+"use strict";
+/* harmony export */ __nccwpck_require__.d(__webpack_exports__, {
+/* harmony export */   "T": () => (/* binding */ BOT_MENTIONS),
+/* harmony export */   "a": () => (/* binding */ PRIMARY_BOT_MENTION)
+/* harmony export */ });
+/**
+ * constants.ts - 全局共享常量
+ *
+ * 跨多个领域模块（命令解析 / 对话识别 / 文案展示）复用的常量集中在此，
+ * 避免同一个值在多处硬编码后发生分叉。
+ */
+/**
+ * bot mention 别名（小写，已带 @）。
+ *
+ * 命令解析（parser）与对话追问识别（conversation）共用同一份触发别名——
+ * 二者必须保持一致，否则会出现「命令能触发但对话不认」之类的隐蔽 bug。
+ * 新增/调整别名只改这里一处。
+ */
+const BOT_MENTIONS = ['@ai-reviewer', '@codesentinel'];
+/**
+ * 主 mention 别名，用于面向用户的文案/用法示例（help、命令 usage 等）。
+ * 取 BOT_MENTIONS 的第一个，保证与触发别名同源。
+ */
+const PRIMARY_BOT_MENTION = BOT_MENTIONS[0];
+
+
+/***/ }),
+
 /***/ 6305:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
@@ -11578,12 +11767,12 @@ __nccwpck_require__.a(module, async (__webpack_handle_async_dependencies__, __we
 __nccwpck_require__.r(__webpack_exports__);
 /* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(1078);
 /* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__nccwpck_require__.n(_actions_core__WEBPACK_IMPORTED_MODULE_0__);
-/* harmony import */ var _bot__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(4936);
+/* harmony import */ var _bot__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(1854);
 /* harmony import */ var _command_handler__WEBPACK_IMPORTED_MODULE_2__ = __nccwpck_require__(8280);
 /* harmony import */ var _commands_early_reaction__WEBPACK_IMPORTED_MODULE_3__ = __nccwpck_require__(6360);
 /* harmony import */ var _options__WEBPACK_IMPORTED_MODULE_4__ = __nccwpck_require__(5341);
 /* harmony import */ var _prompts__WEBPACK_IMPORTED_MODULE_6__ = __nccwpck_require__(2379);
-/* harmony import */ var _review__WEBPACK_IMPORTED_MODULE_5__ = __nccwpck_require__(9211);
+/* harmony import */ var _review__WEBPACK_IMPORTED_MODULE_5__ = __nccwpck_require__(8726);
 /**
  * main.ts - GitHub Action 入口文件
  *
@@ -11629,8 +11818,19 @@ async function run() {
         eslint: (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_eslint'),
         biome: (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_biome'),
         tsc: (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_tsc'),
-        prettier: (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_prettier')
-    }, (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('command_ack_reaction'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_review_comments'));
+        prettier: (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_prettier'),
+        semgrep: (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_semgrep')
+    }, 
+    // 工具版本覆盖：仅收集用户**显式填写**的值；空字符串视为"用默认版本"
+    Object.fromEntries([
+        ['eslint', 'eslint_version'],
+        ['biome', 'biome_version'],
+        ['tsc', 'tsc_version'],
+        ['prettier', 'prettier_version'],
+        ['semgrep', 'semgrep_version']
+    ]
+        .map(([toolName, inputName]) => [toolName, (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)(inputName).trim()])
+        .filter(([, v]) => v.length > 0)), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('semgrep_config'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('command_ack_reaction'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_review_comments'));
     // 打印所有配置项，方便调试
     options.print();
     // 评论事件：在 Bot 初始化前尽快给用户评论打 ACK 表情
@@ -13895,9 +14095,27 @@ class Options {
      * value 是用户在 workflow 里写的 `with: enable_<tool>: true|false`。
      */
     toolEnableOverrides;
+    /**
+     * 每个 lint 适配器的版本覆盖（semver 范围）
+     *
+     * 解决"ai-reviewer 装的工具版本与消费方本地装的不一致"问题。
+     * key = adapter.name，value = 用户在 workflow 里写的
+     * `with: <tool>_version: '^8.57.0'`。
+     *
+     * 用户**未填**或填空字符串时，**不会**进入此 map —— 适配器使用自己
+     * installSpec.version 的默认值（即 ai-reviewer pin 的版本）。
+     */
+    toolVersionOverrides;
+    /**
+     * Semgrep 规则集（来自 Action 输入 `semgrep_config`）。
+     *
+     * 仅当 `enable_semgrep=true` 时生效；默认 `p/default`（OWASP Top 10）。
+     * 详见 action.yml 中 `semgrep_config` 输入说明。
+     */
+    semgrepConfig;
     commandAckReaction; // 命令识别后在用户评论上打的表情（空/off/none 表示禁用）
     maxReviewComments; // 单次审查最多发布的行级评论数，按严重级别截断（0 表示不限制）
-    constructor(debug, disableReview, disableReleaseNotes, maxFiles = '0', reviewSimpleChanges = false, reviewCommentLGTM = false, pathFilters = null, systemMessage = '', openaiLightModel = 'gpt-5.4-nano', openaiHeavyModel = 'gpt-5.4-mini', openaiModelTemperature = '0.0', openaiRetries = '3', openaiTimeoutMS = '120000', openaiConcurrencyLimit = '6', githubConcurrencyLimit = '6', apiBaseUrl = 'https://api.openai.com/v1', language = 'en-US', enableDependencyAnalysis = true, maxDependencyFiles = '50', enableWebSearch = true, enableShell = true, enableLintTools = true, toolEnableOverrides = {}, commandAckReaction = 'eyes', maxReviewComments = '20') {
+    constructor(debug, disableReview, disableReleaseNotes, maxFiles = '0', reviewSimpleChanges = false, reviewCommentLGTM = false, pathFilters = null, systemMessage = '', openaiLightModel = 'gpt-5.4-nano', openaiHeavyModel = 'gpt-5.4-mini', openaiModelTemperature = '0.0', openaiRetries = '3', openaiTimeoutMS = '120000', openaiConcurrencyLimit = '6', githubConcurrencyLimit = '6', apiBaseUrl = 'https://api.openai.com/v1', language = 'en-US', enableDependencyAnalysis = true, maxDependencyFiles = '50', enableWebSearch = true, enableShell = true, enableLintTools = true, toolEnableOverrides = {}, toolVersionOverrides = {}, semgrepConfig = 'p/default', commandAckReaction = 'eyes', maxReviewComments = '20') {
         this.debug = debug;
         this.disableReview = disableReview;
         this.disableReleaseNotes = disableReleaseNotes;
@@ -13923,6 +14141,8 @@ class Options {
         this.enableShell = enableShell;
         this.enableLintTools = enableLintTools;
         this.toolEnableOverrides = toolEnableOverrides;
+        this.toolVersionOverrides = toolVersionOverrides;
+        this.semgrepConfig = semgrepConfig;
         this.commandAckReaction = commandAckReaction;
         this.maxReviewComments = parseInt(maxReviewComments);
     }
@@ -13953,6 +14173,8 @@ class Options {
         (0,core.info)(`enable_shell: ${this.enableShell}`);
         (0,core.info)(`enable_lint_tools: ${this.enableLintTools}`);
         (0,core.info)(`tool_enable_overrides: ${JSON.stringify(this.toolEnableOverrides)}`);
+        (0,core.info)(`tool_version_overrides: ${JSON.stringify(this.toolVersionOverrides)}`);
+        (0,core.info)(`semgrep_config: ${this.semgrepConfig}`);
         (0,core.info)(`command_ack_reaction: ${this.commandAckReaction}`);
         (0,core.info)(`max_review_comments: ${this.maxReviewComments}`);
     }
@@ -14229,12 +14451,48 @@ Don't annotate code snippets with line numbers. Format and indent code correctly
 Do not use \`suggestion\` code blocks.
 For fixes, use \`diff\` code blocks, marking changes with \`+\` or \`-\`. The line number range for comments with fix snippets must exactly match the range to replace in the new hunk.
 
+**Fix suggestion block (MANDATORY)** — Every \`diff\` code block that proposes a fix MUST be wrapped in a collapsible HTML \`<details>\` block, mirroring the existing "🧩 Analysis chain" pattern. Exact format:
+
+\`\`\`
+<details>
+<summary>🔧 Suggested fix</summary>
+
+\\\`\\\`\\\`diff
+-old
++new
+\\\`\\\`\\\`
+
+</details>
+\`\`\`
+
+Rules:
+1. \`<summary>\` line MUST contain the 🔧 wrench emoji + the phrase "Suggested fix" (translate to response language — e.g. "🔧 修复建议" for Chinese, "🔧 수정 제안" for Korean; keep the 🔧 icon).
+2. There MUST be a blank line between \`<summary>\` and the \`\\\`\\\`\\\`diff\` opening fence (GitHub Flavored Markdown won't render the code block otherwise).
+3. There MUST be a blank line between the closing \`\\\`\\\`\\\`\` and \`</details>\`.
+4. Do NOT use the older "\`**🔧 Suggested fix**\`" bold-header format; always use \`<details>\`.
+
+This collapses long diffs by default and keeps PR comments visually clean.
+
 - Do NOT provide general feedback, summaries, explanations of changes, or praises
   for making good additions. Do NOT suggest adding validation, comments, documentation,
   or error handling that was not explicitly part of the changes.
 - Focus solely on offering specific, objective insights based on the
   given context and refrain from making broad comments about potential impacts on
   the system or question intentions behind the changes.
+- **One comment per issue (MANDATORY)** — Do NOT output two or more separate
+  \`startLine-endLine:\` blocks discussing the **same underlying issue**, even if
+  their line ranges differ. The "underlying issue" is identified by what lint
+  tool finding (e.g. TS2345, no-unused-vars) or what bug they reference.
+  Concretely:
+  - If you have multiple angles on a single TypeScript error (e.g. "syntax fix"
+    + "design concern"), combine them into ONE comment.
+  - If a lint tool reports one finding on line 98 and you want to comment on both
+    line 98 specifically AND the surrounding 95-100 function, pick ONE line range
+    and put all content there. Do NOT split into two \`startLine-endLine:\` blocks.
+  - Multiple separate comments on the same file are OK only when they reference
+    **different** tool findings or different bugs.
+  Rationale: PR reviewers see each \`startLine-endLine:\` block as a separate
+  GitHub comment thread. Splitting one issue across multiple threads is noise.
 $lint_mandatory_instruction- **Cross-file impact analysis (MANDATORY)** — When the "Cross-file references" section
   above contains actual references (not "No cross-file references detected"), you MUST
   write a review comment on the changed line (using the same \`startLine-endLine:\\n comment\\n---\`
@@ -14311,10 +14569,16 @@ Please review this change.
 
 22-22:
 There's a syntax error in the add function.
+
+<details>
+<summary>🔧 Suggested fix</summary>
+
 \`\`\`diff
 -    retrn z
 +    return z
 \`\`\`
+
+</details>
 ---
 24-25:
 LGTM!
@@ -14568,7 +14832,7 @@ async function setReviewState(pullNumber, state) {
 
 /***/ }),
 
-/***/ 9211:
+/***/ 8726:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
 "use strict";
@@ -14657,12 +14921,6 @@ function scanPatch(patch) {
     return { addedLines, touchedLines };
 }
 /**
- * 兼容方法：仅返回 added 行 Set（与早期 `extractChangedLinesFromPatch` 等价）
- */
-function extractChangedLinesFromPatch(patch) {
-    return scanPatch(patch).addedLines;
-}
-/**
  * 对 PR 中所有变更文件做一次 walk，得到 PatchScanMap
  *
  * @param filesAndChanges [filename, fileContent, fileDiff, patches] 列表
@@ -14671,18 +14929,6 @@ function buildPatchScans(filesAndChanges) {
     const map = new Map();
     for (const [filename, , fileDiff] of filesAndChanges) {
         map.set(filename, scanPatch(fileDiff));
-    }
-    return map;
-}
-/**
- * 兼容方法：返回 file → addedLines Set 的映射
- *
- * 内部仍走 `buildPatchScans`，仅丢弃 touchedLines 字段。
- */
-function buildChangedLineMap(filesAndChanges) {
-    const map = new Map();
-    for (const [filename, scan] of buildPatchScans(filesAndChanges)) {
-        map.set(filename, scan.addedLines);
     }
     return map;
 }
@@ -14697,6 +14943,8 @@ function toAddedLineMap(scans) {
     return map;
 }
 
+// EXTERNAL MODULE: ./lib/constants.js
+var constants = __nccwpck_require__(2098);
 // EXTERNAL MODULE: ./lib/octokit.js
 var octokit = __nccwpck_require__(2247);
 ;// CONCATENATED MODULE: ./lib/repo-tree.js
@@ -16458,59 +16706,6 @@ function extractVersion(rawVersion) {
     const m = rawVersion.match(/v?(\d+\.\d+\.\d+)/);
     return m?.[1] ?? rawVersion.trim().split('\n')[0];
 }
-/**
- * 构造适配器 detect 失败时的诊断 reason
- *
- * 把 exitCode、cwd、node_modules 是否存在、工具 bin 是否存在、stderr 首行
- * 都带出来，让用户在 PR 摘要表里就能直接判断："是 npm install 没装上"
- * 还是"装了但 cwd 不对"。
- *
- * @param toolName     工具名称（用于探测 node_modules/.bin/<toolName>）
- * @param repoRoot     仓库根目录
- * @param npxResult    `npx --no-install <tool> --version` 的执行结果
- * @param fallbackResult 全局 `<tool> --version` 的执行结果（可选）
- */
-function buildVersionFailureReason(toolName, repoRoot, npxResult, fallbackResult) {
-    if (npxResult.spawnErrorMessage != null)
-        return npxResult.spawnErrorMessage;
-    // 探测 node_modules 是否真的存在以及工具 bin 是否在其中
-    // 用 require('fs') 而非 import 是因为本模块大量使用 child_process，
-    // 加少量 fs 不构成额外耦合
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const fs = __nccwpck_require__(7147);
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const path = __nccwpck_require__(1017);
-    const hasNodeModules = fs.existsSync(path.join(repoRoot, 'node_modules'));
-    const hasBin = fs.existsSync(path.join(repoRoot, 'node_modules', '.bin', toolName));
-    const stderrSnippet = ((npxResult.stderr || fallbackResult?.stderr) ?? '')
-        .split('\n')
-        .find(l => l.trim().length > 0)
-        ?.substring(0, 120) ?? '';
-    const parts = [
-        `${toolName} --version failed`,
-        `exit=${npxResult.exitCode ?? 'null'}`,
-        `cwd=${repoRoot}`,
-        `node_modules=${hasNodeModules ? 'yes' : 'NO'}`,
-        `${toolName}-bin=${hasBin ? 'yes' : 'NO'}`
-    ];
-    if (stderrSnippet.length > 0)
-        parts.push(`stderr="${stderrSnippet}"`);
-    // node_modules 不存在 → 几乎一定是 workflow 漏了 `npm install`
-    // 明确给出可操作建议，避免用户在 cryptic 错误里循环
-    if (!hasNodeModules) {
-        parts.push('HINT: workflow appears to have not run `npm install` before this ' +
-            'action (or checked out the wrong ref). Add `- run: npm install` ' +
-            'before the ai-reviewer step. For pull_request_target events, also ' +
-            "set `actions/checkout@v4` with `ref: \${{ github.event.pull_request.head.sha }}` " +
-            "so the PR branch's devDependencies are installed.");
-    }
-    else if (!hasBin) {
-        parts.push(`HINT: node_modules exists but ${toolName} is missing — ensure ` +
-            `${toolName} is in package.json devDependencies on the checked-out ref, ` +
-            `or add a workflow step to install it (\`npm install --no-save ${toolName}\`).`);
-    }
-    return parts.join('; ');
-}
 
 ;// CONCATENATED MODULE: ./lib/lint/tool-installer.js
 /**
@@ -16555,11 +16750,13 @@ async function ensureToolInstalled(spec) {
     switch (spec.kind) {
         case 'npm':
             return await installViaNpm(spec);
+        case 'pip':
+            return await installViaPip(spec);
         case 'binary':
-            // Phase 2+ 落地：参考 golangci-lint / ruff / semgrep 的发布形态
+            // Phase 2+ 落地：参考 golangci-lint 等纯静态二进制的发布形态
             return {
                 ok: false,
-                reason: "binary install strategy not yet implemented (planned for Phase 2+); " +
+                reason: 'binary install strategy not yet implemented (planned for Phase 2+); ' +
                     'add downloader in tool-installer.ts when needed'
             };
     }
@@ -16624,7 +16821,10 @@ async function installViaNpm(spec) {
         };
     }
     if (result.exitCode !== 0) {
-        const stderrSnippet = result.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 200) ?? '';
+        const stderrSnippet = result.stderr
+            .split('\n')
+            .find(l => l.trim().length > 0)
+            ?.substring(0, 200) ?? '';
         return {
             ok: false,
             reason: `npm install ${spec.package}@${spec.version} failed (exit=${result.exitCode}): ${stderrSnippet}`
@@ -16640,9 +16840,155 @@ async function installViaNpm(spec) {
     (0,core.info)(`lint/installer: ${spec.binName} ready at ${binPath}`);
     return { ok: true, binPath };
 }
+/**
+ * 沙箱内 Python 工具的安装目录（与 npm 工具的 node_modules/ 同级）
+ *
+ * 选 `--target=<dir>` 而非 `--user` 是因为：
+ *   - runner 上 `python3 -m pip install --user` 会装到 `~/.local/`，跨 job
+ *     不可控，也不便于 actions/cache 单独缓存一个子目录
+ *   - --target 让所有 Python 工具集中在沙箱里，与 npm 工具同款的缓存模型
+ */
+function getPipInstallDir() {
+    return external_path_.join(getInstallRoot(), 'python-tools');
+}
+/**
+ * 把 npm 风格的 caret/tilde range（`^1.95.0` / `~1.95.0` / `1.95.0`）
+ * 转成 pip 兼容的版本约束。pip 不认识 `^` —— 需要展开成 `>=,<` 形式。
+ *
+ *   ^1.95.0  →  >=1.95.0,<2          （锁主版本）
+ *   ~1.95.0  →  >=1.95.0,<1.96       （锁次版本）
+ *   1.95.0   →  ==1.95.0             （精确版本）
+ *   >=1.95   →  >=1.95               （原样透传，已经是 pip 语法）
+ *   *        →  ""                   （任意版本）
+ */
+function npmRangeToPipSpecifier(range) {
+    const trimmed = range.trim();
+    if (trimmed === '' || trimmed === '*' || trimmed === 'latest')
+        return '';
+    // 已经是 pip 语法（含 ==, >=, <=, >, <, ~=, !=）：原样返回
+    if (/^(==|>=|<=|>|<|~=|!=)/.test(trimmed))
+        return trimmed;
+    const caretMatch = trimmed.match(/^\^(\d+)\.(\d+)\.(\d+)$/);
+    if (caretMatch != null) {
+        const [, major, minor, patch] = caretMatch;
+        return `>=${major}.${minor}.${patch},<${parseInt(major, 10) + 1}`;
+    }
+    const tildeMatch = trimmed.match(/^~(\d+)\.(\d+)\.(\d+)$/);
+    if (tildeMatch != null) {
+        const [, major, minor, patch] = tildeMatch;
+        return `>=${major}.${minor}.${patch},<${major}.${parseInt(minor, 10) + 1}`;
+    }
+    // 形如 `1.95.0` 这种"裸版本号"：pip 视为精确等于
+    if (/^\d+\.\d+\.\d+$/.test(trimmed))
+        return `==${trimmed}`;
+    // 兜底：原样让 pip 自己尝试（如 `>=1.95,<2` 这类复合 range）
+    return trimmed;
+}
+/**
+ * pip 策略：跑 `python3 -m pip install --target=<sandbox>/python-tools <pkg><range>`
+ *
+ * 设计选择：
+ *   - 用 `python3 -m pip` 而非全局 `pip`，避免 Python 2/3 残留环境下歧义
+ *   - 用 `--target` 把所有依赖装到沙箱目录，console script 落在 bin/
+ *   - 不用 venv：venv 启动慢、跨 runner 缓存复杂；--target 同款隔离已足够
+ *   - 不用 pipx：pipx 在 ubuntu-latest 默认装了，但跨 runner 行为不一；
+ *     我们要的是"可预测、可缓存"，pip --target 是最稳的最小公倍数
+ *
+ * 失败诊断：
+ *   - python3 不存在 → spawnError，returned reason 明确指引
+ *   - pip install 失败 → exit 码 + stderr 首行
+ *   - 装完但 bin 缺失 → 防御性 false（罕见，但比静默有效）
+ */
+async function installViaPip(spec) {
+    const startedAt = Date.now();
+    const root = getInstallRoot();
+    const targetDir = getPipInstallDir();
+    const binPath = external_path_.join(targetDir, 'bin', spec.binName);
+    // 1) 缓存命中
+    if ((0,external_fs_.existsSync)(binPath)) {
+        (0,core.info)(`lint/installer[pip]: cache hit for ${spec.binName} → ${binPath}`);
+        return { ok: true, binPath };
+    }
+    // 2) 沙箱目录初始化
+    try {
+        if (!(0,external_fs_.existsSync)(root))
+            (0,external_fs_.mkdirSync)(root, { recursive: true });
+        if (!(0,external_fs_.existsSync)(targetDir))
+            (0,external_fs_.mkdirSync)(targetDir, { recursive: true });
+    }
+    catch (e) {
+        return {
+            ok: false,
+            reason: `failed to initialize pip sandbox dir ${targetDir}: ${e instanceof Error ? e.message : String(e)}`
+        };
+    }
+    // 3) 跑 pip install
+    const pipSpecifier = npmRangeToPipSpecifier(spec.version);
+    const pkgArg = pipSpecifier.length > 0 ? `${spec.package}${pipSpecifier}` : spec.package;
+    (0,core.info)(`lint/installer[pip]: installing ${spec.package} (range "${spec.version}" → pip "${pipSpecifier}") → ${targetDir}`);
+    const result = await runCommand({
+        command: 'python3',
+        args: [
+            '-m',
+            'pip',
+            'install',
+            '--quiet',
+            '--disable-pip-version-check',
+            '--no-warn-script-location',
+            `--target=${targetDir}`,
+            pkgArg
+        ],
+        cwd: root,
+        timeoutMs: INSTALL_TIMEOUT_MS,
+        env: {
+            // 让 Python 在 sys.path 中优先找沙箱目录，确保 console script 能 import 自己
+            PYTHONPATH: targetDir,
+            PYTHONDONTWRITEBYTECODE: '1'
+        }
+    });
+    const elapsed = Date.now() - startedAt;
+    if (result.spawnError) {
+        (0,core.warning)(`lint/installer[pip]: spawn failed after ${elapsed}ms — ${result.spawnErrorMessage ?? ''}`);
+        return {
+            ok: false,
+            reason: result.spawnErrorMessage != null &&
+                result.spawnErrorMessage.includes('python3')
+                ? `python3 not found on runner: ${result.spawnErrorMessage}. ` +
+                    'ubuntu-latest GitHub-hosted runners ship Python 3 by default — ' +
+                    'if you are on a self-hosted runner, install Python 3.8+ first.'
+                : `failed to invoke python3 -m pip: ${result.spawnErrorMessage ?? ''}`
+        };
+    }
+    if (result.exitCode !== 0) {
+        const stderrSnippet = result.stderr
+            .split('\n')
+            .find(l => l.trim().length > 0)
+            ?.substring(0, 200) ?? '';
+        (0,core.warning)(`lint/installer[pip]: pip exit=${result.exitCode} after ${elapsed}ms, stderr_first="${stderrSnippet}", stderr_len=${result.stderr.length}`);
+        return {
+            ok: false,
+            reason: `pip install ${pkgArg} failed (exit=${result.exitCode}): ${stderrSnippet}`
+        };
+    }
+    if (!(0,external_fs_.existsSync)(binPath)) {
+        (0,core.warning)(`lint/installer[pip]: ${spec.package} installed (exit=0, ${elapsed}ms) but console script not at ${binPath}`);
+        return {
+            ok: false,
+            reason: `package ${spec.package} installed but console script not at ${binPath} ` +
+                `(unexpected pip --target layout; check that the package declares a console_scripts entry for "${spec.binName}")`
+        };
+    }
+    (0,core.info)(`lint/installer[pip]: ${spec.binName} ready at ${binPath} after ${elapsed}ms ` +
+        `(stdout_len=${result.stdout.length}, stderr_len=${result.stderr.length})`);
+    return { ok: true, binPath };
+}
 /** 仅供测试使用：返回当前沙箱根目录路径 */
 function _getInstallRootForTest() {
     return getInstallRoot();
+}
+/** 仅供测试使用：返回 pip 工具的安装目标目录 */
+function _getPipInstallDirForTest() {
+    return getPipInstallDir();
 }
 
 ;// CONCATENATED MODULE: ./lib/lint/adapters/eslint.js
@@ -16755,9 +17101,13 @@ class EslintAdapter {
     resolvedVersion = '';
     /** detect() 成功后填充：bundled 二进制的绝对路径，scan 时直接调用 */
     resolvedBinPath = '';
-    async detect(repoRoot) {
+    async detect(repoRoot, versionOverride) {
         // 1) 让 installer 确保 bundled ESLint 在沙箱内可用
-        const install = await ensureToolInstalled(this.installSpec);
+        //    versionOverride 非空时覆盖默认版本，保证与消费方本地一致
+        const spec = versionOverride && versionOverride.length > 0
+            ? { ...this.installSpec, version: versionOverride }
+            : this.installSpec;
+        const install = await ensureToolInstalled(spec);
         if (!install.ok) {
             return {
                 available: false,
@@ -16948,9 +17298,12 @@ class BiomeAdapter {
     };
     resolvedVersion = '';
     resolvedBinPath = '';
-    async detect(repoRoot) {
+    async detect(repoRoot, versionOverride) {
         // 1) 让 installer 装到沙箱（待审查项目不需要 @biomejs/biome）
-        const install = await ensureToolInstalled(this.installSpec);
+        const spec = versionOverride && versionOverride.length > 0
+            ? { ...this.installSpec, version: versionOverride }
+            : this.installSpec;
+        const install = await ensureToolInstalled(spec);
         if (!install.ok) {
             return {
                 available: false,
@@ -17098,8 +17451,11 @@ class PrettierAdapter {
     };
     resolvedVersion = '';
     resolvedBinPath = '';
-    async detect(repoRoot) {
-        const install = await ensureToolInstalled(this.installSpec);
+    async detect(repoRoot, versionOverride) {
+        const spec = versionOverride && versionOverride.length > 0
+            ? { ...this.installSpec, version: versionOverride }
+            : this.installSpec;
+        const install = await ensureToolInstalled(spec);
         if (!install.ok) {
             return {
                 available: false,
@@ -17159,6 +17515,496 @@ class PrettierAdapter {
             fixable: true,
             category: 'style'
         }));
+    }
+}
+
+;// CONCATENATED MODULE: ./lib/lint/adapters/semgrep.js
+/**
+ * lint/adapters/semgrep.ts — Semgrep SAST 适配器（Phase 4：通用安全扫描）
+ *
+ * Semgrep 是支持 30+ 语言的模式匹配 SAST，与 ESLint/Biome/tsc 互补：
+ *   - ESLint/Biome：JS/TS 风格 + 通用质量规则
+ *   - tsc：类型错误
+ *   - **Semgrep：跨语言安全模式**（SQL 注入、命令注入、硬编码秘密、不安全反序列化…）
+ *
+ * 设计选择：
+ *   - 安装策略 = pip：semgrep 是 Python 工具，没有真正的"单文件预编译二进制"。
+ *     发布形态主要是 `pip install semgrep`（也支持 docker）。我们选 pip，
+ *     落到沙箱 `/tmp/ai-reviewer-lint-tools/python-tools/bin/semgrep`。
+ *   - 默认规则集 = `p/default`：覆盖 OWASP-Top-10 的 Registry 配置。
+ *     **首次运行需联网拉取规则集**（从 semgrep.dev），后续命中本地缓存即离线可用。
+ *     用户可通过 `with: semgrep_config: '<other>'` 覆盖（如 `auto` / `p/security-audit`）。
+ *   - 默认 enable = **false**：与 Prettier 同款保守。Semgrep 冷启动 +15-30s，
+ *     SAST 适合 opt-in 而非默认开启（避免给所有用户加 review 等待时间）。
+ *
+ * 输出解析：`semgrep scan --json` 返回如下结构（截取关键字段）：
+ *   {
+ *     "results": [
+ *       {
+ *         "check_id": "python.lang.security.audit.dangerous-system-call.dangerous-system-call",
+ *         "path": "src/utils.py",
+ *         "start": {"line": 42, "col": 3},
+ *         "end":   {"line": 42, "col": 60},
+ *         "extra": {
+ *           "severity": "ERROR",            // "ERROR" | "WARNING" | "INFO"
+ *           "message": "Detected subprocess call ...",
+ *           "metadata": {"cwe": [...], "owasp": [...]},
+ *           "fix": "...optional..."         // 出现时表示可自动修复
+ *         }
+ *       }
+ *     ],
+ *     "errors": [...],   // 解析失败的文件等（与 results 同级，不进 LintResult）
+ *     "version": "1.95.0"
+ *   }
+ *
+ * Semgrep 的所有 finding 都是安全相关 → category 统一标 `security`，
+ * 这样在 PR 摘要 / 评论里能与 lint findings 形成鲜明对照。
+ */
+
+
+
+
+class SemgrepAdapter {
+    name = 'semgrep';
+    displayName = 'Semgrep';
+    /**
+     * Semgrep 支持 30+ 语言，这里列出本仓库最常见 + Phase 1/2/3 已覆盖的扩展名。
+     * 即使列表里没有的扩展，semgrep 在 `--config=p/default` 下也会智能跳过。
+     */
+    supportedLanguages = [
+        'javascript',
+        'typescript',
+        'python',
+        'go',
+        'ruby',
+        'java',
+        'c',
+        'cpp',
+        'csharp',
+        'php',
+        'rust',
+        'kotlin',
+        'swift',
+        'scala'
+    ];
+    fileExtensions = [
+        '.js',
+        '.jsx',
+        '.mjs',
+        '.cjs',
+        '.ts',
+        '.tsx',
+        '.mts',
+        '.cts',
+        '.py',
+        '.pyi',
+        '.go',
+        '.rb',
+        '.java',
+        '.c',
+        '.h',
+        '.cc',
+        '.cpp',
+        '.cs',
+        '.php',
+        '.rs',
+        '.kt',
+        '.kts',
+        '.swift',
+        '.scala'
+    ];
+    /** 默认关闭：冷启动开销 + 误报噪音 → 让用户显式 opt-in */
+    defaultEnabled = false;
+    installSpec = {
+        kind: 'pip',
+        package: 'semgrep',
+        binName: 'semgrep',
+        version: '^1.95.0'
+    };
+    /** 规则集；构造时可覆盖（来自 Action 输入 `semgrep_config`） */
+    config;
+    resolvedBinPath = '';
+    resolvedVersion = '';
+    /** 沙箱 python-tools 路径，注入到 PYTHONPATH 让 semgrep CLI 能 import 自己 */
+    pythonPath = '';
+    /**
+     * 沙箱 python-tools/bin 路径，必须前置到 PATH —— 否则 `semgrep` 二进制内
+     * `execvp("pysemgrep")` 会按 PATH 查找 Python 后端而找不到，报：
+     *   `Unix_error: No such file or directory execvp pysemgrep`
+     * 这是 semgrep 1.x 以来"OCaml 壳 + Python 后端"架构的固有约束。
+     */
+    binDir = '';
+    constructor(options) {
+        this.config = options?.config ?? 'p/default';
+    }
+    async detect(repoRoot, versionOverride) {
+        const detectStart = Date.now();
+        (0,core.info)(`lint/semgrep[detect]: start repoRoot=${repoRoot}, versionOverride=${versionOverride ?? '(default)'}, config=${this.config}`);
+        // 1) pip 装包
+        const spec = versionOverride != null && versionOverride.length > 0
+            ? { ...this.installSpec, version: versionOverride }
+            : this.installSpec;
+        (0,core.info)(`lint/semgrep[detect]: ensureToolInstalled(kind=pip, package=semgrep, version=${spec.version})`);
+        const install = await ensureToolInstalled(spec);
+        if (!install.ok) {
+            (0,core.warning)(`lint/semgrep[detect]: install failed after ${Date.now() - detectStart}ms — ${install.reason ?? 'unknown'}`);
+            return {
+                available: false,
+                reason: `bundled Semgrep install failed: ${install.reason ?? 'unknown'}`
+            };
+        }
+        this.resolvedBinPath = install.binPath;
+        // pip --target 的 bin 脚本依赖 PYTHONPATH 找到包代码；
+        // 同时 semgrep 二进制内部会 `execvp("pysemgrep")`，所以 bin 目录必须前置到 PATH。
+        // `<sandbox>/python-tools/bin/semgrep` →
+        //   binDir     = `<sandbox>/python-tools/bin`（注入 PATH，execvp pysemgrep 用）
+        //   pythonPath = `<sandbox>/python-tools`  （注入 PYTHONPATH，import 找代码用）
+        // 用 path.dirname 而不是正则剥离 —— 不依赖 binName 字面值是 'semgrep'，
+        // 也兼容 Windows 路径分隔符
+        this.binDir = external_path_.dirname(this.resolvedBinPath);
+        this.pythonPath = external_path_.dirname(this.binDir);
+        (0,core.info)(`lint/semgrep[detect]: install ok — binPath=${this.resolvedBinPath}, pythonPath=${this.pythonPath}, binDir=${this.binDir}`);
+        // 2) `semgrep --version` 校验
+        (0,core.info)(`lint/semgrep[detect]: invoking ${this.resolvedBinPath} --version (with PYTHONPATH + PATH-prepend injected)`);
+        const versionResult = await runCommand({
+            command: this.resolvedBinPath,
+            args: ['--version'],
+            cwd: repoRoot,
+            timeoutMs: 15_000,
+            env: this.buildEnv()
+        });
+        if (versionResult.spawnError || versionResult.exitCode !== 0) {
+            const stderrSnippet = versionResult.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 120) ?? '';
+            (0,core.warning)(`lint/semgrep[detect]: --version failed exit=${versionResult.exitCode}, ` +
+                `spawnError=${versionResult.spawnError}, stderr="${stderrSnippet}"`);
+            return {
+                available: false,
+                reason: `bundled semgrep --version failed: exit=${versionResult.exitCode}; stderr="${stderrSnippet}"`
+            };
+        }
+        const version = extractVersion(versionResult.stdout);
+        this.resolvedVersion = version;
+        // 3) 规则集探测：用 --dump-config 独立验证 `--config=<x>` 真的解析并加载了规则。
+        //    这一步与后续 scan 解耦：即使代码 0 finding，也能从日志里看到"加载了 N 条规则"
+        //    的证据，避免"参数传对了但规则没生效"型的隐性失败。失败仅 warn，不影响 detect 结果。
+        await this.probeRulePack(repoRoot);
+        (0,core.info)(`lint/semgrep[detect]: ready in ${Date.now() - detectStart}ms — bin=${this.resolvedBinPath}, version=${version}, config=${this.config}`);
+        return { available: true, version };
+    }
+    /**
+     * 跑一次 `semgrep scan --validate --config=<this.config>`，验证规则集真的
+     * 能被加载（且 yaml/Registry 解析通过），不实际扫描任何文件。
+     *
+     * 用途：在 GitHub Action 日志里得到"规则真的被 semgrep 加载了"的物证。
+     * 这是排查 `p/default 配置传对了但 0 finding` 类问题最直接的手段。
+     *
+     * 为什么不用 `--dump-config`：semgrep 1.x 把 dump-config 收编到 scan 子命令
+     * 下，但 scan 同时要求 TARGETS 位置参数，没有 TARGETS 时返回 exit=2 + Usage。
+     * 加上 TARGETS 又会触发真扫描（即便有 --dump-config）。`--validate` 没有
+     * 这个矛盾：只加载并校验规则集然后退出。
+     *
+     * 失败容忍：任何错误（联网失败 / yaml 损坏 / --validate 不支持）只 `warning`，
+     * 不阻断 detect。即使探测失败，scan 阶段仍按原计划执行。
+     */
+    async probeRulePack(repoRoot) {
+        const probeStart = Date.now();
+        (0,core.info)(`lint/semgrep[probe]: validating rule pack "${this.config}" via semgrep scan --validate ` +
+            `(no targets needed — just confirms rules can be loaded & parsed)`);
+        const probe = await runCommand({
+            command: this.resolvedBinPath,
+            args: [
+                'scan',
+                '--validate',
+                '--disable-version-check',
+                '--metrics=off',
+                `--config=${this.config}`
+            ],
+            cwd: repoRoot,
+            timeoutMs: 30_000,
+            env: this.buildEnv()
+        });
+        const elapsed = Date.now() - probeStart;
+        if (probe.spawnError || probe.timedOut || probe.exitCode !== 0) {
+            const stderrSnippet = probe.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 300) ?? '';
+            const stdoutSnippet = probe.stdout.split('\n').find(l => l.trim().length > 0)?.substring(0, 200) ?? '';
+            (0,core.warning)(`lint/semgrep[probe]: --validate failed (exit=${probe.exitCode}, timedOut=${probe.timedOut}, ` +
+                `elapsed=${elapsed}ms). Rule pack "${this.config}" may NOT be loaded. ` +
+                `Common causes: (1) config name typo (2) cannot reach semgrep.dev to fetch ` +
+                `the ruleset (3) invalid yaml in a custom config file. ` +
+                `stderr: "${stderrSnippet}"` +
+                (stdoutSnippet.length > 0 ? ` stdout: "${stdoutSnippet}"` : ''));
+            return;
+        }
+        // semgrep --validate 在不同版本里有不同的输出：
+        //   1.x 通常往 stderr 打 "Configuration is valid - found N valid rule(s)" 一类的句子
+        //   有些版本完全静默（exit=0 即代表 valid）
+        //   有些版本在 stdout 把 rule path 打出来
+        // 这里两边都搜，能拿到 N 就给出 N，拿不到就只报"validated successfully"
+        const combined = `${probe.stderr}\n${probe.stdout}`;
+        const ruleCountMatch = combined.match(/(\d+)\s+(?:valid\s+)?rule/i);
+        const ruleCount = ruleCountMatch?.[1] ?? '?';
+        (0,core.info)(`lint/semgrep[probe]: ✅ "${this.config}" validates — ${ruleCount} rule(s) loaded in ${elapsed}ms` +
+            (ruleCount === '?'
+                ? ' (semgrep didn\'t print a rule count; exit=0 still proves config loaded)'
+                : ''));
+        // 把 stderr 头几行也打出来 —— semgrep 在 validate 时偶尔会附带规则来源 / 警告
+        // （如 "loaded rules from https://semgrep.dev/c/p/default" 或弃用提示），
+        // 对诊断"规则到底从哪来"很有价值
+        const stderrLines = probe.stderr
+            .split('\n')
+            .map(l => l.trim())
+            .filter(l => l.length > 0)
+            .slice(0, 5)
+            .map(l => l.substring(0, 200));
+        if (stderrLines.length > 0) {
+            (0,core.info)(`lint/semgrep[probe]: validate stderr (first 5 non-empty lines): ${stderrLines.join(' | ')}`);
+        }
+    }
+    async scan(files, repoRoot) {
+        if (this.resolvedBinPath === '') {
+            // 防御：orchestrator 保证 detect 成功才会调 scan；这里仅锁住"绕过 orchestrator
+            // 直接 new SemgrepAdapter().scan(...)"的误用，避免给 runCommand 传空 command
+            (0,core.warning)('lint/semgrep[scan]: called before successful detect() — bin path empty, skipping');
+            return [];
+        }
+        if (files.length === 0) {
+            (0,core.info)('lint/semgrep[scan]: targets is empty (no matching file extensions in changed set) — skip');
+            return [];
+        }
+        const scanStart = Date.now();
+        (0,core.info)(`lint/semgrep[scan]: start config=${this.config}, files=${files.length} — sample: ${files
+            .slice(0, 5)
+            .join(', ')}${files.length > 5 ? ', ...' : ''}`);
+        const args = [
+            'scan',
+            '--json',
+            '--quiet',
+            '--disable-version-check',
+            '--metrics=off',
+            `--config=${this.config}`,
+            ...files
+        ];
+        (0,core.info)(`lint/semgrep[scan]: invoking ${this.resolvedBinPath} ${args
+            .slice(0, 6)
+            .join(' ')} ... [${files.length} file arg(s)]`);
+        const result = await runCommand({
+            command: this.resolvedBinPath,
+            args,
+            cwd: repoRoot,
+            timeoutMs: 120_000,
+            env: this.buildEnv()
+        });
+        const elapsed = Date.now() - scanStart;
+        const stderrFirstLine = result.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 200) ?? '';
+        (0,core.info)(`lint/semgrep[scan]: returned in ${elapsed}ms — exit=${result.exitCode}, ` +
+            `timedOut=${result.timedOut}, spawnError=${result.spawnError}, ` +
+            `stdout_len=${result.stdout.length}, stderr_len=${result.stderr.length}` +
+            (stderrFirstLine.length > 0 ? `, stderr_first="${stderrFirstLine}"` : ''));
+        if (result.spawnError) {
+            (0,core.warning)(`lint/semgrep[scan]: spawn failed — ${result.spawnErrorMessage ?? ''}. ` +
+                `This usually means the semgrep console script lost its PYTHONPATH or python3 disappeared.`);
+            return [];
+        }
+        if (result.timedOut) {
+            (0,core.warning)(`lint/semgrep[scan]: timed out after ${elapsed}ms (limit 120000ms). ` +
+                `Reduce file count or switch to a smaller --config (e.g. p/security-audit).`);
+            return [];
+        }
+        // semgrep exit:
+        //   0 = no findings
+        //   1 = findings present（不是失败，按 lint 行业惯例）
+        //   2 = misconfig / 真正的错误（含 registry 拉规则失败）
+        // 仅当 stdout 无可解析 JSON 时才视为失败
+        const parsed = parseJsonSafe(result.stdout, 'semgrep');
+        if (parsed == null) {
+            (0,core.warning)(`lint/semgrep[scan]: no parseable JSON in stdout (exit=${result.exitCode}). ` +
+                `stderr first line: "${stderrFirstLine}". ` +
+                `Common causes: (a) semgrep can't reach semgrep.dev to fetch "${this.config}" rules — ` +
+                `try a self-contained config like p/ci or pre-cache rules; ` +
+                `(b) semgrep printed Python traceback to stderr; ` +
+                `(c) semgrep CLI was killed by signal. Raw stdout first 500 chars: "${result.stdout.substring(0, 500)}"`);
+            return [];
+        }
+        const rawCount = parsed.results?.length ?? 0;
+        const errCount = parsed.errors?.length ?? 0;
+        if (errCount > 0) {
+            // semgrep 把"无法解析的文件 / 规则加载错误"放在 errors 数组里 —— 重要诊断信号
+            const firstErr = JSON.stringify(parsed.errors?.[0] ?? {}).substring(0, 300);
+            (0,core.warning)(`lint/semgrep[scan]: ${errCount} semgrep-level error(s) reported (this is separate from "findings"); ` +
+                `first: ${firstErr}`);
+        }
+        // 扫描覆盖面：semgrep 自己上报"实际扫了哪些文件 / 跳过了哪些"。0 finding 多半
+        // 不是规则没生效，而是文件被 skipped（语言不匹配 / 大文件 / 二进制等）—— 把它显式打出来。
+        const scannedPaths = parsed.paths?.scanned ?? [];
+        const skippedPaths = parsed.paths?.skipped ?? [];
+        (0,core.info)(`lint/semgrep[scan]: coverage — scanned=${scannedPaths.length}/${files.length} input file(s), ` +
+            `skipped=${skippedPaths.length}`);
+        if (scannedPaths.length > 0) {
+            (0,core.info)(`lint/semgrep[scan]: scanned files: ${scannedPaths.slice(0, 5).join(', ')}${scannedPaths.length > 5 ? ', ...' : ''}`);
+        }
+        if (skippedPaths.length > 0) {
+            // 只取前 3 条，附带 reason；常见 reason: "too_big" / "wrong_language" / "always_skipped"
+            const skipSample = skippedPaths
+                .slice(0, 3)
+                .map(s => `${s.path ?? '?'}(${s.reason ?? '?'})`)
+                .join(', ');
+            (0,core.info)(`lint/semgrep[scan]: skipped sample: ${skipSample}`);
+        }
+        const findings = [];
+        for (const r of parsed.results ?? []) {
+            // semgrep 报告路径默认是相对 cwd 的；少数模式下可能给绝对路径
+            let relFile = r.path;
+            if (relFile.startsWith(repoRoot)) {
+                relFile = relFile.substring(repoRoot.length).replace(/^[/\\]/, '');
+            }
+            // 把 CWE / OWASP 分类拼到 message 末尾，帮 LLM 在评论里准确说出漏洞分类
+            // （Semgrep 默认 message 通常只描述"做了什么"，不带"属于哪类漏洞"）
+            const baseMessage = r.extra?.message?.trim() ?? '';
+            const tags = formatVulnTags(r.extra?.metadata);
+            const enrichedMessage = tags.length > 0 ? `${baseMessage}\n${tags}` : baseMessage;
+            const fixText = typeof r.extra?.fix === 'string' && r.extra.fix.length > 0
+                ? r.extra.fix.trim()
+                : undefined;
+            findings.push({
+                tool: this.displayName,
+                toolVersion: this.resolvedVersion,
+                file: relFile,
+                line: r.start.line,
+                column: r.start.col,
+                endLine: r.end.line,
+                endColumn: r.end.col,
+                severity: mapSemgrepSeverity(r.extra?.severity),
+                ruleId: r.check_id,
+                message: enrichedMessage,
+                // 把 semgrep 自带的自动修复文本透传给 LLM —— 评论里 AI 可以直接基于此
+                // 生成 diff 修复建议而不是凭空构造
+                suggestion: fixText,
+                fixable: fixText != null,
+                category: 'security'
+            });
+        }
+        if (rawCount === 0) {
+            // 0 findings 本身不是错误（代码可能真的没问题），但在测试场景里多半是"规则没匹配上"
+            (0,core.info)(`lint/semgrep[scan]: 0 findings. ` +
+                `If you expected findings on these files, check: ` +
+                `(1) does "${this.config}" cover the languages of the scanned files? ` +
+                `(2) is the project behind a corporate firewall blocking semgrep.dev? ` +
+                `(3) did semgrep silently skip the files (look at "scanned/skipped" log line above)`);
+        }
+        else {
+            // finding 的 check_id 前缀分布 —— 用来验证规则来源（如 `javascript.lang.security.*`
+            // 多半来自 p/default；陌生前缀提示 config 被指向了其他规则集）
+            const findingPrefixes = new Map();
+            const findingSeverities = new Map();
+            for (const f of findings) {
+                const prefix = f.ruleId.split('.').slice(0, 2).join('.');
+                findingPrefixes.set(prefix, (findingPrefixes.get(prefix) ?? 0) + 1);
+                findingSeverities.set(f.severity, (findingSeverities.get(f.severity) ?? 0) + 1);
+            }
+            const fmtMap = (m) => [...m.entries()]
+                .sort((a, b) => b[1] - a[1])
+                .map(([k, v]) => `${k}:${v}`)
+                .join(', ');
+            (0,core.info)(`lint/semgrep[scan]: finding rule_id prefix breakdown = { ${fmtMap(findingPrefixes)} }`);
+            (0,core.info)(`lint/semgrep[scan]: finding severity breakdown = { ${fmtMap(findingSeverities)} }`);
+            (0,core.info)(`lint/semgrep[scan]: first 3 finding rule_ids: ${findings
+                .slice(0, 3)
+                .map(f => f.ruleId)
+                .join(' | ')}`);
+        }
+        (0,core.info)(`lint/semgrep[scan]: parsed ${findings.length} finding(s) from ${rawCount} raw result(s) ` +
+            `across ${files.length} input file(s) in ${elapsed}ms`);
+        return findings;
+    }
+    /**
+     * 构造调用 semgrep 时的环境变量。
+     *
+     * 必须同时注入：
+     *   - PYTHONPATH（**前置**到用户原有 PYTHONPATH，不整体覆盖）：让 pip --target
+     *     装的 semgrep 包能被 Python import；保留用户原值便于自托管 runner 的
+     *     自定义 Python 配置
+     *   - PATH（前置 binDir）：semgrep OCaml 二进制内部 `execvp("pysemgrep")` /
+     *     `execvp("osemgrep")` 都会按 PATH 查找子进程；如果 binDir 不在 PATH，
+     *     会直接报 `Unix_error: No such file or directory execvp pysemgrep`
+     *
+     * 也关掉 metrics + version-check 的子流程（这些子流程偶尔也走 execvp）。
+     */
+    buildEnv() {
+        const sep = process.platform === 'win32' ? ';' : ':';
+        const existingPythonPath = process.env.PYTHONPATH ?? '';
+        const existingPath = process.env.PATH ?? '';
+        return {
+            // 前置：沙箱优先，但保留用户的 PYTHONPATH（如有）
+            PYTHONPATH: existingPythonPath.length > 0
+                ? `${this.pythonPath}${sep}${existingPythonPath}`
+                : this.pythonPath,
+            PYTHONDONTWRITEBYTECODE: '1',
+            // 前置：沙箱 bin 优先，保证 execvp pysemgrep 能找到子进程
+            PATH: `${this.binDir}${sep}${existingPath}`,
+            // 关掉 metrics 上报，避免子进程意外触发额外 execvp
+            SEMGREP_SEND_METRICS: 'off'
+        };
+    }
+}
+/**
+ * 从 semgrep finding 的 metadata 中提取 CWE / OWASP 标签，格式化为
+ * 单行 `[CWE-95, OWASP A03:2021]` 形式，拼到 message 后供 LLM 消费。
+ *
+ * 单字符串 / 字符串数组两种格式都支持。空时返回空串。
+ */
+function formatVulnTags(metadata) {
+    if (metadata == null)
+        return '';
+    const parts = [];
+    const cwe = toStringArray(metadata.cwe);
+    for (const c of cwe) {
+        // CWE 完整字符串通常是 "CWE-95: Improper Neutralization..." —— 只取冒号前的 ID
+        const id = c.split(':')[0].trim();
+        if (id.length > 0)
+            parts.push(id);
+    }
+    const owasp = toStringArray(metadata.owasp);
+    for (const o of owasp) {
+        // OWASP 字符串通常是 "A03:2021 - Injection"；不去 colon，整段保留更可读
+        const trimmed = o.trim();
+        if (trimmed.length > 0)
+            parts.push(`OWASP ${trimmed}`);
+    }
+    if (parts.length === 0)
+        return '';
+    return `[${parts.join(', ')}]`;
+}
+/** 把 string | string[] | undefined 统一成 string[] */
+function toStringArray(v) {
+    if (typeof v === 'string')
+        return [v];
+    if (Array.isArray(v))
+        return v.filter((x) => typeof x === 'string');
+    return [];
+}
+/**
+ * 把 semgrep 大写 severity 标准化到 LintResult 的小写枚举
+ *
+ *   'CRITICAL'/'HIGH' → 'error'   （semgrep 2.x+ 引入；旧版本不发，加上向后兼容也无害）
+ *   'ERROR'           → 'error'
+ *   'WARNING'/'MEDIUM'→ 'warning'
+ *   'INFO'/'LOW'      → 'info'
+ *   缺失 / 未知       → 'warning'（保守兜底）
+ */
+function mapSemgrepSeverity(raw) {
+    switch ((raw ?? '').toUpperCase()) {
+        case 'CRITICAL':
+        case 'HIGH':
+        case 'ERROR':
+            return 'error';
+        case 'INFO':
+        case 'LOW':
+            return 'info';
+        case 'WARNING':
+        case 'MEDIUM':
+            return 'warning';
+        default:
+            return 'warning';
     }
 }
 
@@ -17234,9 +18080,12 @@ class TscAdapter {
     };
     resolvedVersion = '';
     resolvedBinPath = '';
-    async detect(repoRoot) {
+    async detect(repoRoot, versionOverride) {
         // 1) 沙箱安装 typescript
-        const install = await ensureToolInstalled(this.installSpec);
+        const spec = versionOverride && versionOverride.length > 0
+            ? { ...this.installSpec, version: versionOverride }
+            : this.installSpec;
+        const install = await ensureToolInstalled(spec);
         if (!install.ok) {
             return {
                 available: false,
@@ -17340,16 +18189,6 @@ class TscAdapter {
 /** 变更行附近的"上下文容忍范围"。单位：行 */
 const DEFAULT_CONTEXT_TOLERANCE = 3;
 /**
- * 判断行号是否在变更窗口内（变更行 ± tolerance）
- */
-function isLineInChangedWindow(line, changedLines, tolerance = DEFAULT_CONTEXT_TOLERANCE) {
-    for (const changed of changedLines) {
-        if (Math.abs(line - changed) <= tolerance)
-            return true;
-    }
-    return false;
-}
-/**
  * 过滤 lint 结果：仅保留变更行 ± tolerance 范围内的问题
  *
  * 同时会丢弃文件不在 changedLineMap 中的结果（通常意味着工具扫描了
@@ -17422,7 +18261,8 @@ function deduplicateResults(results) {
         // 故意不含 column —— 详见函数顶 doc comment
         const key = `${r.file}:${r.line}:${ruleKey}:${msgKey}`;
         const existing = map.get(key);
-        if (existing == null || SEV_RANK[r.severity] > SEV_RANK[existing.severity]) {
+        if (existing == null ||
+            SEV_RANK[r.severity] > SEV_RANK[existing.severity]) {
             map.set(key, r);
         }
     }
@@ -17522,13 +18362,15 @@ function collapseAdjacentFindings(results) {
 
 
 
+
 /** 内置适配器注册表 */
-function defaultAdapters() {
+function defaultAdapters(options) {
     return [
         new EslintAdapter(),
         new BiomeAdapter(),
         new TscAdapter(),
-        new PrettierAdapter()
+        new PrettierAdapter(),
+        new SemgrepAdapter({ config: options.semgrepConfig })
     ];
 }
 /**
@@ -17540,24 +18382,31 @@ async function runLintTools(options, adaptersOverride) {
         (0,core.info)('lint: orchestrator disabled, skipping');
         return emptyReport(startedAt);
     }
-    const adapters = adaptersOverride ?? defaultAdapters();
+    const adapters = adaptersOverride ?? defaultAdapters(options);
     const overrides = options.toolEnableOverrides ?? {};
     // 1) 选出"用户启用"的适配器：Action input override 优先，缺失时回退到 adapter.defaultEnabled
-    const enabledAdapters = adapters.filter(a => {
+    //    同时给出每个适配器的启用判定细节，便于排查"semgrep 没跑起来到底是 default-false 还是 override-false"
+    const enabledAdapters = [];
+    const decisions = [];
+    for (const a of adapters) {
         const override = overrides[a.name];
-        return override === undefined ? a.defaultEnabled : override;
-    });
-    (0,core.info)(`lint: ${enabledAdapters.length}/${adapters.length} adapters enabled by Action inputs: [${enabledAdapters
-        .map(a => a.name)
-        .join(', ')}]`);
+        const enabled = override === undefined ? a.defaultEnabled : override;
+        const src = override === undefined ? `default=${a.defaultEnabled}` : `override=${override}`;
+        decisions.push(`${a.name}:${enabled ? 'on' : 'off'}(${src})`);
+        if (enabled)
+            enabledAdapters.push(a);
+    }
+    (0,core.info)(`lint: ${enabledAdapters.length}/${adapters.length} adapters enabled — [${decisions.join(', ')}]`);
     if (enabledAdapters.length === 0) {
         return emptyReport(startedAt);
     }
     // 2) 检测每个工具是否在执行环境中可用（并行）
     //    传入 repoRoot 让适配器能检查项目侧前置条件（如 ESLint 9 的 eslint.config.js）
+    //    传入 versionOverrides 让适配器装到与消费方本地一致的版本
+    const versionOverrides = options.toolVersionOverrides ?? {};
     const detections = await Promise.all(enabledAdapters.map(async (a) => ({
         adapter: a,
-        detection: await safeDetect(a, options.repoRoot)
+        detection: await safeDetect(a, options.repoRoot, versionOverrides[a.name])
     })));
     const toolSummaries = [];
     const allResults = [];
@@ -17679,9 +18528,9 @@ async function runLintTools(options, adaptersOverride) {
         filesScanned: changedFiles.length
     };
 }
-async function safeDetect(adapter, repoRoot) {
+async function safeDetect(adapter, repoRoot, versionOverride) {
     try {
-        return await adapter.detect(repoRoot);
+        return await adapter.detect(repoRoot, versionOverride);
     }
     catch (e) {
         return {
@@ -17883,8 +18732,6 @@ function truncate(s, max) {
 
 
 
-// EXTERNAL MODULE: ./lib/inputs.js
-var lib_inputs = __nccwpck_require__(6305);
 ;// CONCATENATED MODULE: ./lib/noise-control.js
 /**
  * noise-control.ts - 评论噪音控制（迭代二 · 成员 D · 2.5）
@@ -17893,16 +18740,17 @@ var lib_inputs = __nccwpck_require__(6305);
  *
  *   1. 同类评论合并去重  —— 相同文件 / 相同类别的问题合并为一条
  *   2. 单次评论数量上限  —— 默认 N=20，按优先级截断
- *   3. 低优先级折叠      —— Minor / Nit / Info 级别用 <details> 折叠
- *   4. PR 顶部汇总评论    —— 概述所有发现（按严重级别统计）
+ *   3. 行级严重级别徽标  —— 每条行级评论顶部直接标注级别（severityBadge）
  *
  * 对外提供（供成员 C 在审查完成后调用，见拆分文档 §5 接口契约）：
- *   - formatComments(findings, options)        通用评论渲染（去重 + 截断 + 折叠）
- *   - postSummaryComment(prNumber, findings)   PR 顶部汇总评论
- *   - prepareFindings(findings, options)        去重 + 排序 + 截断后的结构化结果
+ *   - prepareFindings(findings, options)   去重 + 排序 + 截断后的结构化结果
+ *   - severityBadge(severity)              行级评论的严重级别徽标
+ *   - classifyFindingSeverity(text)        从评论文本启发式推断严重级别
+ *
+ * 注：早期的「低优先级折叠 / PR 顶部汇总评论」（formatComments / buildSummaryBody /
+ * postSummaryComment）已随「级别分散到各评论」改造移除——级别现以徽标形式直接置于
+ * 每条行级评论顶部。
  */
-
-
 /** 严重级别排序权重（数值越大优先级越高） */
 const SEVERITY_RANK = {
     critical: 4,
@@ -17936,9 +18784,6 @@ function severityBadge(severity) {
     return `> [!${alert}]\n> ${emoji} **${label}**${tail}`;
 }
 const DEFAULT_MAX_COMMENTS = 20;
-const DEFAULT_FOLD_SEVERITIES = (/* unused pure expression or super */ null && (['minor', 'nit', 'info']));
-/** 标识噪音控制汇总评论（独立于迭代一的 SUMMARIZE_TAG，避免互相覆盖） */
-const FINDINGS_SUMMARY_TAG = '<!-- This is an auto-generated comment: findings summary by AI Reviewer -->';
 /**
  * 同类评论合并去重。
  *
@@ -17999,94 +18844,6 @@ function prepareFindings(findings, options = {}) {
     }
     return { kept: sorted, truncated: 0 };
 }
-/**
- * 通用评论渲染：去重 + 截断 + 折叠。
- *
- * 高优先级发现直接展开列出；低优先级发现折叠进 <details>。
- * 超出数量上限时追加截断提示。
- *
- * @returns 渲染后的 markdown 字符串（无发现时返回空字符串）
- */
-function formatComments(findings, options = {}) {
-    if (!findings || findings.length === 0) {
-        return '';
-    }
-    const foldSet = new Set(options.foldSeverities ?? DEFAULT_FOLD_SEVERITIES);
-    const { kept, truncated } = prepareFindings(findings, options);
-    const highPriority = kept.filter(f => !foldSet.has(f.severity));
-    const lowPriority = kept.filter(f => foldSet.has(f.severity));
-    const parts = [];
-    for (const f of highPriority) {
-        parts.push(renderFinding(f));
-    }
-    if (lowPriority.length > 0) {
-        const inner = lowPriority.map(renderFinding).join('\n\n');
-        parts.push(`<details>\n<summary>低优先级建议（${lowPriority.length} 条，已折叠）</summary>\n\n${inner}\n\n</details>`);
-    }
-    if (truncated > 0) {
-        parts.push(`> _另有 ${truncated} 条较低优先级的发现因数量上限未展示。_`);
-    }
-    return parts.join('\n\n');
-}
-/** 渲染单条发现 */
-function renderFinding(f) {
-    const { emoji, label } = SEVERITY_DISPLAY[f.severity];
-    const loc = f.startLine === f.endLine
-        ? `${f.path}:${f.startLine}`
-        : `${f.path}:${f.startLine}-${f.endLine}`;
-    const title = f.title ?? firstLine(f.body);
-    const category = f.category ? ` · \`${f.category}\`` : '';
-    return `${emoji} **[${label}]** \`${loc}\`${category}\n\n${title === firstLine(f.body) ? f.body : `**${title}**\n\n${f.body}`}`;
-}
-/**
- * 生成 PR 顶部汇总评论的正文（按严重级别统计 + 渲染发现列表）。
- * 单独导出以便单测。
- */
-function buildSummaryBody(findings, options = {}) {
-    if (!findings || findings.length === 0) {
-        return `### 🛡️ CodeSentinel 审查摘要\n\n本次审查未发现需要关注的问题。✅`;
-    }
-    // 统计（基于去重后的结果，保证与展示一致）
-    const deduped = options.dedupe === false ? findings : dedupeFindings(findings);
-    const counts = {
-        critical: 0,
-        major: 0,
-        minor: 0,
-        nit: 0,
-        info: 0
-    };
-    for (const f of deduped) {
-        counts[f.severity]++;
-    }
-    const order = ['critical', 'major', 'minor', 'nit', 'info'];
-    const rows = order
-        .filter(s => counts[s] > 0)
-        .map(s => {
-        const { emoji, label } = SEVERITY_DISPLAY[s];
-        return `| ${emoji} ${label} | ${counts[s]} |`;
-    })
-        .join('\n');
-    const table = `| 级别 | 数量 |\n| :--- | :---: |\n${rows}`;
-    const body = formatComments(findings, options);
-    return `### 🛡️ CodeSentinel 审查摘要\n\n本次审查共发现 **${deduped.length}** 个问题：\n\n${table}\n\n---\n\n${body}`;
-}
-/**
- * 发布 / 更新 PR 顶部汇总评论。
- *
- * 供成员 C 在审查完成后调用（拆分文档 §5：D → C 接口契约）。
- * 使用 FINDINGS_SUMMARY_TAG 做幂等替换，重复调用只更新同一条评论。
- *
- * @param prNumber  PR 编号（保留以对齐接口契约；实际目标由 Commenter 依据
- *                  GitHub context 决定，与既有 review 流程一致）
- * @param findings  审查发现列表
- * @param options   噪音控制配置
- * @param commenter 可选，注入自定义 Commenter（便于测试）
- */
-async function postSummaryComment(prNumber, findings, options = {}, commenter = new Commenter()) {
-    const body = buildSummaryBody(findings, options);
-    info(`noise-control: posting findings summary for PR #${prNumber} (${findings.length} findings)`);
-    await commenter.comment(body, FINDINGS_SUMMARY_TAG, 'replace');
-}
 function firstLine(text) {
     const line = (text ?? '').split('\n').find(l => l.trim().length > 0);
     return (line ?? '').trim();
@@ -18114,6 +18871,277 @@ function classifyFindingSeverity(text) {
         return 'minor';
     }
     return 'minor';
+}
+
+// EXTERNAL MODULE: ./lib/inputs.js
+var lib_inputs = __nccwpck_require__(6305);
+;// CONCATENATED MODULE: ./lib/review-dedup.js
+/**
+ * review-dedup.ts - AI 评论级去重（基于"共享 tool finding"的贪心聚类）
+ *
+ * 处理"LLM 对同一个 lint 工具发现写了多条评论"的情况。
+ *
+ * ## 与 lint-filter.ts 的区别
+ *
+ *   - `lint-filter.ts::deduplicateResults` 在**lint 工具发现**层去重
+ *     （如 ESLint 与 Biome 同时报 no-unused-vars 时合并）
+ *   - 本模块在**LLM 解析后的 Review[]**层去重，针对模型自己对同一个工具
+ *     发现写出多条评论
+ *
+ * ## 演进
+ *
+ *   - v1：精确 `(startLine, endLine)` match。LLM 把两条评论挂在不同行
+ *     （一条 98-98，另一条 95-100）就漏掉
+ *   - v2：用"重叠的 ruleId 集合"做 key。但要求**集合完全相等**，对
+ *     "review A 覆盖 {TS2345}，review B 覆盖 {TS2339, TS2345}"的部分
+ *     重叠场景仍然漏（key 不一样）—— 用户在 2026-05-13 报到的实际场景
+ *   - **v3（本版本）**：贪心聚类。两条评论只要**共享任意一个 tool finding
+ *     的 ruleId** 就视为同议题；通过greedy一次扫描自然形成传递闭包
+ *
+ * ## 设计权衡
+ *
+ * 贪心聚类有"过度合并"的理论风险：例如一条"函数级别"评论覆盖 5 个 finding，
+ * 另一条只覆盖其中 1 个 specific finding，它们会被合并。但在 PR review 实
+ * 际语境下，**合并 > 多条独立评论刷屏**：合并后的评论以 `---` 分隔保留所有
+ * 视角，reviewer 读得到全部内容，但只占一条 GitHub 评论位。
+ *
+ * 抽离为独立文件是为了让单元测试可以直接导入，无须把 review.ts 的全部运行时
+ * 依赖（@actions/github / octokit / p-limit）一起拉起来。
+ */
+/**
+ * 判断 review 与 finding 在行号上是否重叠
+ *
+ * 与 formatToolAttribution 使用的判定保持一致，保证"评论上挂着哪些 Tools 卡片"
+ * 与"评论按哪些 finding 去重"两者口径相同。
+ */
+function overlapsFinding(review, finding) {
+    const fEnd = finding.endLine ?? finding.line;
+    return fEnd >= review.startLine && finding.line <= review.endLine;
+}
+/** 判断两个 ruleId 集合是否有任何共同元素 */
+function shareAnyRuleId(a, b) {
+    // 优化：遍历较小的那个集合
+    const [smaller, larger] = a.size <= b.size ? [a, b] : [b, a];
+    for (const rid of smaller) {
+        if (larger.has(rid))
+            return true;
+    }
+    return false;
+}
+/**
+ * 把"谈论同议题"的多条 AI 评论合并为一条
+ *
+ * 算法：贪心聚类。对每条 review，找出它与已有 group 中**任意一条** review
+ * 共享 ruleId 的情况 → 加入该 group；否则单独成 group。最后每个 group
+ * 合并成一条评论。
+ *
+ * 同议题判定：
+ *   - 至少有一条 finding 同时与两条 review 的行号范围重叠（即两条都覆盖
+ *     该 finding）
+ *   - 或者：两条 review 都没有重叠 finding，但行号范围完全相同（退回 v1
+ *     行为，保护"纯 AI 洞察"场景的精确匹配语义）
+ *
+ * 合并策略：
+ *   - 评论 body 按出现顺序拼接，中间插入 `\n\n---\n\n` 分隔符
+ *   - 行号范围扩大到能覆盖 group 内所有 review（GitHub 评论锚点更合理）
+ *
+ * @param reviews 来自 parseReview 的原始数组
+ * @param filename 用于日志（便于排查"为啥又重复了"）
+ * @param toolFindings 该文件中所有 lint 工具发现的简化视图
+ *
+ * @returns 合并后的数组，保持原始顺序（每个 group 用第一条 review 的位置）
+ */
+function mergeReviewsByTopic(reviews, filename, toolFindings) {
+    // 仅在测试环境之外 require @actions/core，避免 jest 启动时直接拉起 GitHub runtime
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { info } = __nccwpck_require__(1078);
+    // Step 1: 为每条 review 计算其重叠的 ruleId 集合
+    const entries = reviews.map(r => {
+        const ruleIds = new Set();
+        for (const f of toolFindings) {
+            if (overlapsFinding(r, f))
+                ruleIds.add(f.ruleId);
+        }
+        return { review: { ...r }, ruleIds };
+    });
+    const groups = [];
+    for (const e of entries) {
+        let attachedGroup = null;
+        for (const g of groups) {
+            if (canMerge(e, g)) {
+                attachedGroup = g;
+                break;
+            }
+        }
+        if (attachedGroup != null) {
+            attachedGroup.members.push(e.review);
+            for (const rid of e.ruleIds)
+                attachedGroup.cumulativeRuleIds.add(rid);
+        }
+        else {
+            groups.push({
+                members: [e.review],
+                cumulativeRuleIds: new Set(e.ruleIds)
+            });
+        }
+    }
+    // Step 3: 把每个 group 合并成一条 review
+    let mergedCount = 0;
+    const out = groups.map(g => {
+        if (g.members.length === 1)
+            return g.members[0];
+        mergedCount += g.members.length - 1;
+        const merged = { ...g.members[0] };
+        for (let k = 1; k < g.members.length; k++) {
+            const m = g.members[k];
+            merged.comment = `${merged.comment.trimEnd()}\n\n---\n\n${m.comment.trimStart()}`;
+            merged.startLine = Math.min(merged.startLine, m.startLine);
+            merged.endLine = Math.max(merged.endLine, m.endLine);
+        }
+        return merged;
+    });
+    if (mergedCount > 0) {
+        info(`[review-dedup] ${filename}: merged ${mergedCount} duplicate comment(s) into ${out.length} unique entries (greedy-clustered)`);
+    }
+    return out;
+}
+/**
+ * 判定 entry 是否可以加入 group
+ *
+ * 两种情况算 "可加入"：
+ * 1. entry 有 ruleId 且 group 累积的 ruleIds 中有任意一个相同
+ * 2. entry 和 group 中**任一**成员 ruleIds 都是空集（无 tool finding 覆盖），
+ *    且行号范围完全相同 —— 退回 v1 行为，保护纯 AI 洞察的语义
+ */
+function canMerge(entry, group) {
+    if (entry.ruleIds.size > 0 && group.cumulativeRuleIds.size > 0) {
+        return shareAnyRuleId(entry.ruleIds, group.cumulativeRuleIds);
+    }
+    if (entry.ruleIds.size === 0 && group.cumulativeRuleIds.size === 0) {
+        // 两边都无 tool finding 覆盖 → 用 v1 行为：精确行号匹配
+        return group.members.some(m => m.startLine === entry.review.startLine &&
+            m.endLine === entry.review.endLine);
+    }
+    // 一边有 ruleId 一边没有 → 不同类，不合并
+    return false;
+}
+/**
+ * 向后兼容别名：按行号精确去重（v1 行为）
+ *
+ * 等价于调用 `mergeReviewsByTopic(reviews, filename, [])` —— 所有 review
+ * 的 ruleIds 都是空集，全部退回到 v1 的精确行号匹配。
+ *
+ * @deprecated 新代码请用 `mergeReviewsByTopic` 并传入 toolFindings 让议题级
+ *   去重生效；本别名仅为旧测试与外部调用方保留
+ */
+function mergeReviewsByLineRange(reviews, filename) {
+    return mergeReviewsByTopic(reviews, filename, []);
+}
+
+;// CONCATENATED MODULE: ./lib/fix-suggestion-header.js
+/**
+ * fix-suggestion-header.ts - 把 LLM 评论里的 `diff` 代码块包进可折叠的
+ * `<details><summary>🔧 Suggested fix</summary>` 块
+ *
+ * 与之前实现差异：早期实现只在 diff 前加 `**🔧 Suggested fix**` 粗体标头，
+ * 但与现有 "🧩 Analysis chain" 的交互风格不一致。改为统一用
+ * `<details>/<summary>` 折叠组件，默认收起，点击展开看到 diff —— 让 PR 评
+ * 论区更清爽，长 diff 也不刷屏。
+ *
+ * 设计原则：
+ *   - 已经被 `<details>` 包裹（且 summary 含 🔧 / fix / 修复 等关键词）时
+ *     **不重复包**
+ *   - 非 diff 代码块（```typescript / ```bash 等）不动
+ *   - 一条评论中多个 diff 块各自获得独立的 `<details>`
+ *   - GitHub Flavored Markdown 要求 `<summary>` 与代码块之间有空行，否则
+ *     代码块不会渲染 —— 注入时保证这一点
+ */
+
+const SUMMARY_LINE = '<summary>🔧 Suggested fix</summary>';
+/** 标头识别关键词（含本地化变体）— 用于判定"是否已经包过" */
+const FIX_KEYWORDS_RE = /(fix|修复|수정|fixar|réparer|поправ|correção)/i;
+/**
+ * 检测一段（紧贴 diff 块之前的）文本是否含已知的"修复建议"标记
+ *
+ * 同时识别两种形态：
+ *   - 新格式：`<summary>🔧 Suggested fix</summary>`（或本地化）
+ *   - 旧/兼容格式：`**🔧 Suggested fix**` 粗体
+ */
+function hasFixMarker(text) {
+    if (!text.includes('🔧'))
+        return false;
+    return FIX_KEYWORDS_RE.test(text);
+}
+/**
+ * 把每个 ```diff 块包进 `<details>` 折叠块。
+ *
+ * @param commentBody 单条 AI 评论的 markdown 内容
+ * @returns 已包好的内容；输入无 diff 块时原样返回
+ */
+function ensureFixSuggestionHeaders(commentBody) {
+    if (!commentBody.includes('```diff'))
+        return commentBody;
+    const lines = commentBody.split('\n');
+    const out = [];
+    let wrappedCount = 0;
+    let i = 0;
+    while (i < lines.length) {
+        const line = lines[i];
+        if (line.trim() === '```diff') {
+            // 找到这个 diff 块的结束位置
+            let endIdx = -1;
+            for (let j = i + 1; j < lines.length; j++) {
+                if (lines[j].trim() === '```') {
+                    endIdx = j;
+                    break;
+                }
+            }
+            if (endIdx === -1) {
+                // 没找到闭合 fence — 异常情况，原样输出，不包
+                out.push(line);
+                i++;
+                continue;
+            }
+            // 检查是否已经在 <details> 里
+            const lookback = out.slice(-5).join('\n');
+            const lookahead = lines.slice(endIdx + 1, endIdx + 6).join('\n');
+            const alreadyWrapped = lookback.includes('<details>') &&
+                hasFixMarker(lookback) &&
+                lookahead.includes('</details>');
+            if (alreadyWrapped) {
+                // 原样照搬整个 diff 块
+                for (let k = i; k <= endIdx; k++)
+                    out.push(lines[k]);
+                i = endIdx + 1;
+                continue;
+            }
+            // 注入 <details> 包装
+            // 1) 前一行不是空行时先补一行（让 details 块独立成段）
+            if (out.length > 0 && out[out.length - 1].trim() !== '') {
+                out.push('');
+            }
+            out.push('<details>');
+            out.push(SUMMARY_LINE);
+            // GFM：summary 与代码块之间必须有空行，否则代码块不渲染
+            out.push('');
+            // 把 diff 块原样塞进去
+            for (let k = i; k <= endIdx; k++)
+                out.push(lines[k]);
+            // 闭合 details 前留一行空行
+            out.push('');
+            out.push('</details>');
+            wrappedCount += 1;
+            i = endIdx + 1;
+        }
+        else {
+            out.push(line);
+            i++;
+        }
+    }
+    if (wrappedCount > 0) {
+        (0,core.info)(`[fix-header] wrapped ${wrappedCount} diff block(s) in <details>`);
+    }
+    return out.join('\n');
 }
 
 // EXTERNAL MODULE: ./lib/review-state.js
@@ -18150,13 +19178,16 @@ var tokenizer = __nccwpck_require__(7525);
 
 
 
+
+
+
 // eslint-disable-next-line camelcase
 const review_context = github.context;
 /** 跨文件上下文注入的 token 上限 */
 const MAX_CROSS_FILE_CONTEXT_TOKENS = 1500;
 const review_repo = review_context.repo;
 /** 在 PR 描述中添加此关键词可跳过 AI 审查 */
-const ignoreKeyword = '@ai-reviewer: ignore';
+const ignoreKeyword = `${constants/* PRIMARY_BOT_MENTION */.a}: ignore`;
 /**
  * 代码审查主函数
  *
@@ -18393,6 +19424,8 @@ ${hunks.oldHunk}
                 patchScans,
                 // 取代 .codesentinel.yaml：把 Action 输入收集到的开关传给 orchestrator
                 toolEnableOverrides: options.toolEnableOverrides,
+                toolVersionOverrides: options.toolVersionOverrides,
+                semgrepConfig: options.semgrepConfig,
                 disabled: false
             });
             (0,core.info)(`Phase 0b: lint scan completed in ${lintReport.durationMs}ms — ${lintReport.results.length} findings on changed lines from ${lintReport.toolSummaries.filter(s => s.available).length} tool(s)`);
@@ -18757,7 +19790,16 @@ ${commentChain}
                     const analysisChainMd = formatAnalysisChain(analysisSteps, resolveAnalysisRepositoryUrl());
                     (0,core.info)(`[analysis_chain] ${filename}: formatted markdown length=${analysisChainMd.length}, empty=${analysisChainMd === ''}`);
                     // 解析 AI 响应，提取结构化的审查评论
-                    const reviews = parseReview(response, patches, options.debug);
+                    // 然后做**议题级合并去重**：LLM 经常对同一个 tool finding 写出多条
+                    // 不同角度的评论（行号还可能不同），按"重叠的 tool finding ruleId 集合"
+                    // 做 key 合并 — 详见 src/review-dedup.ts。
+                    const rawReviews = parseReview(response, patches, options.debug);
+                    const fileFindings = lintReport?.results.filter(r => r.file === filename) ?? [];
+                    const reviews = mergeReviewsByTopic(rawReviews, filename, fileFindings.map(f => ({
+                        line: f.line,
+                        endLine: f.endLine,
+                        ruleId: f.ruleId
+                    })));
                     let analysisChainAttached = false;
                     for (const review of reviews) {
                         // 过滤 LGTM 评论（如果配置为不保留）
@@ -18788,7 +19830,13 @@ ${commentChain}
                                     commentWithChain = `${commentWithChain}\n${toolAttribution}`;
                                 }
                             }
+                            // 兜底：模型偶尔会忘记在 ```diff 块前加 🔧 修复建议标头（prompt
+                            // 里是 MANDATORY 规则，但不是 100% 遵守）。post-process 给裸 diff
+                            // 块自动加标头。
+                            commentWithChain = ensureFixSuggestionHeaders(commentWithChain);
                             (0,core.info)(`[analysis_chain] ${filename}: comment line ${review.startLine}-${review.endLine}, hasChain=${shouldAttachAnalysisChain}, finalLen=${commentWithChain.length}`);
+                            // 将审查评论加入缓冲区
+                            await commenter.bufferReviewComment(filename, review.startLine, review.endLine, commentWithChain);
                             // 收集为 Finding（不立即 buffer），统一在审查完成后做噪音控制。
                             // 严重级别以警示框徽标的形式直接置于每条行级评论顶部（取代 PR 顶部汇总评论）。
                             const severity = classifyFindingSeverity(review.comment);
@@ -18878,16 +19926,16 @@ ${reviewsSkipped.length > 0
 <details>
 <summary>Tips</summary>
 
-### Chat with ${botName} Bot (\`@ai-reviewer\`)
+### Chat with ${botName} Bot (\`${constants/* PRIMARY_BOT_MENTION */.a}\`)
 - Reply on review comments left by this bot to ask follow-up questions. A review comment is a comment on a diff or a file.
-- Invite the bot into a review comment chain by tagging \`@ai-reviewer\` in a reply.
+- Invite the bot into a review comment chain by tagging \`${constants/* PRIMARY_BOT_MENTION */.a}\` in a reply.
 
 ### Code suggestions
 - The bot may make code suggestions, but please review them carefully before committing since the line number ranges may be misaligned.
 - You can edit the comment made by the bot and manually tweak the suggestion if it is slightly off.
 
 ### Pausing incremental reviews
-- Add \`@ai-reviewer: ignore\` anywhere in the PR description to pause further reviews from the bot.
+- Add \`${ignoreKeyword}\` anywhere in the PR description to pause further reviews from the bot.
 
 </details>
 `;
@@ -19026,7 +20074,8 @@ const splitPatch = (patch) => {
     if (patch == null) {
         return [];
     }
-    const pattern = /(^@@ -(\d+),(\d+) \+(\d+),(\d+) @@).*$/gm;
+    // `,count` is optional in unified diff when count=1 (e.g. `@@ -0,0 +1 @@`)
+    const pattern = /(^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@).*$/gm;
     const result = [];
     let last = -1;
     let match;
@@ -19051,13 +20100,14 @@ const splitPatch = (patch) => {
  * @returns { oldHunk: { startLine, endLine }, newHunk: { startLine, endLine } }
  */
 const patchStartEndLine = (patch) => {
-    const pattern = /(^@@ -(\d+),(\d+) \+(\d+),(\d+) @@)/gm;
+    // `,count` is optional in unified diff when count=1 (e.g. `@@ -0,0 +1 @@`)
+    const pattern = /(^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@)/gm;
     const match = pattern.exec(patch);
     if (match != null) {
         const oldBegin = parseInt(match[2]);
-        const oldDiff = parseInt(match[3]);
+        const oldDiff = match[3] != null ? parseInt(match[3]) : 1;
         const newBegin = parseInt(match[4]);
-        const newDiff = parseInt(match[5]);
+        const newDiff = match[5] != null ? parseInt(match[5]) : 1;
         return {
             oldHunk: {
                 startLine: oldBegin,
@@ -19131,6 +20181,7 @@ const parsePatch = (patch) => {
         newHunk: newHunkLines.join('\n')
     };
 };
+// ==================== AI 响应解析 ====================
 /**
  * 解析 AI 的代码审查响应，提取结构化的评论列表
  *

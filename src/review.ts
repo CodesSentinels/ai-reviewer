@@ -42,16 +42,18 @@ import {
   runLintTools,
   type LintReport
 } from './lint'
-import {Inputs} from './inputs'
 import {
   classifyFindingSeverity,
   prepareFindings,
   severityBadge,
   type Finding
 } from './noise-control'
+import {Inputs} from './inputs'
 import {octokit} from './octokit'
 import {type Options} from './options'
 import {type Prompts} from './prompts'
+import {mergeReviewsByTopic, type Review} from './review-dedup'
+import {ensureFixSuggestionHeaders} from './fix-suggestion-header'
 import {getRepoFileTree} from './repo-tree'
 import {getReviewStateFromBody} from './review-state'
 import {getTokenCount} from './tokenizer'
@@ -388,6 +390,8 @@ ${hunks.oldHunk}
         patchScans,
         // 取代 .codesentinel.yaml：把 Action 输入收集到的开关传给 orchestrator
         toolEnableOverrides: options.toolEnableOverrides,
+        toolVersionOverrides: options.toolVersionOverrides,
+        semgrepConfig: options.semgrepConfig,
         disabled: false
       })
       info(
@@ -890,7 +894,21 @@ ${commentChain}
           )
 
           // 解析 AI 响应，提取结构化的审查评论
-          const reviews = parseReview(response, patches, options.debug)
+          // 然后做**议题级合并去重**：LLM 经常对同一个 tool finding 写出多条
+          // 不同角度的评论（行号还可能不同），按"重叠的 tool finding ruleId 集合"
+          // 做 key 合并 — 详见 src/review-dedup.ts。
+          const rawReviews = parseReview(response, patches, options.debug)
+          const fileFindings =
+            lintReport?.results.filter(r => r.file === filename) ?? []
+          const reviews = mergeReviewsByTopic(
+            rawReviews,
+            filename,
+            fileFindings.map(f => ({
+              line: f.line,
+              endLine: f.endLine,
+              ruleId: f.ruleId
+            }))
+          )
           let analysisChainAttached = false
           for (const review of reviews) {
             // 过滤 LGTM 评论（如果配置为不保留）
@@ -930,8 +948,20 @@ ${commentChain}
                   commentWithChain = `${commentWithChain}\n${toolAttribution}`
                 }
               }
+              // 兜底：模型偶尔会忘记在 ```diff 块前加 🔧 修复建议标头（prompt
+              // 里是 MANDATORY 规则，但不是 100% 遵守）。post-process 给裸 diff
+              // 块自动加标头。
+              commentWithChain = ensureFixSuggestionHeaders(commentWithChain)
+
               info(
                 `[analysis_chain] ${filename}: comment line ${review.startLine}-${review.endLine}, hasChain=${shouldAttachAnalysisChain}, finalLen=${commentWithChain.length}`
+              )
+              // 将审查评论加入缓冲区
+              await commenter.bufferReviewComment(
+                filename,
+                review.startLine,
+                review.endLine,
+                commentWithChain
               )
               // 收集为 Finding（不立即 buffer），统一在审查完成后做噪音控制。
               // 严重级别以警示框徽标的形式直接置于每条行级评论顶部（取代 PR 顶部汇总评论）。
@@ -1235,7 +1265,8 @@ const splitPatch = (patch: string | null | undefined): string[] => {
     return []
   }
 
-  const pattern = /(^@@ -(\d+),(\d+) \+(\d+),(\d+) @@).*$/gm
+  // `,count` is optional in unified diff when count=1 (e.g. `@@ -0,0 +1 @@`)
+  const pattern = /(^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@).*$/gm
 
   const result: string[] = []
   let last = -1
@@ -1266,13 +1297,14 @@ const patchStartEndLine = (
   oldHunk: {startLine: number; endLine: number}
   newHunk: {startLine: number; endLine: number}
 } | null => {
-  const pattern = /(^@@ -(\d+),(\d+) \+(\d+),(\d+) @@)/gm
+  // `,count` is optional in unified diff when count=1 (e.g. `@@ -0,0 +1 @@`)
+  const pattern = /(^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@)/gm
   const match = pattern.exec(patch)
   if (match != null) {
     const oldBegin = parseInt(match[2])
-    const oldDiff = parseInt(match[3])
+    const oldDiff = match[3] != null ? parseInt(match[3]) : 1
     const newBegin = parseInt(match[4])
-    const newDiff = parseInt(match[5])
+    const newDiff = match[5] != null ? parseInt(match[5]) : 1
     return {
       oldHunk: {
         startLine: oldBegin,
@@ -1358,13 +1390,6 @@ const parsePatch = (
 }
 
 // ==================== AI 响应解析 ====================
-
-/** 审查评论的结构化表示 */
-interface Review {
-  startLine: number // 评论起始行号
-  endLine: number // 评论结束行号
-  comment: string // 评论内容
-}
 
 /**
  * 解析 AI 的代码审查响应，提取结构化的评论列表
