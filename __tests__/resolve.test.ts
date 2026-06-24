@@ -290,7 +290,7 @@ describe('resolveHandler.execute', () => {
 describe('batchResolve', () => {
   test('空数组 → 返回 ok=0 failed=0 errors=[]，不调用 GraphQL', async () => {
     const result = await batchResolve([])
-    expect(result).toEqual({ok: 0, failed: 0, errors: []})
+    expect(result).toEqual({ok: 0, failed: 0, errors: [], failedItems: []})
     expect(mockGraphql).not.toHaveBeenCalled()
   })
 
