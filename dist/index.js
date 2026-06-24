@@ -12957,6 +12957,29 @@ async function review_thread_fetchUnresolvedBotThreads(params, botLogin) {
 function isPermissionError(e) {
     return String(e).includes('not accessible by integration');
 }
+/** 网络/超时类错误（与权限、node-not-found 区分，便于给出不同提示） */
+function isNetworkError(e) {
+    return /ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|network|timed? ?out/i.test(String(e));
+}
+/**
+ * 测试用：识别注入的假 thread ID（`PRRT_debug_inject_<kind>_<n>`），
+ * 返回对应类型的模拟错误，不实际发起 GraphQL 请求。
+ *
+ * 真实运行时 thread ID 不会带此前缀，函数返回 null，走正常 GraphQL 流程。
+ */
+function simulateDebugError(threadId) {
+    if (!threadId.startsWith('PRRT_debug_inject_'))
+        return null;
+    if (threadId.includes('_permission_')) {
+        return new Error("Resource not accessible by integration (mutation 'resolveReviewThread')");
+    }
+    if (threadId.includes('_network_')) {
+        return new Error('request to https://api.github.com/graphql failed, reason: read ECONNRESET');
+    }
+    // 默认：node not found（无效的 global id）
+    return new Error('Request failed due to following response errors:\n' +
+        ` - Could not resolve to a node with the global id of '${threadId}'`);
+}
 function threadLabel(t) {
     if (t.path) {
         const loc = t.line != null ? `${t.path}:${t.line}` : t.path;
@@ -12976,6 +12999,9 @@ async function review_thread_batchResolve(threads) {
     const failedItems = [];
     await Promise.allSettled(threads.map(t => limit(async () => {
         try {
+            const simulated = simulateDebugError(t.id);
+            if (simulated)
+                throw simulated;
             await octokit/* octokit.graphql */.K.graphql(RESOLVE_THREAD, { threadId: t.id });
             ok++;
         }
@@ -13018,17 +13044,20 @@ async function execute(ctx) {
     if (threads.length === 0) {
         return { message: 'ℹ️ 没有找到待解决的 CodeSentinel 审查意见' };
     }
-    // 测试用：注入假 thread ID，模拟部分失败场景
+    // 测试用：注入假 thread ID，模拟部分失败场景。
+    // 按 notfound → permission → network 轮换，覆盖三类错误。
     const injectCount = ctx.options.debugResolveInjectFailures;
     if (injectCount > 0) {
+        const kinds = ['notfound', 'permission', 'network'];
         for (let i = 0; i < injectCount; i++) {
+            const kind = kinds[i % kinds.length];
             threads.push({
-                id: `PRRT_debug_inject_fake_${i + 1}`,
+                id: `PRRT_debug_inject_${kind}_${i + 1}`,
                 isResolved: false,
                 firstCommentAuthorLogin: botLogin,
                 path: threads[0].path,
                 line: 9000 + i,
-                firstCommentBody: `[debug] injected fake thread ${i + 1}`
+                firstCommentBody: `[debug] injected ${kind} failure ${i + 1}`
             });
         }
     }
@@ -13050,13 +13079,28 @@ function formatResult(ok, failed, total, failedItems) {
     }
     const errDetail = failedItems.length > 0
         ? `\n\n失败详情：\n${failedItems
-            .map(({ thread, error }) => `- \`${threadLabel(thread)}\`：${flattenError(error.message)}`)
-            .join('\n')}`
+            .map(({ thread, error }) => `- ${errorTag(error)} \`${threadLabel(thread)}\`：${flattenError(error.message)}`)
+            .join('\n')}${permissionHint(failedItems)}`
         : '';
     if (ok === 0) {
         return `❌ 解决失败（共 **${total}** 条）${errDetail}`;
     }
     return `⚠️ 共 **${total}** 条，成功解决 **${ok}** 条，**${failed}** 条失败（可手动解决）${errDetail}`;
+}
+/** 给每条失败打上分类标签，方便用户一眼区分错误类型 */
+function errorTag(error) {
+    if (isPermissionError(error))
+        return '🔒 权限不足';
+    if (isNetworkError(error))
+        return '🌐 网络错误';
+    return '⚠️ 其他错误';
+}
+/** 存在权限错误时，追加可操作提示 */
+function permissionHint(failedItems) {
+    if (!failedItems.some(({ error }) => isPermissionError(error)))
+        return '';
+    return ('\n\n💡 存在权限不足导致的失败：当前 token 无法解决审查线程，' +
+        '请将 `resolve_token` 输入配置为具有 repo 权限的 classic PAT，或手动解决。');
 }
 /** 将多行错误信息压成单行，避免错误中的 ` - ` 被 Markdown 当作嵌套列表渲染 */
 function flattenError(message) {

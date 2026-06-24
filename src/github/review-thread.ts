@@ -197,8 +197,40 @@ export interface BatchResolveResult {
   failedItems: FailedThread[]
 }
 
-function isPermissionError(e: unknown): boolean {
+export function isPermissionError(e: unknown): boolean {
   return String(e).includes('not accessible by integration')
+}
+
+/** 网络/超时类错误（与权限、node-not-found 区分，便于给出不同提示） */
+export function isNetworkError(e: unknown): boolean {
+  return /ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|network|timed? ?out/i.test(
+    String(e)
+  )
+}
+
+/**
+ * 测试用：识别注入的假 thread ID（`PRRT_debug_inject_<kind>_<n>`），
+ * 返回对应类型的模拟错误，不实际发起 GraphQL 请求。
+ *
+ * 真实运行时 thread ID 不会带此前缀，函数返回 null，走正常 GraphQL 流程。
+ */
+function simulateDebugError(threadId: string): Error | null {
+  if (!threadId.startsWith('PRRT_debug_inject_')) return null
+  if (threadId.includes('_permission_')) {
+    return new Error(
+      "Resource not accessible by integration (mutation 'resolveReviewThread')"
+    )
+  }
+  if (threadId.includes('_network_')) {
+    return new Error(
+      'request to https://api.github.com/graphql failed, reason: read ECONNRESET'
+    )
+  }
+  // 默认：node not found（无效的 global id）
+  return new Error(
+    'Request failed due to following response errors:\n' +
+      ` - Could not resolve to a node with the global id of '${threadId}'`
+  )
 }
 
 export function threadLabel(t: ReviewThread): string {
@@ -226,6 +258,8 @@ export async function batchResolve(
     threads.map(t =>
       limit(async () => {
         try {
+          const simulated = simulateDebugError(t.id)
+          if (simulated) throw simulated
           await octokit.graphql(RESOLVE_THREAD, {threadId: t.id})
           ok++
         } catch (e) {
