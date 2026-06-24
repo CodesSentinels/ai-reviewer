@@ -43,6 +43,9 @@ class FakeAdapter implements ToolAdapter {
     version: '0.0.0'
   }
 
+  /** 记录 detect 被传入的 versionOverride，用于版本覆盖测试断言 */
+  lastVersionOverride: string | undefined
+
   constructor(
     name: string,
     private readonly detection: ToolDetection,
@@ -55,7 +58,11 @@ class FakeAdapter implements ToolAdapter {
     this.defaultEnabled = defaultEnabled
   }
 
-  async detect(_repoRoot: string): Promise<ToolDetection> {
+  async detect(
+    _repoRoot: string,
+    versionOverride?: string
+  ): Promise<ToolDetection> {
+    this.lastVersionOverride = versionOverride
     return this.detection
   }
 
@@ -233,5 +240,37 @@ describe('runLintTools', () => {
     )
     expect(report.results.length).toBe(0)
     expect(report.toolSummaries.length).toBe(0)
+  })
+
+  test('toolVersionOverrides 透传到 adapter.detect 的 versionOverride 参数', async () => {
+    const adapter = new FakeAdapter('eslint', {available: true, version: '8.57.0'}, [])
+    await runLintTools(
+      {
+        repoRoot: '/tmp',
+        filesAndChanges,
+        toolVersionOverrides: {eslint: '^8.57.0'}
+      },
+      [adapter]
+    )
+    expect(adapter.lastVersionOverride).toBe('^8.57.0')
+  })
+
+  test('未配置 toolVersionOverrides[adapter.name] 时，detect 收到 undefined', async () => {
+    const adapter = new FakeAdapter('eslint', {available: true, version: '9.15.0'}, [])
+    await runLintTools(
+      {
+        repoRoot: '/tmp',
+        filesAndChanges,
+        toolVersionOverrides: {biome: '^2.3.0'} // 故意不写 eslint
+      },
+      [adapter]
+    )
+    expect(adapter.lastVersionOverride).toBeUndefined()
+  })
+
+  test('toolVersionOverrides 整个未提供时，所有 adapter 都收到 undefined', async () => {
+    const adapter = new FakeAdapter('fake', {available: true, version: '1.0.0'}, [])
+    await runLintTools({repoRoot: '/tmp', filesAndChanges}, [adapter])
+    expect(adapter.lastVersionOverride).toBeUndefined()
   })
 })

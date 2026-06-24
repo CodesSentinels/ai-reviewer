@@ -38,6 +38,7 @@
 |:-------|:-----|:-----|:---------------|
 | 工具调用方式 | 子进程 `execFile` 调 CLI | 通过 npm API 内嵌 | API 版本耦合、不同语言无统一接口、不便扩展到 Go/Python |
 | **工具来源** | ai-reviewer **自带**（沙箱安装到 `/tmp`，多策略 dispatcher） | 要求待审查项目把 lint 工具写入 `package.json` | 项目侧零负担；不必为每个想接 ai-reviewer 的项目都开 PR 加 devDependencies |
+| **工具版本** | ai-reviewer 默认 pin + 用户可经 Action 输入显式覆盖 | 自动检测消费方 `package.json` / lockfile | semver range 解析有多种边角情况（`^` vs `~`、workspace 协议、transitive deps）；显式输入更可控可定位 |
 | 工具发现 → AI 注入 | Prompt 中**条件**注入（杠杆 A） + 评论尾部标注 | 直接发布工具评论 / 总是注入 | 直接发评论会与 AI 评论错位，且 AI 无法交叉验证；总是注入则在无 finding 文件上浪费 ~300 token |
 | 变更行过滤 | 在 orchestrator 里统一做 | 让每个适配器自己做 | 过滤逻辑应一次定义；适配器只关心解析 |
 | diff 扫描位置 | 上提到 `src/changed-lines.ts`，`review.ts` 一次扫描全文件，按 `addedLines` / `touchedLines` 分发 | 各模块各扫一遍 | 历史上 review/dep-analyzer/lint-filter 三处都有 walker，是真实的 DRY 问题 |
@@ -84,7 +85,7 @@ flowchart TB
       FMT["formatter.ts<br/>三种输出格式"]
       DF["lint-filter.ts<br/>变更行 / 去重"]
       LD["language-detector.ts"]
-      TS["types.ts"]
+      TYPES["types.ts"]
     end
 
     subgraph Adapters["适配器层 — adapters/"]
@@ -92,7 +93,7 @@ flowchart TB
       EXEC["exec.ts<br/>共享 CLI 封装"]
       ES["EslintAdapter"]
       BI["BiomeAdapter"]
-      TS["TscAdapter<br/>(类型错误)"]
+      TSC["TscAdapter<br/>(类型错误)"]
       PR["PrettierAdapter<br/>(默认关闭)"]
     end
   end
@@ -100,7 +101,7 @@ flowchart TB
   subgraph Sandbox["沙箱目录 /tmp/ai-reviewer-lint-tools/<br/>(由 tool-installer.ts 自管，待审查项目侧零负担)"]
     direction LR
     CLI1["node_modules/.bin/eslint<br/>--format json"]
-    CLI2["node_modules/.bin/biome check<br/>--reporter=json"]
+    CLI2["node_modules/.bin/biome check<br/>--reporter=github"]
     CLI3["node_modules/.bin/prettier<br/>--check"]
   end
 
@@ -443,19 +444,37 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-  WF[".github/workflows/*.yml<br/>with: enable_eslint: true / false ..."] --> ACT["action.yml 默认值<br/>+ 用户 with: 覆盖"]
-  ACT --> M["main.ts<br/>getBooleanInput('enable_eslint') 等 4 个"]
-  M --> O["Options.toolEnableOverrides<br/>{eslint: true, biome: true, tsc: true, prettier: false}"]
-  O --> R["review.ts → runLintTools({ toolEnableOverrides })"]
-  R --> S["orchestrator filter:<br/>adapters.filter(a => overrides[a.name] ?? a.defaultEnabled)"]
+  WF[".github/workflows/*.yml<br/>with: enable_eslint, ..._version, ..."] --> ACT["action.yml 默认值<br/>+ 用户 with: 覆盖"]
+  ACT --> M["main.ts<br/>getBooleanInput / getInput 8 项"]
+
+  M --> OE["Options.toolEnableOverrides<br/>{eslint: true, biome: true, tsc: true, prettier: false}"]
+  M --> OV["Options.toolVersionOverrides<br/>仅含用户显式填写的非空值<br/>e.g. {tsc: '~5.4.0'}"]
+
+  OE --> R["review.ts → runLintTools({<br/>toolEnableOverrides, toolVersionOverrides<br/>})"]
+  OV --> R
+
+  R --> S["orchestrator filter:<br/>adapters.filter(a => enableOverrides[a.name] ?? a.defaultEnabled)"]
   S --> EN["enabled adapters list"]
-  EN --> SC["adapter.scan(files, repoRoot)<br/>无 ToolConfig 参数，工具特定选项暂未启用"]
+
+  EN --> SAFEDET["safeDetect(adapter, repoRoot, versionOverrides[a.name])"]
+  SAFEDET --> AD["adapter.detect(repoRoot, versionOverride)"]
+  AD --> SPEC{"versionOverride 非空?"}
+  SPEC -->|"是"| OVRSPEC["spec = {...installSpec, version: versionOverride}<br/>装到用户指定版本"]
+  SPEC -->|"否"| DEFSPEC["spec = adapter.installSpec<br/>装到 ai-reviewer 默认版本"]
+  OVRSPEC --> INST["ensureToolInstalled(spec)"]
+  DEFSPEC --> INST
+
+  INST --> SC["adapter.scan(files, repoRoot)"]
   SC --> RES["LintResult[]"]
 ```
 
-> 💡 全链路只有 6 个节点 —— 没有 YAML 文件、没有 schema 校验、没有 fallback 树。
+> 💡 全链路只有 10 个节点 —— 没有 YAML 文件、没有 schema 校验、没有 fallback 树。
 > 适配器若需要工具特定选项（如未来 Ruff 规则集），将通过新增 `_<tool>_xxx` 系列
 > Action 输入扩展，仍保持消费方零配置文件原则。
+>
+> **版本覆盖路径**只在用户**显式**填了 `<tool>_version` 时启用 —— `main.ts` 用
+> `filter(v => v.length > 0)` 把空字符串排除，所以 `toolVersionOverrides` map 里
+> 只会有用户主动声明的工具，其他工具走默认 spec。
 
 ### 3.7 单次 diff 扫描的复用拓扑
 
@@ -492,6 +511,7 @@ flowchart TB
 | 可扩展 | `ToolAdapter` 接口 + `defaultAdapters()` 注册表 + 多策略 `installSpec` | Phase 1 已落地 4 个适配器（ESLint/Biome/TypeScript/Prettier）；Phase 2 加 golangci-lint 仅需新增 1 个文件 + 声明 `installSpec.kind = 'binary'` |
 | 失败容忍 | 三层 try/catch（safeDetect / scan / runLintTools 整体）+ 改进 A：ESLint 项目无配置时优雅降级 + 沙箱安装失败时优雅降级 | `lint-orchestrator.test.ts` 4 + `lint-eslint-config-detection.test.ts` 7 + `lint-tool-installer.test.ts` 7 |
 | **项目侧零负担** | 多策略 `tool-installer.ts` 把 lint 工具装到 ai-reviewer 自管沙箱 `/tmp/ai-reviewer-lint-tools/`；待审查项目无需把工具写入 `package.json`，workflow 也无需 `npm install` 步骤 | `lint-tool-installer.test.ts` 覆盖 npm 策略与 binary 占位 |
+| **版本可覆盖** | Action 输入 `<tool>_version`（semver 范围）→ `Options.toolVersionOverrides` → orchestrator 透传 → adapter `detect(repoRoot, versionOverride)` 在 spec 上覆盖 `version` 字段 → 沙箱按指定版本安装 | `lint-orchestrator.test.ts` 中 `toolVersionOverrides 透传 / 部分覆盖 / 不覆盖` 3 个用例 |
 | 聚焦变更 | `src/changed-lines.ts::scanPatch` 单次 walk → `review.ts` 预扫描 PatchScanMap → `runLintTools` 与 `analyzeDependencies` 共享 | `lint-filter.test.ts`、`changed-lines.test.ts` 中 added/touched 双语义覆盖通过 |
 | 零新增依赖 | 复用 `js-yaml` (require)、`child_process.execFile` | `package.json` 未改 |
 | AI ↔ 工具有机融合 | Prompt **条件**注入（杠杆 A） + 评论标注 + 摘要表 三处协同 | `prompts.ts::renderReviewFileDiff` + `formatToolAttribution` + `lint-prompt-injection.test.ts` |

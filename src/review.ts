@@ -45,7 +45,10 @@ import { Inputs } from './inputs'
 import { octokit } from './octokit'
 import { type Options } from './options'
 import { type Prompts } from './prompts'
+import {mergeReviewsByTopic, type Review} from './review-dedup'
+import {ensureFixSuggestionHeaders} from './fix-suggestion-header'
 import { getRepoFileTree } from './repo-tree'
+import { getReviewStateFromBody } from './review-state'
 import { getTokenCount } from './tokenizer'
 
 // eslint-disable-next-line camelcase
@@ -57,6 +60,12 @@ const repo = context.repo
 
 /** 在 PR 描述中添加此关键词可跳过 AI 审查 */
 const ignoreKeyword = '@ai-reviewer: ignore'
+
+export interface CodeReviewRunOptions {
+  mode?: 'incremental' | 'full'
+  source?: 'auto' | 'command'
+  summaryOnly?: boolean
+}
 
 /**
  * 代码审查主函数
@@ -70,9 +79,12 @@ export const codeReview = async (
   lightBot: Bot,
   heavyBot: Bot,
   options: Options,
-  prompts: Prompts
+  prompts: Prompts,
+  runOptions: CodeReviewRunOptions = {}
 ): Promise<void> => {
   const commenter: Commenter = new Commenter()
+  const fromCommand = runOptions.source === 'command'
+  const reviewMode = runOptions.mode ?? 'incremental'
 
   // 初始化并发控制器：分别限制 OpenAI 和 GitHub API 的并发数
   const openaiConcurrencyLimit = pLimit(options.openaiConcurrencyLimit)
@@ -81,15 +93,35 @@ export const codeReview = async (
   // ==================== 事件验证 ====================
   if (
     context.eventName !== 'pull_request' &&
-    context.eventName !== 'pull_request_target'
+    context.eventName !== 'pull_request_target' &&
+    !fromCommand
   ) {
     warning(
       `Skipped: current event is ${context.eventName}, only support pull_request event`
     )
     return
   }
+  if (context.payload.pull_request == null && fromCommand) {
+    const issueNumber = context.payload.issue?.number
+    if (issueNumber != null) {
+      const pr = await octokit.pulls.get({
+        owner: repo.owner,
+        repo: repo.repo,
+        pull_number: issueNumber
+      })
+      ;(context.payload as any).pull_request = pr.data
+    }
+  }
   if (context.payload.pull_request == null) {
     warning('Skipped: context.payload.pull_request is null')
+    return
+  }
+
+  if (
+    !fromCommand &&
+    getReviewStateFromBody(context.payload.pull_request.body ?? '') === 'paused'
+  ) {
+    info('Skipped: review automation is paused for this PR')
     return
   }
 
@@ -143,7 +175,13 @@ export const codeReview = async (
   }
 
   // 确定 diff 的起始 commit
-  if (
+  if (reviewMode === 'full') {
+    info(
+      `Will review full diff from the base commit: ${context.payload.pull_request.base.sha as string
+      }`
+    )
+    highestReviewedCommitId = context.payload.pull_request.base.sha
+  } else if (
     highestReviewedCommitId === '' ||
     highestReviewedCommitId === context.payload.pull_request.head.sha
   ) {
@@ -234,31 +272,35 @@ export const codeReview = async (
           warning('Skipped: context.payload.pull_request is null')
           return null
         }
-        try {
-          const contents = await octokit.repos.getContent({
-            owner: repo.owner,
-            repo: repo.repo,
-            path: file.filename,
-            ref: context.payload.pull_request.base.sha
-          })
-          if (contents.data != null) {
-            if (!Array.isArray(contents.data)) {
-              if (
-                contents.data.type === 'file' &&
-                contents.data.content != null
-              ) {
-                fileContent = Buffer.from(
-                  contents.data.content,
-                  'base64'
-                ).toString()
+        if (file.status === 'added') {
+          info(`skip base content fetch for new file: ${file.filename}`)
+        } else {
+          try {
+            const contents = await octokit.repos.getContent({
+              owner: repo.owner,
+              repo: repo.repo,
+              path: file.filename,
+              ref: context.payload.pull_request.base.sha
+            })
+            if (contents.data != null) {
+              if (!Array.isArray(contents.data)) {
+                if (
+                  contents.data.type === 'file' &&
+                  contents.data.content != null
+                ) {
+                  fileContent = Buffer.from(
+                    contents.data.content,
+                    'base64'
+                  ).toString()
+                }
               }
             }
+          } catch (e: any) {
+            warning(
+              `Failed to get file contents: ${e as string
+              }. This is OK if it's a new file.`
+            )
           }
-        } catch (e: any) {
-          warning(
-            `Failed to get file contents: ${e as string
-            }. This is OK if it's a new file.`
-          )
         }
 
         // 提取文件的完整 diff patch
@@ -338,6 +380,8 @@ ${hunks.oldHunk}
         patchScans,
         // 取代 .codesentinel.yaml：把 Action 输入收集到的开关传给 orchestrator
         toolEnableOverrides: options.toolEnableOverrides,
+        toolVersionOverrides: options.toolVersionOverrides,
+        semgrepConfig: options.semgrepConfig,
         disabled: false
       })
       info(
@@ -624,7 +668,7 @@ ${summariesFailed.length > 0
 `
 
   // ==================== 阶段四：逐文件代码审查 ====================
-  if (!options.disableReview) {
+  if (!options.disableReview && runOptions.summaryOnly !== true) {
     // 筛选出需要审查的文件（分类为 NEEDS_REVIEW 的文件）
     const filesAndChangesReview = filesAndChanges.filter(([filename]) => {
       const needsReview =
@@ -805,7 +849,21 @@ ${commentChain}
           info(`[analysis_chain] ${filename}: formatted markdown length=${analysisChainMd.length}, empty=${analysisChainMd === ''}`)
 
           // 解析 AI 响应，提取结构化的审查评论
-          const reviews = parseReview(response, patches, options.debug)
+          // 然后做**议题级合并去重**：LLM 经常对同一个 tool finding 写出多条
+          // 不同角度的评论（行号还可能不同），按"重叠的 tool finding ruleId 集合"
+          // 做 key 合并 — 详见 src/review-dedup.ts。
+          const rawReviews = parseReview(response, patches, options.debug)
+          const fileFindings =
+            lintReport?.results.filter(r => r.file === filename) ?? []
+          const reviews = mergeReviewsByTopic(
+            rawReviews,
+            filename,
+            fileFindings.map(f => ({
+              line: f.line,
+              endLine: f.endLine,
+              ruleId: f.ruleId
+            }))
+          )
           let analysisChainAttached = false
           for (const review of reviews) {
             // 过滤 LGTM 评论（如果配置为不保留）
@@ -845,6 +903,11 @@ ${commentChain}
                   commentWithChain = `${commentWithChain}\n${toolAttribution}`
                 }
               }
+              // 兜底：模型偶尔会忘记在 ```diff 块前加 🔧 修复建议标头（prompt
+              // 里是 MANDATORY 规则，但不是 100% 遵守）。post-process 给裸 diff
+              // 块自动加标头。
+              commentWithChain = ensureFixSuggestionHeaders(commentWithChain)
+
               info(`[analysis_chain] ${filename}: comment line ${review.startLine}-${review.endLine}, hasChain=${shouldAttachAnalysisChain}, finalLen=${commentWithChain.length}`)
               // 将审查评论加入缓冲区
               await commenter.bufferReviewComment(
@@ -946,6 +1009,12 @@ ${reviewsSkipped.length > 0
       commits[commits.length - 1].sha,
       statusMsg
     )
+  }
+
+  // summary-only 等跳过审查阶段的场景：保留既有的已审查 commit 记录，
+  // 否则 replace 摘要评论会清空增量审查标记，导致下次自动审查从 base 重审
+  if (runOptions.summaryOnly === true && existingCommitIdsBlock !== '') {
+    summarizeComment += `\n${existingCommitIdsBlock}`
   }
 
   // 发布最终的摘要评论
@@ -1222,12 +1291,7 @@ const parsePatch = (
 
 // ==================== AI 响应解析 ====================
 
-/** 审查评论的结构化表示 */
-interface Review {
-  startLine: number  // 评论起始行号
-  endLine: number    // 评论结束行号
-  comment: string    // 评论内容
-}
+// `Review` 接口与 `mergeReviewsByLineRange` 已抽到 src/review-dedup.ts，便于单元测试
 
 /**
  * 解析 AI 的代码审查响应，提取结构化的评论列表

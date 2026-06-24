@@ -139,9 +139,17 @@ export class EslintAdapter implements ToolAdapter {
   /** detect() 成功后填充：bundled 二进制的绝对路径，scan 时直接调用 */
   private resolvedBinPath = ''
 
-  async detect(repoRoot: string): Promise<ToolDetection> {
+  async detect(
+    repoRoot: string,
+    versionOverride?: string
+  ): Promise<ToolDetection> {
     // 1) 让 installer 确保 bundled ESLint 在沙箱内可用
-    const install = await ensureToolInstalled(this.installSpec)
+    //    versionOverride 非空时覆盖默认版本，保证与消费方本地一致
+    const spec: InstallSpec =
+      versionOverride && versionOverride.length > 0
+        ? {...this.installSpec, version: versionOverride}
+        : this.installSpec
+    const install = await ensureToolInstalled(spec)
     if (!install.ok) {
       return {
         available: false,

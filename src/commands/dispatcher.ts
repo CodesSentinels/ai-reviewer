@@ -53,6 +53,7 @@ export interface DispatcherDeps {
   options: Options
   /** 可选: 覆盖默认 bot mention 列表 */
   botMentions?: string[]
+  triggerReview?: CommandContext['triggerReview']
 }
 
 /**
@@ -242,7 +243,8 @@ export async function dispatchCommentEvent(
     commentNodeId,
     threadNodeId,
     reply,
-    options: deps.options
+    options: deps.options,
+    triggerReview: deps.triggerReview
   }
 
   // ACK

@@ -198,7 +198,7 @@ interface ToolAdapter {
 | 适配器 | InstallSpec | CLI 调用 | 输出解析 | 默认启用 |
 |:-------|:-----------|:---------|:---------|:---------|
 | ESLint | `{ kind: 'npm', package: 'eslint', binName: 'eslint', version: '^9.15.0' }` | `<bundled-bin> --format json --no-error-on-unmatched-pattern <files>` | JSON 数组，每元素 `{filePath, messages[]}` | ✅ |
-| Biome  | `{ kind: 'npm', package: '@biomejs/biome', binName: 'biome', version: '^2.3.0' }` | `<bundled-bin> check --reporter=json <files>` | `{diagnostics: [{category, severity, location.line_start, …}]}` | ✅ |
+| Biome  | `{ kind: 'npm', package: '@biomejs/biome', binName: 'biome', version: '^2.3.0' }` | `<bundled-bin> check --reporter=github <files>` | GitHub Actions 注解文本：先用 `^::(error\|warning\|notice) (.+?)::(.*)$` 拆出 level / kv 串 / message，再从 kv 串解析 `title` / `file` / `line` / `col` / `endLine` / `endColumn`。**切到 github reporter 是因为 2.4.x 把 JSON location 字段从 `line_start` 改成 `span[0]` 等，跨版本不稳** | ✅ |
 | **TypeScript** | `{ kind: 'npm', package: 'typescript', binName: 'tsc', version: '^5.6.0' }` | `<bundled-bin> --noEmit --pretty false`（**项目级，忽略 files 参数**） | 正则 `^(.+)\((\d+),(\d+)\): (error\|warning) (TS\d+): (.+)$` 解析单行错误，忽略续行 type chain | ✅ |
 | Prettier | `{ kind: 'npm', package: 'prettier', binName: 'prettier', version: '^3.0.0' }` | `<bundled-bin> --check --no-error-on-unmatched-pattern <files>` | stderr 中按行匹配 `[warn] <file>` | ❌（默认关闭：风格规则信噪比低，与 ESLint/Biome 重叠） |
 
@@ -298,6 +298,8 @@ interface BinaryInstallSpec {       // Phase 2+ 占位（golangci-lint / ruff / 
 
 ### 6.1 GitHub Action 输入
 
+**开关类**（控制启用哪些适配器）：
+
 | 输入 | 默认 | 说明 |
 |:----|:----|:----|
 | `enable_lint_tools` | `true` | 主总开关。`false` 时整个 Phase 0b 跳过，下面 4 个 per-tool 开关均被忽略 |
@@ -305,6 +307,19 @@ interface BinaryInstallSpec {       // Phase 2+ 占位（golangci-lint / ruff / 
 | `enable_biome` | `true` | 启用 Biome 适配器 |
 | `enable_tsc` | `true` | 启用 TypeScript 编译器适配器 |
 | `enable_prettier` | `false` | 启用 Prettier 适配器（默认关闭，因风格类问题信噪比低） |
+
+**版本覆盖类**（解决"ai-reviewer pin 的版本与消费方本地不一致"）：
+
+| 输入 | 默认 | 说明 |
+|:----|:----|:----|
+| `eslint_version` | `''` （即 `^9.15.0`） | semver 范围，覆盖 ai-reviewer 的 ESLint 默认版本 |
+| `biome_version` | `''` （即 `^2.3.0`） | semver 范围，覆盖 Biome 默认版本 |
+| `tsc_version` | `''` （即 `^5.6.0`） | semver 范围，覆盖 TypeScript 默认版本 |
+| `prettier_version` | `''` （即 `^3.0.0`） | semver 范围，覆盖 Prettier 默认版本 |
+
+> ⚠️ 空字符串表示**不覆盖**，使用 ai-reviewer 在适配器 `installSpec.version`
+> 里 pin 的默认值。仅当用户**显式**填入非空 semver 范围时，沙箱安装才会用
+> 该版本（详见 §6.4）。
 
 典型消费方 workflow 写法：
 
@@ -330,7 +345,49 @@ interface BinaryInstallSpec {       // Phase 2+ 占位（golangci-lint / ruff / 
 对所有内置工具都有项；`undefined` 分支只在 Phase 2+ 加新适配器但还没加对应输入
 时才走到，是兜底机制。
 
-### 6.3 历史：`.codesentinel.yaml` 已移除
+### 6.3 版本覆盖优先级与回退
+
+```
+最终安装版本 = options.toolVersionOverrides[adapter.name]   ← 用户在 workflow 显式填的 semver
+              ↓ undefined / 空字符串
+              adapter.installSpec.version                    ← ai-reviewer 默认 pin
+```
+
+注意：`<tool>_version` 输入与开关类输入处理逻辑相反 —— 仅当用户**显式填非空值**
+时才进入 `toolVersionOverrides` map，其他情况 map 中不包含该 key，适配器走默认。
+
+`main.ts` 用 `Object.fromEntries(... .filter(v => v.length > 0))` 实现这个语义，
+避免在控制流里到处 `if (v === '')` 判空。
+
+主流程：
+
+1. `EslintAdapter.detect(repoRoot, versionOverride)` 收到 orchestrator 传入的
+   覆盖值（来自 `options.toolVersionOverrides['eslint']`）
+2. 若 `versionOverride` 非空：构造新 spec：`{...this.installSpec, version: versionOverride}`
+3. 把新 spec 传给 `ensureToolInstalled(spec)`
+4. 沙箱内执行 `npm install eslint@<versionOverride>`
+
+四个适配器（ESLint / Biome / TypeScript / Prettier）走完全相同的流程，逻辑收敛
+在每个适配器 `detect()` 的第一步。
+
+### 6.4 设计：为什么用 Action 输入而非自动检测消费方 `package.json`
+
+考虑过的"自动同步"方案：读消费方仓库根的 `package.json`，从 `devDependencies` 拿
+版本字符串，自动 pin 到沙箱安装。被否决，原因：
+
+| 边角情况 | 后果 |
+|:--------|:-----|
+| `^8.57.0` 范围太宽 | lockfile 锁的可能是 `8.40.0`，但 ai-reviewer 解析 `^` 装到最新的 `8.99.0` → 双侧仍不一致 |
+| `~8.57.0` 与 `^8.57.0` 语义不同 | 代码若简化处理（全当 `^`）会违反用户的"严格 patch"意图 |
+| `workspace:` / `git+https://` / `file:..` 等非 semver | 自动检测代码必须显式区分跳过 |
+| 间接依赖（如 `@nuxt/eslint-config` 引入 eslint） | 顶层 `devDependencies` 看不到 ESLint，检测会漏 |
+| lockfile vs package.json 不一致 | 简单只读 `package.json` 会装错；同时读 lockfile 又得处理 npm/yarn/pnpm 三种格式 |
+
+显式 Action 输入把"声明工具版本"的责任明确交给消费方，**避免"我啥都没动，PR
+review 突然报本地没的错"的诡异 bug**。要付出的代价仅是消费方需要主动写一行
+`<tool>_version: '...'`（且默认不写也能跑，多数用户根本碰不到）。
+
+### 6.6 历史：`.codesentinel.yaml` 已移除
 
 早期版本通过仓库根的 `.codesentinel.yaml` 控制开关 + 工具特定选项。在与消费方
 反复迭代后发现该机制：
@@ -417,17 +474,18 @@ interface BinaryInstallSpec {       // Phase 2+ 占位（golangci-lint / ruff / 
 
 ## 9. 测试
 
-| 测试文件 | 覆盖范围 |
-|:---------|:---------|
-| [`__tests__/lint-filter.test.ts`](../__tests__/lint-filter.test.ts) | unified diff 行号提取、变更行窗口过滤、跨工具去重（含规则名归一化） |
-| [`__tests__/lint-orchestrator.test.ts`](../__tests__/lint-orchestrator.test.ts) | 启用/禁用、不可用工具的 ToolSummary、scan 抛异常的容忍、`disabled=true` 短路 |
-| [`__tests__/lint-prompt-injection.test.ts`](../__tests__/lint-prompt-injection.test.ts) | 杠杆 A 条件注入：lintContext 空/非空两条路径在最终 prompt 中的体现；token 节省下界 |
-| [`__tests__/lint-eslint-config-detection.test.ts`](../__tests__/lint-eslint-config-detection.test.ts) | 改进 A：项目缺少 ESLint 配置时 `detect()` 返回 available=false；覆盖 Flat Config / Legacy / package.json#eslintConfig / 损坏 package.json 等 7 种情形 |
-| [`__tests__/changed-lines.test.ts`](../__tests__/changed-lines.test.ts) | 集中 diff 扫描：`scanPatch` 单次 walk 产出 added/touched 两份集合；`buildPatchScans`/`toAddedLineMap`；纯删除 hunk / 多 hunk / 边界字符（"\\ No newline …"）等 8 种情形 |
-| [`__tests__/lint-tool-installer.test.ts`](../__tests__/lint-tool-installer.test.ts) | 多策略 dispatcher：npm 策略首次安装 / 缓存命中 / 沙箱目录初始化 / `npm install` 失败诊断 / `npm` 不存在 / 安装但 bin 缺失；binary 策略占位返回 7 种情形 |
-| [`__tests__/lint-tsc-adapter.test.ts`](../__tests__/lint-tsc-adapter.test.ts) | **TypeScript 适配器**：detect（沙箱失败 / version 失败 / 无 tsconfig / tsconfig.json 命中 / tsconfig.base.json 命中）+ scan 输出解析（单条 / 多条 / 续行忽略 / 绝对路径归一化 / 0 finding / spawnError）共 10 用例 |
+| 测试文件 | 用例数 | 覆盖范围 |
+|:---------|:------:|:---------|
+| [`__tests__/lint-filter.test.ts`](../__tests__/lint-filter.test.ts) | 8 | 变更行窗口过滤、跨工具去重（含规则名归一化） |
+| [`__tests__/lint-orchestrator.test.ts`](../__tests__/lint-orchestrator.test.ts) | 8 | 启用/禁用、不可用工具的 ToolSummary、scan 抛异常的容忍、`disabled=true` 短路、`toolVersionOverrides` 透传 / 部分覆盖 / 不覆盖 |
+| [`__tests__/lint-prompt-injection.test.ts`](../__tests__/lint-prompt-injection.test.ts) | 4 | 杠杆 A 条件注入：lintContext 空/非空两条路径在最终 prompt 中的体现；token 节省下界 |
+| [`__tests__/lint-eslint-config-detection.test.ts`](../__tests__/lint-eslint-config-detection.test.ts) | 7 | 改进 A：项目缺少 ESLint 配置时 `detect()` 返回 available=false；覆盖 Flat Config / Legacy / package.json#eslintConfig / 损坏 package.json 等情形 |
+| [`__tests__/lint-tool-installer.test.ts`](../__tests__/lint-tool-installer.test.ts) | 7 | 多策略 dispatcher：npm 策略首次安装 / 缓存命中 / 沙箱目录初始化 / `npm install` 失败诊断 / `npm` 不存在 / 安装但 bin 缺失；binary 策略占位返回 |
+| [`__tests__/lint-tsc-adapter.test.ts`](../__tests__/lint-tsc-adapter.test.ts) | 10 | **TypeScript 适配器**：detect（沙箱失败 / version 失败 / 无 tsconfig / tsconfig.json 命中 / tsconfig.base.json 命中）+ scan 输出解析（单条 / 多条 / 续行忽略 / 绝对路径归一化 / 0 finding / spawnError） |
+| [`__tests__/lint-biome-adapter.test.ts`](../__tests__/lint-biome-adapter.test.ts) | 8 | **Biome 适配器（GitHub reporter）**：解析 `::level title=...,file=...,line=...,col=...::msg` 行；endLine/endColumn 可选；title/category 缺失兜底；非 annotation 行忽略；2.4.x JSON 字段变动的回归保护 |
+| [`__tests__/changed-lines.test.ts`](../__tests__/changed-lines.test.ts) | 8 | 集中 diff 扫描：`scanPatch` 单次 walk 产出 added/touched 两份集合；`buildPatchScans`/`toAddedLineMap`；纯删除 hunk / 多 hunk / 边界字符（"\\ No newline …"）等 |
 
-执行：`npm test`（合并后总计 230 个用例全部通过）。
+执行：`npm test`（lint 子系统 8 个 suite 合计 60 个用例；全仓 18 个 suite 共 **295 个用例全部通过**）。
 
 ---
 
@@ -466,6 +524,7 @@ interface BinaryInstallSpec {       // Phase 2+ 占位（golangci-lint / ruff / 
 | 结果注入 LLM Prompt | `Inputs.lintContext` + `$lint_context` 占位符 |
 | AI 交叉验证 | `formatToolAttribution` + Prompt 中的 MANDATORY 指令 |
 | **消费方零配置文件** | Action 输入 `enable_eslint` / `enable_biome` / `enable_tsc` / `enable_prettier`；`src/lint/config.ts` 与所有 `.codesentinel.yaml` 加载逻辑均已删除 |
+| **版本覆盖防止双侧错配** | Action 输入 `eslint_version` / `biome_version` / `tsc_version` / `prettier_version`（semver 范围）；空时用 ai-reviewer 默认 pin，非空时覆盖 adapter `installSpec.version`，沙箱按指定版本安装 |
 | 性能 ≤ 3 分钟 | 并行执行 + 单工具 60s 默认超时 |
 | 错误容忍 | `safeDetect` + scan try/catch + `available=false` 上报 |
 | ESLint 项目无配置时优雅降级 | `EslintAdapter.detect()` 检测到 `eslint.config.*` / `.eslintrc.*` / `package.json#eslintConfig` 缺失时返回 `available=false`（改进 A） |

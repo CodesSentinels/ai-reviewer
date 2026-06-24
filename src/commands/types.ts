@@ -14,6 +14,8 @@
  */
 import type {Options} from '../options'
 
+export type ReviewCommandMode = 'incremental' | 'full' | 'summary'
+
 /** 支持的 GitHub 事件类型（命令框架范围内） */
 export type CommandEventName =
   | 'issue_comment'
@@ -82,6 +84,7 @@ export interface CommandContext {
 
   reply: Reply
   options: Options
+  triggerReview?: (mode: ReviewCommandMode) => Promise<void>
 }
 
 /** handler 返回结构 */
