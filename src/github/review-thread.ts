@@ -1,5 +1,4 @@
 import {getInput, warning} from '@actions/core'
-// import {getOctokit} from '@actions/github'
 import pLimit from 'p-limit'
 import {octokit} from '../octokit'
 import type {Options} from '../options'
@@ -10,6 +9,9 @@ export interface ReviewThread {
   id: string
   isResolved: boolean
   firstCommentAuthorLogin: string | null
+  path: string | null
+  line: number | null
+  firstCommentBody: string | null
 }
 
 interface GetReviewThreadsResponse {
@@ -23,9 +25,12 @@ interface GetReviewThreadsResponse {
         nodes: Array<{
           id: string
           isResolved: boolean
+          path: string
+          line: number | null
           comments: {
             nodes: Array<{
               author: {login: string} | null
+              body: string
             }>
           }
         }>
@@ -54,11 +59,14 @@ const GET_REVIEW_THREADS = `
           nodes {
             id
             isResolved
+            path
+            line
             comments(first: 1) {
               nodes {
                 author {
                   login
                 }
+                body
               }
             }
           }
@@ -151,7 +159,8 @@ export async function fetchUnresolvedBotThreads(
 
     const normalizedBot = normalizeLogin(botLogin)
     for (const node of page.nodes) {
-      const authorLogin = node.comments.nodes[0]?.author?.login ?? null
+      const firstComment = node.comments.nodes[0]
+      const authorLogin = firstComment?.author?.login ?? null
       if (
         !node.isResolved &&
         authorLogin !== null &&
@@ -160,7 +169,10 @@ export async function fetchUnresolvedBotThreads(
         results.push({
           id: node.id,
           isResolved: node.isResolved,
-          firstCommentAuthorLogin: authorLogin
+          firstCommentAuthorLogin: authorLogin,
+          path: node.path,
+          line: node.line ?? null,
+          firstCommentBody: firstComment?.body ?? null
         })
       }
     }
@@ -179,39 +191,65 @@ export interface BatchResolveResult {
   errors: Error[]
 }
 
-// resolveReviewThread is rejected by both GITHUB_TOKEN and GitHub App
-// installation tokens ("Resource not accessible by integration").
-// A classic PAT with repo scope is required.
-// function getResolveGraphql(): (query: string, variables: Record<string, unknown>) => Promise<unknown> {
-//   const pat = getInput('resolve_token')
-//   if (pat) {
-//     return getOctokit(pat).graphql as (query: string, variables: Record<string, unknown>) => Promise<unknown>
-//   }
-//   return (query, variables) => octokit.graphql(query, variables)
-// }
+function isPermissionError(e: unknown): boolean {
+  return String(e).includes('not accessible by integration')
+}
+
+function threadLabel(t: ReviewThread): string {
+  if (t.path) {
+    const loc = t.line != null ? `${t.path}:${t.line}` : t.path
+    if (t.firstCommentBody) {
+      const snippet = t.firstCommentBody.trim().replace(/\s+/g, ' ').slice(0, 60)
+      const ellipsis = snippet.length === 60 ? '…' : ''
+      return `${loc} – "${snippet}${ellipsis}"`
+    }
+    return loc
+  }
+  return t.id
+}
 
 export async function batchResolve(
   threads: ReviewThread[]
 ): Promise<BatchResolveResult> {
   const limit = pLimit(6)
-  // const gql = getResolveGraphql()
   let ok = 0
   const errors: Error[] = []
+  const failedItems: Array<{thread: ReviewThread; error: Error}> = []
 
   await Promise.allSettled(
     threads.map(t =>
       limit(async () => {
         try {
-          // await gql(RESOLVE_THREAD, {threadId: t.id})
-           await octokit.graphql(RESOLVE_THREAD, {threadId: t.id})
+          await octokit.graphql(RESOLVE_THREAD, {threadId: t.id})
           ok++
         } catch (e) {
-          warning(`batchResolve: failed to resolve thread ${t.id} – ${String(e)}`)
-          errors.push(e instanceof Error ? e : new Error(String(e)))
+          const err = e instanceof Error ? e : new Error(String(e))
+          errors.push(err)
+          failedItems.push({thread: t, error: err})
         }
       })
     )
   )
+
+  const permissionFailed = failedItems.filter(({error}) => isPermissionError(error))
+  const otherFailed = failedItems.filter(({error}) => !isPermissionError(error))
+
+  if (permissionFailed.length > 0) {
+    warning(
+      'batchResolve: token lacks permission to resolve review threads ' +
+        '("Resource not accessible by integration"). ' +
+        'Set the `resolve_token` input to a classic PAT with repo scope.'
+    )
+  }
+
+  if (otherFailed.length > 0) {
+    const lines = otherFailed
+      .map(({thread, error}) => `  • ${threadLabel(thread)}: ${error.message}`)
+      .join('\n')
+    warning(
+      `batchResolve: failed to resolve ${otherFailed.length}/${threads.length} thread(s):\n${lines}`
+    )
+  }
 
   return {ok, failed: errors.length, errors}
 }
