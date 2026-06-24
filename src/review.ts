@@ -27,16 +27,26 @@ import {
   SHORT_SUMMARY_START_TAG,
   SUMMARIZE_TAG
 } from './commenter'
+import {buildPatchScans} from './changed-lines'
 import {
   analyzeDependencies,
   formatCrossFileContext,
   formatDependencySummary,
   type DependencyContext
 } from './dependency-analyzer'
+import {
+  formatLintContextForFile,
+  formatLintSummary,
+  formatToolAttribution,
+  runLintTools,
+  type LintReport
+} from './lint'
 import { Inputs } from './inputs'
 import { octokit } from './octokit'
 import { type Options } from './options'
 import { type Prompts } from './prompts'
+import {mergeReviewsByTopic, type Review} from './review-dedup'
+import {ensureFixSuggestionHeaders} from './fix-suggestion-header'
 import { getRepoFileTree } from './repo-tree'
 import { getReviewStateFromBody } from './review-state'
 import { getTokenCount } from './tokenizer'
@@ -352,6 +362,39 @@ ${hunks.oldHunk}
     return
   }
 
+  // ==================== 共享：单次扫描 unified diff，得到每文件的 PatchScan ====================
+  // 提供给 Phase 0b（lint）与 Phase 0（依赖分析）复用，避免对同一份 diff
+  // 字符串重复 walk。Phase 0b 取 addedLines（lint 窗口过滤），Phase 0 取
+  // touchedLines（导出函数作用域内的修改判定）。
+  const patchScans = buildPatchScans(filesAndChanges)
+  info(`shared: precomputed PatchScan for ${patchScans.size} file(s)`)
+
+  // ==================== 阶段零·B：静态分析工具扫描（Linter/SAST） ====================
+  let lintReport: LintReport | null = null
+  if (options.enableLintTools) {
+    try {
+      info('Phase 0b: starting static analysis tool scan (Linter/SAST)')
+      lintReport = await runLintTools({
+        repoRoot: process.cwd(),
+        filesAndChanges,
+        patchScans,
+        // 取代 .codesentinel.yaml：把 Action 输入收集到的开关传给 orchestrator
+        toolEnableOverrides: options.toolEnableOverrides,
+        toolVersionOverrides: options.toolVersionOverrides,
+        semgrepConfig: options.semgrepConfig,
+        disabled: false
+      })
+      info(
+        `Phase 0b: lint scan completed in ${lintReport.durationMs}ms — ${lintReport.results.length} findings on changed lines from ${lintReport.toolSummaries.filter(s => s.available).length} tool(s)`
+      )
+    } catch (e: any) {
+      warning(`Phase 0b: lint scan failed: ${e.message}, skipping`)
+      lintReport = null
+    }
+  } else {
+    info('Phase 0b: lint tools disabled by config, skipping')
+  }
+
   // ==================== 阶段零：跨文件依赖分析 ====================
   let dependencyContext: DependencyContext | null = null
   if (options.enableDependencyAnalysis) {
@@ -366,7 +409,8 @@ ${hunks.oldHunk}
         filesAndChanges,
         repoFiles,
         options,
-        githubConcurrencyLimit
+        githubConcurrencyLimit,
+        patchScans
       )
       info('Phase 0: dependency analysis completed')
     } catch (e: any) {
@@ -584,6 +628,7 @@ ${SHORT_SUMMARY_START_TAG}
 ${inputs.shortSummary}
 ${SHORT_SUMMARY_END_TAG}
 ${dependencyContext != null ? `\n${formatDependencySummary(dependencyContext)}` : ''}
+${lintReport != null ? `\n${formatLintSummary(lintReport)}` : ''}
 ---
 
 <details>
@@ -666,6 +711,15 @@ ${summariesFailed.length > 0
       info(`reviewing ${filename}`)
       const ins: Inputs = inputs.clone()
       ins.filename = filename
+
+      // 注入静态分析工具结果（仅当前文件相关的 finding）
+      if (lintReport != null) {
+        const lintCtx = formatLintContextForFile(filename, lintReport)
+        if (lintCtx.length > 0) {
+          ins.lintContext = lintCtx
+          info(`injected lint context for ${filename}: ${getTokenCount(lintCtx)} tokens`)
+        }
+      }
 
       // 注入跨文件引用上下文（在 token 预算内）
       if (dependencyContext != null) {
@@ -795,7 +849,21 @@ ${commentChain}
           info(`[analysis_chain] ${filename}: formatted markdown length=${analysisChainMd.length}, empty=${analysisChainMd === ''}`)
 
           // 解析 AI 响应，提取结构化的审查评论
-          const reviews = parseReview(response, patches, options.debug)
+          // 然后做**议题级合并去重**：LLM 经常对同一个 tool finding 写出多条
+          // 不同角度的评论（行号还可能不同），按"重叠的 tool finding ruleId 集合"
+          // 做 key 合并 — 详见 src/review-dedup.ts。
+          const rawReviews = parseReview(response, patches, options.debug)
+          const fileFindings =
+            lintReport?.results.filter(r => r.file === filename) ?? []
+          const reviews = mergeReviewsByTopic(
+            rawReviews,
+            filename,
+            fileFindings.map(f => ({
+              line: f.line,
+              endLine: f.endLine,
+              ruleId: f.ruleId
+            }))
+          )
           let analysisChainAttached = false
           for (const review of reviews) {
             // 过滤 LGTM 评论（如果配置为不保留）
@@ -817,12 +885,29 @@ ${commentChain}
               // 每个文件只在第一条评论上附加一次 Analysis chain，避免重复刷屏
               const shouldAttachAnalysisChain =
                 analysisChainMd !== '' && !analysisChainAttached
-              const commentWithChain = shouldAttachAnalysisChain
+              let commentWithChain = shouldAttachAnalysisChain
                 ? `${review.comment}\n\n${analysisChainMd}`
                 : review.comment
               if (shouldAttachAnalysisChain) {
                 analysisChainAttached = true
               }
+              // 附加该评论行号范围内重叠的工具发现（CodeRabbit "🧰 Tools" 风格）
+              if (lintReport != null) {
+                const toolAttribution = formatToolAttribution(
+                  filename,
+                  review.startLine,
+                  review.endLine,
+                  lintReport
+                )
+                if (toolAttribution.length > 0) {
+                  commentWithChain = `${commentWithChain}\n${toolAttribution}`
+                }
+              }
+              // 兜底：模型偶尔会忘记在 ```diff 块前加 🔧 修复建议标头（prompt
+              // 里是 MANDATORY 规则，但不是 100% 遵守）。post-process 给裸 diff
+              // 块自动加标头。
+              commentWithChain = ensureFixSuggestionHeaders(commentWithChain)
+
               info(`[analysis_chain] ${filename}: comment line ${review.startLine}-${review.endLine}, hasChain=${shouldAttachAnalysisChain}, finalLen=${commentWithChain.length}`)
               // 将审查评论加入缓冲区
               await commenter.bufferReviewComment(
@@ -1080,7 +1165,8 @@ const splitPatch = (patch: string | null | undefined): string[] => {
     return []
   }
 
-  const pattern = /(^@@ -(\d+),(\d+) \+(\d+),(\d+) @@).*$/gm
+  // `,count` is optional in unified diff when count=1 (e.g. `@@ -0,0 +1 @@`)
+  const pattern = /(^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@).*$/gm
 
   const result: string[] = []
   let last = -1
@@ -1111,13 +1197,14 @@ const patchStartEndLine = (
   oldHunk: { startLine: number; endLine: number }
   newHunk: { startLine: number; endLine: number }
 } | null => {
-  const pattern = /(^@@ -(\d+),(\d+) \+(\d+),(\d+) @@)/gm
+  // `,count` is optional in unified diff when count=1 (e.g. `@@ -0,0 +1 @@`)
+  const pattern = /(^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@)/gm
   const match = pattern.exec(patch)
   if (match != null) {
     const oldBegin = parseInt(match[2])
-    const oldDiff = parseInt(match[3])
+    const oldDiff = match[3] != null ? parseInt(match[3]) : 1
     const newBegin = parseInt(match[4])
-    const newDiff = parseInt(match[5])
+    const newDiff = match[5] != null ? parseInt(match[5]) : 1
     return {
       oldHunk: {
         startLine: oldBegin,
@@ -1204,12 +1291,7 @@ const parsePatch = (
 
 // ==================== AI 响应解析 ====================
 
-/** 审查评论的结构化表示 */
-interface Review {
-  startLine: number  // 评论起始行号
-  endLine: number    // 评论结束行号
-  comment: string    // 评论内容
-}
+// `Review` 接口与 `mergeReviewsByLineRange` 已抽到 src/review-dedup.ts，便于单元测试
 
 /**
  * 解析 AI 的代码审查响应，提取结构化的评论列表

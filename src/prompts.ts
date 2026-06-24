@@ -145,6 +145,7 @@ $short_summary
 
 $cross_file_context
 
+$lint_section
 ## Analysis chain (pre-review reasoning)
 
 $analysis_chain
@@ -181,13 +182,49 @@ Don't annotate code snippets with line numbers. Format and indent code correctly
 Do not use \`suggestion\` code blocks.
 For fixes, use \`diff\` code blocks, marking changes with \`+\` or \`-\`. The line number range for comments with fix snippets must exactly match the range to replace in the new hunk.
 
+**Fix suggestion block (MANDATORY)** — Every \`diff\` code block that proposes a fix MUST be wrapped in a collapsible HTML \`<details>\` block, mirroring the existing "🧩 Analysis chain" pattern. Exact format:
+
+\`\`\`
+<details>
+<summary>🔧 Suggested fix</summary>
+
+\\\`\\\`\\\`diff
+-old
++new
+\\\`\\\`\\\`
+
+</details>
+\`\`\`
+
+Rules:
+1. \`<summary>\` line MUST contain the 🔧 wrench emoji + the phrase "Suggested fix" (translate to response language — e.g. "🔧 修复建议" for Chinese, "🔧 수정 제안" for Korean; keep the 🔧 icon).
+2. There MUST be a blank line between \`<summary>\` and the \`\\\`\\\`\\\`diff\` opening fence (GitHub Flavored Markdown won't render the code block otherwise).
+3. There MUST be a blank line between the closing \`\\\`\\\`\\\`\` and \`</details>\`.
+4. Do NOT use the older "\`**🔧 Suggested fix**\`" bold-header format; always use \`<details>\`.
+
+This collapses long diffs by default and keeps PR comments visually clean.
+
 - Do NOT provide general feedback, summaries, explanations of changes, or praises
   for making good additions. Do NOT suggest adding validation, comments, documentation,
   or error handling that was not explicitly part of the changes.
 - Focus solely on offering specific, objective insights based on the
   given context and refrain from making broad comments about potential impacts on
   the system or question intentions behind the changes.
-- **Cross-file impact analysis (MANDATORY)** — When the "Cross-file references" section
+- **One comment per issue (MANDATORY)** — Do NOT output two or more separate
+  \`startLine-endLine:\` blocks discussing the **same underlying issue**, even if
+  their line ranges differ. The "underlying issue" is identified by what lint
+  tool finding (e.g. TS2345, no-unused-vars) or what bug they reference.
+  Concretely:
+  - If you have multiple angles on a single TypeScript error (e.g. "syntax fix"
+    + "design concern"), combine them into ONE comment.
+  - If a lint tool reports one finding on line 98 and you want to comment on both
+    line 98 specifically AND the surrounding 95-100 function, pick ONE line range
+    and put all content there. Do NOT split into two \`startLine-endLine:\` blocks.
+  - Multiple separate comments on the same file are OK only when they reference
+    **different** tool findings or different bugs.
+  Rationale: PR reviewers see each \`startLine-endLine:\` block as a separate
+  GitHub comment thread. Splitting one issue across multiple threads is noise.
+$lint_mandatory_instruction- **Cross-file impact analysis (MANDATORY)** — When the "Cross-file references" section
   above contains actual references (not "No cross-file references detected"), you MUST
   write a review comment on the changed line (using the same \`startLine-endLine:\\n comment\\n---\`
   output format) that lists ALL affected callers. Rules:
@@ -263,10 +300,16 @@ Please review this change.
 
 22-22:
 There's a syntax error in the add function.
+
+<details>
+<summary>🔧 Suggested fix</summary>
+
 \`\`\`diff
 -    retrn z
 +    return z
 \`\`\`
+
+</details>
 ---
 24-25:
 LGTM!
@@ -415,8 +458,56 @@ use web search to find and reference current documentation.
     return inputs.render(this.comment)
   }
 
-  /** 渲染代码审查提示词 */
+  /**
+   * 仅当文件存在工具发现时拼入的"静态分析工具结果"区块。
+   * 没有发现时整段连同段头一起从最终 prompt 中移除（杠杆 A，节省 token）。
+   */
+  lintSection = `## Static analysis tool results (pre-review)
+
+$lint_context
+
+`
+
+  /**
+   * 仅当文件存在工具发现时拼入的"静态分析交叉验证 MANDATORY"指令。
+   * 没有发现时整段移除，避免空泡然占用 token。
+   */
+  lintMandatoryInstruction = `- **Static analysis cross-validation (MANDATORY when tool findings exist)** — When the
+  "Static analysis tool results" section above contains actual findings (not "No static
+  analysis tool results available."), you MUST:
+  1. For each tool finding that lands on a changed line, write a review comment on that
+     exact line range (using the same \`startLine-endLine:\\n comment\\n---\` format).
+  2. In your comment, name which tool reported it (e.g. "ESLint reports …") and explain
+     the underlying business or logic impact in your own words — do not just paraphrase
+     the tool message.
+  3. If you disagree with a tool finding (false positive), still write a comment on that
+     line stating "tool finding appears to be a false positive because …" so the author
+     can see the cross-validation reasoning.
+  4. After cross-validating tool findings, continue to surface logic/architecture issues
+     the tools cannot detect — those are still your highest-value contributions.
+`
+
+  /**
+   * 渲染代码审查提示词
+   *
+   * 杠杆 A：仅当 inputs.lintContext 非空时，才把"静态分析工具结果"段头 +
+   * MANDATORY 指令拼到模板中；无发现的文件完全移除两者，节省 token。
+   */
   renderReviewFileDiff(inputs: Inputs): string {
-    return inputs.render(this.reviewFileDiff)
+    const hasLintFindings =
+      inputs.lintContext != null && inputs.lintContext.trim().length > 0
+
+    let prompt = this.reviewFileDiff
+    if (hasLintFindings) {
+      prompt = prompt.replace('$lint_section', this.lintSection)
+      prompt = prompt.replace(
+        '$lint_mandatory_instruction',
+        this.lintMandatoryInstruction
+      )
+    } else {
+      prompt = prompt.replace('$lint_section', '')
+      prompt = prompt.replace('$lint_mandatory_instruction', '')
+    }
+    return inputs.render(prompt)
   }
 }

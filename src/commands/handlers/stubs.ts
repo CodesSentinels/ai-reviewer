@@ -20,16 +20,6 @@ function notImplemented(name: string): CommandHandler['execute'] {
   }
 }
 
-/** 成员 B */
-export const resolveStub: CommandHandler = {
-  name: 'resolve',
-  description: '批量将所有 CodeSentinel 审查意见标记为已解决',
-  usage: '@ai-reviewer resolve',
-  needsAck: true,
-  minPermission: 'write',
-  execute: notImplemented('resolve')
-}
-
 /** 成员 C */
 export const reviewStub: CommandHandler = {
   name: 'review',
@@ -132,7 +122,6 @@ export const configurationStub: CommandHandler = {
 export const ALL_STUBS: CommandHandler[] = [
   reviewStub,
   fullReviewStub,
-  resolveStub,
   summaryStub,
   pauseStub,
   resumeStub,

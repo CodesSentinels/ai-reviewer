@@ -5,6 +5,23 @@ branding:
   color: 'orange'
 author: 'AI Reviewer'
 inputs:
+  # resolve_token:
+  #   required: false
+  #   description: |
+  #     Token used for the resolveReviewThread GraphQL mutation.
+  #     GitHub App installation tokens and the default GITHUB_TOKEN are both
+  #     rejected by this mutation ("Resource not accessible by integration").
+  #     A classic PAT with repo scope is required for resolve to work.
+  #   default: ''
+  bot_github_login:
+    required: false
+    description: |
+      GitHub login of the bot account used to identify bot-authored review threads
+      for the resolve command (e.g. 'my-app[bot]' or just 'my-app').
+      Required when using a custom GitHub App — GitHub App installation tokens
+      cannot call GET /user, so auto-detection falls back to 'github-actions[bot]'
+      which would be wrong. Leave empty when using the default GITHUB_TOKEN.
+    default: ''
   debug:
     required: false
     description: 'Enable debug mode'
@@ -247,6 +264,97 @@ inputs:
       executes model-requested shell commands on the runner and sends the output
       back to the model.'
     default: 'true'
+  enable_lint_tools:
+    required: false
+    description:
+      'Master switch for static analysis (Linter/SAST). When false, all per-tool
+      enable_* flags are ignored and the whole Phase 0b lint scan is skipped.'
+    default: 'true'
+  enable_eslint:
+    required: false
+    description:
+      'Enable the ESLint adapter. Requires a project-side eslint config
+      (eslint.config.* or .eslintrc.*) — when missing, the adapter gracefully
+      degrades to unavailable. Tool itself is auto-installed by ai-reviewer;
+      consumer project does NOT need eslint in their package.json.'
+    default: 'true'
+  enable_biome:
+    required: false
+    description:
+      'Enable the Biome adapter. Zero project-side config required (Biome ships
+      a sensible recommended ruleset). Tool itself is auto-installed by
+      ai-reviewer; consumer project does NOT need @biomejs/biome in their
+      package.json.'
+    default: 'true'
+  enable_tsc:
+    required: false
+    description:
+      'Enable the TypeScript Compiler adapter (tsc --noEmit). Requires a
+      tsconfig.json at the repo root. Tool itself is auto-installed; consumer
+      project does NOT need typescript in their package.json (though most
+      TS projects already have it).'
+    default: 'true'
+  enable_prettier:
+    required: false
+    description:
+      'Enable the Prettier adapter. Disabled by default because most teams
+      already enforce Prettier via pre-commit hooks; enabling here can spam
+      "file is not formatted" warnings.'
+    default: 'false'
+  enable_semgrep:
+    required: false
+    description:
+      'Enable the Semgrep SAST adapter (Phase 4 — multi-language security
+      scanner). Disabled by default because (a) cold install via pip adds
+      ~15-30s to every review and (b) SAST findings benefit from opt-in to
+      avoid noise. Set to true on repos that need security scanning.
+      Requires Python 3.8+ on the runner (ubuntu-latest has it by default).'
+    default: 'false'
+  eslint_version:
+    required: false
+    description:
+      'Pin a specific ESLint version (semver range, e.g. "^8.57.0" or "~9.15.0").
+      Default empty = use the version pinned in ai-reviewer (currently ^9.15.0).
+      Set this to your team''s local version to avoid behaviour drift between
+      local lint and PR review (e.g. when your project still uses ESLint 8).'
+    default: ''
+  biome_version:
+    required: false
+    description:
+      'Pin a specific Biome version (semver range). Default empty = use the
+      version pinned in ai-reviewer (currently ^2.3.0).'
+    default: ''
+  tsc_version:
+    required: false
+    description:
+      'Pin a specific TypeScript version (semver range). Default empty = use
+      the version pinned in ai-reviewer (currently ^5.6.0). Most projects can
+      leave this blank; only set if your code uses TS features that differ
+      across major versions.'
+    default: ''
+  prettier_version:
+    required: false
+    description:
+      'Pin a specific Prettier version (semver range). Default empty = use the
+      version pinned in ai-reviewer (currently ^3.0.0).'
+    default: ''
+  semgrep_version:
+    required: false
+    description:
+      'Pin a specific Semgrep version (caret/tilde/pip-style range, e.g.
+      "^1.95.0" / "~=1.95" / ">=1.95,<2"). Default empty = use the version
+      pinned in ai-reviewer (currently ^1.95.0). The installer translates
+      npm-style caret/tilde to pip-equivalent specifiers automatically.'
+    default: ''
+  semgrep_config:
+    required: false
+    description:
+      'Semgrep rule pack to use (passed to `semgrep --config=<value>`).
+      Default "p/default" runs the built-in OWASP Top 10 set offline. Common
+      alternatives: "auto" (online ruleset matched to PR languages, requires
+      network), "p/security-audit", "p/owasp-top-ten", "p/ci", or a path to a
+      custom rules file. Only takes effect when enable_semgrep is true.'
+    default: 'p/default'
   command_ack_reaction:
     required: false
     description:
