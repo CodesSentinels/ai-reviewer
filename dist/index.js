@@ -12998,7 +12998,7 @@ async function review_thread_batchResolve(threads) {
             .join('\n');
         (0,core.warning)(`batchResolve: failed to resolve ${otherFailed.length}/${threads.length} thread(s):\n${lines}`);
     }
-    return { ok, failed: errors.length, errors };
+    return { ok, failed: errors.length, errors, failedItems };
 }
 
 ;// CONCATENATED MODULE: ./lib/commands/handlers/resolve.js
@@ -13032,8 +13032,8 @@ async function execute(ctx) {
             });
         }
     }
-    const { ok, failed, errors } = await review_thread_batchResolve(threads);
-    return { message: formatResult(ok, failed, threads.length, errors) };
+    const { ok, failed, failedItems } = await review_thread_batchResolve(threads);
+    return { message: formatResult(ok, failed, threads.length, failedItems) };
 }
 // ─── External API (for member C) ──────────────────────────────────────────────
 async function resolveAllBotComments(params) {
@@ -13044,11 +13044,15 @@ async function resolveAllBotComments(params) {
     return batchResolve(threads);
 }
 // ─── Formatting ───────────────────────────────────────────────────────────────
-function formatResult(ok, failed, total, errors) {
+function formatResult(ok, failed, total, failedItems) {
     if (failed === 0) {
         return `✅ 已解决 **${ok}** 条 CodeSentinel 审查意见`;
     }
-    const errDetail = errors.length > 0 ? `\n\n错误详情：\`${errors[0].message}\`` : '';
+    const errDetail = failedItems.length > 0
+        ? `\n\n失败详情：\n${failedItems
+            .map(({ thread, error }) => `• \`${threadLabel(thread)}\`: ${error.message}`)
+            .join('\n')}`
+        : '';
     if (ok === 0) {
         return `❌ 解决失败（共 **${total}** 条）${errDetail}`;
     }

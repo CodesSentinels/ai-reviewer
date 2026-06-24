@@ -185,17 +185,23 @@ export async function fetchUnresolvedBotThreads(
 
 // ─── Mutation ─────────────────────────────────────────────────────────────────
 
+export interface FailedThread {
+  thread: ReviewThread
+  error: Error
+}
+
 export interface BatchResolveResult {
   ok: number
   failed: number
   errors: Error[]
+  failedItems: FailedThread[]
 }
 
 function isPermissionError(e: unknown): boolean {
   return String(e).includes('not accessible by integration')
 }
 
-function threadLabel(t: ReviewThread): string {
+export function threadLabel(t: ReviewThread): string {
   if (t.path) {
     const loc = t.line != null ? `${t.path}:${t.line}` : t.path
     if (t.firstCommentBody) {
@@ -251,5 +257,5 @@ export async function batchResolve(
     )
   }
 
-  return {ok, failed: errors.length, errors}
+  return {ok, failed: errors.length, errors, failedItems}
 }

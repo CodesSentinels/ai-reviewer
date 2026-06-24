@@ -1,9 +1,11 @@
 import type {CommandHandler, CommandContext, CommandResult} from '../types'
 import type {Options} from '../../options'
+import type {FailedThread} from '../../github/review-thread'
 import {
   getBotLogin,
   fetchUnresolvedBotThreads,
-  batchResolve
+  batchResolve,
+  threadLabel
 } from '../../github/review-thread'
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
@@ -43,8 +45,8 @@ async function execute(ctx: CommandContext): Promise<CommandResult> {
     }
   }
 
-  const {ok, failed, errors} = await batchResolve(threads)
-  return {message: formatResult(ok, failed, threads.length, errors)}
+  const {ok, failed, failedItems} = await batchResolve(threads)
+  return {message: formatResult(ok, failed, threads.length, failedItems)}
 }
 
 // ─── External API (for member C) ──────────────────────────────────────────────
@@ -63,11 +65,21 @@ export async function resolveAllBotComments(params: {
 
 // ─── Formatting ───────────────────────────────────────────────────────────────
 
-function formatResult(ok: number, failed: number, total: number, errors: Error[]): string {
+function formatResult(
+  ok: number,
+  failed: number,
+  total: number,
+  failedItems: FailedThread[]
+): string {
   if (failed === 0) {
     return `✅ 已解决 **${ok}** 条 CodeSentinel 审查意见`
   }
-  const errDetail = errors.length > 0 ? `\n\n错误详情：\`${errors[0].message}\`` : ''
+  const errDetail =
+    failedItems.length > 0
+      ? `\n\n失败详情：\n${failedItems
+          .map(({thread, error}) => `• \`${threadLabel(thread)}\`: ${error.message}`)
+          .join('\n')}`
+      : ''
   if (ok === 0) {
     return `❌ 解决失败（共 **${total}** 条）${errDetail}`
   }
