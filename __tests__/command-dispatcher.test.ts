@@ -191,7 +191,8 @@ describe('dispatcher — 命令执行', () => {
   })
 
   test('stub handler 抛 NOT_IMPLEMENTED', async () => {
-    setEvent('issue_comment', buildIssueCommentPayload('@ai-reviewer resolve'))
+    // resolve 已由成员 B 实现；改用成员 C 尚未实现的 review stub
+    setEvent('issue_comment', buildIssueCommentPayload('@ai-reviewer review'))
     const r = await dispatchCommentEvent({options: stubOptions})
     expect(r.kind).toBe('executed')
     if (r.kind === 'executed') {

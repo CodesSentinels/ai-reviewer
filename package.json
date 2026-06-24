@@ -7,7 +7,8 @@
   "scripts": {
     "build": "cp node_modules/@dqbd/tiktoken/tiktoken_bg.wasm dist/tiktoken_bg.wasm && tsc",
     "package": "ncc build --license licenses.txt",
-    "act": "npm run build && npm run package && ./bin/act pull_request_target --secret-file .secrets",
+    "act": "npm run build && npm run package && ./bin/act pull_request_target -e event.json --secret-file .secrets",
+    "act-local": "npm run build && npm run package && ./bin/act pull_request_target -e event.json --secret-file .secrets",
     "format": "prettier --write '**/*.ts'",
     "format-check": "prettier --check '**/*.ts'",
     "lint": "eslint src/**/*.ts",

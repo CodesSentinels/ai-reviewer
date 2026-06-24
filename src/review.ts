@@ -1119,7 +1119,8 @@ const splitPatch = (patch: string | null | undefined): string[] => {
     return []
   }
 
-  const pattern = /(^@@ -(\d+),(\d+) \+(\d+),(\d+) @@).*$/gm
+  // `,count` is optional in unified diff when count=1 (e.g. `@@ -0,0 +1 @@`)
+  const pattern = /(^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@).*$/gm
 
   const result: string[] = []
   let last = -1
@@ -1150,13 +1151,14 @@ const patchStartEndLine = (
   oldHunk: { startLine: number; endLine: number }
   newHunk: { startLine: number; endLine: number }
 } | null => {
-  const pattern = /(^@@ -(\d+),(\d+) \+(\d+),(\d+) @@)/gm
+  // `,count` is optional in unified diff when count=1 (e.g. `@@ -0,0 +1 @@`)
+  const pattern = /(^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@)/gm
   const match = pattern.exec(patch)
   if (match != null) {
     const oldBegin = parseInt(match[2])
-    const oldDiff = parseInt(match[3])
+    const oldDiff = match[3] != null ? parseInt(match[3]) : 1
     const newBegin = parseInt(match[4])
-    const newDiff = parseInt(match[5])
+    const newDiff = match[5] != null ? parseInt(match[5]) : 1
     return {
       oldHunk: {
         startLine: oldBegin,
