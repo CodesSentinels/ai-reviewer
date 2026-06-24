@@ -1,5 +1,5 @@
 import {getInput, warning} from '@actions/core'
-import {getOctokit} from '@actions/github'
+// import {getOctokit} from '@actions/github'
 import pLimit from 'p-limit'
 import {octokit} from '../octokit'
 import type {Options} from '../options'
@@ -182,19 +182,19 @@ export interface BatchResolveResult {
 // resolveReviewThread is rejected by both GITHUB_TOKEN and GitHub App
 // installation tokens ("Resource not accessible by integration").
 // A classic PAT with repo scope is required.
-function getResolveGraphql(): (query: string, variables: Record<string, unknown>) => Promise<unknown> {
-  const pat = getInput('resolve_token')
-  if (pat) {
-    return getOctokit(pat).graphql as (query: string, variables: Record<string, unknown>) => Promise<unknown>
-  }
-  return (query, variables) => octokit.graphql(query, variables)
-}
+// function getResolveGraphql(): (query: string, variables: Record<string, unknown>) => Promise<unknown> {
+//   const pat = getInput('resolve_token')
+//   if (pat) {
+//     return getOctokit(pat).graphql as (query: string, variables: Record<string, unknown>) => Promise<unknown>
+//   }
+//   return (query, variables) => octokit.graphql(query, variables)
+// }
 
 export async function batchResolve(
   threads: ReviewThread[]
 ): Promise<BatchResolveResult> {
   const limit = pLimit(6)
-  const gql = getResolveGraphql()
+  // const gql = getResolveGraphql()
   let ok = 0
   const errors: Error[] = []
 
