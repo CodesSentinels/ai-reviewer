@@ -112,7 +112,8 @@ async function run(): Promise<void> {
         .filter(([, v]) => v.length > 0)
     ),
     getInput('semgrep_config'),
-    getInput('command_ack_reaction')
+    getInput('command_ack_reaction'),
+    getInput('debug_resolve_inject_failures')
   )
 
   // 打印所有配置项，方便调试

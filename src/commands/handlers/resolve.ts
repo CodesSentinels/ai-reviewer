@@ -28,6 +28,21 @@ async function execute(ctx: CommandContext): Promise<CommandResult> {
     return {message: 'ℹ️ 没有找到待解决的 CodeSentinel 审查意见'}
   }
 
+  // 测试用：注入假 thread ID，模拟部分失败场景
+  const injectCount = ctx.options.debugResolveInjectFailures
+  if (injectCount > 0) {
+    for (let i = 0; i < injectCount; i++) {
+      threads.push({
+        id: `PRRT_debug_inject_fake_${i + 1}`,
+        isResolved: false,
+        firstCommentAuthorLogin: botLogin,
+        path: threads[0].path,
+        line: 9000 + i,
+        firstCommentBody: `[debug] injected fake thread ${i + 1}`
+      })
+    }
+  }
+
   const {ok, failed, errors} = await batchResolve(threads)
   return {message: formatResult(ok, failed, threads.length, errors)}
 }

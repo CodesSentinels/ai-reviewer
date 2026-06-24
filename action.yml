@@ -26,6 +26,13 @@ inputs:
     required: false
     description: 'Enable debug mode'
     default: 'false'
+  debug_resolve_inject_failures:
+    required: false
+    description: >
+      FOR TESTING ONLY. When set to a positive integer N, the resolve command
+      appends N fake thread IDs to the batchResolve call, producing controlled
+      partial-failure output (ok=real failed=N). Remove from production workflows.
+    default: '0'
   max_files:
     required: false
     description:

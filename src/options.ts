@@ -69,6 +69,7 @@ export class Options {
    */
   semgrepConfig: string
   commandAckReaction: string // 命令识别后在用户评论上打的表情（空/off/none 表示禁用）
+  debugResolveInjectFailures: number // 测试用：向 batchResolve 注入 N 个假 thread ID
 
   constructor(
     debug: boolean,
@@ -96,7 +97,8 @@ export class Options {
     toolEnableOverrides: Record<string, boolean> = {},
     toolVersionOverrides: Record<string, string> = {},
     semgrepConfig = 'p/default',
-    commandAckReaction = 'eyes'
+    commandAckReaction = 'eyes',
+    debugResolveInjectFailures = '0'
   ) {
     this.debug = debug
     this.disableReview = disableReview
@@ -126,6 +128,7 @@ export class Options {
     this.toolVersionOverrides = toolVersionOverrides
     this.semgrepConfig = semgrepConfig
     this.commandAckReaction = commandAckReaction
+    this.debugResolveInjectFailures = parseInt(debugResolveInjectFailures) || 0
   }
 
   /** 打印所有配置项到日志，方便调试 */
