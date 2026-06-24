@@ -434,6 +434,79 @@ describeIntegration('resolve command — integration with GitHub API', () => {
   )
 
   test(
+    '7. batchResolve 部分成功 — 2 真实 thread + 2 无效 ID → ok=2 failed=2，warning 汇总列出全部失败项',
+    async () => {
+      // 新增 2 条真实 review comment（上一个 test 的真实 thread 已被 resolve）
+      await octokit.pulls.createReviewComment({
+        owner: OWNER,
+        repo: REPO,
+        pull_number: prNumber,
+        commit_id: headSha,
+        path: filePath,
+        line: 3,
+        side: 'RIGHT',
+        body: '🤖 [集成测试-T7] 部分成功测试第一条'
+      })
+      await octokit.pulls.createReviewComment({
+        owner: OWNER,
+        repo: REPO,
+        pull_number: prNumber,
+        commit_id: headSha,
+        path: filePath,
+        line: 5,
+        side: 'RIGHT',
+        body: '🤖 [集成测试-T7] 部分成功测试第二条'
+      })
+
+      const realThreads = await fetchUnresolvedBotThreads(
+        {owner: OWNER, repo: REPO, prNumber},
+        botLogin
+      )
+      expect(realThreads.length).toBe(2)
+
+      const fakeThreads = [
+        {
+          id: 'PRRT_fake_partial_success_1',
+          isResolved: false,
+          firstCommentAuthorLogin: botLogin,
+          path: filePath,
+          line: 10,
+          firstCommentBody: '🤖 [集成测试-T7] 假 thread A'
+        },
+        {
+          id: 'PRRT_fake_partial_success_2',
+          isResolved: false,
+          firstCommentAuthorLogin: botLogin,
+          path: filePath,
+          line: 20,
+          firstCommentBody: '🤖 [集成测试-T7] 假 thread B'
+        }
+      ]
+
+      const warnSpy = jest.spyOn(actionsCore, 'warning').mockImplementation(() => {})
+      try {
+        const {ok, failed, errors} = await batchResolve([...realThreads, ...fakeThreads])
+        console.log(`  batchResolve 结果: ok=${ok} failed=${failed}`)
+
+        expect(ok).toBe(2)
+        expect(failed).toBe(2)
+        expect(errors).toHaveLength(2)
+
+        // 一条汇总 warning，包含两条失败项的 path:line
+        expect(warnSpy).toHaveBeenCalledTimes(1)
+        const msg = warnSpy.mock.calls[0][0] as string
+        console.log(`  warning:\n${msg}`)
+        expect(msg).toMatch(/failed to resolve 2\/4/)
+        expect(msg).toMatch(/:10/)
+        expect(msg).toMatch(/:20/)
+      } finally {
+        warnSpy.mockRestore()
+      }
+    },
+    30_000
+  )
+
+  test(
     '4. 用户 @mention "@ai-reviewer resolve" → dispatchCommentEvent 完整走通，threads 被批量 resolve',
     async () => {
       // Test 4 requires a PAT: the dispatcher filters out Bot self-comments
