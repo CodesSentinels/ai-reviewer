@@ -222,6 +222,7 @@ function simulateDebugError(threadId: string): Error | null {
     )
   }
   if (threadId.includes('_network_')) {
+    // TODO: Maybe gitlab in the future, or other network errors, but for now just simulate a connection reset.
     return new Error(
       'request to https://api.github.com/graphql failed, reason: read ECONNRESET'
     )

@@ -34,21 +34,21 @@ async function execute(ctx: CommandContext): Promise<CommandResult> {
 
   // 测试用：注入假 thread ID，模拟部分失败场景。
   // 按 notfound → permission → network 轮换，覆盖三类错误。
-  const injectCount = ctx.options.debugResolveInjectFailures
-  if (injectCount > 0) {
-    const kinds = ['notfound', 'permission', 'network'] as const
-    for (let i = 0; i < injectCount; i++) {
-      const kind = kinds[i % kinds.length]
-      threads.push({
-        id: `PRRT_debug_inject_${kind}_${i + 1}`,
-        isResolved: false,
-        firstCommentAuthorLogin: botLogin,
-        path: threads[0].path,
-        line: 9000 + i,
-        firstCommentBody: `[debug] injected ${kind} failure ${i + 1}`
-      })
-    }
-  }
+  // const injectCount = ctx.options.debugResolveInjectFailures
+  // if (injectCount > 0) {
+  //   const kinds = ['notfound', 'permission', 'network'] as const
+  //   for (let i = 0; i < injectCount; i++) {
+  //     const kind = kinds[i % kinds.length]
+  //     threads.push({
+  //       id: `PRRT_debug_inject_${kind}_${i + 1}`,
+  //       isResolved: false,
+  //       firstCommentAuthorLogin: botLogin,
+  //       path: threads[0].path,
+  //       line: 9000 + i,
+  //       firstCommentBody: `[debug] injected ${kind} failure ${i + 1}`
+  //     })
+  //   }
+  // }
 
   const {ok, failed, failedItems} = await batchResolve(threads)
   return {message: formatResult(ok, failed, threads.length, failedItems)}
@@ -70,6 +70,7 @@ export async function resolveAllBotComments(params: {
 
 // ─── Formatting ───────────────────────────────────────────────────────────────
 
+// TODO Refer to CodeRabbit for the original implementation of this formatting logic.
 function formatResult(
   ok: number,
   failed: number,
