@@ -32,12 +32,22 @@ fi
 # curl 封装：gh_api <path> [额外 curl 参数...]
 gh_api() {
   local path="$1"; shift
-  curl -sf \
+  local response http_code body
+  response=$(curl -s \
+    -w $'\n''%{http_code}' \
     -H "Authorization: token ${GITHUB_TOKEN}" \
     -H "Accept: application/vnd.github+json" \
     -H "X-GitHub-Api-Version: 2022-11-28" \
-    "${@}" \
-    "${API}/${path}"
+    ${@:+"$@"} \
+    "${API}/${path}")
+  http_code=$(printf '%s' "$response" | tail -1)
+  body=$(printf '%s' "$response" | sed '$d')
+  if [[ "$http_code" -lt 200 || "$http_code" -ge 300 ]]; then
+    echo "❌  GitHub API 错误: HTTP $http_code  (${path})" >&2
+    echo "   响应: $body" >&2
+    return 1
+  fi
+  printf '%s' "$body"
 }
 
 # 从 JSON stdin 提取字段：json_get '.key.sub'
