@@ -1,8 +1,13 @@
 import type {CommandHandler, CommandContext, CommandResult} from '../types'
+import type {Options} from '../../options'
+import type {FailedThread} from '../../github/review-thread'
 import {
   getBotLogin,
   fetchUnresolvedBotThreads,
-  batchResolve
+  batchResolve,
+  threadLabel,
+  isPermissionError,
+  isNetworkError
 } from '../../github/review-thread'
 import {PRIMARY_BOT_MENTION} from '../../constants'
 
@@ -28,23 +33,51 @@ async function execute(ctx: CommandContext): Promise<CommandResult> {
     return {message: 'ℹ️ 没有找到待解决的 CodeSentinel 审查意见'}
   }
 
-  const {ok, failed, errors} = await batchResolve(threads)
-  return {message: formatResult(ok, failed, threads.length, errors)}
+  // 测试用：注入假 thread ID，模拟部分失败场景。
+  // 按 notfound → permission → network 轮换，覆盖三类错误。
+  // const injectCount = ctx.options.debugResolveInjectFailures
+  // if (injectCount > 0) {
+  //   const kinds = ['notfound', 'permission', 'network'] as const
+  //   for (let i = 0; i < injectCount; i++) {
+  //     const kind = kinds[i % kinds.length]
+  //     threads.push({
+  //       id: `PRRT_debug_inject_${kind}_${i + 1}`,
+  //       isResolved: false,
+  //       firstCommentAuthorLogin: botLogin,
+  //       path: threads[0].path,
+  //       line: 9000 + i,
+  //       firstCommentBody: `[debug] injected ${kind} failure ${i + 1}`
+  //     })
+  //   }
+  // }
+
+  const {ok, failed, failedItems} = await batchResolve(threads)
+  return {message: formatResult(ok, failed, threads.length, failedItems)}
 }
 
 // ─── Formatting ───────────────────────────────────────────────────────────────
 
+// TODO Refer to CodeRabbit for the original implementation of this formatting logic.
 function formatResult(
   ok: number,
   failed: number,
   total: number,
-  errors: Error[]
+  failedItems: FailedThread[]
 ): string {
   if (failed === 0) {
     return `✅ 已解决 **${ok}** 条 CodeSentinel 审查意见`
   }
   const errDetail =
-    errors.length > 0 ? `\n\n错误详情：\`${errors[0].message}\`` : ''
+    failedItems.length > 0
+      ? `\n\n失败详情：\n${failedItems
+          .map(
+            ({thread, error}) =>
+              `- ${errorTag(error)} \`${threadLabel(thread)}\`：${flattenError(
+                error.message
+              )}`
+          )
+          .join('\n')}${permissionHint(failedItems)}`
+      : ''
   if (ok === 0) {
     // 全部失败时几乎一定是权限问题：resolveReviewThread mutation 需要用户 PAT，
     // GITHUB_TOKEN 会被 GitHub 拒为 "Resource not accessible by integration"。
@@ -55,4 +88,25 @@ function formatResult(
     return `❌ 解决失败（共 **${total}** 条）${errDetail}${permissionHint}`
   }
   return `⚠️ 共 **${total}** 条，成功解决 **${ok}** 条，**${failed}** 条失败（可手动解决）${errDetail}`
+}
+
+/** 给每条失败打上分类标签，方便用户一眼区分错误类型 */
+function errorTag(error: Error): string {
+  if (isPermissionError(error)) return '🔒 权限不足'
+  if (isNetworkError(error)) return '🌐 网络错误'
+  return '⚠️ 其他错误'
+}
+
+/** 存在权限错误时，追加可操作提示 */
+function permissionHint(failedItems: FailedThread[]): string {
+  if (!failedItems.some(({error}) => isPermissionError(error))) return ''
+  return (
+    '\n\n💡 存在权限不足导致的失败：当前 token 无法解决审查线程，' +
+    '请将 `resolve_token` 输入配置为具有 repo 权限的 classic PAT，或手动解决。'
+  )
+}
+
+/** 将多行错误信息压成单行，避免错误中的 ` - ` 被 Markdown 当作嵌套列表渲染 */
+function flattenError(message: string): string {
+  return message.replace(/\s+/g, ' ').trim()
 }
