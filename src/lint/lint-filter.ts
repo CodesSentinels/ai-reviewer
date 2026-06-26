@@ -25,20 +25,6 @@ import {type LintResult} from './types'
 export const DEFAULT_CONTEXT_TOLERANCE = 3
 
 /**
- * 判断行号是否在变更窗口内（变更行 ± tolerance）
- */
-export function isLineInChangedWindow(
-  line: number,
-  changedLines: Set<number>,
-  tolerance: number = DEFAULT_CONTEXT_TOLERANCE
-): boolean {
-  for (const changed of changedLines) {
-    if (Math.abs(line - changed) <= tolerance) return true
-  }
-  return false
-}
-
-/**
  * 过滤 lint 结果：仅保留变更行 ± tolerance 范围内的问题
  *
  * 同时会丢弃文件不在 changedLineMap 中的结果（通常意味着工具扫描了
@@ -120,7 +106,10 @@ export function deduplicateResults(results: LintResult[]): LintResult[] {
     // 故意不含 column —— 详见函数顶 doc comment
     const key = `${r.file}:${r.line}:${ruleKey}:${msgKey}`
     const existing = map.get(key)
-    if (existing == null || SEV_RANK[r.severity] > SEV_RANK[existing.severity]) {
+    if (
+      existing == null ||
+      SEV_RANK[r.severity] > SEV_RANK[existing.severity]
+    ) {
       map.set(key, r)
     }
   }
@@ -179,7 +168,9 @@ export function collapseAdjacentFindings(results: LintResult[]): LintResult[] {
       out.push(list[0])
       continue
     }
-    list.sort((a, b) => a.line - b.line || (a.endLine ?? a.line) - (b.endLine ?? b.line))
+    list.sort(
+      (a, b) => a.line - b.line || (a.endLine ?? a.line) - (b.endLine ?? b.line)
+    )
     let current: LintResult = {...list[0]}
     for (let i = 1; i < list.length; i++) {
       const next = list[i]

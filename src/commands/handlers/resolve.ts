@@ -9,13 +9,14 @@ import {
   isPermissionError,
   isNetworkError
 } from '../../github/review-thread'
+import {PRIMARY_BOT_MENTION} from '../../constants'
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
 export const resolveHandler: CommandHandler = {
   name: 'resolve',
   description: '批量将所有 CodeSentinel 审查意见标记为已解决',
-  usage: '@ai-reviewer resolve',
+  usage: `${PRIMARY_BOT_MENTION} resolve`,
   needsAck: true,
   minPermission: 'write',
   execute
@@ -54,20 +55,6 @@ async function execute(ctx: CommandContext): Promise<CommandResult> {
   return {message: formatResult(ok, failed, threads.length, failedItems)}
 }
 
-// ─── External API (for member C) ──────────────────────────────────────────────
-
-export async function resolveAllBotComments(params: {
-  owner: string
-  repo: string
-  prNumber: number
-  options: Options
-}): Promise<{ok: number; failed: number}> {
-  const botLogin = await getBotLogin(params.options)
-  const threads = await fetchUnresolvedBotThreads(params, botLogin)
-  if (threads.length === 0) return {ok: 0, failed: 0}
-  return batchResolve(threads)
-}
-
 // ─── Formatting ───────────────────────────────────────────────────────────────
 
 // TODO Refer to CodeRabbit for the original implementation of this formatting logic.
@@ -92,7 +79,13 @@ function formatResult(
           .join('\n')}${permissionHint(failedItems)}`
       : ''
   if (ok === 0) {
-    return `❌ 解决失败（共 **${total}** 条）${errDetail}`
+    // 全部失败时几乎一定是权限问题：resolveReviewThread mutation 需要用户 PAT，
+    // GITHUB_TOKEN 会被 GitHub 拒为 "Resource not accessible by integration"。
+    // 给出可操作提示，避免用户只看到一句干巴巴的 forbidden。
+    const permissionHint =
+      '\n\n💡 这通常是权限不足：解决评论线程需要把用户 PAT 配置到 `resolve_token`，' +
+      '或在 workflow 中授予 `permissions: pull-requests: write`。'
+    return `❌ 解决失败（共 **${total}** 条）${errDetail}${permissionHint}`
   }
   return `⚠️ 共 **${total}** 条，成功解决 **${ok}** 条，**${failed}** 条失败（可手动解决）${errDetail}`
 }

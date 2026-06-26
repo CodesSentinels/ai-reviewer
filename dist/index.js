@@ -1,7 +1,7 @@
 /******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
 
-/***/ 6949:
+/***/ 1854:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
 "use strict";
@@ -15,7 +15,7 @@ __nccwpck_require__.d(__webpack_exports__, {
 var core = __nccwpck_require__(1078);
 // EXTERNAL MODULE: external "child_process"
 var external_child_process_ = __nccwpck_require__(2081);
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/internal/tslib.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/tslib.mjs
 function __classPrivateFieldSet(receiver, state, value, kind, f) {
     if (kind === "m")
         throw new TypeError("Private method is not writable");
@@ -34,7 +34,7 @@ function __classPrivateFieldGet(receiver, state, kind, f) {
 }
 
 
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/internal/utils/uuid.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/utils/uuid.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 /**
  * https://stackoverflow.com/a/2117523
@@ -50,7 +50,7 @@ let uuid4 = function () {
     return '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, (c) => (+c ^ (randomByte() & (15 >> (+c / 4)))).toString(16));
 };
 //# sourceMappingURL=uuid.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/internal/errors.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/errors.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 function isAbortError(err) {
     return (typeof err === 'object' &&
@@ -87,7 +87,7 @@ const castToError = (err) => {
     return new Error(err);
 };
 //# sourceMappingURL=errors.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/core/error.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/core/error.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 class error_OpenAIError extends Error {
@@ -204,39 +204,8 @@ class InvalidWebhookSignatureError extends Error {
         super(message);
     }
 }
-/**
- * Error thrown by the API server during OAuth token exchange.
- * Can have status codes 400, 401, or 403.
- * Other status codes from OAuth endpoints are raised as normal APIError types.
- */
-class OAuthError extends APIError {
-    constructor(status, error, headers) {
-        let finalMessage = 'OAuth2 authentication error';
-        let error_code = undefined;
-        if (error && typeof error === 'object') {
-            const errorData = error;
-            error_code = errorData['error'];
-            const description = errorData['error_description'];
-            if (description && typeof description === 'string') {
-                finalMessage = description;
-            }
-            else if (error_code) {
-                finalMessage = error_code;
-            }
-        }
-        super(status, error, finalMessage, headers);
-        this.error_code = error_code;
-    }
-}
-class SubjectTokenProviderError extends error_OpenAIError {
-    constructor(message, provider, cause) {
-        super(message);
-        this.provider = provider;
-        this.cause = cause;
-    }
-}
 //# sourceMappingURL=error.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/internal/utils/values.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/utils/values.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 // https://url.spec.whatwg.org/#url-scheme-string
@@ -331,14 +300,14 @@ const safeJSON = (text) => {
     }
 };
 //# sourceMappingURL=values.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/internal/utils/sleep.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/utils/sleep.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 //# sourceMappingURL=sleep.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/version.mjs
-const VERSION = '6.39.1'; // x-release-please-version
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/version.mjs
+const VERSION = '6.27.0'; // x-release-please-version
 //# sourceMappingURL=version.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/internal/detect-platform.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/detect-platform.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 const isRunningInBrowser = () => {
@@ -496,7 +465,7 @@ const getPlatformHeaders = () => {
     return (_platformHeaders ?? (_platformHeaders = getPlatformProperties()));
 };
 //# sourceMappingURL=detect-platform.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/internal/shims.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/shims.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 function getDefaultFetch() {
     if (typeof fetch !== 'undefined') {
@@ -582,7 +551,7 @@ async function CancelReadableStream(stream) {
     await cancelPromise;
 }
 //# sourceMappingURL=shims.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/internal/request-options.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/request-options.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 const FallbackEncoder = ({ headers, body }) => {
     return {
@@ -593,7 +562,7 @@ const FallbackEncoder = ({ headers, body }) => {
     };
 };
 //# sourceMappingURL=request-options.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/internal/qs/formats.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/qs/formats.mjs
 const default_format = 'RFC3986';
 const default_formatter = (v) => String(v);
 const formatters = {
@@ -603,7 +572,7 @@ const formatters = {
 const RFC1738 = 'RFC1738';
 const RFC3986 = 'RFC3986';
 //# sourceMappingURL=formats.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/internal/qs/utils.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/qs/utils.mjs
 
 
 let has = (obj, key) => ((has = Object.hasOwn ?? Function.prototype.call.bind(Object.prototype.hasOwnProperty)),
@@ -821,7 +790,7 @@ function maybe_map(val, fn) {
     return fn(val);
 }
 //# sourceMappingURL=utils.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/internal/qs/stringify.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/qs/stringify.mjs
 
 
 
@@ -1096,14 +1065,14 @@ function stringify(object, opts = {}) {
     return joined.length > 0 ? prefix + joined : '';
 }
 //# sourceMappingURL=stringify.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/internal/utils/query.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/utils/query.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 function stringifyQuery(query) {
     return stringify(query, { arrayFormat: 'brackets' });
 }
 //# sourceMappingURL=query.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/internal/utils/bytes.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/utils/bytes.mjs
 function concatBytes(buffers) {
     let length = 0;
     for (const buffer of buffers) {
@@ -1130,7 +1099,7 @@ function decodeUTF8(bytes) {
         ((decoder = new globalThis.TextDecoder()), (decodeUTF8_ = decoder.decode.bind(decoder))))(bytes);
 }
 //# sourceMappingURL=bytes.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/internal/decoders/line.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/decoders/line.mjs
 var _LineDecoder_buffer, _LineDecoder_carriageReturnIndex;
 
 
@@ -1239,7 +1208,7 @@ function findDoubleNewlineIndex(buffer) {
     return -1;
 }
 //# sourceMappingURL=line.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/internal/utils/log.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/utils/log.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 const levelNumbers = {
@@ -1304,8 +1273,6 @@ const formatRequestDetails = (details) => {
         details.headers = Object.fromEntries((details.headers instanceof Headers ? [...details.headers] : Object.entries(details.headers)).map(([name, value]) => [
             name,
             (name.toLowerCase() === 'authorization' ||
-                name.toLowerCase() === 'api-key' ||
-                name.toLowerCase() === 'x-api-key' ||
                 name.toLowerCase() === 'cookie' ||
                 name.toLowerCase() === 'set-cookie') ?
                 '***'
@@ -1321,7 +1288,7 @@ const formatRequestDetails = (details) => {
     return details;
 };
 //# sourceMappingURL=log.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/core/streaming.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/core/streaming.mjs
 var _Stream_client;
 
 
@@ -1610,7 +1577,7 @@ function partition(str, delimiter) {
     return [str, '', ''];
 }
 //# sourceMappingURL=streaming.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/internal/parse.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/parse.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -1667,7 +1634,7 @@ function addRequestID(value, response) {
     });
 }
 //# sourceMappingURL=parse.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/core/api-promise.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/core/api-promise.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 var _APIPromise_client;
 
@@ -1740,7 +1707,7 @@ class APIPromise extends Promise {
 }
 _APIPromise_client = new WeakMap();
 //# sourceMappingURL=api-promise.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/core/pagination.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/core/pagination.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 var _AbstractPage_client;
 
@@ -1888,129 +1855,8 @@ class ConversationCursorPage extends AbstractPage {
         };
     }
 }
-class NextCursorPage extends AbstractPage {
-    constructor(client, response, body, options) {
-        super(client, response, body, options);
-        this.data = body.data || [];
-        this.has_more = body.has_more || false;
-        this.next = body.next || null;
-    }
-    getPaginatedItems() {
-        return this.data ?? [];
-    }
-    hasNextPage() {
-        if (this.has_more === false) {
-            return false;
-        }
-        return super.hasNextPage();
-    }
-    nextPageRequestOptions() {
-        const cursor = this.next;
-        if (!cursor) {
-            return null;
-        }
-        return {
-            ...this.options,
-            query: {
-                ...maybeObj(this.options.query),
-                after: cursor,
-            },
-        };
-    }
-}
 //# sourceMappingURL=pagination.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/auth/workload-identity-auth.mjs
-
-
-const SUBJECT_TOKEN_TYPES = {
-    jwt: 'urn:ietf:params:oauth:token-type:jwt',
-    id: 'urn:ietf:params:oauth:token-type:id_token',
-};
-const TOKEN_EXCHANGE_GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:token-exchange';
-class WorkloadIdentityAuth {
-    constructor(config, fetch) {
-        this.cachedToken = null;
-        this.refreshPromise = null;
-        this.tokenExchangeUrl = 'https://auth.openai.com/oauth/token';
-        this.config = config;
-        this.fetch = fetch ?? getDefaultFetch();
-    }
-    async getToken() {
-        if (!this.cachedToken || this.isTokenExpired(this.cachedToken)) {
-            if (this.refreshPromise) {
-                return await this.refreshPromise;
-            }
-            this.refreshPromise = this.refreshToken();
-            try {
-                const token = await this.refreshPromise;
-                return token;
-            }
-            finally {
-                this.refreshPromise = null;
-            }
-        }
-        if (this.needsRefresh(this.cachedToken) && !this.refreshPromise) {
-            this.refreshPromise = this.refreshToken().finally(() => {
-                this.refreshPromise = null;
-            });
-        }
-        return this.cachedToken.token;
-    }
-    async refreshToken() {
-        const subjectToken = await this.config.provider.getToken();
-        const body = {
-            grant_type: TOKEN_EXCHANGE_GRANT_TYPE,
-            subject_token: subjectToken,
-            subject_token_type: SUBJECT_TOKEN_TYPES[this.config.provider.tokenType],
-            identity_provider_id: this.config.identityProviderId,
-            service_account_id: this.config.serviceAccountId,
-        };
-        if (this.config.clientId) {
-            body['client_id'] = this.config.clientId;
-        }
-        const response = await this.fetch(this.tokenExchangeUrl, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(body),
-        });
-        if (!response.ok) {
-            const errorText = await response.text();
-            let body = undefined;
-            try {
-                body = JSON.parse(errorText);
-            }
-            catch { }
-            if (response.status === 400 || response.status === 401 || response.status === 403) {
-                throw new OAuthError(response.status, body, response.headers);
-            }
-            throw APIError.generate(response.status, body, `Token exchange failed with status ${response.status}`, response.headers);
-        }
-        const tokenResponse = (await response.json());
-        const expiresIn = tokenResponse.expires_in || 3600;
-        const expiresAt = Date.now() + expiresIn * 1000;
-        this.cachedToken = {
-            token: tokenResponse.access_token,
-            expiresAt,
-        };
-        return tokenResponse.access_token;
-    }
-    isTokenExpired(cachedToken) {
-        return Date.now() >= cachedToken.expiresAt;
-    }
-    needsRefresh(cachedToken) {
-        const bufferSeconds = this.config.refreshBufferSeconds ?? 1200;
-        const bufferMs = bufferSeconds * 1000;
-        return Date.now() >= cachedToken.expiresAt - bufferMs;
-    }
-    invalidateToken() {
-        this.cachedToken = null;
-        this.refreshPromise = null;
-    }
-}
-//# sourceMappingURL=workload-identity-auth.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/internal/uploads.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/uploads.mjs
 
 const checkFileSupport = () => {
     if (typeof File === 'undefined') {
@@ -2142,7 +1988,7 @@ const addFormValue = async (form, key, value) => {
     }
 };
 //# sourceMappingURL=uploads.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/internal/to-file.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/to-file.mjs
 
 
 /**
@@ -2231,10 +2077,10 @@ function propsForError(value) {
     return `; props: [${props.map((p) => `"${p}"`).join(', ')}]`;
 }
 //# sourceMappingURL=to-file.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/core/uploads.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/core/uploads.mjs
 
 //# sourceMappingURL=uploads.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/core/resource.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/core/resource.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 class APIResource {
     constructor(client) {
@@ -2242,7 +2088,7 @@ class APIResource {
     }
 }
 //# sourceMappingURL=resource.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/internal/utils/path.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/utils/path.mjs
 
 /**
  * Percent-encode everything that isn't safe to have in a path without encoding safe chars.
@@ -2317,7 +2163,7 @@ const createPathTagFunction = (pathEncoder = encodeURIPath) => function path(sta
  */
 const path = /* @__PURE__ */ createPathTagFunction(encodeURIPath);
 //# sourceMappingURL=path.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/chat/completions/messages.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/chat/completions/messages.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -2341,15 +2187,14 @@ class Messages extends APIResource {
      * ```
      */
     list(completionID, query = {}, options) {
-        return this._client.getAPIList(path `/chat/completions/${completionID}/messages`, (CursorPage), { query, ...options, __security: { bearerAuth: true } });
+        return this._client.getAPIList(path `/chat/completions/${completionID}/messages`, (CursorPage), { query, ...options });
     }
 }
 //# sourceMappingURL=messages.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/error.mjs
-/** @deprecated Import from ./core/error instead */
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/error.mjs
 
 //# sourceMappingURL=error.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/lib/parser.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/parser.mjs
 
 function isChatCompletionFunctionTool(tool) {
     return tool !== undefined && 'function' in tool && tool.function !== undefined;
@@ -2512,7 +2357,7 @@ function validateInputTools(tools) {
     }
 }
 //# sourceMappingURL=parser.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/lib/chatCompletionUtils.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/chatCompletionUtils.mjs
 const isAssistantMessage = (message) => {
     return message?.role === 'assistant';
 };
@@ -2523,7 +2368,7 @@ function isPresent(obj) {
     return obj != null;
 }
 //# sourceMappingURL=chatCompletionUtils.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/lib/EventStream.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/EventStream.mjs
 var _EventStream_instances, _EventStream_connectedPromise, _EventStream_resolveConnectedPromise, _EventStream_rejectConnectedPromise, _EventStream_endPromise, _EventStream_resolveEndPromise, _EventStream_rejectEndPromise, _EventStream_listeners, _EventStream_ended, _EventStream_errored, _EventStream_aborted, _EventStream_catchingPromiseCreated, _EventStream_handleError;
 
 
@@ -2710,7 +2555,7 @@ _EventStream_connectedPromise = new WeakMap(), _EventStream_resolveConnectedProm
     return this._emit('error', new error_OpenAIError(String(error)));
 };
 //# sourceMappingURL=EventStream.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/lib/RunnableFunction.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/RunnableFunction.mjs
 function isRunnableFunctionWithParse(fn) {
     return typeof fn.parse === 'function';
 }
@@ -2725,7 +2570,7 @@ class ParsingToolFunction {
     }
 }
 //# sourceMappingURL=RunnableFunction.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/lib/AbstractChatCompletionRunner.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/AbstractChatCompletionRunner.mjs
 var _AbstractChatCompletionRunner_instances, _AbstractChatCompletionRunner_getFinalContent, _AbstractChatCompletionRunner_getFinalMessage, _AbstractChatCompletionRunner_getFinalFunctionToolCall, _AbstractChatCompletionRunner_getFinalFunctionToolCallResult, _AbstractChatCompletionRunner_calculateTotalUsage, _AbstractChatCompletionRunner_validateParams, _AbstractChatCompletionRunner_stringifyFunctionCallResult;
 
 
@@ -3013,7 +2858,7 @@ _AbstractChatCompletionRunner_instances = new WeakSet(), _AbstractChatCompletion
             : JSON.stringify(rawContent));
 };
 //# sourceMappingURL=AbstractChatCompletionRunner.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/lib/ChatCompletionRunner.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/ChatCompletionRunner.mjs
 
 
 class ChatCompletionRunner extends AbstractChatCompletionRunner {
@@ -3034,7 +2879,7 @@ class ChatCompletionRunner extends AbstractChatCompletionRunner {
     }
 }
 //# sourceMappingURL=ChatCompletionRunner.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/_vendor/partial-json-parser/parser.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/_vendor/partial-json-parser/parser.mjs
 const STR = 0b000000001;
 const NUM = 0b000000010;
 const ARR = 0b000000100;
@@ -3276,11 +3121,10 @@ const _parseJSON = (jsonString, allow) => {
 const partialParse = (input) => parseJSON(input, Allow.ALL ^ Allow.NUM);
 
 //# sourceMappingURL=parser.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/streaming.mjs
-/** @deprecated Import from ./core/streaming instead */
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/streaming.mjs
 
 //# sourceMappingURL=streaming.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/lib/ChatCompletionStream.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/ChatCompletionStream.mjs
 var _ChatCompletionStream_instances, _ChatCompletionStream_params, _ChatCompletionStream_choiceEventStates, _ChatCompletionStream_currentChatCompletionSnapshot, _ChatCompletionStream_beginRequest, _ChatCompletionStream_getChoiceEventState, _ChatCompletionStream_addChunk, _ChatCompletionStream_emitToolCallDoneEvent, _ChatCompletionStream_emitContentDoneEvents, _ChatCompletionStream_endRequest, _ChatCompletionStream_getAutoParseableResponseFormat, _ChatCompletionStream_accumulateChatCompletion;
 
 
@@ -3770,7 +3614,7 @@ function assertIsEmpty(obj) {
 }
 function assertNever(_x) { }
 //# sourceMappingURL=ChatCompletionStream.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/lib/ChatCompletionStreamingRunner.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/ChatCompletionStreamingRunner.mjs
 
 class ChatCompletionStreamingRunner extends ChatCompletionStream {
     static fromReadableStream(stream) {
@@ -3791,7 +3635,7 @@ class ChatCompletionStreamingRunner extends ChatCompletionStream {
     }
 }
 //# sourceMappingURL=ChatCompletionStreamingRunner.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/chat/completions/completions.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/chat/completions/completions.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -3811,12 +3655,7 @@ class Completions extends APIResource {
         this.messages = new Messages(this._client);
     }
     create(body, options) {
-        return this._client.post('/chat/completions', {
-            body,
-            ...options,
-            stream: body.stream ?? false,
-            __security: { bearerAuth: true },
-        });
+        return this._client.post('/chat/completions', { body, ...options, stream: body.stream ?? false });
     }
     /**
      * Get a stored chat completion. Only Chat Completions that have been created with
@@ -3829,10 +3668,7 @@ class Completions extends APIResource {
      * ```
      */
     retrieve(completionID, options) {
-        return this._client.get(path `/chat/completions/${completionID}`, {
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.get(path `/chat/completions/${completionID}`, options);
     }
     /**
      * Modify a stored chat completion. Only Chat Completions that have been created
@@ -3848,11 +3684,7 @@ class Completions extends APIResource {
      * ```
      */
     update(completionID, body, options) {
-        return this._client.post(path `/chat/completions/${completionID}`, {
-            body,
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.post(path `/chat/completions/${completionID}`, { body, ...options });
     }
     /**
      * List stored Chat Completions. Only Chat Completions that have been stored with
@@ -3867,11 +3699,7 @@ class Completions extends APIResource {
      * ```
      */
     list(query = {}, options) {
-        return this._client.getAPIList('/chat/completions', (CursorPage), {
-            query,
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.getAPIList('/chat/completions', (CursorPage), { query, ...options });
     }
     /**
      * Delete a stored chat completion. Only Chat Completions that have been created
@@ -3884,10 +3712,7 @@ class Completions extends APIResource {
      * ```
      */
     delete(completionID, options) {
-        return this._client.delete(path `/chat/completions/${completionID}`, {
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.delete(path `/chat/completions/${completionID}`, options);
     }
     parse(body, options) {
         validateInputTools(body.tools);
@@ -3920,7 +3745,7 @@ class Completions extends APIResource {
 
 Completions.Messages = Messages;
 //# sourceMappingURL=completions.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/chat/chat.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/chat/chat.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -3933,2396 +3758,18 @@ class Chat extends APIResource {
 }
 Chat.Completions = Completions;
 //# sourceMappingURL=chat.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/chat/completions/index.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/chat/completions/index.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
 
 //# sourceMappingURL=index.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/chat/index.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/chat/index.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
 //# sourceMappingURL=index.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/admin/organization/admin-api-keys.mjs
-// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
-
-
-class AdminAPIKeys extends APIResource {
-    /**
-     * Create an organization admin API key
-     *
-     * @example
-     * ```ts
-     * const adminAPIKey =
-     *   await client.admin.organization.adminAPIKeys.create({
-     *     name: 'New Admin Key',
-     *   });
-     * ```
-     */
-    create(body, options) {
-        return this._client.post('/organization/admin_api_keys', {
-            body,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Retrieve a single organization API key
-     *
-     * @example
-     * ```ts
-     * const adminAPIKey =
-     *   await client.admin.organization.adminAPIKeys.retrieve(
-     *     'key_id',
-     *   );
-     * ```
-     */
-    retrieve(keyID, options) {
-        return this._client.get(path `/organization/admin_api_keys/${keyID}`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * List organization API keys
-     *
-     * @example
-     * ```ts
-     * // Automatically fetches more pages as needed.
-     * for await (const adminAPIKey of client.admin.organization.adminAPIKeys.list()) {
-     *   // ...
-     * }
-     * ```
-     */
-    list(query = {}, options) {
-        return this._client.getAPIList('/organization/admin_api_keys', (CursorPage), {
-            query,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Delete an organization admin API key
-     *
-     * @example
-     * ```ts
-     * const adminAPIKey =
-     *   await client.admin.organization.adminAPIKeys.delete(
-     *     'key_id',
-     *   );
-     * ```
-     */
-    delete(keyID, options) {
-        return this._client.delete(path `/organization/admin_api_keys/${keyID}`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-}
-//# sourceMappingURL=admin-api-keys.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/admin/organization/audit-logs.mjs
-// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
-
-/**
- * List user actions and configuration changes within this organization.
- */
-class AuditLogs extends APIResource {
-    /**
-     * List user actions and configuration changes within this organization.
-     *
-     * @example
-     * ```ts
-     * // Automatically fetches more pages as needed.
-     * for await (const auditLogListResponse of client.admin.organization.auditLogs.list()) {
-     *   // ...
-     * }
-     * ```
-     */
-    list(query = {}, options) {
-        return this._client.getAPIList('/organization/audit_logs', (ConversationCursorPage), {
-            query,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-}
-//# sourceMappingURL=audit-logs.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/admin/organization/certificates.mjs
-// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
-
-
-class Certificates extends APIResource {
-    /**
-     * Upload a certificate to the organization. This does **not** automatically
-     * activate the certificate.
-     *
-     * Organizations can upload up to 50 certificates.
-     *
-     * @example
-     * ```ts
-     * const certificate =
-     *   await client.admin.organization.certificates.create({
-     *     certificate: 'certificate',
-     *   });
-     * ```
-     */
-    create(body, options) {
-        return this._client.post('/organization/certificates', {
-            body,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Get a certificate that has been uploaded to the organization.
-     *
-     * You can get a certificate regardless of whether it is active or not.
-     *
-     * @example
-     * ```ts
-     * const certificate =
-     *   await client.admin.organization.certificates.retrieve(
-     *     'certificate_id',
-     *   );
-     * ```
-     */
-    retrieve(certificateID, query = {}, options) {
-        return this._client.get(path `/organization/certificates/${certificateID}`, {
-            query,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Modify a certificate. Note that only the name can be modified.
-     *
-     * @example
-     * ```ts
-     * const certificate =
-     *   await client.admin.organization.certificates.update(
-     *     'certificate_id',
-     *   );
-     * ```
-     */
-    update(certificateID, body, options) {
-        return this._client.post(path `/organization/certificates/${certificateID}`, {
-            body,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * List uploaded certificates for this organization.
-     *
-     * @example
-     * ```ts
-     * // Automatically fetches more pages as needed.
-     * for await (const certificateListResponse of client.admin.organization.certificates.list()) {
-     *   // ...
-     * }
-     * ```
-     */
-    list(query = {}, options) {
-        return this._client.getAPIList('/organization/certificates', (ConversationCursorPage), { query, ...options, __security: { adminAPIKeyAuth: true } });
-    }
-    /**
-     * Delete a certificate from the organization.
-     *
-     * The certificate must be inactive for the organization and all projects.
-     *
-     * @example
-     * ```ts
-     * const certificate =
-     *   await client.admin.organization.certificates.delete(
-     *     'certificate_id',
-     *   );
-     * ```
-     */
-    delete(certificateID, options) {
-        return this._client.delete(path `/organization/certificates/${certificateID}`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Activate certificates at the organization level.
-     *
-     * You can atomically and idempotently activate up to 10 certificates at a time.
-     *
-     * @example
-     * ```ts
-     * // Automatically fetches more pages as needed.
-     * for await (const certificateActivateResponse of client.admin.organization.certificates.activate(
-     *   { certificate_ids: ['cert_abc'] },
-     * )) {
-     *   // ...
-     * }
-     * ```
-     */
-    activate(body, options) {
-        return this._client.getAPIList('/organization/certificates/activate', (Page), {
-            body,
-            method: 'post',
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Deactivate certificates at the organization level.
-     *
-     * You can atomically and idempotently deactivate up to 10 certificates at a time.
-     *
-     * @example
-     * ```ts
-     * // Automatically fetches more pages as needed.
-     * for await (const certificateDeactivateResponse of client.admin.organization.certificates.deactivate(
-     *   { certificate_ids: ['cert_abc'] },
-     * )) {
-     *   // ...
-     * }
-     * ```
-     */
-    deactivate(body, options) {
-        return this._client.getAPIList('/organization/certificates/deactivate', (Page), { body, method: 'post', ...options, __security: { adminAPIKeyAuth: true } });
-    }
-}
-//# sourceMappingURL=certificates.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/admin/organization/data-retention.mjs
-// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
-class DataRetention extends APIResource {
-    /**
-     * Retrieves organization data retention controls.
-     *
-     * @example
-     * ```ts
-     * const organizationDataRetention =
-     *   await client.admin.organization.dataRetention.retrieve();
-     * ```
-     */
-    retrieve(options) {
-        return this._client.get('/organization/data_retention', {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Updates organization data retention controls.
-     *
-     * @example
-     * ```ts
-     * const organizationDataRetention =
-     *   await client.admin.organization.dataRetention.update({
-     *     retention_type: 'zero_data_retention',
-     *   });
-     * ```
-     */
-    update(body, options) {
-        return this._client.post('/organization/data_retention', {
-            body,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-}
-//# sourceMappingURL=data-retention.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/admin/organization/invites.mjs
-// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
-
-
-class Invites extends APIResource {
-    /**
-     * Create an invite for a user to the organization. The invite must be accepted by
-     * the user before they have access to the organization.
-     *
-     * @example
-     * ```ts
-     * const invite =
-     *   await client.admin.organization.invites.create({
-     *     email: 'email',
-     *     role: 'reader',
-     *   });
-     * ```
-     */
-    create(body, options) {
-        return this._client.post('/organization/invites', {
-            body,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Retrieves an invite.
-     *
-     * @example
-     * ```ts
-     * const invite =
-     *   await client.admin.organization.invites.retrieve(
-     *     'invite_id',
-     *   );
-     * ```
-     */
-    retrieve(inviteID, options) {
-        return this._client.get(path `/organization/invites/${inviteID}`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Returns a list of invites in the organization.
-     *
-     * @example
-     * ```ts
-     * // Automatically fetches more pages as needed.
-     * for await (const invite of client.admin.organization.invites.list()) {
-     *   // ...
-     * }
-     * ```
-     */
-    list(query = {}, options) {
-        return this._client.getAPIList('/organization/invites', (ConversationCursorPage), {
-            query,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Delete an invite. If the invite has already been accepted, it cannot be deleted.
-     *
-     * @example
-     * ```ts
-     * const invite =
-     *   await client.admin.organization.invites.delete(
-     *     'invite_id',
-     *   );
-     * ```
-     */
-    delete(inviteID, options) {
-        return this._client.delete(path `/organization/invites/${inviteID}`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-}
-//# sourceMappingURL=invites.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/admin/organization/roles.mjs
-// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
-
-
-class Roles extends APIResource {
-    /**
-     * Creates a custom role for the organization.
-     *
-     * @example
-     * ```ts
-     * const role = await client.admin.organization.roles.create({
-     *   permissions: ['string'],
-     *   role_name: 'role_name',
-     * });
-     * ```
-     */
-    create(body, options) {
-        return this._client.post('/organization/roles', {
-            body,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Retrieves an organization role.
-     *
-     * @example
-     * ```ts
-     * const role = await client.admin.organization.roles.retrieve(
-     *   'role_id',
-     * );
-     * ```
-     */
-    retrieve(roleID, options) {
-        return this._client.get(path `/organization/roles/${roleID}`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Updates an existing organization role.
-     *
-     * @example
-     * ```ts
-     * const role = await client.admin.organization.roles.update(
-     *   'role_id',
-     * );
-     * ```
-     */
-    update(roleID, body, options) {
-        return this._client.post(path `/organization/roles/${roleID}`, {
-            body,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Lists the roles configured for the organization.
-     *
-     * @example
-     * ```ts
-     * // Automatically fetches more pages as needed.
-     * for await (const role of client.admin.organization.roles.list()) {
-     *   // ...
-     * }
-     * ```
-     */
-    list(query = {}, options) {
-        return this._client.getAPIList('/organization/roles', (NextCursorPage), {
-            query,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Deletes a custom role from the organization.
-     *
-     * @example
-     * ```ts
-     * const role = await client.admin.organization.roles.delete(
-     *   'role_id',
-     * );
-     * ```
-     */
-    delete(roleID, options) {
-        return this._client.delete(path `/organization/roles/${roleID}`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-}
-//# sourceMappingURL=roles.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/admin/organization/spend-alerts.mjs
-// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
-
-
-class SpendAlerts extends APIResource {
-    /**
-     * Creates an organization spend alert.
-     *
-     * @example
-     * ```ts
-     * const organizationSpendAlert =
-     *   await client.admin.organization.spendAlerts.create({
-     *     currency: 'USD',
-     *     interval: 'month',
-     *     notification_channel: {
-     *       recipients: ['string'],
-     *       type: 'email',
-     *     },
-     *     threshold_amount: 0,
-     *   });
-     * ```
-     */
-    create(body, options) {
-        return this._client.post('/organization/spend_alerts', {
-            body,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Updates an organization spend alert.
-     *
-     * @example
-     * ```ts
-     * const organizationSpendAlert =
-     *   await client.admin.organization.spendAlerts.update(
-     *     'alert_id',
-     *     {
-     *       currency: 'USD',
-     *       interval: 'month',
-     *       notification_channel: {
-     *         recipients: ['string'],
-     *         type: 'email',
-     *       },
-     *       threshold_amount: 0,
-     *     },
-     *   );
-     * ```
-     */
-    update(alertID, body, options) {
-        return this._client.post(path `/organization/spend_alerts/${alertID}`, {
-            body,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Lists organization spend alerts.
-     *
-     * @example
-     * ```ts
-     * // Automatically fetches more pages as needed.
-     * for await (const organizationSpendAlert of client.admin.organization.spendAlerts.list()) {
-     *   // ...
-     * }
-     * ```
-     */
-    list(query = {}, options) {
-        return this._client.getAPIList('/organization/spend_alerts', (ConversationCursorPage), { query, ...options, __security: { adminAPIKeyAuth: true } });
-    }
-    /**
-     * Deletes an organization spend alert.
-     *
-     * @example
-     * ```ts
-     * const organizationSpendAlertDeleted =
-     *   await client.admin.organization.spendAlerts.delete(
-     *     'alert_id',
-     *   );
-     * ```
-     */
-    delete(alertID, options) {
-        return this._client.delete(path `/organization/spend_alerts/${alertID}`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-}
-//# sourceMappingURL=spend-alerts.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/admin/organization/usage.mjs
-// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
-class Usage extends APIResource {
-    /**
-     * Get audio speeches usage details for the organization.
-     *
-     * @example
-     * ```ts
-     * const response =
-     *   await client.admin.organization.usage.audioSpeeches({
-     *     start_time: 0,
-     *   });
-     * ```
-     */
-    audioSpeeches(query, options) {
-        return this._client.get('/organization/usage/audio_speeches', {
-            query,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Get audio transcriptions usage details for the organization.
-     *
-     * @example
-     * ```ts
-     * const response =
-     *   await client.admin.organization.usage.audioTranscriptions(
-     *     { start_time: 0 },
-     *   );
-     * ```
-     */
-    audioTranscriptions(query, options) {
-        return this._client.get('/organization/usage/audio_transcriptions', {
-            query,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Get code interpreter sessions usage details for the organization.
-     *
-     * @example
-     * ```ts
-     * const response =
-     *   await client.admin.organization.usage.codeInterpreterSessions(
-     *     { start_time: 0 },
-     *   );
-     * ```
-     */
-    codeInterpreterSessions(query, options) {
-        return this._client.get('/organization/usage/code_interpreter_sessions', {
-            query,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Get completions usage details for the organization.
-     *
-     * @example
-     * ```ts
-     * const response =
-     *   await client.admin.organization.usage.completions({
-     *     start_time: 0,
-     *   });
-     * ```
-     */
-    completions(query, options) {
-        return this._client.get('/organization/usage/completions', {
-            query,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Get costs details for the organization.
-     *
-     * @example
-     * ```ts
-     * const response =
-     *   await client.admin.organization.usage.costs({
-     *     start_time: 0,
-     *   });
-     * ```
-     */
-    costs(query, options) {
-        return this._client.get('/organization/costs', {
-            query,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Get embeddings usage details for the organization.
-     *
-     * @example
-     * ```ts
-     * const response =
-     *   await client.admin.organization.usage.embeddings({
-     *     start_time: 0,
-     *   });
-     * ```
-     */
-    embeddings(query, options) {
-        return this._client.get('/organization/usage/embeddings', {
-            query,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Get file search calls usage details for the organization.
-     *
-     * @example
-     * ```ts
-     * const response =
-     *   await client.admin.organization.usage.fileSearchCalls({
-     *     start_time: 0,
-     *   });
-     * ```
-     */
-    fileSearchCalls(query, options) {
-        return this._client.get('/organization/usage/file_search_calls', {
-            query,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Get images usage details for the organization.
-     *
-     * @example
-     * ```ts
-     * const response =
-     *   await client.admin.organization.usage.images({
-     *     start_time: 0,
-     *   });
-     * ```
-     */
-    images(query, options) {
-        return this._client.get('/organization/usage/images', {
-            query,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Get moderations usage details for the organization.
-     *
-     * @example
-     * ```ts
-     * const response =
-     *   await client.admin.organization.usage.moderations({
-     *     start_time: 0,
-     *   });
-     * ```
-     */
-    moderations(query, options) {
-        return this._client.get('/organization/usage/moderations', {
-            query,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Get vector stores usage details for the organization.
-     *
-     * @example
-     * ```ts
-     * const response =
-     *   await client.admin.organization.usage.vectorStores({
-     *     start_time: 0,
-     *   });
-     * ```
-     */
-    vectorStores(query, options) {
-        return this._client.get('/organization/usage/vector_stores', {
-            query,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Get web search calls usage details for the organization.
-     *
-     * @example
-     * ```ts
-     * const response =
-     *   await client.admin.organization.usage.webSearchCalls({
-     *     start_time: 0,
-     *   });
-     * ```
-     */
-    webSearchCalls(query, options) {
-        return this._client.get('/organization/usage/web_search_calls', {
-            query,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-}
-//# sourceMappingURL=usage.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/admin/organization/groups/roles.mjs
-// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
-
-
-class roles_Roles extends APIResource {
-    /**
-     * Assigns an organization role to a group within the organization.
-     *
-     * @example
-     * ```ts
-     * const role =
-     *   await client.admin.organization.groups.roles.create(
-     *     'group_id',
-     *     { role_id: 'role_id' },
-     *   );
-     * ```
-     */
-    create(groupID, body, options) {
-        return this._client.post(path `/organization/groups/${groupID}/roles`, {
-            body,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Retrieves an organization role assigned to a group.
-     *
-     * @example
-     * ```ts
-     * const role =
-     *   await client.admin.organization.groups.roles.retrieve(
-     *     'role_id',
-     *     { group_id: 'group_id' },
-     *   );
-     * ```
-     */
-    retrieve(roleID, params, options) {
-        const { group_id } = params;
-        return this._client.get(path `/organization/groups/${group_id}/roles/${roleID}`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Lists the organization roles assigned to a group within the organization.
-     *
-     * @example
-     * ```ts
-     * // Automatically fetches more pages as needed.
-     * for await (const roleListResponse of client.admin.organization.groups.roles.list(
-     *   'group_id',
-     * )) {
-     *   // ...
-     * }
-     * ```
-     */
-    list(groupID, query = {}, options) {
-        return this._client.getAPIList(path `/organization/groups/${groupID}/roles`, (NextCursorPage), { query, ...options, __security: { adminAPIKeyAuth: true } });
-    }
-    /**
-     * Unassigns an organization role from a group within the organization.
-     *
-     * @example
-     * ```ts
-     * const role =
-     *   await client.admin.organization.groups.roles.delete(
-     *     'role_id',
-     *     { group_id: 'group_id' },
-     *   );
-     * ```
-     */
-    delete(roleID, params, options) {
-        const { group_id } = params;
-        return this._client.delete(path `/organization/groups/${group_id}/roles/${roleID}`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-}
-//# sourceMappingURL=roles.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/admin/organization/groups/users.mjs
-// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
-
-
-class Users extends APIResource {
-    /**
-     * Adds a user to a group.
-     *
-     * @example
-     * ```ts
-     * const user =
-     *   await client.admin.organization.groups.users.create(
-     *     'group_id',
-     *     { user_id: 'user_id' },
-     *   );
-     * ```
-     */
-    create(groupID, body, options) {
-        return this._client.post(path `/organization/groups/${groupID}/users`, {
-            body,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Retrieves a user in a group.
-     *
-     * @example
-     * ```ts
-     * const user =
-     *   await client.admin.organization.groups.users.retrieve(
-     *     'user_id',
-     *     { group_id: 'group_id' },
-     *   );
-     * ```
-     */
-    retrieve(userID, params, options) {
-        const { group_id } = params;
-        return this._client.get(path `/organization/groups/${group_id}/users/${userID}`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Lists the users assigned to a group.
-     *
-     * @example
-     * ```ts
-     * // Automatically fetches more pages as needed.
-     * for await (const organizationGroupUser of client.admin.organization.groups.users.list(
-     *   'group_id',
-     * )) {
-     *   // ...
-     * }
-     * ```
-     */
-    list(groupID, query = {}, options) {
-        return this._client.getAPIList(path `/organization/groups/${groupID}/users`, (NextCursorPage), { query, ...options, __security: { adminAPIKeyAuth: true } });
-    }
-    /**
-     * Removes a user from a group.
-     *
-     * @example
-     * ```ts
-     * const user =
-     *   await client.admin.organization.groups.users.delete(
-     *     'user_id',
-     *     { group_id: 'group_id' },
-     *   );
-     * ```
-     */
-    delete(userID, params, options) {
-        const { group_id } = params;
-        return this._client.delete(path `/organization/groups/${group_id}/users/${userID}`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-}
-//# sourceMappingURL=users.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/admin/organization/groups/groups.mjs
-// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
-
-
-
-
-
-
-class Groups extends APIResource {
-    constructor() {
-        super(...arguments);
-        this.users = new Users(this._client);
-        this.roles = new roles_Roles(this._client);
-    }
-    /**
-     * Creates a new group in the organization.
-     *
-     * @example
-     * ```ts
-     * const group = await client.admin.organization.groups.create(
-     *   { name: 'x' },
-     * );
-     * ```
-     */
-    create(body, options) {
-        return this._client.post('/organization/groups', {
-            body,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Retrieves a group.
-     *
-     * @example
-     * ```ts
-     * const group =
-     *   await client.admin.organization.groups.retrieve(
-     *     'group_id',
-     *   );
-     * ```
-     */
-    retrieve(groupID, options) {
-        return this._client.get(path `/organization/groups/${groupID}`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Updates a group's information.
-     *
-     * @example
-     * ```ts
-     * const group = await client.admin.organization.groups.update(
-     *   'group_id',
-     *   { name: 'x' },
-     * );
-     * ```
-     */
-    update(groupID, body, options) {
-        return this._client.post(path `/organization/groups/${groupID}`, {
-            body,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Lists all groups in the organization.
-     *
-     * @example
-     * ```ts
-     * // Automatically fetches more pages as needed.
-     * for await (const group of client.admin.organization.groups.list()) {
-     *   // ...
-     * }
-     * ```
-     */
-    list(query = {}, options) {
-        return this._client.getAPIList('/organization/groups', (NextCursorPage), {
-            query,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Deletes a group from the organization.
-     *
-     * @example
-     * ```ts
-     * const group = await client.admin.organization.groups.delete(
-     *   'group_id',
-     * );
-     * ```
-     */
-    delete(groupID, options) {
-        return this._client.delete(path `/organization/groups/${groupID}`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-}
-Groups.Users = Users;
-Groups.Roles = roles_Roles;
-//# sourceMappingURL=groups.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/admin/organization/projects/api-keys.mjs
-// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
-
-
-class APIKeys extends APIResource {
-    /**
-     * Retrieves an API key in the project.
-     *
-     * @example
-     * ```ts
-     * const projectAPIKey =
-     *   await client.admin.organization.projects.apiKeys.retrieve(
-     *     'api_key_id',
-     *     { project_id: 'project_id' },
-     *   );
-     * ```
-     */
-    retrieve(apiKeyID, params, options) {
-        const { project_id } = params;
-        return this._client.get(path `/organization/projects/${project_id}/api_keys/${apiKeyID}`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Returns a list of API keys in the project.
-     *
-     * @example
-     * ```ts
-     * // Automatically fetches more pages as needed.
-     * for await (const projectAPIKey of client.admin.organization.projects.apiKeys.list(
-     *   'project_id',
-     * )) {
-     *   // ...
-     * }
-     * ```
-     */
-    list(projectID, query = {}, options) {
-        return this._client.getAPIList(path `/organization/projects/${projectID}/api_keys`, (ConversationCursorPage), { query, ...options, __security: { adminAPIKeyAuth: true } });
-    }
-    /**
-     * Deletes an API key from the project.
-     *
-     * Returns confirmation of the key deletion, or an error if the key belonged to a
-     * service account.
-     *
-     * @example
-     * ```ts
-     * const apiKey =
-     *   await client.admin.organization.projects.apiKeys.delete(
-     *     'api_key_id',
-     *     { project_id: 'project_id' },
-     *   );
-     * ```
-     */
-    delete(apiKeyID, params, options) {
-        const { project_id } = params;
-        return this._client.delete(path `/organization/projects/${project_id}/api_keys/${apiKeyID}`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-}
-//# sourceMappingURL=api-keys.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/admin/organization/projects/certificates.mjs
-// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
-
-
-class certificates_Certificates extends APIResource {
-    /**
-     * List certificates for this project.
-     *
-     * @example
-     * ```ts
-     * // Automatically fetches more pages as needed.
-     * for await (const certificateListResponse of client.admin.organization.projects.certificates.list(
-     *   'project_id',
-     * )) {
-     *   // ...
-     * }
-     * ```
-     */
-    list(projectID, query = {}, options) {
-        return this._client.getAPIList(path `/organization/projects/${projectID}/certificates`, (ConversationCursorPage), { query, ...options, __security: { adminAPIKeyAuth: true } });
-    }
-    /**
-     * Activate certificates at the project level.
-     *
-     * You can atomically and idempotently activate up to 10 certificates at a time.
-     *
-     * @example
-     * ```ts
-     * // Automatically fetches more pages as needed.
-     * for await (const certificateActivateResponse of client.admin.organization.projects.certificates.activate(
-     *   'project_id',
-     *   { certificate_ids: ['cert_abc'] },
-     * )) {
-     *   // ...
-     * }
-     * ```
-     */
-    activate(projectID, body, options) {
-        return this._client.getAPIList(path `/organization/projects/${projectID}/certificates/activate`, (Page), { body, method: 'post', ...options, __security: { adminAPIKeyAuth: true } });
-    }
-    /**
-     * Deactivate certificates at the project level. You can atomically and
-     * idempotently deactivate up to 10 certificates at a time.
-     *
-     * @example
-     * ```ts
-     * // Automatically fetches more pages as needed.
-     * for await (const certificateDeactivateResponse of client.admin.organization.projects.certificates.deactivate(
-     *   'project_id',
-     *   { certificate_ids: ['cert_abc'] },
-     * )) {
-     *   // ...
-     * }
-     * ```
-     */
-    deactivate(projectID, body, options) {
-        return this._client.getAPIList(path `/organization/projects/${projectID}/certificates/deactivate`, (Page), { body, method: 'post', ...options, __security: { adminAPIKeyAuth: true } });
-    }
-}
-//# sourceMappingURL=certificates.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/admin/organization/projects/data-retention.mjs
-// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
-
-class data_retention_DataRetention extends APIResource {
-    /**
-     * Retrieves project data retention controls.
-     *
-     * @example
-     * ```ts
-     * const projectDataRetention =
-     *   await client.admin.organization.projects.dataRetention.retrieve(
-     *     'project_id',
-     *   );
-     * ```
-     */
-    retrieve(projectID, options) {
-        return this._client.get(path `/organization/projects/${projectID}/data_retention`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Updates project data retention controls.
-     *
-     * @example
-     * ```ts
-     * const projectDataRetention =
-     *   await client.admin.organization.projects.dataRetention.update(
-     *     'project_id',
-     *     { retention_type: 'organization_default' },
-     *   );
-     * ```
-     */
-    update(projectID, body, options) {
-        return this._client.post(path `/organization/projects/${projectID}/data_retention`, {
-            body,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-}
-//# sourceMappingURL=data-retention.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/admin/organization/projects/hosted-tool-permissions.mjs
-// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
-
-class HostedToolPermissions extends APIResource {
-    /**
-     * Returns hosted tool permissions for a project.
-     *
-     * @example
-     * ```ts
-     * const projectHostedToolPermissions =
-     *   await client.admin.organization.projects.hostedToolPermissions.retrieve(
-     *     'project_id',
-     *   );
-     * ```
-     */
-    retrieve(projectID, options) {
-        return this._client.get(path `/organization/projects/${projectID}/hosted_tool_permissions`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Updates hosted tool permissions for a project.
-     *
-     * @example
-     * ```ts
-     * const projectHostedToolPermissions =
-     *   await client.admin.organization.projects.hostedToolPermissions.update(
-     *     'project_id',
-     *   );
-     * ```
-     */
-    update(projectID, body, options) {
-        return this._client.post(path `/organization/projects/${projectID}/hosted_tool_permissions`, {
-            body,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-}
-//# sourceMappingURL=hosted-tool-permissions.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/admin/organization/projects/model-permissions.mjs
-// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
-
-class ModelPermissions extends APIResource {
-    /**
-     * Returns model permissions for a project.
-     *
-     * @example
-     * ```ts
-     * const projectModelPermissions =
-     *   await client.admin.organization.projects.modelPermissions.retrieve(
-     *     'project_id',
-     *   );
-     * ```
-     */
-    retrieve(projectID, options) {
-        return this._client.get(path `/organization/projects/${projectID}/model_permissions`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Updates model permissions for a project.
-     *
-     * @example
-     * ```ts
-     * const projectModelPermissions =
-     *   await client.admin.organization.projects.modelPermissions.update(
-     *     'project_id',
-     *     { mode: 'allow_list', model_ids: ['string'] },
-     *   );
-     * ```
-     */
-    update(projectID, body, options) {
-        return this._client.post(path `/organization/projects/${projectID}/model_permissions`, {
-            body,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Deletes model permissions for a project.
-     *
-     * @example
-     * ```ts
-     * const projectModelPermissionsDeleted =
-     *   await client.admin.organization.projects.modelPermissions.delete(
-     *     'project_id',
-     *   );
-     * ```
-     */
-    delete(projectID, options) {
-        return this._client.delete(path `/organization/projects/${projectID}/model_permissions`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-}
-//# sourceMappingURL=model-permissions.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/admin/organization/projects/rate-limits.mjs
-// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
-
-
-class RateLimits extends APIResource {
-    /**
-     * Returns the rate limits per model for a project.
-     *
-     * @example
-     * ```ts
-     * // Automatically fetches more pages as needed.
-     * for await (const projectRateLimit of client.admin.organization.projects.rateLimits.listRateLimits(
-     *   'project_id',
-     * )) {
-     *   // ...
-     * }
-     * ```
-     */
-    listRateLimits(projectID, query = {}, options) {
-        return this._client.getAPIList(path `/organization/projects/${projectID}/rate_limits`, (ConversationCursorPage), { query, ...options, __security: { adminAPIKeyAuth: true } });
-    }
-    /**
-     * Updates a project rate limit.
-     *
-     * @example
-     * ```ts
-     * const projectRateLimit =
-     *   await client.admin.organization.projects.rateLimits.updateRateLimit(
-     *     'rate_limit_id',
-     *     { project_id: 'project_id' },
-     *   );
-     * ```
-     */
-    updateRateLimit(rateLimitID, params, options) {
-        const { project_id, ...body } = params;
-        return this._client.post(path `/organization/projects/${project_id}/rate_limits/${rateLimitID}`, {
-            body,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-}
-//# sourceMappingURL=rate-limits.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/admin/organization/projects/roles.mjs
-// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
-
-
-class projects_roles_Roles extends APIResource {
-    /**
-     * Creates a custom role for a project.
-     *
-     * @example
-     * ```ts
-     * const role =
-     *   await client.admin.organization.projects.roles.create(
-     *     'project_id',
-     *     { permissions: ['string'], role_name: 'role_name' },
-     *   );
-     * ```
-     */
-    create(projectID, body, options) {
-        return this._client.post(path `/projects/${projectID}/roles`, {
-            body,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Retrieves a project role.
-     *
-     * @example
-     * ```ts
-     * const role =
-     *   await client.admin.organization.projects.roles.retrieve(
-     *     'role_id',
-     *     { project_id: 'project_id' },
-     *   );
-     * ```
-     */
-    retrieve(roleID, params, options) {
-        const { project_id } = params;
-        return this._client.get(path `/projects/${project_id}/roles/${roleID}`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Updates an existing project role.
-     *
-     * @example
-     * ```ts
-     * const role =
-     *   await client.admin.organization.projects.roles.update(
-     *     'role_id',
-     *     { project_id: 'project_id' },
-     *   );
-     * ```
-     */
-    update(roleID, params, options) {
-        const { project_id, ...body } = params;
-        return this._client.post(path `/projects/${project_id}/roles/${roleID}`, {
-            body,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Lists the roles configured for a project.
-     *
-     * @example
-     * ```ts
-     * // Automatically fetches more pages as needed.
-     * for await (const role of client.admin.organization.projects.roles.list(
-     *   'project_id',
-     * )) {
-     *   // ...
-     * }
-     * ```
-     */
-    list(projectID, query = {}, options) {
-        return this._client.getAPIList(path `/projects/${projectID}/roles`, (NextCursorPage), {
-            query,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Deletes a custom role from a project.
-     *
-     * @example
-     * ```ts
-     * const role =
-     *   await client.admin.organization.projects.roles.delete(
-     *     'role_id',
-     *     { project_id: 'project_id' },
-     *   );
-     * ```
-     */
-    delete(roleID, params, options) {
-        const { project_id } = params;
-        return this._client.delete(path `/projects/${project_id}/roles/${roleID}`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-}
-//# sourceMappingURL=roles.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/admin/organization/projects/service-accounts.mjs
-// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
-
-
-class ServiceAccounts extends APIResource {
-    /**
-     * Creates a new service account in the project. This also returns an unredacted
-     * API key for the service account.
-     *
-     * @example
-     * ```ts
-     * const serviceAccount =
-     *   await client.admin.organization.projects.serviceAccounts.create(
-     *     'project_id',
-     *     { name: 'name' },
-     *   );
-     * ```
-     */
-    create(projectID, body, options) {
-        return this._client.post(path `/organization/projects/${projectID}/service_accounts`, {
-            body,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Retrieves a service account in the project.
-     *
-     * @example
-     * ```ts
-     * const projectServiceAccount =
-     *   await client.admin.organization.projects.serviceAccounts.retrieve(
-     *     'service_account_id',
-     *     { project_id: 'project_id' },
-     *   );
-     * ```
-     */
-    retrieve(serviceAccountID, params, options) {
-        const { project_id } = params;
-        return this._client.get(path `/organization/projects/${project_id}/service_accounts/${serviceAccountID}`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Updates a service account in the project.
-     *
-     * @example
-     * ```ts
-     * const projectServiceAccount =
-     *   await client.admin.organization.projects.serviceAccounts.update(
-     *     'service_account_id',
-     *     { project_id: 'project_id' },
-     *   );
-     * ```
-     */
-    update(serviceAccountID, params, options) {
-        const { project_id, ...body } = params;
-        return this._client.post(path `/organization/projects/${project_id}/service_accounts/${serviceAccountID}`, { body, ...options, __security: { adminAPIKeyAuth: true } });
-    }
-    /**
-     * Returns a list of service accounts in the project.
-     *
-     * @example
-     * ```ts
-     * // Automatically fetches more pages as needed.
-     * for await (const projectServiceAccount of client.admin.organization.projects.serviceAccounts.list(
-     *   'project_id',
-     * )) {
-     *   // ...
-     * }
-     * ```
-     */
-    list(projectID, query = {}, options) {
-        return this._client.getAPIList(path `/organization/projects/${projectID}/service_accounts`, (ConversationCursorPage), { query, ...options, __security: { adminAPIKeyAuth: true } });
-    }
-    /**
-     * Deletes a service account from the project.
-     *
-     * Returns confirmation of service account deletion, or an error if the project is
-     * archived (archived projects have no service accounts).
-     *
-     * @example
-     * ```ts
-     * const serviceAccount =
-     *   await client.admin.organization.projects.serviceAccounts.delete(
-     *     'service_account_id',
-     *     { project_id: 'project_id' },
-     *   );
-     * ```
-     */
-    delete(serviceAccountID, params, options) {
-        const { project_id } = params;
-        return this._client.delete(path `/organization/projects/${project_id}/service_accounts/${serviceAccountID}`, { ...options, __security: { adminAPIKeyAuth: true } });
-    }
-}
-//# sourceMappingURL=service-accounts.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/admin/organization/projects/spend-alerts.mjs
-// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
-
-
-class spend_alerts_SpendAlerts extends APIResource {
-    /**
-     * Creates a project spend alert.
-     *
-     * @example
-     * ```ts
-     * const projectSpendAlert =
-     *   await client.admin.organization.projects.spendAlerts.create(
-     *     'project_id',
-     *     {
-     *       currency: 'USD',
-     *       interval: 'month',
-     *       notification_channel: {
-     *         recipients: ['string'],
-     *         type: 'email',
-     *       },
-     *       threshold_amount: 0,
-     *     },
-     *   );
-     * ```
-     */
-    create(projectID, body, options) {
-        return this._client.post(path `/organization/projects/${projectID}/spend_alerts`, {
-            body,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Updates a project spend alert.
-     *
-     * @example
-     * ```ts
-     * const projectSpendAlert =
-     *   await client.admin.organization.projects.spendAlerts.update(
-     *     'alert_id',
-     *     {
-     *       project_id: 'project_id',
-     *       currency: 'USD',
-     *       interval: 'month',
-     *       notification_channel: {
-     *         recipients: ['string'],
-     *         type: 'email',
-     *       },
-     *       threshold_amount: 0,
-     *     },
-     *   );
-     * ```
-     */
-    update(alertID, params, options) {
-        const { project_id, ...body } = params;
-        return this._client.post(path `/organization/projects/${project_id}/spend_alerts/${alertID}`, {
-            body,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Lists project spend alerts.
-     *
-     * @example
-     * ```ts
-     * // Automatically fetches more pages as needed.
-     * for await (const projectSpendAlert of client.admin.organization.projects.spendAlerts.list(
-     *   'project_id',
-     * )) {
-     *   // ...
-     * }
-     * ```
-     */
-    list(projectID, query = {}, options) {
-        return this._client.getAPIList(path `/organization/projects/${projectID}/spend_alerts`, (ConversationCursorPage), { query, ...options, __security: { adminAPIKeyAuth: true } });
-    }
-    /**
-     * Deletes a project spend alert.
-     *
-     * @example
-     * ```ts
-     * const projectSpendAlertDeleted =
-     *   await client.admin.organization.projects.spendAlerts.delete(
-     *     'alert_id',
-     *     { project_id: 'project_id' },
-     *   );
-     * ```
-     */
-    delete(alertID, params, options) {
-        const { project_id } = params;
-        return this._client.delete(path `/organization/projects/${project_id}/spend_alerts/${alertID}`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-}
-//# sourceMappingURL=spend-alerts.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/admin/organization/projects/groups/roles.mjs
-// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
-
-
-class groups_roles_Roles extends APIResource {
-    /**
-     * Assigns a project role to a group within a project.
-     *
-     * @example
-     * ```ts
-     * const role =
-     *   await client.admin.organization.projects.groups.roles.create(
-     *     'group_id',
-     *     { project_id: 'project_id', role_id: 'role_id' },
-     *   );
-     * ```
-     */
-    create(groupID, params, options) {
-        const { project_id, ...body } = params;
-        return this._client.post(path `/projects/${project_id}/groups/${groupID}/roles`, {
-            body,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Retrieves a project role assigned to a group.
-     *
-     * @example
-     * ```ts
-     * const role =
-     *   await client.admin.organization.projects.groups.roles.retrieve(
-     *     'role_id',
-     *     { project_id: 'project_id', group_id: 'group_id' },
-     *   );
-     * ```
-     */
-    retrieve(roleID, params, options) {
-        const { project_id, group_id } = params;
-        return this._client.get(path `/projects/${project_id}/groups/${group_id}/roles/${roleID}`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Lists the project roles assigned to a group within a project.
-     *
-     * @example
-     * ```ts
-     * // Automatically fetches more pages as needed.
-     * for await (const roleListResponse of client.admin.organization.projects.groups.roles.list(
-     *   'group_id',
-     *   { project_id: 'project_id' },
-     * )) {
-     *   // ...
-     * }
-     * ```
-     */
-    list(groupID, params, options) {
-        const { project_id, ...query } = params;
-        return this._client.getAPIList(path `/projects/${project_id}/groups/${groupID}/roles`, (NextCursorPage), { query, ...options, __security: { adminAPIKeyAuth: true } });
-    }
-    /**
-     * Unassigns a project role from a group within a project.
-     *
-     * @example
-     * ```ts
-     * const role =
-     *   await client.admin.organization.projects.groups.roles.delete(
-     *     'role_id',
-     *     { project_id: 'project_id', group_id: 'group_id' },
-     *   );
-     * ```
-     */
-    delete(roleID, params, options) {
-        const { project_id, group_id } = params;
-        return this._client.delete(path `/projects/${project_id}/groups/${group_id}/roles/${roleID}`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-}
-//# sourceMappingURL=roles.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/admin/organization/projects/groups/groups.mjs
-// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
-
-
-
-
-class groups_Groups extends APIResource {
-    constructor() {
-        super(...arguments);
-        this.roles = new groups_roles_Roles(this._client);
-    }
-    /**
-     * Grants a group access to a project.
-     *
-     * @example
-     * ```ts
-     * const projectGroup =
-     *   await client.admin.organization.projects.groups.create(
-     *     'project_id',
-     *     { group_id: 'group_id', role: 'role' },
-     *   );
-     * ```
-     */
-    create(projectID, body, options) {
-        return this._client.post(path `/organization/projects/${projectID}/groups`, {
-            body,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Retrieves a project's group.
-     *
-     * @example
-     * ```ts
-     * const projectGroup =
-     *   await client.admin.organization.projects.groups.retrieve(
-     *     'group_id',
-     *     { project_id: 'project_id' },
-     *   );
-     * ```
-     */
-    retrieve(groupID, params, options) {
-        const { project_id, ...query } = params;
-        return this._client.get(path `/organization/projects/${project_id}/groups/${groupID}`, {
-            query,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Lists the groups that have access to a project.
-     *
-     * @example
-     * ```ts
-     * // Automatically fetches more pages as needed.
-     * for await (const projectGroup of client.admin.organization.projects.groups.list(
-     *   'project_id',
-     * )) {
-     *   // ...
-     * }
-     * ```
-     */
-    list(projectID, query = {}, options) {
-        return this._client.getAPIList(path `/organization/projects/${projectID}/groups`, (NextCursorPage), { query, ...options, __security: { adminAPIKeyAuth: true } });
-    }
-    /**
-     * Revokes a group's access to a project.
-     *
-     * @example
-     * ```ts
-     * const group =
-     *   await client.admin.organization.projects.groups.delete(
-     *     'group_id',
-     *     { project_id: 'project_id' },
-     *   );
-     * ```
-     */
-    delete(groupID, params, options) {
-        const { project_id } = params;
-        return this._client.delete(path `/organization/projects/${project_id}/groups/${groupID}`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-}
-groups_Groups.Roles = groups_roles_Roles;
-//# sourceMappingURL=groups.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/admin/organization/projects/users/roles.mjs
-// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
-
-
-class users_roles_Roles extends APIResource {
-    /**
-     * Assigns a project role to a user within a project.
-     *
-     * @example
-     * ```ts
-     * const role =
-     *   await client.admin.organization.projects.users.roles.create(
-     *     'user_id',
-     *     { project_id: 'project_id', role_id: 'role_id' },
-     *   );
-     * ```
-     */
-    create(userID, params, options) {
-        const { project_id, ...body } = params;
-        return this._client.post(path `/projects/${project_id}/users/${userID}/roles`, {
-            body,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Retrieves a project role assigned to a user.
-     *
-     * @example
-     * ```ts
-     * const role =
-     *   await client.admin.organization.projects.users.roles.retrieve(
-     *     'role_id',
-     *     { project_id: 'project_id', user_id: 'user_id' },
-     *   );
-     * ```
-     */
-    retrieve(roleID, params, options) {
-        const { project_id, user_id } = params;
-        return this._client.get(path `/projects/${project_id}/users/${user_id}/roles/${roleID}`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Lists the project roles assigned to a user within a project.
-     *
-     * @example
-     * ```ts
-     * // Automatically fetches more pages as needed.
-     * for await (const roleListResponse of client.admin.organization.projects.users.roles.list(
-     *   'user_id',
-     *   { project_id: 'project_id' },
-     * )) {
-     *   // ...
-     * }
-     * ```
-     */
-    list(userID, params, options) {
-        const { project_id, ...query } = params;
-        return this._client.getAPIList(path `/projects/${project_id}/users/${userID}/roles`, (NextCursorPage), { query, ...options, __security: { adminAPIKeyAuth: true } });
-    }
-    /**
-     * Unassigns a project role from a user within a project.
-     *
-     * @example
-     * ```ts
-     * const role =
-     *   await client.admin.organization.projects.users.roles.delete(
-     *     'role_id',
-     *     { project_id: 'project_id', user_id: 'user_id' },
-     *   );
-     * ```
-     */
-    delete(roleID, params, options) {
-        const { project_id, user_id } = params;
-        return this._client.delete(path `/projects/${project_id}/users/${user_id}/roles/${roleID}`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-}
-//# sourceMappingURL=roles.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/admin/organization/projects/users/users.mjs
-// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
-
-
-
-
-class users_Users extends APIResource {
-    constructor() {
-        super(...arguments);
-        this.roles = new users_roles_Roles(this._client);
-    }
-    /**
-     * Adds a user to the project. Users must already be members of the organization to
-     * be added to a project.
-     *
-     * @example
-     * ```ts
-     * const projectUser =
-     *   await client.admin.organization.projects.users.create(
-     *     'project_id',
-     *     { role: 'role' },
-     *   );
-     * ```
-     */
-    create(projectID, body, options) {
-        return this._client.post(path `/organization/projects/${projectID}/users`, {
-            body,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Retrieves a user in the project.
-     *
-     * @example
-     * ```ts
-     * const projectUser =
-     *   await client.admin.organization.projects.users.retrieve(
-     *     'user_id',
-     *     { project_id: 'project_id' },
-     *   );
-     * ```
-     */
-    retrieve(userID, params, options) {
-        const { project_id } = params;
-        return this._client.get(path `/organization/projects/${project_id}/users/${userID}`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Modifies a user's role in the project.
-     *
-     * @example
-     * ```ts
-     * const projectUser =
-     *   await client.admin.organization.projects.users.update(
-     *     'user_id',
-     *     { project_id: 'project_id' },
-     *   );
-     * ```
-     */
-    update(userID, params, options) {
-        const { project_id, ...body } = params;
-        return this._client.post(path `/organization/projects/${project_id}/users/${userID}`, {
-            body,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Returns a list of users in the project.
-     *
-     * @example
-     * ```ts
-     * // Automatically fetches more pages as needed.
-     * for await (const projectUser of client.admin.organization.projects.users.list(
-     *   'project_id',
-     * )) {
-     *   // ...
-     * }
-     * ```
-     */
-    list(projectID, query = {}, options) {
-        return this._client.getAPIList(path `/organization/projects/${projectID}/users`, (ConversationCursorPage), { query, ...options, __security: { adminAPIKeyAuth: true } });
-    }
-    /**
-     * Deletes a user from the project.
-     *
-     * Returns confirmation of project user deletion, or an error if the project is
-     * archived (archived projects have no users).
-     *
-     * @example
-     * ```ts
-     * const user =
-     *   await client.admin.organization.projects.users.delete(
-     *     'user_id',
-     *     { project_id: 'project_id' },
-     *   );
-     * ```
-     */
-    delete(userID, params, options) {
-        const { project_id } = params;
-        return this._client.delete(path `/organization/projects/${project_id}/users/${userID}`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-}
-users_Users.Roles = users_roles_Roles;
-//# sourceMappingURL=users.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/admin/organization/projects/projects.mjs
-// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-class Projects extends APIResource {
-    constructor() {
-        super(...arguments);
-        this.users = new users_Users(this._client);
-        this.serviceAccounts = new ServiceAccounts(this._client);
-        this.apiKeys = new APIKeys(this._client);
-        this.rateLimits = new RateLimits(this._client);
-        this.modelPermissions = new ModelPermissions(this._client);
-        this.hostedToolPermissions = new HostedToolPermissions(this._client);
-        this.groups = new groups_Groups(this._client);
-        this.roles = new projects_roles_Roles(this._client);
-        this.dataRetention = new data_retention_DataRetention(this._client);
-        this.spendAlerts = new spend_alerts_SpendAlerts(this._client);
-        this.certificates = new certificates_Certificates(this._client);
-    }
-    /**
-     * Create a new project in the organization. Projects can be created and archived,
-     * but cannot be deleted.
-     *
-     * @example
-     * ```ts
-     * const project =
-     *   await client.admin.organization.projects.create({
-     *     name: 'name',
-     *   });
-     * ```
-     */
-    create(body, options) {
-        return this._client.post('/organization/projects', {
-            body,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Retrieves a project.
-     *
-     * @example
-     * ```ts
-     * const project =
-     *   await client.admin.organization.projects.retrieve(
-     *     'project_id',
-     *   );
-     * ```
-     */
-    retrieve(projectID, options) {
-        return this._client.get(path `/organization/projects/${projectID}`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Modifies a project in the organization.
-     *
-     * @example
-     * ```ts
-     * const project =
-     *   await client.admin.organization.projects.update(
-     *     'project_id',
-     *   );
-     * ```
-     */
-    update(projectID, body, options) {
-        return this._client.post(path `/organization/projects/${projectID}`, {
-            body,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Returns a list of projects.
-     *
-     * @example
-     * ```ts
-     * // Automatically fetches more pages as needed.
-     * for await (const project of client.admin.organization.projects.list()) {
-     *   // ...
-     * }
-     * ```
-     */
-    list(query = {}, options) {
-        return this._client.getAPIList('/organization/projects', (ConversationCursorPage), {
-            query,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Archives a project in the organization. Archived projects cannot be used or
-     * updated.
-     *
-     * @example
-     * ```ts
-     * const project =
-     *   await client.admin.organization.projects.archive(
-     *     'project_id',
-     *   );
-     * ```
-     */
-    archive(projectID, options) {
-        return this._client.post(path `/organization/projects/${projectID}/archive`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-}
-Projects.Users = users_Users;
-Projects.ServiceAccounts = ServiceAccounts;
-Projects.APIKeys = APIKeys;
-Projects.RateLimits = RateLimits;
-Projects.ModelPermissions = ModelPermissions;
-Projects.HostedToolPermissions = HostedToolPermissions;
-Projects.Groups = groups_Groups;
-Projects.Roles = projects_roles_Roles;
-Projects.DataRetention = data_retention_DataRetention;
-Projects.SpendAlerts = spend_alerts_SpendAlerts;
-Projects.Certificates = certificates_Certificates;
-//# sourceMappingURL=projects.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/admin/organization/users/roles.mjs
-// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
-
-
-class organization_users_roles_Roles extends APIResource {
-    /**
-     * Assigns an organization role to a user within the organization.
-     *
-     * @example
-     * ```ts
-     * const role =
-     *   await client.admin.organization.users.roles.create(
-     *     'user_id',
-     *     { role_id: 'role_id' },
-     *   );
-     * ```
-     */
-    create(userID, body, options) {
-        return this._client.post(path `/organization/users/${userID}/roles`, {
-            body,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Retrieves an organization role assigned to a user.
-     *
-     * @example
-     * ```ts
-     * const role =
-     *   await client.admin.organization.users.roles.retrieve(
-     *     'role_id',
-     *     { user_id: 'user_id' },
-     *   );
-     * ```
-     */
-    retrieve(roleID, params, options) {
-        const { user_id } = params;
-        return this._client.get(path `/organization/users/${user_id}/roles/${roleID}`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Lists the organization roles assigned to a user within the organization.
-     *
-     * @example
-     * ```ts
-     * // Automatically fetches more pages as needed.
-     * for await (const roleListResponse of client.admin.organization.users.roles.list(
-     *   'user_id',
-     * )) {
-     *   // ...
-     * }
-     * ```
-     */
-    list(userID, query = {}, options) {
-        return this._client.getAPIList(path `/organization/users/${userID}/roles`, (NextCursorPage), { query, ...options, __security: { adminAPIKeyAuth: true } });
-    }
-    /**
-     * Unassigns an organization role from a user within the organization.
-     *
-     * @example
-     * ```ts
-     * const role =
-     *   await client.admin.organization.users.roles.delete(
-     *     'role_id',
-     *     { user_id: 'user_id' },
-     *   );
-     * ```
-     */
-    delete(roleID, params, options) {
-        const { user_id } = params;
-        return this._client.delete(path `/organization/users/${user_id}/roles/${roleID}`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-}
-//# sourceMappingURL=roles.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/admin/organization/users/users.mjs
-// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
-
-
-
-
-class users_users_Users extends APIResource {
-    constructor() {
-        super(...arguments);
-        this.roles = new organization_users_roles_Roles(this._client);
-    }
-    /**
-     * Retrieves a user by their identifier.
-     *
-     * @example
-     * ```ts
-     * const organizationUser =
-     *   await client.admin.organization.users.retrieve('user_id');
-     * ```
-     */
-    retrieve(userID, options) {
-        return this._client.get(path `/organization/users/${userID}`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Modifies a user's role in the organization.
-     *
-     * @example
-     * ```ts
-     * const organizationUser =
-     *   await client.admin.organization.users.update('user_id');
-     * ```
-     */
-    update(userID, body, options) {
-        return this._client.post(path `/organization/users/${userID}`, {
-            body,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Lists all of the users in the organization.
-     *
-     * @example
-     * ```ts
-     * // Automatically fetches more pages as needed.
-     * for await (const organizationUser of client.admin.organization.users.list()) {
-     *   // ...
-     * }
-     * ```
-     */
-    list(query = {}, options) {
-        return this._client.getAPIList('/organization/users', (ConversationCursorPage), {
-            query,
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-    /**
-     * Deletes a user from the organization.
-     *
-     * @example
-     * ```ts
-     * const user = await client.admin.organization.users.delete(
-     *   'user_id',
-     * );
-     * ```
-     */
-    delete(userID, options) {
-        return this._client.delete(path `/organization/users/${userID}`, {
-            ...options,
-            __security: { adminAPIKeyAuth: true },
-        });
-    }
-}
-users_users_Users.Roles = organization_users_roles_Roles;
-//# sourceMappingURL=users.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/admin/organization/organization.mjs
-// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-class Organization extends APIResource {
-    constructor() {
-        super(...arguments);
-        this.auditLogs = new AuditLogs(this._client);
-        this.adminAPIKeys = new AdminAPIKeys(this._client);
-        this.usage = new Usage(this._client);
-        this.invites = new Invites(this._client);
-        this.users = new users_users_Users(this._client);
-        this.groups = new Groups(this._client);
-        this.roles = new Roles(this._client);
-        this.dataRetention = new DataRetention(this._client);
-        this.spendAlerts = new SpendAlerts(this._client);
-        this.certificates = new Certificates(this._client);
-        this.projects = new Projects(this._client);
-    }
-}
-Organization.AuditLogs = AuditLogs;
-Organization.AdminAPIKeys = AdminAPIKeys;
-Organization.Usage = Usage;
-Organization.Invites = Invites;
-Organization.Users = users_users_Users;
-Organization.Groups = Groups;
-Organization.Roles = Roles;
-Organization.DataRetention = DataRetention;
-Organization.SpendAlerts = SpendAlerts;
-Organization.Certificates = Certificates;
-Organization.Projects = Projects;
-//# sourceMappingURL=organization.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/admin/admin.mjs
-// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
-
-
-class Admin extends APIResource {
-    constructor() {
-        super(...arguments);
-        this.organization = new Organization(this._client);
-    }
-}
-Admin.Organization = Organization;
-//# sourceMappingURL=admin.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/internal/headers.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/headers.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 const brand_privateNullableHeaders = /* @__PURE__ */ Symbol('brand.privateNullableHeaders');
@@ -6397,7 +3844,7 @@ const isEmptyHeaders = (headers) => {
     return true;
 };
 //# sourceMappingURL=headers.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/audio/speech.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/audio/speech.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6414,8 +3861,8 @@ class Speech extends APIResource {
      * ```ts
      * const speech = await client.audio.speech.create({
      *   input: 'input',
-     *   model: 'tts-1',
-     *   voice: 'alloy',
+     *   model: 'string',
+     *   voice: 'ash',
      * });
      *
      * const content = await speech.blob();
@@ -6427,13 +3874,12 @@ class Speech extends APIResource {
             body,
             ...options,
             headers: headers_buildHeaders([{ Accept: 'application/octet-stream' }, options?.headers]),
-            __security: { bearerAuth: true },
             __binaryResponse: true,
         });
     }
 }
 //# sourceMappingURL=speech.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/audio/transcriptions.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/audio/transcriptions.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6447,12 +3893,11 @@ class Transcriptions extends APIResource {
             ...options,
             stream: body.stream ?? false,
             __metadata: { model: body.model },
-            __security: { bearerAuth: true },
         }, this._client));
     }
 }
 //# sourceMappingURL=transcriptions.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/audio/translations.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/audio/translations.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6461,11 +3906,11 @@ class Transcriptions extends APIResource {
  */
 class Translations extends APIResource {
     create(body, options) {
-        return this._client.post('/audio/translations', multipartFormRequestOptions({ body, ...options, __metadata: { model: body.model }, __security: { bearerAuth: true } }, this._client));
+        return this._client.post('/audio/translations', multipartFormRequestOptions({ body, ...options, __metadata: { model: body.model } }, this._client));
     }
 }
 //# sourceMappingURL=translations.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/audio/audio.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/audio/audio.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6486,7 +3931,7 @@ Audio.Transcriptions = Transcriptions;
 Audio.Translations = Translations;
 Audio.Speech = Speech;
 //# sourceMappingURL=audio.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/batches.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/batches.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6499,23 +3944,19 @@ class Batches extends APIResource {
      * Creates and executes a batch from an uploaded file of requests
      */
     create(body, options) {
-        return this._client.post('/batches', { body, ...options, __security: { bearerAuth: true } });
+        return this._client.post('/batches', { body, ...options });
     }
     /**
      * Retrieves a batch.
      */
     retrieve(batchID, options) {
-        return this._client.get(path `/batches/${batchID}`, { ...options, __security: { bearerAuth: true } });
+        return this._client.get(path `/batches/${batchID}`, options);
     }
     /**
      * List your organization's batches.
      */
     list(query = {}, options) {
-        return this._client.getAPIList('/batches', (CursorPage), {
-            query,
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.getAPIList('/batches', (CursorPage), { query, ...options });
     }
     /**
      * Cancels an in-progress batch. The batch will be in status `cancelling` for up to
@@ -6523,14 +3964,11 @@ class Batches extends APIResource {
      * (if any) available in the output file.
      */
     cancel(batchID, options) {
-        return this._client.post(path `/batches/${batchID}/cancel`, {
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.post(path `/batches/${batchID}/cancel`, options);
     }
 }
 //# sourceMappingURL=batches.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/beta/assistants.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/assistants.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6550,7 +3988,6 @@ class Assistants extends APIResource {
             body,
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -6562,7 +3999,6 @@ class Assistants extends APIResource {
         return this._client.get(path `/assistants/${assistantID}`, {
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -6575,7 +4011,6 @@ class Assistants extends APIResource {
             body,
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -6588,7 +4023,6 @@ class Assistants extends APIResource {
             query,
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -6600,12 +4034,11 @@ class Assistants extends APIResource {
         return this._client.delete(path `/assistants/${assistantID}`, {
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
 }
 //# sourceMappingURL=assistants.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/beta/realtime/sessions.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/realtime/sessions.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6630,12 +4063,11 @@ class Sessions extends APIResource {
             body,
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
 }
 //# sourceMappingURL=sessions.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/beta/realtime/transcription-sessions.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/realtime/transcription-sessions.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6660,12 +4092,11 @@ class TranscriptionSessions extends APIResource {
             body,
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
 }
 //# sourceMappingURL=transcription-sessions.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/beta/realtime/realtime.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/realtime/realtime.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6685,7 +4116,7 @@ class Realtime extends APIResource {
 Realtime.Sessions = Sessions;
 Realtime.TranscriptionSessions = TranscriptionSessions;
 //# sourceMappingURL=realtime.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/beta/chatkit/sessions.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/chatkit/sessions.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6708,7 +4139,6 @@ class sessions_Sessions extends APIResource {
             body,
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'chatkit_beta=v1' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -6726,12 +4156,11 @@ class sessions_Sessions extends APIResource {
         return this._client.post(path `/chatkit/sessions/${sessionID}/cancel`, {
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'chatkit_beta=v1' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
 }
 //# sourceMappingURL=sessions.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/beta/chatkit/threads.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/chatkit/threads.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6751,7 +4180,6 @@ class Threads extends APIResource {
         return this._client.get(path `/chatkit/threads/${threadID}`, {
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'chatkit_beta=v1' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -6770,7 +4198,6 @@ class Threads extends APIResource {
             query,
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'chatkit_beta=v1' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -6787,7 +4214,6 @@ class Threads extends APIResource {
         return this._client.delete(path `/chatkit/threads/${threadID}`, {
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'chatkit_beta=v1' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -6804,16 +4230,11 @@ class Threads extends APIResource {
      * ```
      */
     listItems(threadID, query = {}, options) {
-        return this._client.getAPIList(path `/chatkit/threads/${threadID}/items`, (ConversationCursorPage), {
-            query,
-            ...options,
-            headers: headers_buildHeaders([{ 'OpenAI-Beta': 'chatkit_beta=v1' }, options?.headers]),
-            __security: { bearerAuth: true },
-        });
+        return this._client.getAPIList(path `/chatkit/threads/${threadID}/items`, (ConversationCursorPage), { query, ...options, headers: headers_buildHeaders([{ 'OpenAI-Beta': 'chatkit_beta=v1' }, options?.headers]) });
     }
 }
 //# sourceMappingURL=threads.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/beta/chatkit/chatkit.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/chatkit/chatkit.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6830,7 +4251,7 @@ class ChatKit extends APIResource {
 ChatKit.Sessions = sessions_Sessions;
 ChatKit.Threads = Threads;
 //# sourceMappingURL=chatkit.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/beta/threads/messages.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/threads/messages.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6852,7 +4273,6 @@ class messages_Messages extends APIResource {
             body,
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -6865,7 +4285,6 @@ class messages_Messages extends APIResource {
         return this._client.get(path `/threads/${thread_id}/messages/${messageID}`, {
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -6879,7 +4298,6 @@ class messages_Messages extends APIResource {
             body,
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -6892,7 +4310,6 @@ class messages_Messages extends APIResource {
             query,
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -6905,12 +4322,11 @@ class messages_Messages extends APIResource {
         return this._client.delete(path `/threads/${thread_id}/messages/${messageID}`, {
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
 }
 //# sourceMappingURL=messages.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/beta/threads/runs/steps.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/threads/runs/steps.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -6933,7 +4349,6 @@ class Steps extends APIResource {
             query,
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -6947,12 +4362,11 @@ class Steps extends APIResource {
             query,
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
 }
 //# sourceMappingURL=steps.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/internal/utils/base64.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/utils/base64.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -7008,7 +4422,7 @@ const toFloat32Array = (base64Str) => {
     }
 };
 //# sourceMappingURL=base64.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/internal/utils.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/utils.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -7018,7 +4432,7 @@ const toFloat32Array = (base64Str) => {
 
 
 //# sourceMappingURL=utils.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/lib/AssistantStream.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/AssistantStream.mjs
 var _AssistantStream_instances, _a, _AssistantStream_events, _AssistantStream_runStepSnapshots, _AssistantStream_messageSnapshots, _AssistantStream_messageSnapshot, _AssistantStream_finalRun, _AssistantStream_currentContentIndex, _AssistantStream_currentContent, _AssistantStream_currentToolCallIndex, _AssistantStream_currentToolCall, _AssistantStream_currentEvent, _AssistantStream_currentRunSnapshot, _AssistantStream_currentRunStepSnapshot, _AssistantStream_addEvent, _AssistantStream_endRequest, _AssistantStream_handleMessage, _AssistantStream_handleRunStep, _AssistantStream_handleEvent, _AssistantStream_accumulateRunStep, _AssistantStream_accumulateMessage, _AssistantStream_accumulateContent, _AssistantStream_handleRun;
 
 
@@ -7568,7 +4982,7 @@ _a = AssistantStream, _AssistantStream_addEvent = function _AssistantStream_addE
 };
 function AssistantStream_assertNever(_x) { }
 //# sourceMappingURL=AssistantStream.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/beta/threads/runs/runs.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/threads/runs/runs.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -7597,7 +5011,6 @@ class Runs extends APIResource {
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
             stream: params.stream ?? false,
             __synthesizeEventData: true,
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -7610,7 +5023,6 @@ class Runs extends APIResource {
         return this._client.get(path `/threads/${thread_id}/runs/${runID}`, {
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -7624,7 +5036,6 @@ class Runs extends APIResource {
             body,
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -7637,7 +5048,6 @@ class Runs extends APIResource {
             query,
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -7650,7 +5060,6 @@ class Runs extends APIResource {
         return this._client.post(path `/threads/${thread_id}/runs/${runID}/cancel`, {
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -7733,7 +5142,6 @@ class Runs extends APIResource {
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
             stream: params.stream ?? false,
             __synthesizeEventData: true,
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -7756,7 +5164,7 @@ class Runs extends APIResource {
 }
 Runs.Steps = Steps;
 //# sourceMappingURL=runs.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/beta/threads/threads.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/threads/threads.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -7787,7 +5195,6 @@ class threads_Threads extends APIResource {
             body,
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -7799,7 +5206,6 @@ class threads_Threads extends APIResource {
         return this._client.get(path `/threads/${threadID}`, {
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -7812,7 +5218,6 @@ class threads_Threads extends APIResource {
             body,
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -7824,7 +5229,6 @@ class threads_Threads extends APIResource {
         return this._client.delete(path `/threads/${threadID}`, {
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     createAndRun(body, options) {
@@ -7834,7 +5238,6 @@ class threads_Threads extends APIResource {
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
             stream: body.stream ?? false,
             __synthesizeEventData: true,
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -7856,7 +5259,7 @@ class threads_Threads extends APIResource {
 threads_Threads.Runs = Runs;
 threads_Threads.Messages = messages_Messages;
 //# sourceMappingURL=threads.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/beta/beta.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/beta/beta.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -7881,7 +5284,7 @@ Beta.ChatKit = ChatKit;
 Beta.Assistants = Assistants;
 Beta.Threads = threads_Threads;
 //# sourceMappingURL=beta.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/completions.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/completions.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 /**
@@ -7889,16 +5292,11 @@ Beta.Threads = threads_Threads;
  */
 class completions_Completions extends APIResource {
     create(body, options) {
-        return this._client.post('/completions', {
-            body,
-            ...options,
-            stream: body.stream ?? false,
-            __security: { bearerAuth: true },
-        });
+        return this._client.post('/completions', { body, ...options, stream: body.stream ?? false });
     }
 }
 //# sourceMappingURL=completions.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/containers/files/content.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/containers/files/content.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -7912,13 +5310,12 @@ class Content extends APIResource {
         return this._client.get(path `/containers/${container_id}/files/${fileID}/content`, {
             ...options,
             headers: headers_buildHeaders([{ Accept: 'application/binary' }, options?.headers]),
-            __security: { bearerAuth: true },
             __binaryResponse: true,
         });
     }
 }
 //# sourceMappingURL=content.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/containers/files/files.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/containers/files/files.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -7939,17 +5336,14 @@ class Files extends APIResource {
      * a JSON request with a file ID.
      */
     create(containerID, body, options) {
-        return this._client.post(path `/containers/${containerID}/files`, maybeMultipartFormRequestOptions({ body, ...options, __security: { bearerAuth: true } }, this._client));
+        return this._client.post(path `/containers/${containerID}/files`, maybeMultipartFormRequestOptions({ body, ...options }, this._client));
     }
     /**
      * Retrieve Container File
      */
     retrieve(fileID, params, options) {
         const { container_id } = params;
-        return this._client.get(path `/containers/${container_id}/files/${fileID}`, {
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.get(path `/containers/${container_id}/files/${fileID}`, options);
     }
     /**
      * List Container files
@@ -7958,7 +5352,6 @@ class Files extends APIResource {
         return this._client.getAPIList(path `/containers/${containerID}/files`, (CursorPage), {
             query,
             ...options,
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -7969,13 +5362,12 @@ class Files extends APIResource {
         return this._client.delete(path `/containers/${container_id}/files/${fileID}`, {
             ...options,
             headers: headers_buildHeaders([{ Accept: '*/*' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
 }
 Files.Content = Content;
 //# sourceMappingURL=files.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/containers/containers.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/containers/containers.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -7992,26 +5384,19 @@ class Containers extends APIResource {
      * Create Container
      */
     create(body, options) {
-        return this._client.post('/containers', { body, ...options, __security: { bearerAuth: true } });
+        return this._client.post('/containers', { body, ...options });
     }
     /**
      * Retrieve Container
      */
     retrieve(containerID, options) {
-        return this._client.get(path `/containers/${containerID}`, {
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.get(path `/containers/${containerID}`, options);
     }
     /**
      * List Containers
      */
     list(query = {}, options) {
-        return this._client.getAPIList('/containers', (CursorPage), {
-            query,
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.getAPIList('/containers', (CursorPage), { query, ...options });
     }
     /**
      * Delete Container
@@ -8020,13 +5405,12 @@ class Containers extends APIResource {
         return this._client.delete(path `/containers/${containerID}`, {
             ...options,
             headers: headers_buildHeaders([{ Accept: '*/*' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
 }
 Containers.Files = Files;
 //# sourceMappingURL=containers.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/conversations/items.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/conversations/items.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -8044,7 +5428,6 @@ class Items extends APIResource {
             query: { include },
             body,
             ...options,
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -8052,31 +5435,24 @@ class Items extends APIResource {
      */
     retrieve(itemID, params, options) {
         const { conversation_id, ...query } = params;
-        return this._client.get(path `/conversations/${conversation_id}/items/${itemID}`, {
-            query,
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.get(path `/conversations/${conversation_id}/items/${itemID}`, { query, ...options });
     }
     /**
      * List all items for a conversation with the given ID.
      */
     list(conversationID, query = {}, options) {
-        return this._client.getAPIList(path `/conversations/${conversationID}/items`, (ConversationCursorPage), { query, ...options, __security: { bearerAuth: true } });
+        return this._client.getAPIList(path `/conversations/${conversationID}/items`, (ConversationCursorPage), { query, ...options });
     }
     /**
      * Delete an item from a conversation with the given IDs.
      */
     delete(itemID, params, options) {
         const { conversation_id } = params;
-        return this._client.delete(path `/conversations/${conversation_id}/items/${itemID}`, {
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.delete(path `/conversations/${conversation_id}/items/${itemID}`, options);
     }
 }
 //# sourceMappingURL=items.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/conversations/conversations.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/conversations/conversations.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -8094,40 +5470,30 @@ class Conversations extends APIResource {
      * Create a conversation.
      */
     create(body = {}, options) {
-        return this._client.post('/conversations', { body, ...options, __security: { bearerAuth: true } });
+        return this._client.post('/conversations', { body, ...options });
     }
     /**
      * Get a conversation
      */
     retrieve(conversationID, options) {
-        return this._client.get(path `/conversations/${conversationID}`, {
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.get(path `/conversations/${conversationID}`, options);
     }
     /**
      * Update a conversation
      */
     update(conversationID, body, options) {
-        return this._client.post(path `/conversations/${conversationID}`, {
-            body,
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.post(path `/conversations/${conversationID}`, { body, ...options });
     }
     /**
      * Delete a conversation. Items in the conversation will not be deleted.
      */
     delete(conversationID, options) {
-        return this._client.delete(path `/conversations/${conversationID}`, {
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.delete(path `/conversations/${conversationID}`, options);
     }
 }
 Conversations.Items = Items;
 //# sourceMappingURL=conversations.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/embeddings.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/embeddings.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -8161,7 +5527,6 @@ class Embeddings extends APIResource {
                 encoding_format: encoding_format,
             },
             ...options,
-            __security: { bearerAuth: true },
         });
         // if the user specified an encoding_format, return the response as-is
         if (hasUserProvidedEncodingFormat) {
@@ -8184,7 +5549,7 @@ class Embeddings extends APIResource {
     }
 }
 //# sourceMappingURL=embeddings.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/evals/runs/output-items.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/evals/runs/output-items.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -8198,21 +5563,18 @@ class OutputItems extends APIResource {
      */
     retrieve(outputItemID, params, options) {
         const { eval_id, run_id } = params;
-        return this._client.get(path `/evals/${eval_id}/runs/${run_id}/output_items/${outputItemID}`, {
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.get(path `/evals/${eval_id}/runs/${run_id}/output_items/${outputItemID}`, options);
     }
     /**
      * Get a list of output items for an evaluation run.
      */
     list(runID, params, options) {
         const { eval_id, ...query } = params;
-        return this._client.getAPIList(path `/evals/${eval_id}/runs/${runID}/output_items`, (CursorPage), { query, ...options, __security: { bearerAuth: true } });
+        return this._client.getAPIList(path `/evals/${eval_id}/runs/${runID}/output_items`, (CursorPage), { query, ...options });
     }
 }
 //# sourceMappingURL=output-items.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/evals/runs/runs.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/evals/runs/runs.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -8233,21 +5595,14 @@ class runs_Runs extends APIResource {
      * schema specified in the config of the evaluation.
      */
     create(evalID, body, options) {
-        return this._client.post(path `/evals/${evalID}/runs`, {
-            body,
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.post(path `/evals/${evalID}/runs`, { body, ...options });
     }
     /**
      * Get an evaluation run by ID.
      */
     retrieve(runID, params, options) {
         const { eval_id } = params;
-        return this._client.get(path `/evals/${eval_id}/runs/${runID}`, {
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.get(path `/evals/${eval_id}/runs/${runID}`, options);
     }
     /**
      * Get a list of runs for an evaluation.
@@ -8256,7 +5611,6 @@ class runs_Runs extends APIResource {
         return this._client.getAPIList(path `/evals/${evalID}/runs`, (CursorPage), {
             query,
             ...options,
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -8264,25 +5618,19 @@ class runs_Runs extends APIResource {
      */
     delete(runID, params, options) {
         const { eval_id } = params;
-        return this._client.delete(path `/evals/${eval_id}/runs/${runID}`, {
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.delete(path `/evals/${eval_id}/runs/${runID}`, options);
     }
     /**
      * Cancel an ongoing evaluation run.
      */
     cancel(runID, params, options) {
         const { eval_id } = params;
-        return this._client.post(path `/evals/${eval_id}/runs/${runID}`, {
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.post(path `/evals/${eval_id}/runs/${runID}`, options);
     }
 }
 runs_Runs.OutputItems = OutputItems;
 //# sourceMappingURL=runs.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/evals/evals.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/evals/evals.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -8306,40 +5654,36 @@ class Evals extends APIResource {
      * the [Evals guide](https://platform.openai.com/docs/guides/evals).
      */
     create(body, options) {
-        return this._client.post('/evals', { body, ...options, __security: { bearerAuth: true } });
+        return this._client.post('/evals', { body, ...options });
     }
     /**
      * Get an evaluation by ID.
      */
     retrieve(evalID, options) {
-        return this._client.get(path `/evals/${evalID}`, { ...options, __security: { bearerAuth: true } });
+        return this._client.get(path `/evals/${evalID}`, options);
     }
     /**
      * Update certain properties of an evaluation.
      */
     update(evalID, body, options) {
-        return this._client.post(path `/evals/${evalID}`, { body, ...options, __security: { bearerAuth: true } });
+        return this._client.post(path `/evals/${evalID}`, { body, ...options });
     }
     /**
      * List evaluations for a project.
      */
     list(query = {}, options) {
-        return this._client.getAPIList('/evals', (CursorPage), {
-            query,
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.getAPIList('/evals', (CursorPage), { query, ...options });
     }
     /**
      * Delete an evaluation.
      */
     delete(evalID, options) {
-        return this._client.delete(path `/evals/${evalID}`, { ...options, __security: { bearerAuth: true } });
+        return this._client.delete(path `/evals/${evalID}`, options);
     }
 }
 Evals.Runs = runs_Runs;
 //# sourceMappingURL=evals.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/files.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/files.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -8355,8 +5699,7 @@ class files_Files extends APIResource {
     /**
      * Upload a file that can be used across various endpoints. Individual files can be
      * up to 512 MB, and each project can store up to 2.5 TB of files in total. There
-     * is no organization-wide storage limit. Uploads to this endpoint are rate-limited
-     * to 1,000 requests per minute per authenticated user.
+     * is no organization-wide storage limit.
      *
      * - The Assistants API supports files up to 2 million tokens and of specific file
      *   types. See the
@@ -8371,40 +5714,30 @@ class files_Files extends APIResource {
      * - The Batch API only supports `.jsonl` files up to 200 MB in size. The input
      *   also has a specific required
      *   [format](https://platform.openai.com/docs/api-reference/batch/request-input).
-     * - For Retrieval or `file_search` ingestion, upload files here first. If you need
-     *   to attach multiple uploaded files to the same vector store, use
-     *   [`/vector_stores/{vector_store_id}/file_batches`](https://platform.openai.com/docs/api-reference/vector-stores-file-batches/createBatch)
-     *   instead of attaching them one by one. Vector store attachment has separate
-     *   limits from file upload, including 2,000 attached files per minute per
-     *   organization.
      *
      * Please [contact us](https://help.openai.com/) if you need to increase these
      * storage limits.
      */
     create(body, options) {
-        return this._client.post('/files', multipartFormRequestOptions({ body, ...options, __security: { bearerAuth: true } }, this._client));
+        return this._client.post('/files', multipartFormRequestOptions({ body, ...options }, this._client));
     }
     /**
      * Returns information about a specific file.
      */
     retrieve(fileID, options) {
-        return this._client.get(path `/files/${fileID}`, { ...options, __security: { bearerAuth: true } });
+        return this._client.get(path `/files/${fileID}`, options);
     }
     /**
      * Returns a list of files.
      */
     list(query = {}, options) {
-        return this._client.getAPIList('/files', (CursorPage), {
-            query,
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.getAPIList('/files', (CursorPage), { query, ...options });
     }
     /**
      * Delete a file and remove it from all vector stores.
      */
     delete(fileID, options) {
-        return this._client.delete(path `/files/${fileID}`, { ...options, __security: { bearerAuth: true } });
+        return this._client.delete(path `/files/${fileID}`, options);
     }
     /**
      * Returns the contents of the specified file.
@@ -8413,7 +5746,6 @@ class files_Files extends APIResource {
         return this._client.get(path `/files/${fileID}/content`, {
             ...options,
             headers: headers_buildHeaders([{ Accept: 'application/binary' }, options?.headers]),
-            __security: { bearerAuth: true },
             __binaryResponse: true,
         });
     }
@@ -8437,13 +5769,13 @@ class files_Files extends APIResource {
     }
 }
 //# sourceMappingURL=files.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/fine-tuning/methods.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/fine-tuning/methods.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 class Methods extends APIResource {
 }
 //# sourceMappingURL=methods.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/fine-tuning/alpha/graders.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/fine-tuning/alpha/graders.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 /**
@@ -8468,11 +5800,7 @@ class Graders extends APIResource {
      * ```
      */
     run(body, options) {
-        return this._client.post('/fine_tuning/alpha/graders/run', {
-            body,
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.post('/fine_tuning/alpha/graders/run', { body, ...options });
     }
     /**
      * Validate a grader.
@@ -8492,15 +5820,11 @@ class Graders extends APIResource {
      * ```
      */
     validate(body, options) {
-        return this._client.post('/fine_tuning/alpha/graders/validate', {
-            body,
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.post('/fine_tuning/alpha/graders/validate', { body, ...options });
     }
 }
 //# sourceMappingURL=graders.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/fine-tuning/alpha/alpha.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/fine-tuning/alpha/alpha.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -8513,7 +5837,7 @@ class Alpha extends APIResource {
 }
 Alpha.Graders = Graders;
 //# sourceMappingURL=alpha.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/fine-tuning/checkpoints/permissions.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/fine-tuning/checkpoints/permissions.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -8540,7 +5864,7 @@ class Permissions extends APIResource {
      * ```
      */
     create(fineTunedModelCheckpoint, body, options) {
-        return this._client.getAPIList(path `/fine_tuning/checkpoints/${fineTunedModelCheckpoint}/permissions`, (Page), { body, method: 'post', ...options, __security: { adminAPIKeyAuth: true } });
+        return this._client.getAPIList(path `/fine_tuning/checkpoints/${fineTunedModelCheckpoint}/permissions`, (Page), { body, method: 'post', ...options });
     }
     /**
      * **NOTE:** This endpoint requires an [admin API key](../admin-api-keys).
@@ -8554,7 +5878,6 @@ class Permissions extends APIResource {
         return this._client.get(path `/fine_tuning/checkpoints/${fineTunedModelCheckpoint}/permissions`, {
             query,
             ...options,
-            __security: { adminAPIKeyAuth: true },
         });
     }
     /**
@@ -8574,7 +5897,7 @@ class Permissions extends APIResource {
      * ```
      */
     list(fineTunedModelCheckpoint, query = {}, options) {
-        return this._client.getAPIList(path `/fine_tuning/checkpoints/${fineTunedModelCheckpoint}/permissions`, (ConversationCursorPage), { query, ...options, __security: { adminAPIKeyAuth: true } });
+        return this._client.getAPIList(path `/fine_tuning/checkpoints/${fineTunedModelCheckpoint}/permissions`, (ConversationCursorPage), { query, ...options });
     }
     /**
      * **NOTE:** This endpoint requires an [admin API key](../admin-api-keys).
@@ -8596,11 +5919,11 @@ class Permissions extends APIResource {
      */
     delete(permissionID, params, options) {
         const { fine_tuned_model_checkpoint } = params;
-        return this._client.delete(path `/fine_tuning/checkpoints/${fine_tuned_model_checkpoint}/permissions/${permissionID}`, { ...options, __security: { adminAPIKeyAuth: true } });
+        return this._client.delete(path `/fine_tuning/checkpoints/${fine_tuned_model_checkpoint}/permissions/${permissionID}`, options);
     }
 }
 //# sourceMappingURL=permissions.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/fine-tuning/checkpoints/checkpoints.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/fine-tuning/checkpoints/checkpoints.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -8613,7 +5936,7 @@ class Checkpoints extends APIResource {
 }
 Checkpoints.Permissions = Permissions;
 //# sourceMappingURL=checkpoints.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/fine-tuning/jobs/checkpoints.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/fine-tuning/jobs/checkpoints.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -8636,11 +5959,11 @@ class checkpoints_Checkpoints extends APIResource {
      * ```
      */
     list(fineTuningJobID, query = {}, options) {
-        return this._client.getAPIList(path `/fine_tuning/jobs/${fineTuningJobID}/checkpoints`, (CursorPage), { query, ...options, __security: { bearerAuth: true } });
+        return this._client.getAPIList(path `/fine_tuning/jobs/${fineTuningJobID}/checkpoints`, (CursorPage), { query, ...options });
     }
 }
 //# sourceMappingURL=checkpoints.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/fine-tuning/jobs/jobs.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/fine-tuning/jobs/jobs.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -8673,7 +5996,7 @@ class Jobs extends APIResource {
      * ```
      */
     create(body, options) {
-        return this._client.post('/fine_tuning/jobs', { body, ...options, __security: { bearerAuth: true } });
+        return this._client.post('/fine_tuning/jobs', { body, ...options });
     }
     /**
      * Get info about a fine-tuning job.
@@ -8688,10 +6011,7 @@ class Jobs extends APIResource {
      * ```
      */
     retrieve(fineTuningJobID, options) {
-        return this._client.get(path `/fine_tuning/jobs/${fineTuningJobID}`, {
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.get(path `/fine_tuning/jobs/${fineTuningJobID}`, options);
     }
     /**
      * List your organization's fine-tuning jobs
@@ -8705,11 +6025,7 @@ class Jobs extends APIResource {
      * ```
      */
     list(query = {}, options) {
-        return this._client.getAPIList('/fine_tuning/jobs', (CursorPage), {
-            query,
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.getAPIList('/fine_tuning/jobs', (CursorPage), { query, ...options });
     }
     /**
      * Immediately cancel a fine-tune job.
@@ -8722,10 +6038,7 @@ class Jobs extends APIResource {
      * ```
      */
     cancel(fineTuningJobID, options) {
-        return this._client.post(path `/fine_tuning/jobs/${fineTuningJobID}/cancel`, {
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.post(path `/fine_tuning/jobs/${fineTuningJobID}/cancel`, options);
     }
     /**
      * Get status updates for a fine-tuning job.
@@ -8741,7 +6054,7 @@ class Jobs extends APIResource {
      * ```
      */
     listEvents(fineTuningJobID, query = {}, options) {
-        return this._client.getAPIList(path `/fine_tuning/jobs/${fineTuningJobID}/events`, (CursorPage), { query, ...options, __security: { bearerAuth: true } });
+        return this._client.getAPIList(path `/fine_tuning/jobs/${fineTuningJobID}/events`, (CursorPage), { query, ...options });
     }
     /**
      * Pause a fine-tune job.
@@ -8754,10 +6067,7 @@ class Jobs extends APIResource {
      * ```
      */
     pause(fineTuningJobID, options) {
-        return this._client.post(path `/fine_tuning/jobs/${fineTuningJobID}/pause`, {
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.post(path `/fine_tuning/jobs/${fineTuningJobID}/pause`, options);
     }
     /**
      * Resume a fine-tune job.
@@ -8770,15 +6080,12 @@ class Jobs extends APIResource {
      * ```
      */
     resume(fineTuningJobID, options) {
-        return this._client.post(path `/fine_tuning/jobs/${fineTuningJobID}/resume`, {
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.post(path `/fine_tuning/jobs/${fineTuningJobID}/resume`, options);
     }
 }
 Jobs.Checkpoints = checkpoints_Checkpoints;
 //# sourceMappingURL=jobs.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/fine-tuning/fine-tuning.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/fine-tuning/fine-tuning.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -8803,13 +6110,13 @@ FineTuning.Jobs = Jobs;
 FineTuning.Checkpoints = Checkpoints;
 FineTuning.Alpha = Alpha;
 //# sourceMappingURL=fine-tuning.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/graders/grader-models.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/graders/grader-models.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 class GraderModels extends APIResource {
 }
 //# sourceMappingURL=grader-models.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/graders/graders.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/graders/graders.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -8822,7 +6129,7 @@ class graders_Graders extends APIResource {
 }
 graders_Graders.GraderModels = GraderModels;
 //# sourceMappingURL=graders.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/images.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/images.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -8841,22 +6148,17 @@ class Images extends APIResource {
      * ```
      */
     createVariation(body, options) {
-        return this._client.post('/images/variations', multipartFormRequestOptions({ body, ...options, __security: { bearerAuth: true } }, this._client));
+        return this._client.post('/images/variations', multipartFormRequestOptions({ body, ...options }, this._client));
     }
     edit(body, options) {
-        return this._client.post('/images/edits', multipartFormRequestOptions({ body, ...options, stream: body.stream ?? false, __security: { bearerAuth: true } }, this._client));
+        return this._client.post('/images/edits', multipartFormRequestOptions({ body, ...options, stream: body.stream ?? false }, this._client));
     }
     generate(body, options) {
-        return this._client.post('/images/generations', {
-            body,
-            ...options,
-            stream: body.stream ?? false,
-            __security: { bearerAuth: true },
-        });
+        return this._client.post('/images/generations', { body, ...options, stream: body.stream ?? false });
     }
 }
 //# sourceMappingURL=images.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/models.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/models.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -8870,25 +6172,25 @@ class Models extends APIResource {
      * the owner and permissioning.
      */
     retrieve(model, options) {
-        return this._client.get(path `/models/${model}`, { ...options, __security: { bearerAuth: true } });
+        return this._client.get(path `/models/${model}`, options);
     }
     /**
      * Lists the currently available models, and provides basic information about each
      * one such as the owner and availability.
      */
     list(options) {
-        return this._client.getAPIList('/models', (Page), { ...options, __security: { bearerAuth: true } });
+        return this._client.getAPIList('/models', (Page), options);
     }
     /**
      * Delete a fine-tuned model. You must have the Owner role in your organization to
      * delete a model.
      */
     delete(model, options) {
-        return this._client.delete(path `/models/${model}`, { ...options, __security: { bearerAuth: true } });
+        return this._client.delete(path `/models/${model}`, options);
     }
 }
 //# sourceMappingURL=models.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/moderations.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/moderations.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 /**
@@ -8900,11 +6202,11 @@ class Moderations extends APIResource {
      * the [moderation guide](https://platform.openai.com/docs/guides/moderation).
      */
     create(body, options) {
-        return this._client.post('/moderations', { body, ...options, __security: { bearerAuth: true } });
+        return this._client.post('/moderations', { body, ...options });
     }
 }
 //# sourceMappingURL=moderations.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/realtime/calls.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/realtime/calls.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -8926,7 +6228,6 @@ class Calls extends APIResource {
             body,
             ...options,
             headers: headers_buildHeaders([{ Accept: '*/*' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -8941,7 +6242,6 @@ class Calls extends APIResource {
         return this._client.post(path `/realtime/calls/${callID}/hangup`, {
             ...options,
             headers: headers_buildHeaders([{ Accept: '*/*' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -8959,7 +6259,6 @@ class Calls extends APIResource {
             body,
             ...options,
             headers: headers_buildHeaders([{ Accept: '*/*' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -8975,12 +6274,11 @@ class Calls extends APIResource {
             body,
             ...options,
             headers: headers_buildHeaders([{ Accept: '*/*' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
 }
 //# sourceMappingURL=calls.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/realtime/client-secrets.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/realtime/client-secrets.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 class ClientSecrets extends APIResource {
@@ -9008,15 +6306,11 @@ class ClientSecrets extends APIResource {
      * ```
      */
     create(body, options) {
-        return this._client.post('/realtime/client_secrets', {
-            body,
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.post('/realtime/client_secrets', { body, ...options });
     }
 }
 //# sourceMappingURL=client-secrets.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/realtime/realtime.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/realtime/realtime.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -9033,7 +6327,7 @@ class realtime_Realtime extends APIResource {
 realtime_Realtime.ClientSecrets = ClientSecrets;
 realtime_Realtime.Calls = Calls;
 //# sourceMappingURL=realtime.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/lib/ResponsesParser.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/ResponsesParser.mjs
 
 
 function maybeParseResponse(response, params) {
@@ -9194,7 +6488,7 @@ function addOutputText(rsp) {
     rsp.output_text = texts.join('');
 }
 //# sourceMappingURL=ResponsesParser.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/lib/responses/ResponseStream.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/responses/ResponseStream.mjs
 var _ResponseStream_instances, _ResponseStream_params, _ResponseStream_currentResponseSnapshot, _ResponseStream_finalResponse, _ResponseStream_beginRequest, _ResponseStream_addEvent, _ResponseStream_endRequest, _ResponseStream_accumulateResponse;
 
 
@@ -9456,7 +6750,7 @@ function finalizeResponse(snapshot, params) {
     return maybeParseResponse(snapshot, params);
 }
 //# sourceMappingURL=ResponseStream.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/responses/input-items.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/responses/input-items.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -9476,11 +6770,11 @@ class InputItems extends APIResource {
      * ```
      */
     list(responseID, query = {}, options) {
-        return this._client.getAPIList(path `/responses/${responseID}/input_items`, (CursorPage), { query, ...options, __security: { bearerAuth: true } });
+        return this._client.getAPIList(path `/responses/${responseID}/input_items`, (CursorPage), { query, ...options });
     }
 }
 //# sourceMappingURL=input-items.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/responses/input-tokens.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/responses/input-tokens.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 class InputTokens extends APIResource {
@@ -9496,15 +6790,11 @@ class InputTokens extends APIResource {
      * ```
      */
     count(body = {}, options) {
-        return this._client.post('/responses/input_tokens', {
-            body,
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.post('/responses/input_tokens', { body, ...options });
     }
 }
 //# sourceMappingURL=input-tokens.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/responses/responses.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/responses/responses.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -9522,12 +6812,7 @@ class Responses extends APIResource {
         this.inputTokens = new InputTokens(this._client);
     }
     create(body, options) {
-        return this._client.post('/responses', {
-            body,
-            ...options,
-            stream: body.stream ?? false,
-            __security: { bearerAuth: true },
-        })._thenUnwrap((rsp) => {
+        return this._client.post('/responses', { body, ...options, stream: body.stream ?? false })._thenUnwrap((rsp) => {
             if ('object' in rsp && rsp.object === 'response') {
                 addOutputText(rsp);
             }
@@ -9539,7 +6824,6 @@ class Responses extends APIResource {
             query,
             ...options,
             stream: query?.stream ?? false,
-            __security: { bearerAuth: true },
         })._thenUnwrap((rsp) => {
             if ('object' in rsp && rsp.object === 'response') {
                 addOutputText(rsp);
@@ -9561,7 +6845,6 @@ class Responses extends APIResource {
         return this._client.delete(path `/responses/${responseID}`, {
             ...options,
             headers: headers_buildHeaders([{ Accept: '*/*' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     parse(body, options) {
@@ -9588,10 +6871,7 @@ class Responses extends APIResource {
      * ```
      */
     cancel(responseID, options) {
-        return this._client.post(path `/responses/${responseID}/cancel`, {
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.post(path `/responses/${responseID}/cancel`, options);
     }
     /**
      * Compact a conversation. Returns a compacted response object.
@@ -9609,13 +6889,13 @@ class Responses extends APIResource {
      * ```
      */
     compact(body, options) {
-        return this._client.post('/responses/compact', { body, ...options, __security: { bearerAuth: true } });
+        return this._client.post('/responses/compact', { body, ...options });
     }
 }
 Responses.InputItems = InputItems;
 Responses.InputTokens = InputTokens;
 //# sourceMappingURL=responses.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/skills/content.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/skills/content.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -9628,13 +6908,12 @@ class content_Content extends APIResource {
         return this._client.get(path `/skills/${skillID}/content`, {
             ...options,
             headers: headers_buildHeaders([{ Accept: 'application/binary' }, options?.headers]),
-            __security: { bearerAuth: true },
             __binaryResponse: true,
         });
     }
 }
 //# sourceMappingURL=content.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/skills/versions/content.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/skills/versions/content.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -9648,13 +6927,12 @@ class versions_content_Content extends APIResource {
         return this._client.get(path `/skills/${skill_id}/versions/${version}/content`, {
             ...options,
             headers: headers_buildHeaders([{ Accept: 'application/binary' }, options?.headers]),
-            __security: { bearerAuth: true },
             __binaryResponse: true,
         });
     }
 }
 //# sourceMappingURL=content.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/skills/versions/versions.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/skills/versions/versions.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -9671,17 +6949,14 @@ class Versions extends APIResource {
      * Create a new immutable skill version.
      */
     create(skillID, body = {}, options) {
-        return this._client.post(path `/skills/${skillID}/versions`, maybeMultipartFormRequestOptions({ body, ...options, __security: { bearerAuth: true } }, this._client));
+        return this._client.post(path `/skills/${skillID}/versions`, maybeMultipartFormRequestOptions({ body, ...options }, this._client));
     }
     /**
      * Get a specific skill version.
      */
     retrieve(version, params, options) {
         const { skill_id } = params;
-        return this._client.get(path `/skills/${skill_id}/versions/${version}`, {
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.get(path `/skills/${skill_id}/versions/${version}`, options);
     }
     /**
      * List skill versions for a skill.
@@ -9690,7 +6965,6 @@ class Versions extends APIResource {
         return this._client.getAPIList(path `/skills/${skillID}/versions`, (CursorPage), {
             query,
             ...options,
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -9698,15 +6972,12 @@ class Versions extends APIResource {
      */
     delete(version, params, options) {
         const { skill_id } = params;
-        return this._client.delete(path `/skills/${skill_id}/versions/${version}`, {
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.delete(path `/skills/${skill_id}/versions/${version}`, options);
     }
 }
 Versions.Content = versions_content_Content;
 //# sourceMappingURL=versions.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/skills/skills.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/skills/skills.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -9726,45 +6997,37 @@ class Skills extends APIResource {
      * Create a new skill.
      */
     create(body = {}, options) {
-        return this._client.post('/skills', maybeMultipartFormRequestOptions({ body, ...options, __security: { bearerAuth: true } }, this._client));
+        return this._client.post('/skills', maybeMultipartFormRequestOptions({ body, ...options }, this._client));
     }
     /**
      * Get a skill by its ID.
      */
     retrieve(skillID, options) {
-        return this._client.get(path `/skills/${skillID}`, { ...options, __security: { bearerAuth: true } });
+        return this._client.get(path `/skills/${skillID}`, options);
     }
     /**
      * Update the default version pointer for a skill.
      */
     update(skillID, body, options) {
-        return this._client.post(path `/skills/${skillID}`, {
-            body,
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.post(path `/skills/${skillID}`, { body, ...options });
     }
     /**
      * List all skills for the current project.
      */
     list(query = {}, options) {
-        return this._client.getAPIList('/skills', (CursorPage), {
-            query,
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.getAPIList('/skills', (CursorPage), { query, ...options });
     }
     /**
      * Delete a skill by its ID.
      */
     delete(skillID, options) {
-        return this._client.delete(path `/skills/${skillID}`, { ...options, __security: { bearerAuth: true } });
+        return this._client.delete(path `/skills/${skillID}`, options);
     }
 }
 Skills.Content = content_Content;
 Skills.Versions = Versions;
 //# sourceMappingURL=skills.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/uploads/parts.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/uploads/parts.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -9787,11 +7050,11 @@ class Parts extends APIResource {
      * [complete the Upload](https://platform.openai.com/docs/api-reference/uploads/complete).
      */
     create(uploadID, body, options) {
-        return this._client.post(path `/uploads/${uploadID}/parts`, multipartFormRequestOptions({ body, ...options, __security: { bearerAuth: true } }, this._client));
+        return this._client.post(path `/uploads/${uploadID}/parts`, multipartFormRequestOptions({ body, ...options }, this._client));
     }
 }
 //# sourceMappingURL=parts.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/uploads/uploads.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/uploads/uploads.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -9829,7 +7092,7 @@ class Uploads extends APIResource {
      * Returns the Upload object with status `pending`.
      */
     create(body, options) {
-        return this._client.post('/uploads', { body, ...options, __security: { bearerAuth: true } });
+        return this._client.post('/uploads', { body, ...options });
     }
     /**
      * Cancels the Upload. No Parts may be added after an Upload is cancelled.
@@ -9837,10 +7100,7 @@ class Uploads extends APIResource {
      * Returns the Upload object with status `cancelled`.
      */
     cancel(uploadID, options) {
-        return this._client.post(path `/uploads/${uploadID}/cancel`, {
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.post(path `/uploads/${uploadID}/cancel`, options);
     }
     /**
      * Completes the
@@ -9860,16 +7120,12 @@ class Uploads extends APIResource {
      * object.
      */
     complete(uploadID, body, options) {
-        return this._client.post(path `/uploads/${uploadID}/complete`, {
-            body,
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.post(path `/uploads/${uploadID}/complete`, { body, ...options });
     }
 }
 Uploads.Parts = Parts;
 //# sourceMappingURL=uploads.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/lib/Util.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/lib/Util.mjs
 /**
  * Like `Promise.allSettled()` but throws an error if any promises are rejected.
  */
@@ -9892,7 +7148,7 @@ const allSettledWithThrow = async (promises) => {
     return values;
 };
 //# sourceMappingURL=Util.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/vector-stores/file-batches.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/vector-stores/file-batches.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -9909,7 +7165,6 @@ class FileBatches extends APIResource {
             body,
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -9920,7 +7175,6 @@ class FileBatches extends APIResource {
         return this._client.get(path `/vector_stores/${vector_store_id}/file_batches/${batchID}`, {
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -9932,7 +7186,6 @@ class FileBatches extends APIResource {
         return this._client.post(path `/vector_stores/${vector_store_id}/file_batches/${batchID}/cancel`, {
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -9947,12 +7200,7 @@ class FileBatches extends APIResource {
      */
     listFiles(batchID, params, options) {
         const { vector_store_id, ...query } = params;
-        return this._client.getAPIList(path `/vector_stores/${vector_store_id}/file_batches/${batchID}/files`, (CursorPage), {
-            query,
-            ...options,
-            headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
-        });
+        return this._client.getAPIList(path `/vector_stores/${vector_store_id}/file_batches/${batchID}/files`, (CursorPage), { query, ...options, headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]) });
     }
     /**
      * Wait for the given file batch to be processed.
@@ -10030,7 +7278,7 @@ class FileBatches extends APIResource {
     }
 }
 //# sourceMappingURL=file-batches.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/vector-stores/files.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/vector-stores/files.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -10048,7 +7296,6 @@ class vector_stores_files_Files extends APIResource {
             body,
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -10059,7 +7306,6 @@ class vector_stores_files_Files extends APIResource {
         return this._client.get(path `/vector_stores/${vector_store_id}/files/${fileID}`, {
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -10071,7 +7317,6 @@ class vector_stores_files_Files extends APIResource {
             body,
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -10082,7 +7327,6 @@ class vector_stores_files_Files extends APIResource {
             query,
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -10096,7 +7340,6 @@ class vector_stores_files_Files extends APIResource {
         return this._client.delete(path `/vector_stores/${vector_store_id}/files/${fileID}`, {
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -10170,15 +7413,11 @@ class vector_stores_files_Files extends APIResource {
      */
     content(fileID, params, options) {
         const { vector_store_id } = params;
-        return this._client.getAPIList(path `/vector_stores/${vector_store_id}/files/${fileID}/content`, (Page), {
-            ...options,
-            headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
-        });
+        return this._client.getAPIList(path `/vector_stores/${vector_store_id}/files/${fileID}/content`, (Page), { ...options, headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]) });
     }
 }
 //# sourceMappingURL=files.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/vector-stores/vector-stores.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/vector-stores/vector-stores.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -10202,7 +7441,6 @@ class VectorStores extends APIResource {
             body,
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -10212,7 +7450,6 @@ class VectorStores extends APIResource {
         return this._client.get(path `/vector_stores/${vectorStoreID}`, {
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -10223,7 +7460,6 @@ class VectorStores extends APIResource {
             body,
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -10234,7 +7470,6 @@ class VectorStores extends APIResource {
             query,
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -10244,7 +7479,6 @@ class VectorStores extends APIResource {
         return this._client.delete(path `/vector_stores/${vectorStoreID}`, {
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
     /**
@@ -10257,14 +7491,13 @@ class VectorStores extends APIResource {
             method: 'post',
             ...options,
             headers: headers_buildHeaders([{ 'OpenAI-Beta': 'assistants=v2' }, options?.headers]),
-            __security: { bearerAuth: true },
         });
     }
 }
 VectorStores.Files = vector_stores_files_Files;
 VectorStores.FileBatches = FileBatches;
 //# sourceMappingURL=vector-stores.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/videos.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/videos.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -10276,35 +7509,25 @@ class Videos extends APIResource {
      * Create a new video generation job from a prompt and optional reference assets.
      */
     create(body, options) {
-        return this._client.post('/videos', multipartFormRequestOptions({ body, ...options, __security: { bearerAuth: true } }, this._client));
+        return this._client.post('/videos', maybeMultipartFormRequestOptions({ body, ...options }, this._client));
     }
     /**
      * Fetch the latest metadata for a generated video.
      */
     retrieve(videoID, options) {
-        return this._client.get(path `/videos/${videoID}`, { ...options, __security: { bearerAuth: true } });
+        return this._client.get(path `/videos/${videoID}`, options);
     }
     /**
      * List recently generated videos for the current project.
      */
     list(query = {}, options) {
-        return this._client.getAPIList('/videos', (ConversationCursorPage), {
-            query,
-            ...options,
-            __security: { bearerAuth: true },
-        });
+        return this._client.getAPIList('/videos', (ConversationCursorPage), { query, ...options });
     }
     /**
      * Permanently delete a completed or failed video and its stored assets.
      */
     delete(videoID, options) {
-        return this._client.delete(path `/videos/${videoID}`, { ...options, __security: { bearerAuth: true } });
-    }
-    /**
-     * Create a character from an uploaded video.
-     */
-    createCharacter(body, options) {
-        return this._client.post('/videos/characters', multipartFormRequestOptions({ body, ...options, __security: { bearerAuth: true } }, this._client));
+        return this._client.delete(path `/videos/${videoID}`, options);
     }
     /**
      * Download the generated video bytes or a derived preview asset.
@@ -10316,41 +7539,18 @@ class Videos extends APIResource {
             query,
             ...options,
             headers: headers_buildHeaders([{ Accept: 'application/binary' }, options?.headers]),
-            __security: { bearerAuth: true },
             __binaryResponse: true,
-        });
-    }
-    /**
-     * Create a new video generation job by editing a source video or existing
-     * generated video.
-     */
-    edit(body, options) {
-        return this._client.post('/videos/edits', multipartFormRequestOptions({ body, ...options, __security: { bearerAuth: true } }, this._client));
-    }
-    /**
-     * Create an extension of a completed video.
-     */
-    extend(body, options) {
-        return this._client.post('/videos/extensions', multipartFormRequestOptions({ body, ...options, __security: { bearerAuth: true } }, this._client));
-    }
-    /**
-     * Fetch a character.
-     */
-    getCharacter(characterID, options) {
-        return this._client.get(path `/videos/characters/${characterID}`, {
-            ...options,
-            __security: { bearerAuth: true },
         });
     }
     /**
      * Create a remix of a completed video using a refreshed prompt.
      */
     remix(videoID, body, options) {
-        return this._client.post(path `/videos/${videoID}/remix`, maybeMultipartFormRequestOptions({ body, ...options, __security: { bearerAuth: true } }, this._client));
+        return this._client.post(path `/videos/${videoID}/remix`, maybeMultipartFormRequestOptions({ body, ...options }, this._client));
     }
 }
 //# sourceMappingURL=videos.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/webhooks/webhooks.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/webhooks/webhooks.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 var _Webhooks_instances, _Webhooks_validateSecret, _Webhooks_getRequiredHeader;
 
@@ -10448,15 +7648,15 @@ _Webhooks_instances = new WeakSet(), _Webhooks_validateSecret = function _Webhoo
     return value;
 };
 //# sourceMappingURL=webhooks.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/webhooks/index.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/webhooks/index.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 //# sourceMappingURL=index.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/webhooks.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/webhooks.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 //# sourceMappingURL=webhooks.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/resources/index.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/resources/index.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -10481,9 +7681,8 @@ _Webhooks_instances = new WeakSet(), _Webhooks_validateSecret = function _Webhoo
 
 
 
-
 //# sourceMappingURL=index.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/internal/utils/env.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/internal/utils/env.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 /**
  * Read an environment variable.
@@ -10494,15 +7693,15 @@ _Webhooks_instances = new WeakSet(), _Webhooks_validateSecret = function _Webhoo
  */
 const env_readEnv = (env) => {
     if (typeof globalThis.process !== 'undefined') {
-        return globalThis.process.env?.[env]?.trim() || undefined;
+        return globalThis.process.env?.[env]?.trim() ?? undefined;
     }
     if (typeof globalThis.Deno !== 'undefined') {
-        return globalThis.Deno.env?.get?.(env)?.trim() || undefined;
+        return globalThis.Deno.env?.get?.(env)?.trim();
     }
     return undefined;
 };
 //# sourceMappingURL=env.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/client.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/client.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 var _OpenAI_instances, client_a, _OpenAI_encoder, _OpenAI_baseURLOverridden;
 
@@ -10547,10 +7746,6 @@ var _OpenAI_instances, client_a, _OpenAI_encoder, _OpenAI_baseURLOverridden;
 
 
 
-
-
-
-const WORKLOAD_IDENTITY_API_KEY_PLACEHOLDER = 'workload-identity-auth';
 /**
  * API Client for interfacing with the OpenAI API.
  */
@@ -10558,8 +7753,7 @@ class client_OpenAI {
     /**
      * API Client for interfacing with the OpenAI API.
      *
-     * @param {string | null | undefined} [opts.apiKey=process.env['OPENAI_API_KEY'] ?? null]
-     * @param {string | null | undefined} [opts.adminAPIKey=process.env['OPENAI_ADMIN_KEY'] ?? null]
+     * @param {string | undefined} [opts.apiKey=process.env['OPENAI_API_KEY'] ?? undefined]
      * @param {string | null | undefined} [opts.organization=process.env['OPENAI_ORG_ID'] ?? null]
      * @param {string | null | undefined} [opts.project=process.env['OPENAI_PROJECT_ID'] ?? null]
      * @param {string | null | undefined} [opts.webhookSecret=process.env['OPENAI_WEBHOOK_SECRET'] ?? null]
@@ -10572,7 +7766,7 @@ class client_OpenAI {
      * @param {Record<string, string | undefined>} opts.defaultQuery - Default query parameters to include with every request to the API.
      * @param {boolean} [opts.dangerouslyAllowBrowser=false] - By default, client-side use of this library is not allowed, as it risks exposing your secret API credentials to attackers.
      */
-    constructor({ baseURL = env_readEnv('OPENAI_BASE_URL'), apiKey = env_readEnv('OPENAI_API_KEY') ?? null, adminAPIKey = env_readEnv('OPENAI_ADMIN_KEY') ?? null, organization = env_readEnv('OPENAI_ORG_ID') ?? null, project = env_readEnv('OPENAI_PROJECT_ID') ?? null, webhookSecret = env_readEnv('OPENAI_WEBHOOK_SECRET') ?? null, workloadIdentity, ...opts } = {}) {
+    constructor({ baseURL = env_readEnv('OPENAI_BASE_URL'), apiKey = env_readEnv('OPENAI_API_KEY'), organization = env_readEnv('OPENAI_ORG_ID') ?? null, project = env_readEnv('OPENAI_PROJECT_ID') ?? null, webhookSecret = env_readEnv('OPENAI_WEBHOOK_SECRET') ?? null, ...opts } = {}) {
         _OpenAI_instances.add(this);
         _OpenAI_encoder.set(this, void 0);
         /**
@@ -10614,7 +7808,6 @@ class client_OpenAI {
          * Use Uploads to upload large files in multiple parts.
          */
         this.uploads = new Uploads(this);
-        this.admin = new Admin(this);
         this.responses = new Responses(this);
         this.realtime = new realtime_Realtime(this);
         /**
@@ -10628,22 +7821,17 @@ class client_OpenAI {
         this.containers = new Containers(this);
         this.skills = new Skills(this);
         this.videos = new Videos(this);
+        if (apiKey === undefined) {
+            throw new error_OpenAIError('Missing credentials. Please pass an `apiKey`, or set the `OPENAI_API_KEY` environment variable.');
+        }
         const options = {
             apiKey,
-            adminAPIKey,
             organization,
             project,
             webhookSecret,
-            workloadIdentity,
             ...opts,
             baseURL: baseURL || `https://api.openai.com/v1`,
         };
-        if (apiKey && workloadIdentity) {
-            throw new error_OpenAIError('The `apiKey` and `workloadIdentity` options are mutually exclusive');
-        }
-        if (!apiKey && !adminAPIKey && !workloadIdentity) {
-            throw new error_OpenAIError('Missing credentials. Please pass an `apiKey`, `workloadIdentity`, `adminAPIKey`, or set the `OPENAI_API_KEY` or `OPENAI_ADMIN_KEY` environment variable.');
-        }
         if (!options.dangerouslyAllowBrowser && isRunningInBrowser()) {
             throw new error_OpenAIError("It looks like you're running in a browser-like environment.\n\nThis is disabled by default, as it risks exposing your secret API credentials to attackers.\nIf you understand the risks and have appropriate mitigations in place,\nyou can set the `dangerouslyAllowBrowser` option to `true`, e.g.,\n\nnew OpenAI({ apiKey, dangerouslyAllowBrowser: true });\n\nhttps://help.openai.com/en/articles/5112595-best-practices-for-api-key-safety\n");
         }
@@ -10661,23 +7849,8 @@ class client_OpenAI {
         this.maxRetries = options.maxRetries ?? 2;
         this.fetch = options.fetch ?? getDefaultFetch();
         __classPrivateFieldSet(this, _OpenAI_encoder, FallbackEncoder, "f");
-        const customHeadersEnv = env_readEnv('OPENAI_CUSTOM_HEADERS');
-        if (customHeadersEnv) {
-            const parsed = {};
-            for (const line of customHeadersEnv.split('\n')) {
-                const colon = line.indexOf(':');
-                if (colon >= 0) {
-                    parsed[line.substring(0, colon).trim()] = line.substring(colon + 1).trim();
-                }
-            }
-            options.defaultHeaders = headers_buildHeaders([parsed, options.defaultHeaders]);
-        }
         this._options = options;
-        if (workloadIdentity) {
-            this._workloadIdentityAuth = new WorkloadIdentityAuth(workloadIdentity, this.fetch);
-        }
-        this.apiKey = typeof apiKey === 'string' ? apiKey : null;
-        this.adminAPIKey = adminAPIKey;
+        this.apiKey = typeof apiKey === 'string' ? apiKey : 'Missing Key';
         this.organization = organization;
         this.project = project;
         this.webhookSecret = webhookSecret;
@@ -10695,9 +7868,7 @@ class client_OpenAI {
             logLevel: this.logLevel,
             fetch: this.fetch,
             fetchOptions: this.fetchOptions,
-            apiKey: this._options.apiKey,
-            adminAPIKey: this.adminAPIKey,
-            workloadIdentity: this._options.workloadIdentity,
+            apiKey: this.apiKey,
             organization: this.organization,
             project: this.project,
             webhookSecret: this.webhookSecret,
@@ -10708,44 +7879,11 @@ class client_OpenAI {
     defaultQuery() {
         return this._options.defaultQuery;
     }
-    validateHeaders({ values, nulls }, schemes = {
-        bearerAuth: true,
-        adminAPIKeyAuth: true,
-    }) {
-        if (values.get('authorization') || values.get('api-key')) {
-            return;
-        }
-        if (nulls.has('authorization') || nulls.has('api-key')) {
-            return;
-        }
-        if (this._workloadIdentityAuth && schemes.bearerAuth) {
-            return;
-        }
-        throw new Error('Could not resolve authentication method. Expected either apiKey or adminAPIKey to be set. Or for one of the "Authorization" or "api-key" headers to be explicitly omitted');
+    validateHeaders({ values, nulls }) {
+        return;
     }
-    async authHeaders(opts, schemes = {
-        bearerAuth: true,
-        adminAPIKeyAuth: true,
-    }) {
-        return headers_buildHeaders([
-            schemes.bearerAuth ? await this.bearerAuth(opts) : null,
-            schemes.adminAPIKeyAuth ? await this.adminAPIKeyAuth(opts) : null,
-        ]);
-    }
-    async bearerAuth(opts) {
-        if (this._workloadIdentityAuth) {
-            return headers_buildHeaders([{ Authorization: `Bearer ${await this._workloadIdentityAuth.getToken()}` }]);
-        }
-        if (this.apiKey == null) {
-            return undefined;
-        }
+    async authHeaders(opts) {
         return headers_buildHeaders([{ Authorization: `Bearer ${this.apiKey}` }]);
-    }
-    async adminAPIKeyAuth(opts) {
-        if (this.adminAPIKey == null) {
-            return undefined;
-        }
-        return headers_buildHeaders([{ Authorization: `Bearer ${this.adminAPIKey}` }]);
     }
     stringifyQuery(query) {
         return stringifyQuery(query);
@@ -10786,9 +7924,8 @@ class client_OpenAI {
             new URL(path)
             : new URL(baseURL + (baseURL.endsWith('/') && path.startsWith('/') ? path.slice(1) : path));
         const defaultQuery = this.defaultQuery();
-        const pathQuery = Object.fromEntries(url.searchParams);
-        if (!isEmptyObj(defaultQuery) || !isEmptyObj(pathQuery)) {
-            query = { ...pathQuery, ...defaultQuery, ...query };
+        if (!isEmptyObj(defaultQuery)) {
+            query = { ...defaultQuery, ...query };
         }
         if (typeof query === 'object' && query && !Array.isArray(query)) {
             url.search = this.stringifyQuery(query);
@@ -10799,10 +7936,7 @@ class client_OpenAI {
      * Used as a callback for mutating the given `FinalRequestOptions` object.
      */
     async prepareOptions(options) {
-        const security = options.__security ?? { bearerAuth: true };
-        if (security.bearerAuth) {
-            await this._callApiKey();
-        }
+        await this._callApiKey();
     }
     /**
      * Used as a callback for mutating the given `RequestInit` object.
@@ -10859,9 +7993,8 @@ class client_OpenAI {
         if (options.signal?.aborted) {
             throw new APIUserAbortError();
         }
-        const security = options.__security ?? { bearerAuth: true };
         const controller = new AbortController();
-        const response = await this.fetchWithAuth(url, req, timeout, controller, security).catch(castToError);
+        const response = await this.fetchWithTimeout(url, req, timeout, controller).catch(castToError);
         const headersTime = Date.now();
         if (response instanceof globalThis.Error) {
             const retryMessage = `retrying, ${retriesRemaining} attempts remaining`;
@@ -10891,16 +8024,10 @@ class client_OpenAI {
                 durationMs: headersTime - startTime,
                 message: response.message,
             }));
-            if (response instanceof OAuthError || response instanceof SubjectTokenProviderError) {
-                throw response;
-            }
             if (isTimeout) {
                 throw new APIConnectionTimeoutError();
             }
-            throw new APIConnectionError({
-                message: getConnectionErrorMessage(response),
-                cause: response,
-            });
+            throw new APIConnectionError({ cause: response });
         }
         const specialHeaders = [...response.headers.entries()]
             .filter(([name]) => name === 'x-request-id')
@@ -10908,21 +8035,6 @@ class client_OpenAI {
             .join('');
         const responseInfo = `[${requestLogID}${retryLogStr}${specialHeaders}] ${req.method} ${url} ${response.ok ? 'succeeded' : 'failed'} with status ${response.status} in ${headersTime - startTime}ms`;
         if (!response.ok) {
-            if (response.status === 401 &&
-                this._workloadIdentityAuth &&
-                security.bearerAuth &&
-                !options.__metadata?.['hasStreamingBody'] &&
-                !options.__metadata?.['workloadIdentityTokenRefreshed']) {
-                await CancelReadableStream(response.body);
-                this._workloadIdentityAuth.invalidateToken();
-                return this.makeRequest({
-                    ...options,
-                    __metadata: {
-                        ...options.__metadata,
-                        workloadIdentityTokenRefreshed: true,
-                    },
-                }, retriesRemaining, retryOfRequestLogID ?? requestLogID);
-            }
             const shouldRetry = await this.shouldRetry(response);
             if (retriesRemaining && shouldRetry) {
                 const retryMessage = `retrying, ${retriesRemaining} attempts remaining`;
@@ -10972,21 +8084,6 @@ class client_OpenAI {
     requestAPIList(Page, options) {
         const request = this.makeRequest(options, null, undefined);
         return new PagePromise(this, request, Page);
-    }
-    async fetchWithAuth(url, init, timeout, controller, schemes = {
-        bearerAuth: true,
-        adminAPIKeyAuth: true,
-    }) {
-        if (this._workloadIdentityAuth && schemes.bearerAuth) {
-            const headers = init.headers;
-            const authHeader = headers.get('Authorization');
-            if (!authHeader || authHeader === `Bearer ${WORKLOAD_IDENTITY_API_KEY_PLACEHOLDER}`) {
-                const token = await this._workloadIdentityAuth.getToken();
-                headers.set('Authorization', `Bearer ${token}`);
-            }
-        }
-        const response = await this.fetchWithTimeout(url, init, timeout, controller);
-        return response;
     }
     async fetchWithTimeout(url, init, ms, controller) {
         const { signal, method, ...options } = init || {};
@@ -11084,13 +8181,7 @@ class client_OpenAI {
         if ('timeout' in options)
             validatePositiveInteger('timeout', options.timeout);
         options.timeout = options.timeout ?? this.timeout;
-        const { bodyHeaders, body, isStreamingBody } = this.buildBody({ options });
-        if (isStreamingBody) {
-            inputOptions.__metadata = {
-                ...inputOptions.__metadata,
-                hasStreamingBody: true,
-            };
-        }
+        const { bodyHeaders, body } = this.buildBody({ options });
         const reqHeaders = await this.buildHeaders({ options: inputOptions, method, bodyHeaders, retryCount });
         const req = {
             method,
@@ -11122,12 +8213,12 @@ class client_OpenAI {
                 'OpenAI-Organization': this.organization,
                 'OpenAI-Project': this.project,
             },
-            await this.authHeaders(options, options.__security ?? { bearerAuth: true }),
+            await this.authHeaders(options),
             this._options.defaultHeaders,
             bodyHeaders,
             options.headers,
         ]);
-        this.validateHeaders(headers, options.__security ?? { bearerAuth: true });
+        this.validateHeaders(headers);
         return headers.values;
     }
     _makeAbort(controller) {
@@ -11137,18 +8228,9 @@ class client_OpenAI {
     }
     buildBody({ options: { body, headers: rawHeaders } }) {
         if (!body) {
-            return { bodyHeaders: undefined, body: undefined, isStreamingBody: false };
+            return { bodyHeaders: undefined, body: undefined };
         }
         const headers = headers_buildHeaders([rawHeaders]);
-        const isReadableStream = typeof globalThis.ReadableStream !== 'undefined' &&
-            body instanceof globalThis.ReadableStream;
-        const isRetryableBody = !isReadableStream &&
-            (typeof body === 'string' ||
-                body instanceof ArrayBuffer ||
-                ArrayBuffer.isView(body) ||
-                (typeof globalThis.Blob !== 'undefined' && body instanceof globalThis.Blob) ||
-                body instanceof URLSearchParams ||
-                body instanceof FormData);
         if (
         // Pass raw type verbatim
         ArrayBuffer.isView(body) ||
@@ -11164,28 +8246,23 @@ class client_OpenAI {
             // `URLSearchParams` -> `application/x-www-form-urlencoded`
             body instanceof URLSearchParams ||
             // Send chunked stream (each chunk has own `length`)
-            isReadableStream) {
-            return { bodyHeaders: undefined, body: body, isStreamingBody: !isRetryableBody };
+            (globalThis.ReadableStream && body instanceof globalThis.ReadableStream)) {
+            return { bodyHeaders: undefined, body: body };
         }
         else if (typeof body === 'object' &&
             (Symbol.asyncIterator in body ||
                 (Symbol.iterator in body && 'next' in body && typeof body.next === 'function'))) {
-            return {
-                bodyHeaders: undefined,
-                body: ReadableStreamFrom(body),
-                isStreamingBody: true,
-            };
+            return { bodyHeaders: undefined, body: ReadableStreamFrom(body) };
         }
         else if (typeof body === 'object' &&
             headers.values.get('content-type') === 'application/x-www-form-urlencoded') {
             return {
                 bodyHeaders: { 'content-type': 'application/x-www-form-urlencoded' },
                 body: this.stringifyQuery(body),
-                isStreamingBody: false,
             };
         }
         else {
-            return { ...__classPrivateFieldGet(this, _OpenAI_encoder, "f").call(this, { body, headers }), isStreamingBody: false };
+            return __classPrivateFieldGet(this, _OpenAI_encoder, "f").call(this, { body, headers });
         }
     }
 }
@@ -11224,7 +8301,6 @@ client_OpenAI.Webhooks = Webhooks;
 client_OpenAI.Beta = Beta;
 client_OpenAI.Batches = Batches;
 client_OpenAI.Uploads = Uploads;
-client_OpenAI.Admin = Admin;
 client_OpenAI.Responses = Responses;
 client_OpenAI.Realtime = realtime_Realtime;
 client_OpenAI.Conversations = Conversations;
@@ -11232,27 +8308,8 @@ client_OpenAI.Evals = Evals;
 client_OpenAI.Containers = Containers;
 client_OpenAI.Skills = Skills;
 client_OpenAI.Videos = Videos;
-function getConnectionErrorMessage(error) {
-    if (isUndiciDispatcherVersionMismatchError(error)) {
-        return `Connection error. This may be caused by passing an undici dispatcher, such as ProxyAgent, that is incompatible with the fetch implementation. If you are using undici's ProxyAgent, pass the fetch implementation from the same undici package: import { fetch, ProxyAgent } from 'undici'; new OpenAI({ fetch, fetchOptions: { dispatcher: new ProxyAgent(...) } });`;
-    }
-    return undefined;
-}
-function isUndiciDispatcherVersionMismatchError(error) {
-    let current = error;
-    for (let i = 0; i < 8 && current && typeof current === 'object'; i++) {
-        const err = current;
-        if (err.code === 'UND_ERR_INVALID_ARG' &&
-            typeof err.message === 'string' &&
-            err.message.includes('invalid onRequestStart method')) {
-            return true;
-        }
-        current = err.cause;
-    }
-    return false;
-}
 //# sourceMappingURL=client.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/azure.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/azure.mjs
 
 
 
@@ -11326,12 +8383,11 @@ class AzureOpenAI extends (/* unused pure expression or super */ null && (OpenAI
         }
         return super.buildRequest(options, props);
     }
-    async authHeaders(opts, schemes) {
-        const security = schemes ?? { bearerAuth: true, adminAPIKeyAuth: true };
-        if (security.bearerAuth && typeof this._options.apiKey === 'string') {
+    async authHeaders(opts) {
+        if (typeof this._options.apiKey === 'string') {
             return buildHeaders([{ 'api-key': this.apiKey }]);
         }
-        return super.authHeaders(opts, security);
+        return super.authHeaders(opts);
     }
 }
 const _deployments_endpoints = new Set([
@@ -11346,7 +8402,7 @@ const _deployments_endpoints = new Set([
     '/images/edits',
 ]);
 //# sourceMappingURL=azure.mjs.map
-;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.39.1/node_modules/openai/index.mjs
+;// CONCATENATED MODULE: ./node_modules/.pnpm/openai@6.27.0/node_modules/openai/index.mjs
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 
@@ -11986,7 +9042,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
 
 /***/ }),
 
-/***/ 1085:
+/***/ 8280:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
 "use strict";
@@ -12320,14 +9376,19 @@ const context = github.context;
 /**
  * 主调度入口。
  * 调用方 (command-handler.ts) 负责:
- *   - 当返回 'fallback_conversation' 时，调用旧的 handleReviewComment
+ *   - 当返回 'fallback_conversation' 时，调用成员 D 的 handleConversation（对话式追问）
  */
 async function dispatchCommentEvent(deps) {
+    // [事件白名单] 仅放行 issue_comment / pull_request_review_comment 两类带评论的事件；
+    // 其余事件（push、pull_request、schedule 等）不携带用户评论，直接忽略，
+    // 同时把 eventName 收窄为 CommandEventName 供后续分支安全使用。
     const eventName = context.eventName;
     if (eventName !== 'issue_comment' &&
         eventName !== 'pull_request_review_comment') {
         return { kind: 'ignored', reason: `unsupported event: ${eventName}` };
     }
+    // [action 校验] 只处理"新建评论"(created)，忽略 edited / deleted 等动作，
+    // 避免编辑历史评论时重复触发命令。
     const payload = context.payload;
     if (!payload || payload.action !== 'created') {
         return { kind: 'ignored', reason: `action not created` };
@@ -12341,6 +9402,8 @@ async function dispatchCommentEvent(deps) {
     let commentNodeId;
     let threadNodeId;
     if (eventName === 'issue_comment') {
+        // [issue_comment 分支] PR 主评论区。GitHub 中 PR 复用 issue 模型，
+        // 只有当该 issue 关联 pull_request 时才是 PR 评论；否则是普通 issue，忽略。
         if (!payload.issue?.pull_request) {
             return { kind: 'ignored', reason: 'issue_comment on non-PR issue' };
         }
@@ -12350,40 +9413,51 @@ async function dispatchCommentEvent(deps) {
         prAuthor = payload.issue.user?.login ?? '';
     }
     else {
+        // [pull_request_review_comment 分支] 代码 diff 上的行级评论。
+        // 缺少 pull_request 字段属于异常 payload，忽略。
         if (!payload.pull_request) {
             return { kind: 'ignored', reason: 'review_comment missing pull_request' };
         }
         prNumber = payload.pull_request.number;
         comment = payload.comment;
+        // 行级评论 payload 自带 head/base SHA，可直接用于后续 diff 定位
         headSha = payload.pull_request.head?.sha ?? '';
         baseSha = payload.pull_request.base?.sha ?? '';
         prAuthor = payload.pull_request.user?.login ?? '';
         commentNodeId = comment?.node_id;
         // review_thread 的 nodeId 需要另查 GraphQL；此处置空由 B 在 handler 中补齐
     }
+    // [字段完整性校验] 评论体非字符串或缺 PR number 则无法解析命令，忽略。
     if (!comment || typeof comment.body !== 'string' || !prNumber) {
         return { kind: 'ignored', reason: 'missing comment body or pr number' };
     }
-    // 过滤 bot 自身（避免自我触发）
+    // [bot 自评论过滤] 通过 user.type 或登录名 `xxx[bot]` 后缀识别机器人，
+    // 防止 bot 自己回帖再次触发命令造成死循环。
     const actorLogin = comment.user?.login ?? '';
     const actorIsBot = comment.user?.type === 'Bot' || /\[bot\]$/i.test(actorLogin);
     if (actorIsBot) {
+        // 打印作者信息，便于排查"明明是人却被当成 bot"的情况
+        (0,core.info)(`command dispatcher: ignored comment from bot (login=${actorLogin}, type=${comment.user?.type})`);
         return { kind: 'ignored', reason: 'comment from bot' };
     }
     // 命令解析
-    const registry = (0,commands_registry/* getRegistry */.JH)();
+    const registry = (0,commands_registry/* getRegistry */.J)();
     const parseOpts = {
         registeredCommands: registry.getRegisteredNames(),
         botMentions: deps.botMentions ?? parser/* DEFAULT_BOT_MENTIONS */.gC
     };
     const outcome = (0,parser/* parse */.Qc)(comment.body, parseOpts);
+    // [解析结果分支] parser 返回三种形态：
     if (outcome.kind === 'none') {
+        // none：未 @bot 或非命令。对话必须显式 @bot 才触发（包括续轮），
+        // 避免与真人之间的普通讨论冲突。
         return { kind: 'ignored', reason: 'no bot mention' };
     }
     if (outcome.kind === 'conversation') {
+        // conversation：@bot 但非已注册命令 → 交回 command-handler 走对话式追问 fallback。
         return { kind: 'fallback_conversation' };
     }
-    // outcome.kind === 'command'
+    // outcome.kind === 'command'：解析出一条已知命令，进入执行流程。
     // 即便解析出错，也尽量构造 reply 以反馈用户
     const owner = context.repo.owner;
     const repoName = context.repo.repo;
@@ -12395,6 +9469,7 @@ async function dispatchCommentEvent(deps) {
         originalCommentId: comment.id,
         commandName: cmdNameForReply
     });
+    // [解析错误] 命令名识别成功但参数非法等（如 INVALID_ARGS），直接回帖报错并结束。
     if (outcome.error) {
         await reply.error(outcome.error.code, outcome.error.detail);
         return {
@@ -12405,13 +9480,19 @@ async function dispatchCommentEvent(deps) {
         };
     }
     const parsed = outcome.command;
-    // 幂等检查: 同一 commentId × 同一 command 是否已有回复
+    // [幂等检查] 同一 commentId × 同一 command 是否已有回复；
+    // Actions 可能因重试/重复投递触发多次，命中则跳过避免重复执行。
     const processed = await hasBeenProcessed(owner, repoName, prNumber, comment.id, parsed.name);
     if (processed) {
         (0,core.info)(`command dispatcher: skip duplicate commentId=${comment.id} cmd=${parsed.name}`);
-        return { kind: 'executed', command: parsed.name, ok: false, error: 'DUPLICATE' };
+        return {
+            kind: 'executed',
+            command: parsed.name,
+            ok: false,
+            error: 'DUPLICATE'
+        };
     }
-    // 速率限制
+    // [速率限制] 按操作者维度限流；超限则回帖提示重试时间并结束。
     const rl = checkRateLimit(actorLogin);
     if (!rl.allowed) {
         await reply.error('RATE_LIMITED', `请 ${Math.ceil((rl.retryAfterMs ?? 0) / 1000)} 秒后再试`);
@@ -12422,7 +9503,7 @@ async function dispatchCommentEvent(deps) {
             error: 'RATE_LIMITED'
         };
     }
-    // 查找 handler
+    // [查找 handler] 从注册表取命令处理器；命令名虽通过解析但未注册（如已下线）则报 UNKNOWN_COMMAND。
     const handler = registry.get(parsed.name);
     if (!handler) {
         await reply.error('UNKNOWN_COMMAND', `\`${parsed.name}\``);
@@ -12433,7 +9514,8 @@ async function dispatchCommentEvent(deps) {
             error: 'UNKNOWN_COMMAND'
         };
     }
-    // 权限: 查询 + 校验
+    // [权限校验] 查询操作者在仓库的权限等级，结合"是否为 PR 作者"判断能否执行该命令；
+    // 不满足则回帖 FORBIDDEN 并结束。
     const permission = await getPermission({
         owner,
         repo: repoName,
@@ -12473,12 +9555,13 @@ async function dispatchCommentEvent(deps) {
         options: deps.options,
         triggerReview: deps.triggerReview
     };
-    // ACK
+    // [ACK 回复] 仅对声明 needsAck 的耗时命令先回一条"正在执行"，
+    // 后续 success/error 会复用该 ackId 原地更新，避免刷屏。
     let ackId = null;
     if (handler.needsAck) {
         ackId = await reply.ack(`正在执行 \`${parsed.name}\` …`);
     }
-    // 执行
+    // [执行] 调用 handler，成功回 success；
     try {
         const result = await handler.execute(ctx);
         const message = result?.message ?? `✅ 命令 \`${parsed.name}\` 执行完成`;
@@ -12486,6 +9569,7 @@ async function dispatchCommentEvent(deps) {
         return { kind: 'executed', command: parsed.name, ok: true };
     }
     catch (e) {
+        // 抛错则归一化错误码后回 error，并打 warning 便于排查。
         const code = extractErrorCode(e);
         const detail = e instanceof Error ? e.message : String(e);
         await reply.error(code, detail, ackId);
@@ -12498,10 +9582,17 @@ async function dispatchCommentEvent(deps) {
         };
     }
 }
+/**
+ * 把任意抛出的异常归一化为已知 ErrorCode。
+ * 仅当 e 是对象、带 string 类型的 code、且 code 属于白名单时才采用，
+ * 否则一律兜底为 'INTERNAL'。
+ */
 function extractErrorCode(e) {
+    // 非对象或无 code 字段 → 走末尾 INTERNAL 兜底
     if (e && typeof e === 'object' && 'code' in e) {
         const c = e.code;
         if (typeof c === 'string') {
+            // code 必须命中已知错误码白名单，防止把任意字符串当成合法 ErrorCode
             if ([
                 'UNKNOWN_COMMAND',
                 'INVALID_ARGS',
@@ -12519,31 +9610,34 @@ function extractErrorCode(e) {
     return 'INTERNAL';
 }
 
-// EXTERNAL MODULE: ./lib/review.js + 16 modules
-var review = __nccwpck_require__(7034);
+// EXTERNAL MODULE: ./lib/review.js + 17 modules
+var review = __nccwpck_require__(8726);
 // EXTERNAL MODULE: ./lib/commenter.js
 var lib_commenter = __nccwpck_require__(4558);
+// EXTERNAL MODULE: ./lib/constants.js
+var constants = __nccwpck_require__(2098);
 // EXTERNAL MODULE: ./lib/inputs.js
 var lib_inputs = __nccwpck_require__(6305);
 // EXTERNAL MODULE: ./lib/tokenizer.js
 var tokenizer = __nccwpck_require__(7525);
-;// CONCATENATED MODULE: ./lib/review-comment.js
+;// CONCATENATED MODULE: ./lib/conversation.js
 /**
- * review-comment.ts - PR 审查评论回复处理模块
+ * conversation.ts - 对话式追问交互（迭代二 · 成员 D · 2.3）
  *
- * 处理 pull_request_review_comment 事件，即用户在 PR 的代码审查评论中发表回复。
+ * 当开发者在 PR 的代码审查评论中回复并 @ 机器人，或在已有的 bot 对话链中继续
+ * 追问时，本模块负责：
  *
- * 触发条件（满足任一）：
- * 1. 评论对话链中已有 bot 的评论（继续对话）
- * 2. 评论内容中 @ai-reviewer（主动召唤 bot）
+ *   1. 追问意图识别        —— 区分"追问 Bot"与"普通评论"，避免无关回帖
+ *   2. Thread 对话历史收集  —— 拉取完整对话链并格式化
+ *   3. 关联代码行/扩展上下文 —— 评论所在 diff hunk + 文件完整 diff
+ *   4. 对话 Prompt 组装     —— 历史 + 代码 + diff + PR 摘要
+ *   5. LLM 对话推理         —— 复用迭代一的重量模型（Analysis Chain / Web Query）
+ *   6. 回复发布到 thread
+ *   7. 上下文截断 + 摘要压缩 —— 防止长对话 Token 超限
+ *   8. 对话轮次上限控制     —— 防止无限对话消耗资源
  *
- * 处理流程：
- * 1. 验证事件类型和 payload 数据
- * 2. 过滤 bot 自身发出的评论（避免自我回复循环）
- * 3. 获取评论对话链上下文
- * 4. 收集文件 diff、PR 摘要等辅助上下文
- * 5. 在 token 限制内打包所有上下文
- * 6. 调用 AI 生成回复并发布
+ * 设计原则：纯逻辑（意图识别 / 截断 / 轮次统计）抽成可独立单测的函数，
+ * I/O 编排集中在 handleConversation 中，复用既有 Commenter / Bot / Prompts。
  */
 
 // eslint-disable-next-line camelcase
@@ -12552,142 +9646,254 @@ var tokenizer = __nccwpck_require__(7525);
 
 
 
+
 // eslint-disable-next-line camelcase
-const review_comment_context = github.context;
-const repo = review_comment_context.repo;
-/** 用户在评论中 @ bot 的关键词 */
-const ASK_BOT = '@ai-reviewer';
+const conversation_context = github.context;
+/** 默认的 bot mention 别名（小写匹配，与命令解析器保持一致）。共享自 constants。 */
+
+/** 标识 bot 在对话链中出现过的标签（用于轮次统计 / 意图识别） */
+const BOT_COMMENT_TAGS = [lib_commenter/* COMMENT_TAG */.Rs, lib_commenter/* COMMENT_REPLY_TAG */.aD];
+/** 单个 thread 的对话轮次上限（bot 已回复的次数），超过后停止追问 */
+const MAX_CONVERSATION_TURNS = 10;
+/** 对话历史进入 Prompt 时的字符上限（粗粒度预算，token 预算另行精确校验） */
+const MAX_CHAIN_CHARS = 12_000;
+/** 对话历史截断时的分隔符（与 Commenter.composeCommentChain 对齐） */
+const CHAIN_SEPARATOR = '\n---\n';
 /**
- * 处理 PR 审查评论回复事件的主函数
+ * 追问意图识别：判断一条评论是否应触发 bot 对话回复。
  *
- * @param heavyBot - 重量级 AI 模型（用于生成高质量回复）
- * @param options - 全局配置选项
- * @param prompts - 提示词模板
+ * 触发条件：**评论必须显式 @ 了机器人**（首轮与续轮一致），
+ * 以避免把 thread 内真人之间的讨论误当成追问。
+ *
+ * 排除规则（优先级最高）：
+ *   - 评论来自 bot 自身（避免自我触发循环）
+ *   - 评论正文含 bot 专属标签（视为 bot 文案）
+ *
+ * @returns true 表示需要 bot 介入回复
  */
-const handleReviewComment = async (heavyBot, options, prompts) => {
+function isFollowUpQuestion(opts) {
+    const { commentBody, authorIsBot } = opts;
+    if (authorIsBot) {
+        return false;
+    }
+    const body = commentBody ?? '';
+    // bot 自动生成的内容带有专属标签，二次保险，避免把 bot 文案当成追问
+    const botTags = opts.botCommentTags ?? BOT_COMMENT_TAGS;
+    if (botTags.some(tag => body.includes(tag))) {
+        return false;
+    }
+    const mentions = (opts.mentions ?? constants/* BOT_MENTIONS */.T).map(m => m.toLowerCase());
+    const lowerBody = body.toLowerCase();
+    return mentions.some(m => lowerBody.includes(m));
+}
+/**
+ * 统计对话链中 bot 已回复的轮次。
+ * 以 bot 专属标签出现次数为准（每条 bot 评论都会携带一个标签）。
+ */
+function countBotTurns(commentChain, botCommentTags = BOT_COMMENT_TAGS) {
+    if (!commentChain) {
+        return 0;
+    }
+    let count = 0;
+    for (const tag of botCommentTags) {
+        count += occurrences(commentChain, tag);
+    }
+    return count;
+}
+function occurrences(haystack, needle) {
+    if (!needle) {
+        return 0;
+    }
+    let count = 0;
+    let idx = haystack.indexOf(needle);
+    while (idx !== -1) {
+        count++;
+        idx = haystack.indexOf(needle, idx + needle.length);
+    }
+    return count;
+}
+/**
+ * 对话历史截断 + 摘要压缩。
+ *
+ * 长对话会撑爆 Token 预算。这里保留**最近**的若干轮对话（信息最相关），
+ * 较早的内容压缩为一行提示，避免直接截断造成上下文割裂。
+ *
+ * @param chain    composeCommentChain 产出的对话链字符串
+ * @param maxChars 字符预算上限
+ */
+function truncateConversationChain(chain, maxChars = MAX_CHAIN_CHARS) {
+    if (!chain || chain.length <= maxChars) {
+        return chain;
+    }
+    const turns = chain.split(CHAIN_SEPARATOR);
+    const kept = [];
+    let used = 0;
+    let omitted = 0;
+    // 从最新的一轮往前累加，直到预算用尽
+    for (let i = turns.length - 1; i >= 0; i--) {
+        const turn = turns[i];
+        const cost = turn.length + CHAIN_SEPARATOR.length;
+        if (used + cost <= maxChars || kept.length === 0) {
+            kept.unshift(turn);
+            used += cost;
+        }
+        else {
+            omitted = i + 1;
+            break;
+        }
+    }
+    if (omitted > 0) {
+        kept.unshift(`> _（为控制上下文长度，较早的 ${omitted} 条对话已省略，仅保留最近 ${kept.length} 条）_`);
+    }
+    return kept.join(CHAIN_SEPARATOR);
+}
+/**
+ * 对话式追问主入口。
+ *
+ * 仅处理 pull_request_review_comment 事件（代码行级评论中的追问）。
+ * 由 command-handler.ts 在命令解析判定为 "fallback_conversation" 时调用。
+ *
+ * @param heavyBot - 重量级模型，用于生成高质量回复
+ * @param options  - 全局配置
+ * @param prompts  - 提示词模板
+ */
+const handleConversation = async (heavyBot, options, prompts) => {
     const commenter = new lib_commenter/* Commenter */.Es();
     const inputs = new lib_inputs/* Inputs */.k();
-    // ===== 第一步：验证事件类型 =====
-    if (review_comment_context.eventName !== 'pull_request_review_comment') {
-        (0,core.warning)(`Skipped: ${review_comment_context.eventName} is not a pull_request_review_comment event`);
+    const repo = conversation_context.repo;
+    // ===== 1. 事件与 payload 校验 =====
+    if (conversation_context.eventName !== 'pull_request_review_comment') {
+        (0,core.info)(`conversation: skip non review_comment event (${conversation_context.eventName})`);
         return;
     }
-    if (!review_comment_context.payload) {
-        (0,core.warning)(`Skipped: ${review_comment_context.eventName} event is missing payload`);
+    const payload = conversation_context.payload;
+    if (!payload || payload.action !== 'created') {
+        (0,core.info)('conversation: skip (missing payload or action != created)');
         return;
     }
-    const comment = review_comment_context.payload.comment;
-    if (comment == null) {
-        (0,core.warning)(`Skipped: ${review_comment_context.eventName} event is missing comment`);
+    const comment = payload.comment;
+    if (comment == null || typeof comment.body !== 'string') {
+        (0,core.warning)('conversation: skip (missing comment body)');
         return;
     }
-    if (review_comment_context.payload.pull_request == null ||
-        review_comment_context.payload.repository == null) {
-        (0,core.warning)(`Skipped: ${review_comment_context.eventName} event is missing pull_request`);
+    if (payload.pull_request == null || payload.repository == null) {
+        (0,core.warning)('conversation: skip (missing pull_request/repository)');
         return;
     }
-    // 填充 PR 基本信息到 inputs
-    inputs.title = review_comment_context.payload.pull_request.title;
-    if (review_comment_context.payload.pull_request.body) {
-        inputs.description = commenter.getDescription(review_comment_context.payload.pull_request.body);
-    }
-    // ===== 第二步：只处理新创建的评论 =====
-    if (review_comment_context.payload.action !== 'created') {
-        (0,core.warning)(`Skipped: ${review_comment_context.eventName} event is not created`);
+    // ===== 2. 过滤 bot 自身评论 =====
+    const authorIsBot = comment.user?.type === 'Bot' ||
+        /\[bot\]$/i.test(comment.user?.login ?? '') ||
+        comment.body.includes(lib_commenter/* COMMENT_TAG */.Rs) ||
+        comment.body.includes(lib_commenter/* COMMENT_REPLY_TAG */.aD);
+    if (authorIsBot) {
+        (0,core.info)('conversation: skip (comment from bot itself)');
         return;
     }
-    // ===== 第三步：过滤 bot 自身的评论（避免自我回复循环） =====
-    if (!comment.body.includes(lib_commenter/* COMMENT_TAG */.Rs) &&
-        !comment.body.includes(lib_commenter/* COMMENT_REPLY_TAG */.aD)) {
-        const pullNumber = review_comment_context.payload.pull_request.number;
-        // 填充评论相关信息
-        inputs.comment = `${comment.user.login}: ${comment.body}`;
-        inputs.diff = comment.diff_hunk; // 评论所在的 diff 片段
-        inputs.filename = comment.path; // 评论所在的文件路径
-        // 获取完整的评论对话链
-        const { chain: commentChain, topLevelComment } = await commenter.getCommentChain(pullNumber, comment);
-        if (!topLevelComment) {
-            (0,core.warning)('Failed to find the top-level comment to reply to');
+    const pullNumber = payload.pull_request.number;
+    // 填充 PR 基本信息
+    inputs.title = payload.pull_request.title;
+    if (payload.pull_request.body) {
+        inputs.description = commenter.getDescription(payload.pull_request.body);
+    }
+    inputs.comment = `${comment.user.login}: ${comment.body}`;
+    inputs.diff = comment.diff_hunk ?? '';
+    inputs.filename = comment.path ?? '';
+    // ===== 3. Thread 对话历史收集 =====
+    const { chain: rawChain, topLevelComment } = await commenter.getCommentChain(pullNumber, comment);
+    if (!topLevelComment) {
+        (0,core.warning)('conversation: cannot locate top-level comment, abort');
+        return;
+    }
+    // ===== 4. 追问意图识别（必须 @bot） =====
+    if (!isFollowUpQuestion({
+        commentBody: comment.body,
+        authorIsBot: false
+    })) {
+        (0,core.info)('conversation: not a follow-up question (no @mention), skip');
+        return;
+    }
+    // ===== 5. 对话轮次上限控制 =====
+    const turns = countBotTurns(rawChain);
+    if (turns >= MAX_CONVERSATION_TURNS) {
+        (0,core.info)(`conversation: turn limit reached (${turns}/${MAX_CONVERSATION_TURNS})`);
+        await commenter.reviewCommentReply(pullNumber, topLevelComment, `本话题的自动对话轮次已达上限（${MAX_CONVERSATION_TURNS} 轮）。如需继续深入，请新开一条评论或联系人工 reviewer。`);
+        return;
+    }
+    // ===== 6. 上下文截断 + 摘要压缩 =====
+    inputs.commentChain = truncateConversationChain(rawChain);
+    // ===== 7. 关联代码行及扩展上下文（文件完整 diff） =====
+    let fileDiff = '';
+    try {
+        const diffAll = await octokit/* octokit.repos.compareCommits */.K.repos.compareCommits({
+            owner: repo.owner,
+            repo: repo.repo,
+            base: payload.pull_request.base.sha,
+            head: payload.pull_request.head.sha
+        });
+        const file = diffAll.data?.files?.find(f => f.filename === comment.path);
+        if (file?.patch) {
+            fileDiff = file.patch;
+        }
+    }
+    catch (e) {
+        (0,core.warning)(`conversation: failed to get file diff: ${e}, continue without it`);
+    }
+    // 评论本身没有 diff 片段时，退化为使用完整文件 diff
+    if (inputs.diff.length === 0) {
+        if (fileDiff.length > 0) {
+            inputs.diff = fileDiff;
+            fileDiff = '';
+        }
+        else {
+            await commenter.reviewCommentReply(pullNumber, topLevelComment, '无法回复该评论：未能定位关联的代码 diff。');
             return;
         }
-        inputs.commentChain = commentChain;
-        // ===== 第四步：判断是否需要 AI 回复 =====
-        // 条件：对话链中已有 bot 评论（COMMENT_TAG/COMMENT_REPLY_TAG），
-        //       或用户主动 @ai-reviewer
-        if (commentChain.includes(lib_commenter/* COMMENT_TAG */.Rs) ||
-            commentChain.includes(lib_commenter/* COMMENT_REPLY_TAG */.aD) ||
-            comment.body.includes(ASK_BOT)) {
-            // ===== 第五步：收集文件 diff 上下文 =====
-            let fileDiff = '';
-            try {
-                // 获取文件的完整 diff（base 到 head 的对比）
-                const diffAll = await octokit/* octokit.repos.compareCommits */.K.repos.compareCommits({
-                    owner: repo.owner,
-                    repo: repo.repo,
-                    base: review_comment_context.payload.pull_request.base.sha,
-                    head: review_comment_context.payload.pull_request.head.sha
-                });
-                if (diffAll.data) {
-                    const files = diffAll.data.files;
-                    if (files != null) {
-                        const file = files.find(f => f.filename === comment.path);
-                        if (file != null && file.patch) {
-                            fileDiff = file.patch;
-                        }
-                    }
-                }
-            }
-            catch (error) {
-                (0,core.warning)(`Failed to get file diff: ${error}, skipping.`);
-            }
-            // 如果评论中没有 diff 片段，使用完整的文件 diff 替代
-            if (inputs.diff.length === 0) {
-                if (fileDiff.length > 0) {
-                    inputs.diff = fileDiff;
-                    fileDiff = '';
-                }
-                else {
-                    await commenter.reviewCommentReply(pullNumber, topLevelComment, 'Cannot reply to this comment as diff could not be found.');
-                    return;
-                }
-            }
-            // ===== 第六步：在 token 限制内打包上下文 =====
-            let tokens = (0,tokenizer/* getTokenCount */.V)(prompts.renderComment(inputs));
-            // 检查基础提示词是否已超出 token 限制
-            if (tokens > options.heavyTokenLimits.requestTokens) {
-                await commenter.reviewCommentReply(pullNumber, topLevelComment, 'Cannot reply to this comment as diff being commented is too large and exceeds the token limit.');
-                return;
-            }
-            // 尝试将完整文件 diff 加入上下文（如果 token 预算允许）
-            if (fileDiff.length > 0) {
-                const fileDiffCount = prompts.comment.split('$file_diff').length - 1;
-                const fileDiffTokens = (0,tokenizer/* getTokenCount */.V)(fileDiff);
-                if (fileDiffCount > 0 &&
-                    tokens + fileDiffTokens * fileDiffCount <=
-                        options.heavyTokenLimits.requestTokens) {
-                    tokens += fileDiffTokens * fileDiffCount;
-                    inputs.fileDiff = fileDiff;
-                }
-            }
-            // 尝试将 PR 精简摘要加入上下文（如果 token 预算允许）
-            const summary = await commenter.findCommentWithTag(lib_commenter/* SUMMARIZE_TAG */.Rp, pullNumber);
-            if (summary) {
-                const shortSummary = commenter.getShortSummary(summary.body);
-                const shortSummaryTokens = (0,tokenizer/* getTokenCount */.V)(shortSummary);
-                if (tokens + shortSummaryTokens <=
-                    options.heavyTokenLimits.requestTokens) {
-                    tokens += shortSummaryTokens;
-                    inputs.shortSummary = shortSummary;
-                }
-            }
-            // ===== 第七步：调用 AI 生成回复并发布 =====
-            const [reply] = await heavyBot.chat(prompts.renderComment(inputs), {});
-            await commenter.reviewCommentReply(pullNumber, topLevelComment, reply);
+    }
+    // ===== 8. Token 预算内打包上下文 =====
+    let tokens = (0,tokenizer/* getTokenCount */.V)(prompts.renderComment(inputs));
+    if (tokens > options.heavyTokenLimits.requestTokens) {
+        // 对话链可能仍过长，进一步压缩后重试一次
+        inputs.commentChain = truncateConversationChain(rawChain, Math.floor(MAX_CHAIN_CHARS / 2));
+        tokens = (0,tokenizer/* getTokenCount */.V)(prompts.renderComment(inputs));
+    }
+    if (tokens > options.heavyTokenLimits.requestTokens) {
+        await commenter.reviewCommentReply(pullNumber, topLevelComment, '无法回复该评论：关联的上下文过大，超出了模型的 token 限制。');
+        return;
+    }
+    // 预算允许时补充完整文件 diff
+    if (fileDiff.length > 0) {
+        const fileDiffCount = prompts.comment.split('$file_diff').length - 1;
+        const fileDiffTokens = (0,tokenizer/* getTokenCount */.V)(fileDiff);
+        if (fileDiffCount > 0 &&
+            tokens + fileDiffTokens * fileDiffCount <=
+                options.heavyTokenLimits.requestTokens) {
+            tokens += fileDiffTokens * fileDiffCount;
+            inputs.fileDiff = fileDiff;
         }
     }
-    else {
-        (0,core.info)(`Skipped: ${review_comment_context.eventName} event is from the bot itself`);
+    // 预算允许时补充 PR 精简摘要
+    const summary = await commenter.findCommentWithTag(lib_commenter/* SUMMARIZE_TAG */.Rp, pullNumber);
+    if (summary) {
+        const shortSummary = commenter.getShortSummary(summary.body);
+        const shortSummaryTokens = (0,tokenizer/* getTokenCount */.V)(shortSummary);
+        if (tokens + shortSummaryTokens <= options.heavyTokenLimits.requestTokens) {
+            tokens += shortSummaryTokens;
+            inputs.shortSummary = shortSummary;
+        }
     }
+    // ===== 9. LLM 对话推理 + 发布回复 =====
+    const [reply] = await heavyBot.chat(prompts.renderComment(inputs), {});
+    if (!reply) {
+        (0,core.warning)('conversation: empty reply from model, skip posting');
+        return;
+    }
+    // 由我们用真实评论者用户名前缀回复（模型已被要求不要自行 @）。
+    // 防御性去掉模型可能仍残留的开头 "@user"（历史 prompt 遗留），避免误链到真实账号 user。
+    const cleanedReply = reply.replace(/^\s*@user[，,：:\s]*/i, '').trimStart();
+    const authorLogin = comment.user?.login ?? '';
+    const mention = authorLogin ? `@${authorLogin} ` : '';
+    await commenter.reviewCommentReply(pullNumber, topLevelComment, `${mention}${cleanedReply}`);
+    (0,core.info)(`conversation: replied on PR #${pullNumber} thread (top-level comment ${topLevelComment.id})`);
 };
 
 ;// CONCATENATED MODULE: ./lib/command-handler.js
@@ -12700,9 +9906,9 @@ const handleReviewComment = async (heavyBot, options, prompts) => {
  *   1. 启动命令注册表（只需一次）
  *   2. 调用 dispatcher 处理事件
  *   3. 当 dispatcher 判定为 "fallback_conversation" 时，
- *      透传给既有的 handleReviewComment（对话式追问），
+ *      透传给成员 D 的对话式追问处理器 handleConversation，
  *      但仅当事件是 pull_request_review_comment 时才透传
- *      （issue_comment 场景的对话由迭代二成员 D 后续扩展）。
+ *      （issue_comment 场景的对话暂不支持）。
  */
 
 // eslint-disable-next-line camelcase
@@ -12734,7 +9940,6 @@ async function handleCommentEvent(deps) {
     });
     (0,core.info)(`commentEvent dispatcher outcome: ${JSON.stringify(outcome)}`);
     if (outcome.kind === 'fallback_conversation') {
-        // 既有对话式追问仅支持 pull_request_review_comment
         if (command_handler_context.eventName === 'pull_request_review_comment') {
             const bots = deps.heavyBot != null
                 ? { heavyBot: deps.heavyBot }
@@ -12743,10 +9948,13 @@ async function handleCommentEvent(deps) {
                 (0,core.info)('commentEvent: conversation fallback skipped (OpenAI bot unavailable)');
                 return;
             }
-            await handleReviewComment(bots.heavyBot, deps.options, deps.prompts);
+            // 对话式追问（成员 D · 2.3）仅支持 pull_request_review_comment。
+            // handleConversation 已取代旧的 handleReviewComment（含意图识别 / 轮次上限 /
+            // 上下文截断），两者都会向 thread 回帖，**不可同时调用**，否则重复回复 + 双倍 LLM 开销。
+            await handleConversation(bots.heavyBot, deps.options, deps.prompts);
         }
         else {
-            (0,core.info)('commentEvent: conversation fallback skipped (issue_comment 对话由后续迭代支持)');
+            (0,core.info)('commentEvent: conversation fallback skipped (issue_comment 对话暂不支持)');
         }
     }
 }
@@ -12770,6 +9978,8 @@ __nccwpck_require__.d(__webpack_exports__, {
 var core = __nccwpck_require__(1078);
 // EXTERNAL MODULE: ./lib/commands/registry.js
 var registry = __nccwpck_require__(953);
+// EXTERNAL MODULE: ./lib/constants.js
+var constants = __nccwpck_require__(2098);
 ;// CONCATENATED MODULE: ./lib/commands/handlers/help.js
 /**
  * commands/handlers/help.ts - help 命令的参考实现（成员 A 交付）
@@ -12779,6 +9989,7 @@ var registry = __nccwpck_require__(953);
  * - 按注册顺序输出命令名、描述、用法
  * - 提供 buildHelpMessage() 纯函数，便于单测
  */
+
 
 
 /**
@@ -12801,7 +10012,7 @@ function buildHelpMessage(commands) {
     });
     for (const c of ordered) {
         const perm = c.minPermission ?? 'write';
-        const usage = c.usage ?? `@ai-reviewer ${c.name}`;
+        const usage = c.usage ?? `${constants/* PRIMARY_BOT_MENTION */.a} ${c.name}`;
         lines.push(`| \`${usage}\` | ${c.description} | \`${perm}\` |`);
     }
     if (ordered.some(c => (c.aliases?.length ?? 0) > 0)) {
@@ -12814,17 +10025,17 @@ function buildHelpMessage(commands) {
         }
     }
     lines.push('');
-    lines.push(`> ${(0,core.getInput)('bot_icon') || '🤖'} Bot 同时支持 \`@ai-reviewer\` 与 \`@codesentinel\` 两个 mention。`);
+    lines.push(`> ${(0,core.getInput)('bot_icon') || '🤖'} Bot 同时支持 ${constants/* BOT_MENTIONS.map */.T.map(m => `\`${m}\``).join(' 与 ')} 共 ${constants/* BOT_MENTIONS.length */.T.length} 个 mention。`);
     return lines.join('\n');
 }
 const helpHandler = {
     name: 'help',
     description: '显示所有支持的命令及用法',
-    usage: '@ai-reviewer help',
+    usage: `${constants/* PRIMARY_BOT_MENTION */.a} help`,
     needsAck: false,
     minPermission: 'read',
     async execute(_ctx) {
-        const cmds = (0,registry/* getRegistry */.JH)().listCommands();
+        const cmds = (0,registry/* getRegistry */.J)().listCommands();
         return { message: buildHelpMessage(cmds) };
     }
 };
@@ -12882,7 +10093,7 @@ const RESOLVE_THREAD = `
 `;
 // ─── Bot identity ─────────────────────────────────────────────────────────────
 let cachedBotLogin = null;
-async function review_thread_getBotLogin(options) {
+async function getBotLogin(options) {
     if (cachedBotLogin !== null)
         return cachedBotLogin;
     void options;
@@ -12922,7 +10133,7 @@ function normalizeLogin(login) {
     return login.replace(/\[bot\]$/i, '').toLowerCase();
 }
 // ─── Query ────────────────────────────────────────────────────────────────────
-async function review_thread_fetchUnresolvedBotThreads(params, botLogin) {
+async function fetchUnresolvedBotThreads(params, botLogin) {
     const results = [];
     let cursor = null;
     do {
@@ -12974,6 +10185,7 @@ function simulateDebugError(threadId) {
         return new Error("Resource not accessible by integration (mutation 'resolveReviewThread')");
     }
     if (threadId.includes('_network_')) {
+        // TODO: Maybe gitlab in the future, or other network errors, but for now just simulate a connection reset.
         return new Error('request to https://api.github.com/graphql failed, reason: read ECONNRESET');
     }
     // 默认：node not found（无效的 global id）
@@ -12992,7 +10204,7 @@ function threadLabel(t) {
     }
     return t.id;
 }
-async function review_thread_batchResolve(threads) {
+async function batchResolve(threads) {
     const limit = (0,p_limit/* default */.Z)(6);
     let ok = 0;
     const errors = [];
@@ -13029,50 +10241,44 @@ async function review_thread_batchResolve(threads) {
 
 ;// CONCATENATED MODULE: ./lib/commands/handlers/resolve.js
 
+
 // ─── Handler ──────────────────────────────────────────────────────────────────
 const resolveHandler = {
     name: 'resolve',
     description: '批量将所有 CodeSentinel 审查意见标记为已解决',
-    usage: '@ai-reviewer resolve',
+    usage: `${constants/* PRIMARY_BOT_MENTION */.a} resolve`,
     needsAck: true,
     minPermission: 'write',
     execute
 };
 async function execute(ctx) {
-    const botLogin = await review_thread_getBotLogin(ctx.options);
-    const threads = await review_thread_fetchUnresolvedBotThreads({ owner: ctx.owner, repo: ctx.repo, prNumber: ctx.prNumber }, botLogin);
+    const botLogin = await getBotLogin(ctx.options);
+    const threads = await fetchUnresolvedBotThreads({ owner: ctx.owner, repo: ctx.repo, prNumber: ctx.prNumber }, botLogin);
     if (threads.length === 0) {
         return { message: 'ℹ️ 没有找到待解决的 CodeSentinel 审查意见' };
     }
     // 测试用：注入假 thread ID，模拟部分失败场景。
     // 按 notfound → permission → network 轮换，覆盖三类错误。
-    const injectCount = ctx.options.debugResolveInjectFailures;
-    if (injectCount > 0) {
-        const kinds = ['notfound', 'permission', 'network'];
-        for (let i = 0; i < injectCount; i++) {
-            const kind = kinds[i % kinds.length];
-            threads.push({
-                id: `PRRT_debug_inject_${kind}_${i + 1}`,
-                isResolved: false,
-                firstCommentAuthorLogin: botLogin,
-                path: threads[0].path,
-                line: 9000 + i,
-                firstCommentBody: `[debug] injected ${kind} failure ${i + 1}`
-            });
-        }
-    }
-    const { ok, failed, failedItems } = await review_thread_batchResolve(threads);
+    // const injectCount = ctx.options.debugResolveInjectFailures
+    // if (injectCount > 0) {
+    //   const kinds = ['notfound', 'permission', 'network'] as const
+    //   for (let i = 0; i < injectCount; i++) {
+    //     const kind = kinds[i % kinds.length]
+    //     threads.push({
+    //       id: `PRRT_debug_inject_${kind}_${i + 1}`,
+    //       isResolved: false,
+    //       firstCommentAuthorLogin: botLogin,
+    //       path: threads[0].path,
+    //       line: 9000 + i,
+    //       firstCommentBody: `[debug] injected ${kind} failure ${i + 1}`
+    //     })
+    //   }
+    // }
+    const { ok, failed, failedItems } = await batchResolve(threads);
     return { message: formatResult(ok, failed, threads.length, failedItems) };
 }
-// ─── External API (for member C) ──────────────────────────────────────────────
-async function resolveAllBotComments(params) {
-    const botLogin = await getBotLogin(params.options);
-    const threads = await fetchUnresolvedBotThreads(params, botLogin);
-    if (threads.length === 0)
-        return { ok: 0, failed: 0 };
-    return batchResolve(threads);
-}
 // ─── Formatting ───────────────────────────────────────────────────────────────
+// TODO Refer to CodeRabbit for the original implementation of this formatting logic.
 function formatResult(ok, failed, total, failedItems) {
     if (failed === 0) {
         return `✅ 已解决 **${ok}** 条 CodeSentinel 审查意见`;
@@ -13083,7 +10289,12 @@ function formatResult(ok, failed, total, failedItems) {
             .join('\n')}${permissionHint(failedItems)}`
         : '';
     if (ok === 0) {
-        return `❌ 解决失败（共 **${total}** 条）${errDetail}`;
+        // 全部失败时几乎一定是权限问题：resolveReviewThread mutation 需要用户 PAT，
+        // GITHUB_TOKEN 会被 GitHub 拒为 "Resource not accessible by integration"。
+        // 给出可操作提示，避免用户只看到一句干巴巴的 forbidden。
+        const permissionHint = '\n\n💡 这通常是权限不足：解决评论线程需要把用户 PAT 配置到 `resolve_token`，' +
+            '或在 workflow 中授予 `permissions: pull-requests: write`。';
+        return `❌ 解决失败（共 **${total}** 条）${errDetail}${permissionHint}`;
     }
     return `⚠️ 共 **${total}** 条，成功解决 **${ok}** 条，**${failed}** 条失败（可手动解决）${errDetail}`;
 }
@@ -13111,6 +10322,7 @@ function flattenError(message) {
 var review_state = __nccwpck_require__(3337);
 ;// CONCATENATED MODULE: ./lib/commands/handlers/stubs.js
 
+
 function notImplemented(name) {
     return async (_ctx) => {
         // 调度器会把抛出的标记型错误转成 NOT_IMPLEMENTED 反馈
@@ -13123,7 +10335,7 @@ function notImplemented(name) {
 const reviewStub = {
     name: 'review',
     description: '触发增量审查（仅审查自上次审查以来的新增变更）',
-    usage: '@ai-reviewer review',
+    usage: `${constants/* PRIMARY_BOT_MENTION */.a} review`,
     needsAck: true,
     minPermission: 'write',
     async execute(ctx) {
@@ -13136,7 +10348,7 @@ const reviewStub = {
 const fullReviewStub = {
     name: 'full review',
     description: '触发全量审查（从 base 到 HEAD 的完整 diff）',
-    usage: '@ai-reviewer full review',
+    usage: `${constants/* PRIMARY_BOT_MENTION */.a} full review`,
     needsAck: true,
     minPermission: 'write',
     async execute(ctx) {
@@ -13149,7 +10361,7 @@ const fullReviewStub = {
 const summaryStub = {
     name: 'summary',
     description: '基于当前最新代码重新生成 PR 摘要',
-    usage: '@ai-reviewer summary',
+    usage: `${constants/* PRIMARY_BOT_MENTION */.a} summary`,
     needsAck: true,
     minPermission: 'write',
     async execute(ctx) {
@@ -13162,20 +10374,20 @@ const summaryStub = {
 const pauseStub = {
     name: 'pause',
     description: '暂停对当前 PR 的自动审查',
-    usage: '@ai-reviewer pause',
+    usage: `${constants/* PRIMARY_BOT_MENTION */.a} pause`,
     needsAck: false,
     minPermission: 'write',
     async execute(ctx) {
         await (0,review_state/* setReviewState */.DU)(ctx.prNumber, 'paused');
         return {
-            message: '已暂停当前 PR 的自动审查。使用 `@ai-reviewer resume` 恢复。'
+            message: `已暂停当前 PR 的自动审查。使用 \`${constants/* PRIMARY_BOT_MENTION */.a} resume\` 恢复。`
         };
     }
 };
 const resumeStub = {
     name: 'resume',
     description: '恢复对当前 PR 的自动审查',
-    usage: '@ai-reviewer resume',
+    usage: `${constants/* PRIMARY_BOT_MENTION */.a} resume`,
     needsAck: false,
     minPermission: 'write',
     async execute(ctx) {
@@ -13186,7 +10398,7 @@ const resumeStub = {
 const configurationStub = {
     name: 'configuration',
     description: '显示当前仓库的审查配置',
-    usage: '@ai-reviewer configuration',
+    usage: `${constants/* PRIMARY_BOT_MENTION */.a} configuration`,
     needsAck: false,
     minPermission: 'read',
     async execute(ctx) {
@@ -13241,7 +10453,7 @@ let bootstrapped = false;
 function bootstrapCommands() {
     if (bootstrapped)
         return;
-    const reg = (0,registry/* getRegistry */.JH)();
+    const reg = (0,registry/* getRegistry */.J)();
     reg.register(helpHandler);
     reg.register(resolveHandler);
     for (const h of ALL_STUBS) {
@@ -13409,7 +10621,7 @@ async function tryEarlyReaction(rawReaction) {
         if (actorIsBot)
             return;
         (0,bootstrap/* bootstrapCommands */.K)();
-        const registry = (0,commands_registry/* getRegistry */.JH)();
+        const registry = (0,commands_registry/* getRegistry */.J)();
         const outcome = (0,parser/* parse */.Qc)(comment.body, {
             registeredCommands: registry.getRegisteredNames(),
             botMentions: parser/* DEFAULT_BOT_MENTIONS */.gC
@@ -13444,8 +10656,29 @@ async function tryEarlyReaction(rawReaction) {
 /* harmony export */   "gC": () => (/* binding */ DEFAULT_BOT_MENTIONS)
 /* harmony export */ });
 /* unused harmony exports MAX_COMMAND_LINE_LENGTH, MAX_ARG_LENGTH, MAX_ARGS_COUNT */
-/** 默认支持的 bot mention 别名（小写，已带 @） */
-const DEFAULT_BOT_MENTIONS = ['@ai-reviewer', '@codesentinel'];
+/* harmony import */ var _constants__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(2098);
+/**
+ * commands/parser.ts - 命令解析器
+ *
+ * 输入: 评论原文 + 已注册命令列表
+ * 输出: ParseOutcome，三种情形:
+ *   1. command      — 命中白名单的命令（可能带参数）
+ *   2. conversation — 包含 @bot 但未命中命令（走对话 fallback）
+ *   3. none         — 不包含 @bot 或没有任何有效触发
+ *
+ * 关键规则（见 §5.4 设计文档）:
+ *   - 默认支持 @ai-reviewer 与 @codesentinel 两个 mention 别名
+ *   - bot mention 不区分大小写
+ *   - 命令名不区分大小写（解析后归一化为小写）
+ *   - 复合命令按最长前缀匹配（例: "full review" 先于 "full"）
+ *   - 仅处理第一行的命令体，换行后的内容进入 rawAfter
+ *   - 单条评论只识别第一个命令，其余忽略
+ *   - 参数字符集白名单: [A-Za-z0-9_\-./:=]；出现 shell 元字符 → INVALID_ARGS
+ *   - 长度上限: 命令行 ≤ 512 字符, 单个 arg ≤ 128 字符, arg 数量 ≤ 16
+ */
+
+/** 默认支持的 bot mention 别名（小写，已带 @）。共享自 constants.BOT_MENTIONS。 */
+const DEFAULT_BOT_MENTIONS = [..._constants__WEBPACK_IMPORTED_MODULE_0__/* .BOT_MENTIONS */ .T];
 /** 命令行长度上限 */
 const MAX_COMMAND_LINE_LENGTH = 512;
 /** 单个 arg 长度上限 */
@@ -13614,9 +10847,9 @@ function truncate(s, n) {
 
 "use strict";
 /* harmony export */ __nccwpck_require__.d(__webpack_exports__, {
-/* harmony export */   "JH": () => (/* binding */ getRegistry)
+/* harmony export */   "J": () => (/* binding */ getRegistry)
 /* harmony export */ });
-/* unused harmony exports registerCommand, CommandRegistry */
+/* unused harmony export CommandRegistry */
 class CommandRegistry {
     handlers = new Map();
     /** 规范名 → 注册顺序，help 命令按注册顺序输出 */
@@ -13667,9 +10900,6 @@ class CommandRegistry {
     }
 }
 const globalRegistry = new CommandRegistry();
-function registerCommand(handler) {
-    globalRegistry.register(handler);
-}
 function getRegistry() {
     return globalRegistry;
 }
@@ -14460,6 +11690,37 @@ ${commentBody}`;
 
 /***/ }),
 
+/***/ 2098:
+/***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
+
+"use strict";
+/* harmony export */ __nccwpck_require__.d(__webpack_exports__, {
+/* harmony export */   "T": () => (/* binding */ BOT_MENTIONS),
+/* harmony export */   "a": () => (/* binding */ PRIMARY_BOT_MENTION)
+/* harmony export */ });
+/**
+ * constants.ts - 全局共享常量
+ *
+ * 跨多个领域模块（命令解析 / 对话识别 / 文案展示）复用的常量集中在此，
+ * 避免同一个值在多处硬编码后发生分叉。
+ */
+/**
+ * bot mention 别名（小写，已带 @）。
+ *
+ * 命令解析（parser）与对话追问识别（conversation）共用同一份触发别名——
+ * 二者必须保持一致，否则会出现「命令能触发但对话不认」之类的隐蔽 bug。
+ * 新增/调整别名只改这里一处。
+ */
+const BOT_MENTIONS = ['@ai-reviewer', '@codesentinel'];
+/**
+ * 主 mention 别名，用于面向用户的文案/用法示例（help、命令 usage 等）。
+ * 取 BOT_MENTIONS 的第一个，保证与触发别名同源。
+ */
+const PRIMARY_BOT_MENTION = BOT_MENTIONS[0];
+
+
+/***/ }),
+
 /***/ 6305:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
@@ -14596,12 +11857,12 @@ __nccwpck_require__.a(module, async (__webpack_handle_async_dependencies__, __we
 __nccwpck_require__.r(__webpack_exports__);
 /* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(1078);
 /* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__nccwpck_require__.n(_actions_core__WEBPACK_IMPORTED_MODULE_0__);
-/* harmony import */ var _bot__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(6949);
-/* harmony import */ var _command_handler__WEBPACK_IMPORTED_MODULE_2__ = __nccwpck_require__(1085);
+/* harmony import */ var _bot__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(1854);
+/* harmony import */ var _command_handler__WEBPACK_IMPORTED_MODULE_2__ = __nccwpck_require__(8280);
 /* harmony import */ var _commands_early_reaction__WEBPACK_IMPORTED_MODULE_3__ = __nccwpck_require__(6360);
 /* harmony import */ var _options__WEBPACK_IMPORTED_MODULE_4__ = __nccwpck_require__(5341);
 /* harmony import */ var _prompts__WEBPACK_IMPORTED_MODULE_6__ = __nccwpck_require__(2379);
-/* harmony import */ var _review__WEBPACK_IMPORTED_MODULE_5__ = __nccwpck_require__(7034);
+/* harmony import */ var _review__WEBPACK_IMPORTED_MODULE_5__ = __nccwpck_require__(8726);
 /**
  * main.ts - GitHub Action 入口文件
  *
@@ -14659,7 +11920,7 @@ async function run() {
         ['semgrep', 'semgrep_version']
     ]
         .map(([toolName, inputName]) => [toolName, (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)(inputName).trim()])
-        .filter(([, v]) => v.length > 0)), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('semgrep_config'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('command_ack_reaction'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('debug_resolve_inject_failures'));
+        .filter(([, v]) => v.length > 0)), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('semgrep_config'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('command_ack_reaction'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_review_comments'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('debug_resolve_inject_failures'));
     // 打印所有配置项，方便调试
     options.print();
     // 评论事件：在 Bot 初始化前尽快给用户评论打 ACK 表情
@@ -16943,8 +14204,9 @@ class Options {
      */
     semgrepConfig;
     commandAckReaction; // 命令识别后在用户评论上打的表情（空/off/none 表示禁用）
+    maxReviewComments; // 单次审查最多发布的行级评论数，按严重级别截断（0 表示不限制）
     debugResolveInjectFailures; // 测试用：向 batchResolve 注入 N 个假 thread ID
-    constructor(debug, disableReview, disableReleaseNotes, maxFiles = '0', reviewSimpleChanges = false, reviewCommentLGTM = false, pathFilters = null, systemMessage = '', openaiLightModel = 'gpt-5.4-nano', openaiHeavyModel = 'gpt-5.4-mini', openaiModelTemperature = '0.0', openaiRetries = '3', openaiTimeoutMS = '120000', openaiConcurrencyLimit = '6', githubConcurrencyLimit = '6', apiBaseUrl = 'https://api.openai.com/v1', language = 'en-US', enableDependencyAnalysis = true, maxDependencyFiles = '50', enableWebSearch = true, enableShell = true, enableLintTools = true, toolEnableOverrides = {}, toolVersionOverrides = {}, semgrepConfig = 'p/default', commandAckReaction = 'eyes', debugResolveInjectFailures = '0') {
+    constructor(debug, disableReview, disableReleaseNotes, maxFiles = '0', reviewSimpleChanges = false, reviewCommentLGTM = false, pathFilters = null, systemMessage = '', openaiLightModel = 'gpt-5.4-nano', openaiHeavyModel = 'gpt-5.4-mini', openaiModelTemperature = '0.0', openaiRetries = '3', openaiTimeoutMS = '120000', openaiConcurrencyLimit = '6', githubConcurrencyLimit = '6', apiBaseUrl = 'https://api.openai.com/v1', language = 'en-US', enableDependencyAnalysis = true, maxDependencyFiles = '50', enableWebSearch = true, enableShell = true, enableLintTools = true, toolEnableOverrides = {}, toolVersionOverrides = {}, semgrepConfig = 'p/default', commandAckReaction = 'eyes', maxReviewComments = '20', debugResolveInjectFailures = '0') {
         this.debug = debug;
         this.disableReview = disableReview;
         this.disableReleaseNotes = disableReleaseNotes;
@@ -16973,6 +14235,7 @@ class Options {
         this.toolVersionOverrides = toolVersionOverrides;
         this.semgrepConfig = semgrepConfig;
         this.commandAckReaction = commandAckReaction;
+        this.maxReviewComments = parseInt(maxReviewComments);
         this.debugResolveInjectFailures = parseInt(debugResolveInjectFailures) || 0;
     }
     /** 打印所有配置项到日志，方便调试 */
@@ -17005,6 +14268,7 @@ class Options {
         (0,core.info)(`tool_version_overrides: ${JSON.stringify(this.toolVersionOverrides)}`);
         (0,core.info)(`semgrep_config: ${this.semgrepConfig}`);
         (0,core.info)(`command_ack_reaction: ${this.commandAckReaction}`);
+        (0,core.info)(`max_review_comments: ${this.maxReviewComments}`);
     }
     /**
      * 检查文件路径是否通过过滤规则
@@ -17482,8 +14746,9 @@ If the comment contains instructions/requests for you, please comply.
 For example, if the comment is asking you to generate documentation
 comments on the code, in your reply please generate the required code.
 
-In your reply, please make sure to begin the reply by tagging the user
-with "@user".
+Do NOT start your reply with an @mention, a username, or a greeting
+(such as "@user" or "Hi") — the bot prepends the correct @mention of the
+actual commenter automatically. Just provide the reply content directly.
 
 ## Comment format
 
@@ -17659,7 +14924,7 @@ async function setReviewState(pullNumber, state) {
 
 /***/ }),
 
-/***/ 7034:
+/***/ 8726:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
 "use strict";
@@ -17748,12 +15013,6 @@ function scanPatch(patch) {
     return { addedLines, touchedLines };
 }
 /**
- * 兼容方法：仅返回 added 行 Set（与早期 `extractChangedLinesFromPatch` 等价）
- */
-function extractChangedLinesFromPatch(patch) {
-    return scanPatch(patch).addedLines;
-}
-/**
  * 对 PR 中所有变更文件做一次 walk，得到 PatchScanMap
  *
  * @param filesAndChanges [filename, fileContent, fileDiff, patches] 列表
@@ -17762,18 +15021,6 @@ function buildPatchScans(filesAndChanges) {
     const map = new Map();
     for (const [filename, , fileDiff] of filesAndChanges) {
         map.set(filename, scanPatch(fileDiff));
-    }
-    return map;
-}
-/**
- * 兼容方法：返回 file → addedLines Set 的映射
- *
- * 内部仍走 `buildPatchScans`，仅丢弃 touchedLines 字段。
- */
-function buildChangedLineMap(filesAndChanges) {
-    const map = new Map();
-    for (const [filename, scan] of buildPatchScans(filesAndChanges)) {
-        map.set(filename, scan.addedLines);
     }
     return map;
 }
@@ -17788,6 +15035,8 @@ function toAddedLineMap(scans) {
     return map;
 }
 
+// EXTERNAL MODULE: ./lib/constants.js
+var constants = __nccwpck_require__(2098);
 // EXTERNAL MODULE: ./lib/octokit.js
 var octokit = __nccwpck_require__(2247);
 ;// CONCATENATED MODULE: ./lib/repo-tree.js
@@ -19549,59 +16798,6 @@ function extractVersion(rawVersion) {
     const m = rawVersion.match(/v?(\d+\.\d+\.\d+)/);
     return m?.[1] ?? rawVersion.trim().split('\n')[0];
 }
-/**
- * 构造适配器 detect 失败时的诊断 reason
- *
- * 把 exitCode、cwd、node_modules 是否存在、工具 bin 是否存在、stderr 首行
- * 都带出来，让用户在 PR 摘要表里就能直接判断："是 npm install 没装上"
- * 还是"装了但 cwd 不对"。
- *
- * @param toolName     工具名称（用于探测 node_modules/.bin/<toolName>）
- * @param repoRoot     仓库根目录
- * @param npxResult    `npx --no-install <tool> --version` 的执行结果
- * @param fallbackResult 全局 `<tool> --version` 的执行结果（可选）
- */
-function buildVersionFailureReason(toolName, repoRoot, npxResult, fallbackResult) {
-    if (npxResult.spawnErrorMessage != null)
-        return npxResult.spawnErrorMessage;
-    // 探测 node_modules 是否真的存在以及工具 bin 是否在其中
-    // 用 require('fs') 而非 import 是因为本模块大量使用 child_process，
-    // 加少量 fs 不构成额外耦合
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const fs = __nccwpck_require__(7147);
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const path = __nccwpck_require__(1017);
-    const hasNodeModules = fs.existsSync(path.join(repoRoot, 'node_modules'));
-    const hasBin = fs.existsSync(path.join(repoRoot, 'node_modules', '.bin', toolName));
-    const stderrSnippet = ((npxResult.stderr || fallbackResult?.stderr) ?? '')
-        .split('\n')
-        .find(l => l.trim().length > 0)
-        ?.substring(0, 120) ?? '';
-    const parts = [
-        `${toolName} --version failed`,
-        `exit=${npxResult.exitCode ?? 'null'}`,
-        `cwd=${repoRoot}`,
-        `node_modules=${hasNodeModules ? 'yes' : 'NO'}`,
-        `${toolName}-bin=${hasBin ? 'yes' : 'NO'}`
-    ];
-    if (stderrSnippet.length > 0)
-        parts.push(`stderr="${stderrSnippet}"`);
-    // node_modules 不存在 → 几乎一定是 workflow 漏了 `npm install`
-    // 明确给出可操作建议，避免用户在 cryptic 错误里循环
-    if (!hasNodeModules) {
-        parts.push('HINT: workflow appears to have not run `npm install` before this ' +
-            'action (or checked out the wrong ref). Add `- run: npm install` ' +
-            'before the ai-reviewer step. For pull_request_target events, also ' +
-            "set `actions/checkout@v4` with `ref: \${{ github.event.pull_request.head.sha }}` " +
-            "so the PR branch's devDependencies are installed.");
-    }
-    else if (!hasBin) {
-        parts.push(`HINT: node_modules exists but ${toolName} is missing — ensure ` +
-            `${toolName} is in package.json devDependencies on the checked-out ref, ` +
-            `or add a workflow step to install it (\`npm install --no-save ${toolName}\`).`);
-    }
-    return parts.join('; ');
-}
 
 ;// CONCATENATED MODULE: ./lib/lint/tool-installer.js
 /**
@@ -19652,7 +16848,7 @@ async function ensureToolInstalled(spec) {
             // Phase 2+ 落地：参考 golangci-lint 等纯静态二进制的发布形态
             return {
                 ok: false,
-                reason: "binary install strategy not yet implemented (planned for Phase 2+); " +
+                reason: 'binary install strategy not yet implemented (planned for Phase 2+); ' +
                     'add downloader in tool-installer.ts when needed'
             };
     }
@@ -19717,7 +16913,10 @@ async function installViaNpm(spec) {
         };
     }
     if (result.exitCode !== 0) {
-        const stderrSnippet = result.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 200) ?? '';
+        const stderrSnippet = result.stderr
+            .split('\n')
+            .find(l => l.trim().length > 0)
+            ?.substring(0, 200) ?? '';
         return {
             ok: false,
             reason: `npm install ${spec.package}@${spec.version} failed (exit=${result.exitCode}): ${stderrSnippet}`
@@ -19853,7 +17052,10 @@ async function installViaPip(spec) {
         };
     }
     if (result.exitCode !== 0) {
-        const stderrSnippet = result.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 200) ?? '';
+        const stderrSnippet = result.stderr
+            .split('\n')
+            .find(l => l.trim().length > 0)
+            ?.substring(0, 200) ?? '';
         (0,core.warning)(`lint/installer[pip]: pip exit=${result.exitCode} after ${elapsed}ms, stderr_first="${stderrSnippet}", stderr_len=${result.stderr.length}`);
         return {
             ok: false,
@@ -21079,16 +18281,6 @@ class TscAdapter {
 /** 变更行附近的"上下文容忍范围"。单位：行 */
 const DEFAULT_CONTEXT_TOLERANCE = 3;
 /**
- * 判断行号是否在变更窗口内（变更行 ± tolerance）
- */
-function isLineInChangedWindow(line, changedLines, tolerance = DEFAULT_CONTEXT_TOLERANCE) {
-    for (const changed of changedLines) {
-        if (Math.abs(line - changed) <= tolerance)
-            return true;
-    }
-    return false;
-}
-/**
  * 过滤 lint 结果：仅保留变更行 ± tolerance 范围内的问题
  *
  * 同时会丢弃文件不在 changedLineMap 中的结果（通常意味着工具扫描了
@@ -21161,7 +18353,8 @@ function deduplicateResults(results) {
         // 故意不含 column —— 详见函数顶 doc comment
         const key = `${r.file}:${r.line}:${ruleKey}:${msgKey}`;
         const existing = map.get(key);
-        if (existing == null || SEV_RANK[r.severity] > SEV_RANK[existing.severity]) {
+        if (existing == null ||
+            SEV_RANK[r.severity] > SEV_RANK[existing.severity]) {
             map.set(key, r);
         }
     }
@@ -21631,6 +18824,147 @@ function truncate(s, max) {
 
 
 
+;// CONCATENATED MODULE: ./lib/noise-control.js
+/**
+ * noise-control.ts - 评论噪音控制（迭代二 · 成员 D · 2.5）
+ *
+ * 避免 Bot 评论过多干扰开发者，提供：
+ *
+ *   1. 同类评论合并去重  —— 相同文件 / 相同类别的问题合并为一条
+ *   2. 单次评论数量上限  —— 默认 N=20，按优先级截断
+ *   3. 行级严重级别徽标  —— 每条行级评论顶部直接标注级别（severityBadge）
+ *
+ * 对外提供（供成员 C 在审查完成后调用，见拆分文档 §5 接口契约）：
+ *   - prepareFindings(findings, options)   去重 + 排序 + 截断后的结构化结果
+ *   - severityBadge(severity)              行级评论的严重级别徽标
+ *   - classifyFindingSeverity(text)        从评论文本启发式推断严重级别
+ *
+ * 注：早期的「低优先级折叠 / PR 顶部汇总评论」（formatComments / buildSummaryBody /
+ * postSummaryComment）已随「级别分散到各评论」改造移除——级别现以徽标形式直接置于
+ * 每条行级评论顶部。
+ */
+/** 严重级别排序权重（数值越大优先级越高） */
+const SEVERITY_RANK = {
+    critical: 4,
+    major: 3,
+    minor: 2,
+    nit: 1,
+    info: 0
+};
+/** 严重级别的展示样式（emoji + 中文标签 + GitHub 警示框类型 + 一句话说明） */
+const SEVERITY_DISPLAY = {
+    critical: {
+        emoji: '🔴',
+        label: '严重',
+        alert: 'CAUTION',
+        hint: '需优先修复'
+    },
+    major: { emoji: '🟠', label: '重要', alert: 'WARNING', hint: '建议尽快处理' },
+    minor: { emoji: '🟡', label: '次要', alert: 'NOTE', hint: '可酌情优化' },
+    nit: { emoji: '⚪', label: '吹毛求疵', alert: 'TIP', hint: '锦上添花' },
+    info: { emoji: 'ℹ️', label: '提示', alert: 'NOTE', hint: '' }
+};
+/**
+ * 行级评论的严重级别徽标。
+ *
+ * 用 GitHub 警示框（`> [!CAUTION]` 等）渲染成带颜色的标题块，配合 emoji + 中文标签，
+ * 让每条行级评论一眼能看出严重级别（取代原先在 PR 顶部单独发的汇总评论）。
+ */
+function severityBadge(severity) {
+    const { emoji, label, alert, hint } = SEVERITY_DISPLAY[severity];
+    const tail = hint ? ` — ${hint}` : '';
+    return `> [!${alert}]\n> ${emoji} **${label}**${tail}`;
+}
+const DEFAULT_MAX_COMMENTS = 20;
+/**
+ * 同类评论合并去重。
+ *
+ * 合并键 = 文件路径 + 类别 + 归一化标题（无标题则取正文首行）。
+ * 命中同一键的发现合并为一条，保留**最高严重级别**与首条正文，
+ * 并在标题后标注合并数量。
+ */
+function dedupeFindings(findings) {
+    const map = new Map();
+    const order = [];
+    for (const f of findings) {
+        const titleKey = (f.title ?? firstLine(f.body)).trim().toLowerCase();
+        const key = `${f.path}|${f.category ?? ''}|${titleKey}`;
+        const existing = map.get(key);
+        if (existing) {
+            existing.count++;
+            // 保留更高的严重级别
+            if (SEVERITY_RANK[f.severity] > SEVERITY_RANK[existing.finding.severity]) {
+                existing.finding = { ...existing.finding, severity: f.severity };
+            }
+        }
+        else {
+            map.set(key, { finding: { ...f }, count: 1 });
+            order.push(key);
+        }
+    }
+    return order.map(key => {
+        const { finding, count } = map.get(key);
+        if (count > 1) {
+            const base = finding.title ?? firstLine(finding.body);
+            return { ...finding, title: `${base}（合并 ${count} 处同类问题）` };
+        }
+        return finding;
+    });
+}
+/**
+ * 去重 + 按严重级别排序 + 截断到上限。
+ * 返回结构化结果，供调用方逐条发布行级评论。
+ *
+ * @returns kept: 保留的发现（已排序）；truncated: 被截断丢弃的数量
+ */
+function prepareFindings(findings, options = {}) {
+    const maxComments = options.maxComments ?? DEFAULT_MAX_COMMENTS;
+    const deduped = options.dedupe === false ? [...findings] : dedupeFindings(findings);
+    // 按严重级别降序稳定排序
+    const sorted = deduped
+        .map((f, i) => ({ f, i }))
+        .sort((a, b) => {
+        const diff = SEVERITY_RANK[b.f.severity] - SEVERITY_RANK[a.f.severity];
+        return diff !== 0 ? diff : a.i - b.i;
+    })
+        .map(x => x.f);
+    if (maxComments > 0 && sorted.length > maxComments) {
+        return {
+            kept: sorted.slice(0, maxComments),
+            truncated: sorted.length - maxComments
+        };
+    }
+    return { kept: sorted, truncated: 0 };
+}
+function firstLine(text) {
+    const line = (text ?? '').split('\n').find(l => l.trim().length > 0);
+    return (line ?? '').trim();
+}
+/**
+ * 启发式严重级别分类：从一条审查评论的文本推断严重级别。
+ *
+ * 审查模型当前并不直接输出级别，这里用关键词（中英）做轻量分类，
+ * 用于噪音控制的排序 / 截断 / 折叠。按"高 → 低"顺序匹配，命中即返回。
+ * 无明显信号时归为 minor（既不抢占高优先级，也不会被当作纯提示丢弃）。
+ */
+function classifyFindingSeverity(text) {
+    const t = (text ?? '').toLowerCase();
+    const has = (...kw) => kw.some(k => t.includes(k));
+    if (has('security', 'vulnerab', 'injection', 'xss', 'csrf', 'rce', 'redos', 'secret', 'credential', 'hardcoded', 'api key', '密钥', '凭证', '注入', '漏洞', '安全')) {
+        return 'critical';
+    }
+    if (has('crash', 'null pointer', 'race condition', 'data loss', 'memory leak', 'leak', 'off-by-one', 'off by one', 'incorrect', 'unhandled', 'exception', 'await', 'deadlock', '错误', '正确性', '缺陷', '异常', '泄露', '崩溃')) {
+        return 'major';
+    }
+    if (has('nit', 'typo', 'formatting', 'indentation', 'naming', '拼写', '格式', '命名')) {
+        return 'nit';
+    }
+    if (has('consider', 'recommend', 'prefer', 'readability', 'document', '建议', '可读性', '推荐')) {
+        return 'minor';
+    }
+    return 'minor';
+}
+
 // EXTERNAL MODULE: ./lib/inputs.js
 var lib_inputs = __nccwpck_require__(6305);
 ;// CONCATENATED MODULE: ./lib/review-dedup.js
@@ -21937,13 +19271,15 @@ var tokenizer = __nccwpck_require__(7525);
 
 
 
+
+
 // eslint-disable-next-line camelcase
 const review_context = github.context;
 /** 跨文件上下文注入的 token 上限 */
 const MAX_CROSS_FILE_CONTEXT_TOKENS = 1500;
 const review_repo = review_context.repo;
 /** 在 PR 描述中添加此关键词可跳过 AI 审查 */
-const ignoreKeyword = '@ai-reviewer: ignore';
+const ignoreKeyword = `${constants/* PRIMARY_BOT_MENTION */.a}: ignore`;
 /**
  * 代码审查主函数
  *
@@ -22370,7 +19706,9 @@ ${lib_commenter/* RAW_SUMMARY_END_TAG */.rV}
 ${lib_commenter/* SHORT_SUMMARY_START_TAG */.O$}
 ${inputs.shortSummary}
 ${lib_commenter/* SHORT_SUMMARY_END_TAG */.Zb}
-${dependencyContext != null ? `\n${formatDependencySummary(dependencyContext)}` : ''}
+${dependencyContext != null
+        ? `\n${formatDependencySummary(dependencyContext)}`
+        : ''}
 ${lintReport != null ? `\n${formatLintSummary(lintReport)}` : ''}
 ---
 
@@ -22417,7 +19755,11 @@ ${summariesFailed.length > 0
             .map(([filename]) => filename);
         const reviewsFailed = [];
         let lgtmCount = 0; // LGTM 评论计数（被过滤掉的）
-        let reviewCount = 0; // 实际发布的审查评论计数
+        let reviewCount = 0; // 收集到的审查发现总数（去重/截断前）
+        // 噪音控制（成员 D · §2.5）：先把所有文件的发现收集起来，
+        // 待并行审查全部完成后统一去重 / 排序 / 截断，再发布行级评论 + PR 顶部汇总。
+        // 注意: doReview 并行执行，但 JS 单线程下 Array.push 是安全的。
+        const findings = [];
         /**
          * 对单个文件执行代码审查
          *
@@ -22587,6 +19929,16 @@ ${commentChain}
                             (0,core.info)(`[analysis_chain] ${filename}: comment line ${review.startLine}-${review.endLine}, hasChain=${shouldAttachAnalysisChain}, finalLen=${commentWithChain.length}`);
                             // 将审查评论加入缓冲区
                             await commenter.bufferReviewComment(filename, review.startLine, review.endLine, commentWithChain);
+                            // 收集为 Finding（不立即 buffer），统一在审查完成后做噪音控制。
+                            // 严重级别以警示框徽标的形式直接置于每条行级评论顶部（取代 PR 顶部汇总评论）。
+                            const severity = classifyFindingSeverity(review.comment);
+                            findings.push({
+                                path: filename,
+                                startLine: review.startLine,
+                                endLine: review.endLine,
+                                severity,
+                                body: `${severityBadge(severity)}\n\n${commentWithChain}`
+                            });
                         }
                         catch (e) {
                             reviewsFailed.push(`${filename} comment failed (${e})`);
@@ -22615,6 +19967,21 @@ ${commentChain}
             }
         }
         await Promise.all(reviewPromises);
+        // 噪音控制（成员 D · §2.5）：按严重级别排序 + 截断到上限（默认 20）。
+        // 行级评论保留每个位置（dedupe:false），避免把不同代码行的同类问题合并导致丢失位置；
+        // 同类合并仅用于下方 PR 顶部汇总评论的概览统计。
+        const { kept: keptFindings, truncated: truncatedFindings } = prepareFindings(findings, { dedupe: false, maxComments: options.maxReviewComments });
+        if (truncatedFindings > 0) {
+            (0,core.info)(`noise-control: ${findings.length} findings → posting ${keptFindings.length}, truncated ${truncatedFindings} low-priority`);
+        }
+        for (const f of keptFindings) {
+            try {
+                await commenter.bufferReviewComment(f.path, f.startLine, f.endLine, f.body);
+            }
+            catch (e) {
+                reviewsFailed.push(`${f.path} comment failed (${e})`);
+            }
+        }
         // 追加审查统计信息到状态消息
         statusMsg += `
 ${reviewsFailed.length > 0
@@ -22639,6 +20006,9 @@ ${reviewsSkipped.length > 0
 <summary>Review comments generated (${reviewCount + lgtmCount})</summary>
 
 * Review: ${reviewCount}
+* Posted (after noise control): ${keptFindings.length}${truncatedFindings > 0
+            ? ` — truncated ${truncatedFindings} lower-priority`
+            : ''}
 * LGTM: ${lgtmCount}
 
 </details>
@@ -22648,22 +20018,22 @@ ${reviewsSkipped.length > 0
 <details>
 <summary>Tips</summary>
 
-### Chat with ${botName} Bot (\`@ai-reviewer\`)
+### Chat with ${botName} Bot (\`${constants/* PRIMARY_BOT_MENTION */.a}\`)
 - Reply on review comments left by this bot to ask follow-up questions. A review comment is a comment on a diff or a file.
-- Invite the bot into a review comment chain by tagging \`@ai-reviewer\` in a reply.
+- Invite the bot into a review comment chain by tagging \`${constants/* PRIMARY_BOT_MENTION */.a}\` in a reply.
 
 ### Code suggestions
 - The bot may make code suggestions, but please review them carefully before committing since the line number ranges may be misaligned.
 - You can edit the comment made by the bot and manually tweak the suggestion if it is slightly off.
 
 ### Pausing incremental reviews
-- Add \`@ai-reviewer: ignore\` anywhere in the PR description to pause further reviews from the bot.
+- Add \`${ignoreKeyword}\` anywhere in the PR description to pause further reviews from the bot.
 
 </details>
 `;
         // 将最新的 head commit SHA 添加到已审查列表
         summarizeComment += `\n${commenter.addReviewedCommitId(existingCommitIdsBlock, review_context.payload.pull_request.head.sha)}`;
-        // 批量提交所有缓冲的审查评论
+        // 批量提交所有缓冲的审查评论（严重级别已内嵌在每条评论顶部，不再单独发汇总评论）
         await commenter.submitReview(review_context.payload.pull_request.number, commits[commits.length - 1].sha, statusMsg);
     }
     // summary-only 等跳过审查阶段的场景：保留既有的已审查 commit 记录，
@@ -22904,7 +20274,6 @@ const parsePatch = (patch) => {
     };
 };
 // ==================== AI 响应解析 ====================
-// `Review` 接口与 `mergeReviewsByLineRange` 已抽到 src/review-dedup.ts，便于单元测试
 /**
  * 解析 AI 的代码审查响应，提取结构化的评论列表
  *

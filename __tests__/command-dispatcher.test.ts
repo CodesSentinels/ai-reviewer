@@ -187,6 +187,22 @@ describe('dispatcher — 解析与 fallback', () => {
     const r = await dispatchCommentEvent({options: stubOptions})
     expect(r.kind).toBe('fallback_conversation')
   })
+
+  test('review_comment 线程内回复（无 @bot）→ ignored（对话必须 @bot）', async () => {
+    const payload = buildReviewCommentPayload('这个问题严重吗')
+    ;(payload.comment as any).in_reply_to_id = 2001
+    setEvent('pull_request_review_comment', payload)
+    const r = await dispatchCommentEvent({options: stubOptions})
+    expect(r.kind).toBe('ignored')
+  })
+
+  test('review_comment 线程内回复（带 @bot）→ fallback_conversation', async () => {
+    const payload = buildReviewCommentPayload('@ai-reviewer 这个问题严重吗')
+    ;(payload.comment as any).in_reply_to_id = 2001
+    setEvent('pull_request_review_comment', payload)
+    const r = await dispatchCommentEvent({options: stubOptions})
+    expect(r.kind).toBe('fallback_conversation')
+  })
 })
 
 describe('dispatcher — 命令执行', () => {

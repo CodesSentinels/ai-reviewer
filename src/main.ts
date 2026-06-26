@@ -113,6 +113,7 @@ async function run(): Promise<void> {
     ),
     getInput('semgrep_config'),
     getInput('command_ack_reaction'),
+    getInput('max_review_comments'),
     getInput('debug_resolve_inject_failures')
   )
 

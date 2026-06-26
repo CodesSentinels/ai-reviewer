@@ -10,6 +10,7 @@
  */
 import type {CommandHandler, CommandContext, CommandResult} from '../types'
 import {getReviewState, setReviewState} from '../../review-state'
+import {PRIMARY_BOT_MENTION} from '../../constants'
 
 function notImplemented(name: string): CommandHandler['execute'] {
   return async (_ctx: CommandContext): Promise<CommandResult> => {
@@ -24,7 +25,7 @@ function notImplemented(name: string): CommandHandler['execute'] {
 export const reviewStub: CommandHandler = {
   name: 'review',
   description: '触发增量审查（仅审查自上次审查以来的新增变更）',
-  usage: '@ai-reviewer review',
+  usage: `${PRIMARY_BOT_MENTION} review`,
   needsAck: true,
   minPermission: 'write',
   async execute(ctx: CommandContext): Promise<CommandResult> {
@@ -37,7 +38,7 @@ export const reviewStub: CommandHandler = {
 export const fullReviewStub: CommandHandler = {
   name: 'full review',
   description: '触发全量审查（从 base 到 HEAD 的完整 diff）',
-  usage: '@ai-reviewer full review',
+  usage: `${PRIMARY_BOT_MENTION} full review`,
   needsAck: true,
   minPermission: 'write',
   async execute(ctx: CommandContext): Promise<CommandResult> {
@@ -51,7 +52,7 @@ export const fullReviewStub: CommandHandler = {
 export const summaryStub: CommandHandler = {
   name: 'summary',
   description: '基于当前最新代码重新生成 PR 摘要',
-  usage: '@ai-reviewer summary',
+  usage: `${PRIMARY_BOT_MENTION} summary`,
   needsAck: true,
   minPermission: 'write',
   async execute(ctx: CommandContext): Promise<CommandResult> {
@@ -64,13 +65,13 @@ export const summaryStub: CommandHandler = {
 export const pauseStub: CommandHandler = {
   name: 'pause',
   description: '暂停对当前 PR 的自动审查',
-  usage: '@ai-reviewer pause',
+  usage: `${PRIMARY_BOT_MENTION} pause`,
   needsAck: false,
   minPermission: 'write',
   async execute(ctx: CommandContext): Promise<CommandResult> {
     await setReviewState(ctx.prNumber, 'paused')
     return {
-      message: '已暂停当前 PR 的自动审查。使用 `@ai-reviewer resume` 恢复。'
+      message: `已暂停当前 PR 的自动审查。使用 \`${PRIMARY_BOT_MENTION} resume\` 恢复。`
     }
   }
 }
@@ -78,7 +79,7 @@ export const pauseStub: CommandHandler = {
 export const resumeStub: CommandHandler = {
   name: 'resume',
   description: '恢复对当前 PR 的自动审查',
-  usage: '@ai-reviewer resume',
+  usage: `${PRIMARY_BOT_MENTION} resume`,
   needsAck: false,
   minPermission: 'write',
   async execute(ctx: CommandContext): Promise<CommandResult> {
@@ -90,7 +91,7 @@ export const resumeStub: CommandHandler = {
 export const configurationStub: CommandHandler = {
   name: 'configuration',
   description: '显示当前仓库的审查配置',
-  usage: '@ai-reviewer configuration',
+  usage: `${PRIMARY_BOT_MENTION} configuration`,
   needsAck: false,
   minPermission: 'read',
   async execute(ctx: CommandContext): Promise<CommandResult> {

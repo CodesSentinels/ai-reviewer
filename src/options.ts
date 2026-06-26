@@ -69,6 +69,7 @@ export class Options {
    */
   semgrepConfig: string
   commandAckReaction: string // 命令识别后在用户评论上打的表情（空/off/none 表示禁用）
+  maxReviewComments: number // 单次审查最多发布的行级评论数，按严重级别截断（0 表示不限制）
   debugResolveInjectFailures: number // 测试用：向 batchResolve 注入 N 个假 thread ID
 
   constructor(
@@ -98,6 +99,7 @@ export class Options {
     toolVersionOverrides: Record<string, string> = {},
     semgrepConfig = 'p/default',
     commandAckReaction = 'eyes',
+    maxReviewComments = '20',
     debugResolveInjectFailures = '0'
   ) {
     this.debug = debug
@@ -128,6 +130,7 @@ export class Options {
     this.toolVersionOverrides = toolVersionOverrides
     this.semgrepConfig = semgrepConfig
     this.commandAckReaction = commandAckReaction
+    this.maxReviewComments = parseInt(maxReviewComments)
     this.debugResolveInjectFailures = parseInt(debugResolveInjectFailures) || 0
   }
 
@@ -161,6 +164,7 @@ export class Options {
     info(`tool_version_overrides: ${JSON.stringify(this.toolVersionOverrides)}`)
     info(`semgrep_config: ${this.semgrepConfig}`)
     info(`command_ack_reaction: ${this.commandAckReaction}`)
+    info(`max_review_comments: ${this.maxReviewComments}`)
   }
 
   /**

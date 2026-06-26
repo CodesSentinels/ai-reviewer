@@ -46,7 +46,7 @@ import {
   batchResolve,
   _resetBotLoginCache
 } from '../src/github/review-thread'
-import {resolveHandler, resolveAllBotComments} from '../src/commands/handlers/resolve'
+import {resolveHandler} from '../src/commands/handlers/resolve'
 import type {CommandContext} from '../src/commands/types'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -134,20 +134,28 @@ beforeEach(() => {
 
 describe('getBotLogin', () => {
   test('始终调用 getAuthenticated 获取真实 GitHub 登录名', async () => {
-    mockGetAuthenticated.mockResolvedValue({data: {login: 'github-actions[bot]'}})
+    mockGetAuthenticated.mockResolvedValue({
+      data: {login: 'github-actions[bot]'}
+    })
     const login = await getBotLogin({} as never)
     expect(login).toBe('github-actions[bot]')
     expect(mockGetAuthenticated).toHaveBeenCalledTimes(1)
   })
 
   test('缓存：第二次调用不再请求 API', async () => {
-    mockGetAuthenticated.mockResolvedValue({data: {login: 'github-actions[bot]'}})
+    mockGetAuthenticated.mockResolvedValue({
+      data: {login: 'github-actions[bot]'}
+    })
     await getBotLogin({} as never)
     await getBotLogin({} as never)
     expect(mockGetAuthenticated).toHaveBeenCalledTimes(1)
   })
 
+<<<<<<< HEAD
+  test('getAuthenticated 抛异常时 fallback 到 github-actions（不带 [bot] 后缀，便于与 GraphQL author 比对）', async () => {
+=======
   test('getAuthenticated 抛异常时回退到 github-actions', async () => {
+>>>>>>> main
     mockGetAuthenticated.mockRejectedValue(new Error('network error'))
     const login = await getBotLogin({} as never)
     expect(login).toBe('github-actions')
@@ -248,8 +256,12 @@ describe('resolveHandler.execute', () => {
         ])
       )
       // mutations
-      .mockResolvedValueOnce({resolveReviewThread: {thread: {isResolved: true}}})
-      .mockResolvedValueOnce({resolveReviewThread: {thread: {isResolved: true}}})
+      .mockResolvedValueOnce({
+        resolveReviewThread: {thread: {isResolved: true}}
+      })
+      .mockResolvedValueOnce({
+        resolveReviewThread: {thread: {isResolved: true}}
+      })
 
     const result = await resolveHandler.execute(makeCtx())
     expect(result.message).toMatch(/✅/)
@@ -265,12 +277,14 @@ describe('resolveHandler.execute', () => {
           {id: 't2', isResolved: false, authorLogin: 'cs-bot'}
         ])
       )
-      .mockResolvedValueOnce({resolveReviewThread: {thread: {isResolved: true}}})
+      .mockResolvedValueOnce({
+        resolveReviewThread: {thread: {isResolved: true}}
+      })
       .mockRejectedValueOnce(new Error('forbidden'))
 
     const result = await resolveHandler.execute(makeCtx())
     expect(result.message).toMatch(/⚠️/)
-    expect(result.message).toMatch(/1/)  // ok
+    expect(result.message).toMatch(/1/) // ok
   })
 
   test('全部失败 → 返回 ❌ 和错误详情', async () => {
@@ -290,7 +304,11 @@ describe('resolveHandler.execute', () => {
 describe('batchResolve', () => {
   test('空数组 → 返回 ok=0 failed=0 errors=[]，不调用 GraphQL', async () => {
     const result = await batchResolve([])
+<<<<<<< HEAD
+    expect(result).toEqual({ok: 0, failed: 0, errors: []})
+=======
     expect(result).toEqual({ok: 0, failed: 0, errors: [], failedItems: []})
+>>>>>>> main
     expect(mockGraphql).not.toHaveBeenCalled()
   })
 
@@ -357,6 +375,8 @@ describe('batchResolve', () => {
     })
   })
 })
+<<<<<<< HEAD
+=======
 
 describe('resolveAllBotComments', () => {
   test('无待解决 thread → 返回 {ok: 0, failed: 0}，不调用 mutation', async () => {
@@ -394,3 +414,4 @@ describe('resolveAllBotComments', () => {
     expect(result).toMatchObject({ok: 2, failed: 0})
   })
 })
+>>>>>>> main

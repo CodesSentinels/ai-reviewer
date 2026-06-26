@@ -2,7 +2,7 @@
  * commands/registry.ts - 命令处理器注册表
  *
  * 单例注册表，维护命令名 → handler 的映射。
- * B/C/D 的 handler 文件在被 import 时调用 registerCommand 自注册。
+ * 所有 handler 由 bootstrap.ts 在启动时显式调用 registry.register() 登记。
  *
  * 特性:
  * - 支持别名 (aliases)
@@ -77,10 +77,6 @@ class CommandRegistry {
 }
 
 const globalRegistry = new CommandRegistry()
-
-export function registerCommand(handler: CommandHandler): void {
-  globalRegistry.register(handler)
-}
 
 export function getRegistry(): CommandRegistry {
   return globalRegistry

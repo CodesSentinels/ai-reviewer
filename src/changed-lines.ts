@@ -86,15 +86,6 @@ export function scanPatch(patch: string | null | undefined): PatchScan {
 }
 
 /**
- * 兼容方法：仅返回 added 行 Set（与早期 `extractChangedLinesFromPatch` 等价）
- */
-export function extractChangedLinesFromPatch(
-  patch: string | null | undefined
-): Set<number> {
-  return scanPatch(patch).addedLines
-}
-
-/**
  * 对 PR 中所有变更文件做一次 walk，得到 PatchScanMap
  *
  * @param filesAndChanges [filename, fileContent, fileDiff, patches] 列表
@@ -107,23 +98,6 @@ export function buildPatchScans(
   const map: PatchScanMap = new Map()
   for (const [filename, , fileDiff] of filesAndChanges) {
     map.set(filename, scanPatch(fileDiff))
-  }
-  return map
-}
-
-/**
- * 兼容方法：返回 file → addedLines Set 的映射
- *
- * 内部仍走 `buildPatchScans`，仅丢弃 touchedLines 字段。
- */
-export function buildChangedLineMap(
-  filesAndChanges: Array<
-    [string, string, string, Array<[number, number, string]>]
-  >
-): ChangedLineMap {
-  const map: ChangedLineMap = new Map()
-  for (const [filename, scan] of buildPatchScans(filesAndChanges)) {
-    map.set(filename, scan.addedLines)
   }
   return map
 }

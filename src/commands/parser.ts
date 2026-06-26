@@ -17,10 +17,11 @@
  *   - 参数字符集白名单: [A-Za-z0-9_\-./:=]；出现 shell 元字符 → INVALID_ARGS
  *   - 长度上限: 命令行 ≤ 512 字符, 单个 arg ≤ 128 字符, arg 数量 ≤ 16
  */
+import {BOT_MENTIONS} from '../constants'
 import type {ParseOutcome, ParsedCommand} from './types'
 
-/** 默认支持的 bot mention 别名（小写，已带 @） */
-export const DEFAULT_BOT_MENTIONS = ['@ai-reviewer', '@codesentinel']
+/** 默认支持的 bot mention 别名（小写，已带 @）。共享自 constants.BOT_MENTIONS。 */
+export const DEFAULT_BOT_MENTIONS: string[] = [...BOT_MENTIONS]
 
 /** 命令行长度上限 */
 export const MAX_COMMAND_LINE_LENGTH = 512
@@ -44,10 +45,7 @@ export interface ParserOptions {
 /**
  * 主解析入口
  */
-export function parse(
-  body: string,
-  opts: ParserOptions
-): ParseOutcome {
+export function parse(body: string, opts: ParserOptions): ParseOutcome {
   if (typeof body !== 'string' || body.length === 0) {
     return {kind: 'none'}
   }
@@ -82,7 +80,8 @@ export function parse(
   // 按第一个换行切分：第一行是命令体，其余是 rawAfter
   const firstNewline = rest.indexOf('\n')
   const firstLineRaw = firstNewline === -1 ? rest : rest.slice(0, firstNewline)
-  const rawAfter = firstNewline === -1 ? '' : rest.slice(firstNewline + 1).trim()
+  const rawAfter =
+    firstNewline === -1 ? '' : rest.slice(firstNewline + 1).trim()
 
   // 3. 命令行长度校验
   if (firstLineRaw.length > MAX_COMMAND_LINE_LENGTH) {

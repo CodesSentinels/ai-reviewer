@@ -39,6 +39,13 @@ inputs:
       'Max files to summarize and review. Less than or equal to 0 means no
       limit.'
     default: '150'
+  max_review_comments:
+    required: false
+    description:
+      'Max inline review comments to post per review (noise control). Findings
+      are sorted by severity and truncated to this limit. Less than or equal to
+      0 means no limit.'
+    default: '20'
   review_simple_changes:
     required: false
     description: 'Review even when the changes are simple'

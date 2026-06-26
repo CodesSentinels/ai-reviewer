@@ -63,32 +63,3 @@ export function detectLintLanguage(filename: string): LintLanguage {
   const ext = lower.substring(dotIdx)
   return EXTENSION_TO_LANGUAGE[ext] ?? 'unknown'
 }
-
-/**
- * 检查文件是否属于给定的语言集合
- */
-export function isLanguageSupported(
-  filename: string,
-  supportedLanguages: string[]
-): boolean {
-  const lang = detectLintLanguage(filename)
-  if (lang === 'unknown') return false
-  return supportedLanguages.includes(lang)
-}
-
-/**
- * 按语言对文件分组
- */
-export function groupFilesByLanguage(
-  files: string[]
-): Map<LintLanguage, string[]> {
-  const groups = new Map<LintLanguage, string[]>()
-  for (const f of files) {
-    const lang = detectLintLanguage(f)
-    if (lang === 'unknown') continue
-    const list = groups.get(lang) ?? []
-    list.push(f)
-    groups.set(lang, list)
-  }
-  return groups
-}
