@@ -170,7 +170,7 @@ export default function DependencyAnalysis() {
   }, [diffPatch, sourceFilename, sourceContent, refFilename, refContent])
 
   return (
-    <div style={{display: 'flex', height: '100vh', overflow: 'hidden'}}>
+    <div style={{display: 'flex', height: '100%', overflow: 'hidden'}}>
       {/* Left panel */}
       <div
         style={{
