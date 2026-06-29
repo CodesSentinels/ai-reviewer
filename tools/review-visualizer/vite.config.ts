@@ -8,13 +8,12 @@ const mockDir = path.resolve(__dirname, 'src/mocks')
 export default defineConfig({
   plugins: [react()],
   resolve: {
-    alias: {
-      '@actions/core': path.join(mockDir, 'actions-core.ts'),
-      '@actions/github': path.join(mockDir, 'actions-github.ts'),
-      '../../src/octokit': path.join(mockDir, 'octokit.ts'),
-      '../octokit': path.join(mockDir, 'octokit.ts'),
-      './octokit': path.join(mockDir, 'octokit.ts'),
-      '@src': srcRoot
-    }
+    alias: [
+      {find: '@actions/core', replacement: path.join(mockDir, 'actions-core.ts')},
+      {find: '@actions/github', replacement: path.join(mockDir, 'actions-github.ts')},
+      {find: /\.\/octokit$/, replacement: path.join(mockDir, 'octokit.ts')},
+      {find: /\.\.\/octokit$/, replacement: path.join(mockDir, 'octokit.ts')},
+      {find: '@src', replacement: srcRoot}
+    ]
   }
 })
