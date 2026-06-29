@@ -8601,6 +8601,8 @@ function sanitizeModelOutput(text) {
     out = out.replace(BARE_CITATION_AT_BOUNDARY_RE, '');
     // 第三步：清掉任何残留的孤立分隔符字符
     out = out.replace(SEPARATOR_RE, '');
+    console.log('输入文本：', JSON.stringify(text));
+    console.log('输出文本：', JSON.stringify(out));
     return out;
 }
 
@@ -9040,7 +9042,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
 
 /***/ }),
 
-/***/ 1085:
+/***/ 8280:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
 "use strict";
@@ -9054,8 +9056,8 @@ __nccwpck_require__.d(__webpack_exports__, {
 var core = __nccwpck_require__(1078);
 // EXTERNAL MODULE: ./node_modules/.pnpm/@actions+github@5.1.1/node_modules/@actions/github/lib/github.js
 var github = __nccwpck_require__(3695);
-// EXTERNAL MODULE: ./lib/commands/bootstrap.js + 2 modules
-var bootstrap = __nccwpck_require__(6806);
+// EXTERNAL MODULE: ./lib/commands/bootstrap.js + 4 modules
+var bootstrap = __nccwpck_require__(5544);
 // EXTERNAL MODULE: ./lib/commands/registry.js
 var commands_registry = __nccwpck_require__(953);
 // EXTERNAL MODULE: ./lib/commands/parser.js
@@ -9374,14 +9376,19 @@ const context = github.context;
 /**
  * 主调度入口。
  * 调用方 (command-handler.ts) 负责:
- *   - 当返回 'fallback_conversation' 时，调用旧的 handleReviewComment
+ *   - 当返回 'fallback_conversation' 时，调用成员 D 的 handleConversation（对话式追问）
  */
 async function dispatchCommentEvent(deps) {
+    // [事件白名单] 仅放行 issue_comment / pull_request_review_comment 两类带评论的事件；
+    // 其余事件（push、pull_request、schedule 等）不携带用户评论，直接忽略，
+    // 同时把 eventName 收窄为 CommandEventName 供后续分支安全使用。
     const eventName = context.eventName;
     if (eventName !== 'issue_comment' &&
         eventName !== 'pull_request_review_comment') {
         return { kind: 'ignored', reason: `unsupported event: ${eventName}` };
     }
+    // [action 校验] 只处理"新建评论"(created)，忽略 edited / deleted 等动作，
+    // 避免编辑历史评论时重复触发命令。
     const payload = context.payload;
     if (!payload || payload.action !== 'created') {
         return { kind: 'ignored', reason: `action not created` };
@@ -9395,6 +9402,8 @@ async function dispatchCommentEvent(deps) {
     let commentNodeId;
     let threadNodeId;
     if (eventName === 'issue_comment') {
+        // [issue_comment 分支] PR 主评论区。GitHub 中 PR 复用 issue 模型，
+        // 只有当该 issue 关联 pull_request 时才是 PR 评论；否则是普通 issue，忽略。
         if (!payload.issue?.pull_request) {
             return { kind: 'ignored', reason: 'issue_comment on non-PR issue' };
         }
@@ -9404,40 +9413,51 @@ async function dispatchCommentEvent(deps) {
         prAuthor = payload.issue.user?.login ?? '';
     }
     else {
+        // [pull_request_review_comment 分支] 代码 diff 上的行级评论。
+        // 缺少 pull_request 字段属于异常 payload，忽略。
         if (!payload.pull_request) {
             return { kind: 'ignored', reason: 'review_comment missing pull_request' };
         }
         prNumber = payload.pull_request.number;
         comment = payload.comment;
+        // 行级评论 payload 自带 head/base SHA，可直接用于后续 diff 定位
         headSha = payload.pull_request.head?.sha ?? '';
         baseSha = payload.pull_request.base?.sha ?? '';
         prAuthor = payload.pull_request.user?.login ?? '';
         commentNodeId = comment?.node_id;
         // review_thread 的 nodeId 需要另查 GraphQL；此处置空由 B 在 handler 中补齐
     }
+    // [字段完整性校验] 评论体非字符串或缺 PR number 则无法解析命令，忽略。
     if (!comment || typeof comment.body !== 'string' || !prNumber) {
         return { kind: 'ignored', reason: 'missing comment body or pr number' };
     }
-    // 过滤 bot 自身（避免自我触发）
+    // [bot 自评论过滤] 通过 user.type 或登录名 `xxx[bot]` 后缀识别机器人，
+    // 防止 bot 自己回帖再次触发命令造成死循环。
     const actorLogin = comment.user?.login ?? '';
     const actorIsBot = comment.user?.type === 'Bot' || /\[bot\]$/i.test(actorLogin);
     if (actorIsBot) {
+        // 打印作者信息，便于排查"明明是人却被当成 bot"的情况
+        (0,core.info)(`command dispatcher: ignored comment from bot (login=${actorLogin}, type=${comment.user?.type})`);
         return { kind: 'ignored', reason: 'comment from bot' };
     }
     // 命令解析
-    const registry = (0,commands_registry/* getRegistry */.JH)();
+    const registry = (0,commands_registry/* getRegistry */.J)();
     const parseOpts = {
         registeredCommands: registry.getRegisteredNames(),
         botMentions: deps.botMentions ?? parser/* DEFAULT_BOT_MENTIONS */.gC
     };
     const outcome = (0,parser/* parse */.Qc)(comment.body, parseOpts);
+    // [解析结果分支] parser 返回三种形态：
     if (outcome.kind === 'none') {
+        // none：未 @bot 或非命令。对话必须显式 @bot 才触发（包括续轮），
+        // 避免与真人之间的普通讨论冲突。
         return { kind: 'ignored', reason: 'no bot mention' };
     }
     if (outcome.kind === 'conversation') {
+        // conversation：@bot 但非已注册命令 → 交回 command-handler 走对话式追问 fallback。
         return { kind: 'fallback_conversation' };
     }
-    // outcome.kind === 'command'
+    // outcome.kind === 'command'：解析出一条已知命令，进入执行流程。
     // 即便解析出错，也尽量构造 reply 以反馈用户
     const owner = context.repo.owner;
     const repoName = context.repo.repo;
@@ -9449,6 +9469,7 @@ async function dispatchCommentEvent(deps) {
         originalCommentId: comment.id,
         commandName: cmdNameForReply
     });
+    // [解析错误] 命令名识别成功但参数非法等（如 INVALID_ARGS），直接回帖报错并结束。
     if (outcome.error) {
         await reply.error(outcome.error.code, outcome.error.detail);
         return {
@@ -9459,13 +9480,19 @@ async function dispatchCommentEvent(deps) {
         };
     }
     const parsed = outcome.command;
-    // 幂等检查: 同一 commentId × 同一 command 是否已有回复
+    // [幂等检查] 同一 commentId × 同一 command 是否已有回复；
+    // Actions 可能因重试/重复投递触发多次，命中则跳过避免重复执行。
     const processed = await hasBeenProcessed(owner, repoName, prNumber, comment.id, parsed.name);
     if (processed) {
         (0,core.info)(`command dispatcher: skip duplicate commentId=${comment.id} cmd=${parsed.name}`);
-        return { kind: 'executed', command: parsed.name, ok: false, error: 'DUPLICATE' };
+        return {
+            kind: 'executed',
+            command: parsed.name,
+            ok: false,
+            error: 'DUPLICATE'
+        };
     }
-    // 速率限制
+    // [速率限制] 按操作者维度限流；超限则回帖提示重试时间并结束。
     const rl = checkRateLimit(actorLogin);
     if (!rl.allowed) {
         await reply.error('RATE_LIMITED', `请 ${Math.ceil((rl.retryAfterMs ?? 0) / 1000)} 秒后再试`);
@@ -9476,7 +9503,7 @@ async function dispatchCommentEvent(deps) {
             error: 'RATE_LIMITED'
         };
     }
-    // 查找 handler
+    // [查找 handler] 从注册表取命令处理器；命令名虽通过解析但未注册（如已下线）则报 UNKNOWN_COMMAND。
     const handler = registry.get(parsed.name);
     if (!handler) {
         await reply.error('UNKNOWN_COMMAND', `\`${parsed.name}\``);
@@ -9487,7 +9514,8 @@ async function dispatchCommentEvent(deps) {
             error: 'UNKNOWN_COMMAND'
         };
     }
-    // 权限: 查询 + 校验
+    // [权限校验] 查询操作者在仓库的权限等级，结合"是否为 PR 作者"判断能否执行该命令；
+    // 不满足则回帖 FORBIDDEN 并结束。
     const permission = await getPermission({
         owner,
         repo: repoName,
@@ -9524,14 +9552,16 @@ async function dispatchCommentEvent(deps) {
         commentNodeId,
         threadNodeId,
         reply,
-        options: deps.options
+        options: deps.options,
+        triggerReview: deps.triggerReview
     };
-    // ACK
+    // [ACK 回复] 仅对声明 needsAck 的耗时命令先回一条"正在执行"，
+    // 后续 success/error 会复用该 ackId 原地更新，避免刷屏。
     let ackId = null;
     if (handler.needsAck) {
         ackId = await reply.ack(`正在执行 \`${parsed.name}\` …`);
     }
-    // 执行
+    // [执行] 调用 handler，成功回 success；
     try {
         const result = await handler.execute(ctx);
         const message = result?.message ?? `✅ 命令 \`${parsed.name}\` 执行完成`;
@@ -9539,6 +9569,7 @@ async function dispatchCommentEvent(deps) {
         return { kind: 'executed', command: parsed.name, ok: true };
     }
     catch (e) {
+        // 抛错则归一化错误码后回 error，并打 warning 便于排查。
         const code = extractErrorCode(e);
         const detail = e instanceof Error ? e.message : String(e);
         await reply.error(code, detail, ackId);
@@ -9551,10 +9582,17 @@ async function dispatchCommentEvent(deps) {
         };
     }
 }
+/**
+ * 把任意抛出的异常归一化为已知 ErrorCode。
+ * 仅当 e 是对象、带 string 类型的 code、且 code 属于白名单时才采用，
+ * 否则一律兜底为 'INTERNAL'。
+ */
 function extractErrorCode(e) {
+    // 非对象或无 code 字段 → 走末尾 INTERNAL 兜底
     if (e && typeof e === 'object' && 'code' in e) {
         const c = e.code;
         if (typeof c === 'string') {
+            // code 必须命中已知错误码白名单，防止把任意字符串当成合法 ErrorCode
             if ([
                 'UNKNOWN_COMMAND',
                 'INVALID_ARGS',
@@ -9572,29 +9610,34 @@ function extractErrorCode(e) {
     return 'INTERNAL';
 }
 
+// EXTERNAL MODULE: ./lib/review.js + 17 modules
+var review = __nccwpck_require__(8726);
 // EXTERNAL MODULE: ./lib/commenter.js
 var lib_commenter = __nccwpck_require__(4558);
+// EXTERNAL MODULE: ./lib/constants.js
+var constants = __nccwpck_require__(2098);
 // EXTERNAL MODULE: ./lib/inputs.js
 var lib_inputs = __nccwpck_require__(6305);
 // EXTERNAL MODULE: ./lib/tokenizer.js
 var tokenizer = __nccwpck_require__(7525);
-;// CONCATENATED MODULE: ./lib/review-comment.js
+;// CONCATENATED MODULE: ./lib/conversation.js
 /**
- * review-comment.ts - PR 审查评论回复处理模块
+ * conversation.ts - 对话式追问交互（迭代二 · 成员 D · 2.3）
  *
- * 处理 pull_request_review_comment 事件，即用户在 PR 的代码审查评论中发表回复。
+ * 当开发者在 PR 的代码审查评论中回复并 @ 机器人，或在已有的 bot 对话链中继续
+ * 追问时，本模块负责：
  *
- * 触发条件（满足任一）：
- * 1. 评论对话链中已有 bot 的评论（继续对话）
- * 2. 评论内容中 @ai-reviewer（主动召唤 bot）
+ *   1. 追问意图识别        —— 区分"追问 Bot"与"普通评论"，避免无关回帖
+ *   2. Thread 对话历史收集  —— 拉取完整对话链并格式化
+ *   3. 关联代码行/扩展上下文 —— 评论所在 diff hunk + 文件完整 diff
+ *   4. 对话 Prompt 组装     —— 历史 + 代码 + diff + PR 摘要
+ *   5. LLM 对话推理         —— 复用迭代一的重量模型（Analysis Chain / Web Query）
+ *   6. 回复发布到 thread
+ *   7. 上下文截断 + 摘要压缩 —— 防止长对话 Token 超限
+ *   8. 对话轮次上限控制     —— 防止无限对话消耗资源
  *
- * 处理流程：
- * 1. 验证事件类型和 payload 数据
- * 2. 过滤 bot 自身发出的评论（避免自我回复循环）
- * 3. 获取评论对话链上下文
- * 4. 收集文件 diff、PR 摘要等辅助上下文
- * 5. 在 token 限制内打包所有上下文
- * 6. 调用 AI 生成回复并发布
+ * 设计原则：纯逻辑（意图识别 / 截断 / 轮次统计）抽成可独立单测的函数，
+ * I/O 编排集中在 handleConversation 中，复用既有 Commenter / Bot / Prompts。
  */
 
 // eslint-disable-next-line camelcase
@@ -9603,142 +9646,254 @@ var tokenizer = __nccwpck_require__(7525);
 
 
 
+
 // eslint-disable-next-line camelcase
-const review_comment_context = github.context;
-const repo = review_comment_context.repo;
-/** 用户在评论中 @ bot 的关键词 */
-const ASK_BOT = '@ai-reviewer';
+const conversation_context = github.context;
+/** 默认的 bot mention 别名（小写匹配，与命令解析器保持一致）。共享自 constants。 */
+
+/** 标识 bot 在对话链中出现过的标签（用于轮次统计 / 意图识别） */
+const BOT_COMMENT_TAGS = [lib_commenter/* COMMENT_TAG */.Rs, lib_commenter/* COMMENT_REPLY_TAG */.aD];
+/** 单个 thread 的对话轮次上限（bot 已回复的次数），超过后停止追问 */
+const MAX_CONVERSATION_TURNS = 10;
+/** 对话历史进入 Prompt 时的字符上限（粗粒度预算，token 预算另行精确校验） */
+const MAX_CHAIN_CHARS = 12_000;
+/** 对话历史截断时的分隔符（与 Commenter.composeCommentChain 对齐） */
+const CHAIN_SEPARATOR = '\n---\n';
 /**
- * 处理 PR 审查评论回复事件的主函数
+ * 追问意图识别：判断一条评论是否应触发 bot 对话回复。
  *
- * @param heavyBot - 重量级 AI 模型（用于生成高质量回复）
- * @param options - 全局配置选项
- * @param prompts - 提示词模板
+ * 触发条件：**评论必须显式 @ 了机器人**（首轮与续轮一致），
+ * 以避免把 thread 内真人之间的讨论误当成追问。
+ *
+ * 排除规则（优先级最高）：
+ *   - 评论来自 bot 自身（避免自我触发循环）
+ *   - 评论正文含 bot 专属标签（视为 bot 文案）
+ *
+ * @returns true 表示需要 bot 介入回复
  */
-const handleReviewComment = async (heavyBot, options, prompts) => {
+function isFollowUpQuestion(opts) {
+    const { commentBody, authorIsBot } = opts;
+    if (authorIsBot) {
+        return false;
+    }
+    const body = commentBody ?? '';
+    // bot 自动生成的内容带有专属标签，二次保险，避免把 bot 文案当成追问
+    const botTags = opts.botCommentTags ?? BOT_COMMENT_TAGS;
+    if (botTags.some(tag => body.includes(tag))) {
+        return false;
+    }
+    const mentions = (opts.mentions ?? constants/* BOT_MENTIONS */.T).map(m => m.toLowerCase());
+    const lowerBody = body.toLowerCase();
+    return mentions.some(m => lowerBody.includes(m));
+}
+/**
+ * 统计对话链中 bot 已回复的轮次。
+ * 以 bot 专属标签出现次数为准（每条 bot 评论都会携带一个标签）。
+ */
+function countBotTurns(commentChain, botCommentTags = BOT_COMMENT_TAGS) {
+    if (!commentChain) {
+        return 0;
+    }
+    let count = 0;
+    for (const tag of botCommentTags) {
+        count += occurrences(commentChain, tag);
+    }
+    return count;
+}
+function occurrences(haystack, needle) {
+    if (!needle) {
+        return 0;
+    }
+    let count = 0;
+    let idx = haystack.indexOf(needle);
+    while (idx !== -1) {
+        count++;
+        idx = haystack.indexOf(needle, idx + needle.length);
+    }
+    return count;
+}
+/**
+ * 对话历史截断 + 摘要压缩。
+ *
+ * 长对话会撑爆 Token 预算。这里保留**最近**的若干轮对话（信息最相关），
+ * 较早的内容压缩为一行提示，避免直接截断造成上下文割裂。
+ *
+ * @param chain    composeCommentChain 产出的对话链字符串
+ * @param maxChars 字符预算上限
+ */
+function truncateConversationChain(chain, maxChars = MAX_CHAIN_CHARS) {
+    if (!chain || chain.length <= maxChars) {
+        return chain;
+    }
+    const turns = chain.split(CHAIN_SEPARATOR);
+    const kept = [];
+    let used = 0;
+    let omitted = 0;
+    // 从最新的一轮往前累加，直到预算用尽
+    for (let i = turns.length - 1; i >= 0; i--) {
+        const turn = turns[i];
+        const cost = turn.length + CHAIN_SEPARATOR.length;
+        if (used + cost <= maxChars || kept.length === 0) {
+            kept.unshift(turn);
+            used += cost;
+        }
+        else {
+            omitted = i + 1;
+            break;
+        }
+    }
+    if (omitted > 0) {
+        kept.unshift(`> _（为控制上下文长度，较早的 ${omitted} 条对话已省略，仅保留最近 ${kept.length} 条）_`);
+    }
+    return kept.join(CHAIN_SEPARATOR);
+}
+/**
+ * 对话式追问主入口。
+ *
+ * 仅处理 pull_request_review_comment 事件（代码行级评论中的追问）。
+ * 由 command-handler.ts 在命令解析判定为 "fallback_conversation" 时调用。
+ *
+ * @param heavyBot - 重量级模型，用于生成高质量回复
+ * @param options  - 全局配置
+ * @param prompts  - 提示词模板
+ */
+const handleConversation = async (heavyBot, options, prompts) => {
     const commenter = new lib_commenter/* Commenter */.Es();
     const inputs = new lib_inputs/* Inputs */.k();
-    // ===== 第一步：验证事件类型 =====
-    if (review_comment_context.eventName !== 'pull_request_review_comment') {
-        (0,core.warning)(`Skipped: ${review_comment_context.eventName} is not a pull_request_review_comment event`);
+    const repo = conversation_context.repo;
+    // ===== 1. 事件与 payload 校验 =====
+    if (conversation_context.eventName !== 'pull_request_review_comment') {
+        (0,core.info)(`conversation: skip non review_comment event (${conversation_context.eventName})`);
         return;
     }
-    if (!review_comment_context.payload) {
-        (0,core.warning)(`Skipped: ${review_comment_context.eventName} event is missing payload`);
+    const payload = conversation_context.payload;
+    if (!payload || payload.action !== 'created') {
+        (0,core.info)('conversation: skip (missing payload or action != created)');
         return;
     }
-    const comment = review_comment_context.payload.comment;
-    if (comment == null) {
-        (0,core.warning)(`Skipped: ${review_comment_context.eventName} event is missing comment`);
+    const comment = payload.comment;
+    if (comment == null || typeof comment.body !== 'string') {
+        (0,core.warning)('conversation: skip (missing comment body)');
         return;
     }
-    if (review_comment_context.payload.pull_request == null ||
-        review_comment_context.payload.repository == null) {
-        (0,core.warning)(`Skipped: ${review_comment_context.eventName} event is missing pull_request`);
+    if (payload.pull_request == null || payload.repository == null) {
+        (0,core.warning)('conversation: skip (missing pull_request/repository)');
         return;
     }
-    // 填充 PR 基本信息到 inputs
-    inputs.title = review_comment_context.payload.pull_request.title;
-    if (review_comment_context.payload.pull_request.body) {
-        inputs.description = commenter.getDescription(review_comment_context.payload.pull_request.body);
-    }
-    // ===== 第二步：只处理新创建的评论 =====
-    if (review_comment_context.payload.action !== 'created') {
-        (0,core.warning)(`Skipped: ${review_comment_context.eventName} event is not created`);
+    // ===== 2. 过滤 bot 自身评论 =====
+    const authorIsBot = comment.user?.type === 'Bot' ||
+        /\[bot\]$/i.test(comment.user?.login ?? '') ||
+        comment.body.includes(lib_commenter/* COMMENT_TAG */.Rs) ||
+        comment.body.includes(lib_commenter/* COMMENT_REPLY_TAG */.aD);
+    if (authorIsBot) {
+        (0,core.info)('conversation: skip (comment from bot itself)');
         return;
     }
-    // ===== 第三步：过滤 bot 自身的评论（避免自我回复循环） =====
-    if (!comment.body.includes(lib_commenter/* COMMENT_TAG */.Rs) &&
-        !comment.body.includes(lib_commenter/* COMMENT_REPLY_TAG */.aD)) {
-        const pullNumber = review_comment_context.payload.pull_request.number;
-        // 填充评论相关信息
-        inputs.comment = `${comment.user.login}: ${comment.body}`;
-        inputs.diff = comment.diff_hunk; // 评论所在的 diff 片段
-        inputs.filename = comment.path; // 评论所在的文件路径
-        // 获取完整的评论对话链
-        const { chain: commentChain, topLevelComment } = await commenter.getCommentChain(pullNumber, comment);
-        if (!topLevelComment) {
-            (0,core.warning)('Failed to find the top-level comment to reply to');
+    const pullNumber = payload.pull_request.number;
+    // 填充 PR 基本信息
+    inputs.title = payload.pull_request.title;
+    if (payload.pull_request.body) {
+        inputs.description = commenter.getDescription(payload.pull_request.body);
+    }
+    inputs.comment = `${comment.user.login}: ${comment.body}`;
+    inputs.diff = comment.diff_hunk ?? '';
+    inputs.filename = comment.path ?? '';
+    // ===== 3. Thread 对话历史收集 =====
+    const { chain: rawChain, topLevelComment } = await commenter.getCommentChain(pullNumber, comment);
+    if (!topLevelComment) {
+        (0,core.warning)('conversation: cannot locate top-level comment, abort');
+        return;
+    }
+    // ===== 4. 追问意图识别（必须 @bot） =====
+    if (!isFollowUpQuestion({
+        commentBody: comment.body,
+        authorIsBot: false
+    })) {
+        (0,core.info)('conversation: not a follow-up question (no @mention), skip');
+        return;
+    }
+    // ===== 5. 对话轮次上限控制 =====
+    const turns = countBotTurns(rawChain);
+    if (turns >= MAX_CONVERSATION_TURNS) {
+        (0,core.info)(`conversation: turn limit reached (${turns}/${MAX_CONVERSATION_TURNS})`);
+        await commenter.reviewCommentReply(pullNumber, topLevelComment, `本话题的自动对话轮次已达上限（${MAX_CONVERSATION_TURNS} 轮）。如需继续深入，请新开一条评论或联系人工 reviewer。`);
+        return;
+    }
+    // ===== 6. 上下文截断 + 摘要压缩 =====
+    inputs.commentChain = truncateConversationChain(rawChain);
+    // ===== 7. 关联代码行及扩展上下文（文件完整 diff） =====
+    let fileDiff = '';
+    try {
+        const diffAll = await octokit/* octokit.repos.compareCommits */.K.repos.compareCommits({
+            owner: repo.owner,
+            repo: repo.repo,
+            base: payload.pull_request.base.sha,
+            head: payload.pull_request.head.sha
+        });
+        const file = diffAll.data?.files?.find(f => f.filename === comment.path);
+        if (file?.patch) {
+            fileDiff = file.patch;
+        }
+    }
+    catch (e) {
+        (0,core.warning)(`conversation: failed to get file diff: ${e}, continue without it`);
+    }
+    // 评论本身没有 diff 片段时，退化为使用完整文件 diff
+    if (inputs.diff.length === 0) {
+        if (fileDiff.length > 0) {
+            inputs.diff = fileDiff;
+            fileDiff = '';
+        }
+        else {
+            await commenter.reviewCommentReply(pullNumber, topLevelComment, '无法回复该评论：未能定位关联的代码 diff。');
             return;
         }
-        inputs.commentChain = commentChain;
-        // ===== 第四步：判断是否需要 AI 回复 =====
-        // 条件：对话链中已有 bot 评论（COMMENT_TAG/COMMENT_REPLY_TAG），
-        //       或用户主动 @ai-reviewer
-        if (commentChain.includes(lib_commenter/* COMMENT_TAG */.Rs) ||
-            commentChain.includes(lib_commenter/* COMMENT_REPLY_TAG */.aD) ||
-            comment.body.includes(ASK_BOT)) {
-            // ===== 第五步：收集文件 diff 上下文 =====
-            let fileDiff = '';
-            try {
-                // 获取文件的完整 diff（base 到 head 的对比）
-                const diffAll = await octokit/* octokit.repos.compareCommits */.K.repos.compareCommits({
-                    owner: repo.owner,
-                    repo: repo.repo,
-                    base: review_comment_context.payload.pull_request.base.sha,
-                    head: review_comment_context.payload.pull_request.head.sha
-                });
-                if (diffAll.data) {
-                    const files = diffAll.data.files;
-                    if (files != null) {
-                        const file = files.find(f => f.filename === comment.path);
-                        if (file != null && file.patch) {
-                            fileDiff = file.patch;
-                        }
-                    }
-                }
-            }
-            catch (error) {
-                (0,core.warning)(`Failed to get file diff: ${error}, skipping.`);
-            }
-            // 如果评论中没有 diff 片段，使用完整的文件 diff 替代
-            if (inputs.diff.length === 0) {
-                if (fileDiff.length > 0) {
-                    inputs.diff = fileDiff;
-                    fileDiff = '';
-                }
-                else {
-                    await commenter.reviewCommentReply(pullNumber, topLevelComment, 'Cannot reply to this comment as diff could not be found.');
-                    return;
-                }
-            }
-            // ===== 第六步：在 token 限制内打包上下文 =====
-            let tokens = (0,tokenizer/* getTokenCount */.V)(prompts.renderComment(inputs));
-            // 检查基础提示词是否已超出 token 限制
-            if (tokens > options.heavyTokenLimits.requestTokens) {
-                await commenter.reviewCommentReply(pullNumber, topLevelComment, 'Cannot reply to this comment as diff being commented is too large and exceeds the token limit.');
-                return;
-            }
-            // 尝试将完整文件 diff 加入上下文（如果 token 预算允许）
-            if (fileDiff.length > 0) {
-                const fileDiffCount = prompts.comment.split('$file_diff').length - 1;
-                const fileDiffTokens = (0,tokenizer/* getTokenCount */.V)(fileDiff);
-                if (fileDiffCount > 0 &&
-                    tokens + fileDiffTokens * fileDiffCount <=
-                        options.heavyTokenLimits.requestTokens) {
-                    tokens += fileDiffTokens * fileDiffCount;
-                    inputs.fileDiff = fileDiff;
-                }
-            }
-            // 尝试将 PR 精简摘要加入上下文（如果 token 预算允许）
-            const summary = await commenter.findCommentWithTag(lib_commenter/* SUMMARIZE_TAG */.Rp, pullNumber);
-            if (summary) {
-                const shortSummary = commenter.getShortSummary(summary.body);
-                const shortSummaryTokens = (0,tokenizer/* getTokenCount */.V)(shortSummary);
-                if (tokens + shortSummaryTokens <=
-                    options.heavyTokenLimits.requestTokens) {
-                    tokens += shortSummaryTokens;
-                    inputs.shortSummary = shortSummary;
-                }
-            }
-            // ===== 第七步：调用 AI 生成回复并发布 =====
-            const [reply] = await heavyBot.chat(prompts.renderComment(inputs), {});
-            await commenter.reviewCommentReply(pullNumber, topLevelComment, reply);
+    }
+    // ===== 8. Token 预算内打包上下文 =====
+    let tokens = (0,tokenizer/* getTokenCount */.V)(prompts.renderComment(inputs));
+    if (tokens > options.heavyTokenLimits.requestTokens) {
+        // 对话链可能仍过长，进一步压缩后重试一次
+        inputs.commentChain = truncateConversationChain(rawChain, Math.floor(MAX_CHAIN_CHARS / 2));
+        tokens = (0,tokenizer/* getTokenCount */.V)(prompts.renderComment(inputs));
+    }
+    if (tokens > options.heavyTokenLimits.requestTokens) {
+        await commenter.reviewCommentReply(pullNumber, topLevelComment, '无法回复该评论：关联的上下文过大，超出了模型的 token 限制。');
+        return;
+    }
+    // 预算允许时补充完整文件 diff
+    if (fileDiff.length > 0) {
+        const fileDiffCount = prompts.comment.split('$file_diff').length - 1;
+        const fileDiffTokens = (0,tokenizer/* getTokenCount */.V)(fileDiff);
+        if (fileDiffCount > 0 &&
+            tokens + fileDiffTokens * fileDiffCount <=
+                options.heavyTokenLimits.requestTokens) {
+            tokens += fileDiffTokens * fileDiffCount;
+            inputs.fileDiff = fileDiff;
         }
     }
-    else {
-        (0,core.info)(`Skipped: ${review_comment_context.eventName} event is from the bot itself`);
+    // 预算允许时补充 PR 精简摘要
+    const summary = await commenter.findCommentWithTag(lib_commenter/* SUMMARIZE_TAG */.Rp, pullNumber);
+    if (summary) {
+        const shortSummary = commenter.getShortSummary(summary.body);
+        const shortSummaryTokens = (0,tokenizer/* getTokenCount */.V)(shortSummary);
+        if (tokens + shortSummaryTokens <= options.heavyTokenLimits.requestTokens) {
+            tokens += shortSummaryTokens;
+            inputs.shortSummary = shortSummary;
+        }
     }
+    // ===== 9. LLM 对话推理 + 发布回复 =====
+    const [reply] = await heavyBot.chat(prompts.renderComment(inputs), {});
+    if (!reply) {
+        (0,core.warning)('conversation: empty reply from model, skip posting');
+        return;
+    }
+    // 由我们用真实评论者用户名前缀回复（模型已被要求不要自行 @）。
+    // 防御性去掉模型可能仍残留的开头 "@user"（历史 prompt 遗留），避免误链到真实账号 user。
+    const cleanedReply = reply.replace(/^\s*@user[，,：:\s]*/i, '').trimStart();
+    const authorLogin = comment.user?.login ?? '';
+    const mention = authorLogin ? `@${authorLogin} ` : '';
+    await commenter.reviewCommentReply(pullNumber, topLevelComment, `${mention}${cleanedReply}`);
+    (0,core.info)(`conversation: replied on PR #${pullNumber} thread (top-level comment ${topLevelComment.id})`);
 };
 
 ;// CONCATENATED MODULE: ./lib/command-handler.js
@@ -9751,12 +9906,13 @@ const handleReviewComment = async (heavyBot, options, prompts) => {
  *   1. 启动命令注册表（只需一次）
  *   2. 调用 dispatcher 处理事件
  *   3. 当 dispatcher 判定为 "fallback_conversation" 时，
- *      透传给既有的 handleReviewComment（对话式追问），
+ *      透传给成员 D 的对话式追问处理器 handleConversation，
  *      但仅当事件是 pull_request_review_comment 时才透传
- *      （issue_comment 场景的对话由迭代二成员 D 后续扩展）。
+ *      （issue_comment 场景的对话暂不支持）。
  */
 
 // eslint-disable-next-line camelcase
+
 
 
 
@@ -9765,15 +9921,40 @@ const handleReviewComment = async (heavyBot, options, prompts) => {
 const command_handler_context = github.context;
 async function handleCommentEvent(deps) {
     (0,bootstrap/* bootstrapCommands */.K)();
-    const outcome = await dispatchCommentEvent({ options: deps.options });
+    const triggerReview = async (mode) => {
+        const bots = deps.lightBot != null && deps.heavyBot != null
+            ? { lightBot: deps.lightBot, heavyBot: deps.heavyBot }
+            : deps.getReviewBots?.();
+        if (bots == null) {
+            throw new Error('OpenAI bot is unavailable for review command');
+        }
+        await (0,review/* codeReview */.z)(bots.lightBot, bots.heavyBot, deps.options, deps.prompts, {
+            mode: mode === 'incremental' ? 'incremental' : 'full',
+            source: 'command',
+            summaryOnly: mode === 'summary'
+        });
+    };
+    const outcome = await dispatchCommentEvent({
+        options: deps.options,
+        triggerReview
+    });
     (0,core.info)(`commentEvent dispatcher outcome: ${JSON.stringify(outcome)}`);
     if (outcome.kind === 'fallback_conversation') {
-        // 既有对话式追问仅支持 pull_request_review_comment
         if (command_handler_context.eventName === 'pull_request_review_comment') {
-            await handleReviewComment(deps.heavyBot, deps.options, deps.prompts);
+            const bots = deps.heavyBot != null
+                ? { heavyBot: deps.heavyBot }
+                : deps.getReviewBots?.();
+            if (bots == null) {
+                (0,core.info)('commentEvent: conversation fallback skipped (OpenAI bot unavailable)');
+                return;
+            }
+            // 对话式追问（成员 D · 2.3）仅支持 pull_request_review_comment。
+            // handleConversation 已取代旧的 handleReviewComment（含意图识别 / 轮次上限 /
+            // 上下文截断），两者都会向 thread 回帖，**不可同时调用**，否则重复回复 + 双倍 LLM 开销。
+            await handleConversation(bots.heavyBot, deps.options, deps.prompts);
         }
         else {
-            (0,core.info)('commentEvent: conversation fallback skipped (issue_comment 对话由后续迭代支持)');
+            (0,core.info)('commentEvent: conversation fallback skipped (issue_comment 对话暂不支持)');
         }
     }
 }
@@ -9781,7 +9962,7 @@ async function handleCommentEvent(deps) {
 
 /***/ }),
 
-/***/ 6806:
+/***/ 5544:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
 "use strict";
@@ -9797,6 +9978,8 @@ __nccwpck_require__.d(__webpack_exports__, {
 var core = __nccwpck_require__(1078);
 // EXTERNAL MODULE: ./lib/commands/registry.js
 var registry = __nccwpck_require__(953);
+// EXTERNAL MODULE: ./lib/constants.js
+var constants = __nccwpck_require__(2098);
 ;// CONCATENATED MODULE: ./lib/commands/handlers/help.js
 /**
  * commands/handlers/help.ts - help 命令的参考实现（成员 A 交付）
@@ -9806,6 +9989,7 @@ var registry = __nccwpck_require__(953);
  * - 按注册顺序输出命令名、描述、用法
  * - 提供 buildHelpMessage() 纯函数，便于单测
  */
+
 
 
 /**
@@ -9828,7 +10012,7 @@ function buildHelpMessage(commands) {
     });
     for (const c of ordered) {
         const perm = c.minPermission ?? 'write';
-        const usage = c.usage ?? `@ai-reviewer ${c.name}`;
+        const usage = c.usage ?? `${constants/* PRIMARY_BOT_MENTION */.a} ${c.name}`;
         lines.push(`| \`${usage}\` | ${c.description} | \`${perm}\` |`);
     }
     if (ordered.some(c => (c.aliases?.length ?? 0) > 0)) {
@@ -9841,22 +10025,304 @@ function buildHelpMessage(commands) {
         }
     }
     lines.push('');
-    lines.push(`> ${(0,core.getInput)('bot_icon') || '🤖'} Bot 同时支持 \`@ai-reviewer\` 与 \`@codesentinel\` 两个 mention。`);
+    lines.push(`> ${(0,core.getInput)('bot_icon') || '🤖'} Bot 同时支持 ${constants/* BOT_MENTIONS.map */.T.map(m => `\`${m}\``).join(' 与 ')} 共 ${constants/* BOT_MENTIONS.length */.T.length} 个 mention。`);
     return lines.join('\n');
 }
 const helpHandler = {
     name: 'help',
     description: '显示所有支持的命令及用法',
-    usage: '@ai-reviewer help',
+    usage: `${constants/* PRIMARY_BOT_MENTION */.a} help`,
     needsAck: false,
     minPermission: 'read',
     async execute(_ctx) {
-        const cmds = (0,registry/* getRegistry */.JH)().listCommands();
+        const cmds = (0,registry/* getRegistry */.J)().listCommands();
         return { message: buildHelpMessage(cmds) };
     }
 };
 
+// EXTERNAL MODULE: ./node_modules/.pnpm/p-limit@4.0.0/node_modules/p-limit/index.js + 1 modules
+var p_limit = __nccwpck_require__(9272);
+// EXTERNAL MODULE: ./lib/octokit.js
+var octokit = __nccwpck_require__(2247);
+;// CONCATENATED MODULE: ./lib/github/review-thread.js
+
+
+
+// ─── GraphQL documents ───────────────────────────────────────────────────────
+const GET_REVIEW_THREADS = `
+  query GetReviewThreads(
+    $owner: String!
+    $repo: String!
+    $number: Int!
+    $after: String
+  ) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $number) {
+        reviewThreads(first: 100, after: $after) {
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+          nodes {
+            id
+            isResolved
+            path
+            line
+            comments(first: 1) {
+              nodes {
+                author {
+                  login
+                }
+                body
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+const RESOLVE_THREAD = `
+  mutation ResolveThread($threadId: ID!) {
+    resolveReviewThread(input: { threadId: $threadId }) {
+      thread {
+        isResolved
+      }
+    }
+  }
+`;
+// ─── Bot identity ─────────────────────────────────────────────────────────────
+let cachedBotLogin = null;
+async function getBotLogin(options) {
+    if (cachedBotLogin !== null)
+        return cachedBotLogin;
+    void options;
+    // Explicit override for custom GitHub App: installation tokens cannot call
+    // GET /user, so auto-detection would wrongly fall back to 'github-actions'.
+    const explicitLogin = (0,core.getInput)('bot_github_login');
+    if (explicitLogin) {
+        cachedBotLogin = explicitLogin;
+        return cachedBotLogin;
+    }
+    try {
+        const { data } = await octokit/* octokit.users.getAuthenticated */.K.users.getAuthenticated();
+        cachedBotLogin = data.login;
+    }
+    catch (e) {
+        (0,core.warning)(`getBotLogin: failed to get authenticated user – ${String(e)}`);
+        // Default GITHUB_TOKEN (integration token) lacks read:user scope.
+        // GraphQL returns the login WITHOUT the "[bot]" suffix, so use 'github-actions'
+        // (not 'github-actions[bot]') to match the author field in reviewThread queries.
+        cachedBotLogin = 'github-actions';
+    }
+    return cachedBotLogin;
+}
+/** Visible for testing only */
+function _resetBotLoginCache() {
+    cachedBotLogin = null;
+}
+/**
+ * Normalize a GitHub login for bot identity comparison.
+ *
+ * GitHub is inconsistent about the `[bot]` suffix on bot accounts:
+ *   - REST (`getAuthenticated`, comment.user.login) → `github-actions[bot]`
+ *   - GraphQL (reviewThread author.login)           → `github-actions`
+ * Stripping the suffix (and lowercasing) lets the two representations match.
+ */
+function normalizeLogin(login) {
+    return login.replace(/\[bot\]$/i, '').toLowerCase();
+}
+// ─── Query ────────────────────────────────────────────────────────────────────
+async function fetchUnresolvedBotThreads(params, botLogin) {
+    const results = [];
+    let cursor = null;
+    do {
+        const data = await octokit/* octokit.graphql */.K.graphql(GET_REVIEW_THREADS, {
+            owner: params.owner,
+            repo: params.repo,
+            number: params.prNumber,
+            after: cursor ?? undefined
+        });
+        const page = data.repository.pullRequest.reviewThreads;
+        const normalizedBot = normalizeLogin(botLogin);
+        for (const node of page.nodes) {
+            const firstComment = node.comments.nodes[0];
+            const authorLogin = firstComment?.author?.login ?? null;
+            if (!node.isResolved &&
+                authorLogin !== null &&
+                normalizeLogin(authorLogin) === normalizedBot) {
+                results.push({
+                    id: node.id,
+                    isResolved: node.isResolved,
+                    firstCommentAuthorLogin: authorLogin,
+                    path: node.path,
+                    line: node.line ?? null,
+                    firstCommentBody: firstComment?.body ?? null
+                });
+            }
+        }
+        cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+    } while (cursor !== null);
+    return results;
+}
+function isPermissionError(e) {
+    return String(e).includes('not accessible by integration');
+}
+/** 网络/超时类错误（与权限、node-not-found 区分，便于给出不同提示） */
+function isNetworkError(e) {
+    return /ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|network|timed? ?out/i.test(String(e));
+}
+/**
+ * 测试用：识别注入的假 thread ID（`PRRT_debug_inject_<kind>_<n>`），
+ * 返回对应类型的模拟错误，不实际发起 GraphQL 请求。
+ *
+ * 真实运行时 thread ID 不会带此前缀，函数返回 null，走正常 GraphQL 流程。
+ */
+function simulateDebugError(threadId) {
+    if (!threadId.startsWith('PRRT_debug_inject_'))
+        return null;
+    if (threadId.includes('_permission_')) {
+        return new Error("Resource not accessible by integration (mutation 'resolveReviewThread')");
+    }
+    if (threadId.includes('_network_')) {
+        // TODO: Maybe gitlab in the future, or other network errors, but for now just simulate a connection reset.
+        return new Error('request to https://api.github.com/graphql failed, reason: read ECONNRESET');
+    }
+    // 默认：node not found（无效的 global id）
+    return new Error('Request failed due to following response errors:\n' +
+        ` - Could not resolve to a node with the global id of '${threadId}'`);
+}
+function threadLabel(t) {
+    if (t.path) {
+        const loc = t.line != null ? `${t.path}:${t.line}` : t.path;
+        if (t.firstCommentBody) {
+            const snippet = t.firstCommentBody.trim().replace(/\s+/g, ' ').slice(0, 60);
+            const ellipsis = snippet.length === 60 ? '…' : '';
+            return `${loc} – "${snippet}${ellipsis}"`;
+        }
+        return loc;
+    }
+    return t.id;
+}
+async function batchResolve(threads) {
+    const limit = (0,p_limit/* default */.Z)(6);
+    let ok = 0;
+    const errors = [];
+    const failedItems = [];
+    await Promise.allSettled(threads.map(t => limit(async () => {
+        try {
+            const simulated = simulateDebugError(t.id);
+            if (simulated)
+                throw simulated;
+            await octokit/* octokit.graphql */.K.graphql(RESOLVE_THREAD, { threadId: t.id });
+            ok++;
+        }
+        catch (e) {
+            const err = e instanceof Error ? e : new Error(String(e));
+            errors.push(err);
+            failedItems.push({ thread: t, error: err });
+        }
+    })));
+    const permissionFailed = failedItems.filter(({ error }) => isPermissionError(error));
+    const otherFailed = failedItems.filter(({ error }) => !isPermissionError(error));
+    if (permissionFailed.length > 0) {
+        (0,core.warning)('batchResolve: token lacks permission to resolve review threads ' +
+            '("Resource not accessible by integration"). ' +
+            'Set the `resolve_token` input to a classic PAT with repo scope.');
+    }
+    if (otherFailed.length > 0) {
+        const lines = otherFailed
+            .map(({ thread, error }) => `  • ${threadLabel(thread)}: ${error.message}`)
+            .join('\n');
+        (0,core.warning)(`batchResolve: failed to resolve ${otherFailed.length}/${threads.length} thread(s):\n${lines}`);
+    }
+    return { ok, failed: errors.length, errors, failedItems };
+}
+
+;// CONCATENATED MODULE: ./lib/commands/handlers/resolve.js
+
+
+// ─── Handler ──────────────────────────────────────────────────────────────────
+const resolveHandler = {
+    name: 'resolve',
+    description: '批量将所有 CodeSentinel 审查意见标记为已解决',
+    usage: `${constants/* PRIMARY_BOT_MENTION */.a} resolve`,
+    needsAck: true,
+    minPermission: 'write',
+    execute
+};
+async function execute(ctx) {
+    const botLogin = await getBotLogin(ctx.options);
+    const threads = await fetchUnresolvedBotThreads({ owner: ctx.owner, repo: ctx.repo, prNumber: ctx.prNumber }, botLogin);
+    if (threads.length === 0) {
+        return { message: 'ℹ️ 没有找到待解决的 CodeSentinel 审查意见' };
+    }
+    // 测试用：注入假 thread ID，模拟部分失败场景。
+    // 按 notfound → permission → network 轮换，覆盖三类错误。
+    // const injectCount = ctx.options.debugResolveInjectFailures
+    // if (injectCount > 0) {
+    //   const kinds = ['notfound', 'permission', 'network'] as const
+    //   for (let i = 0; i < injectCount; i++) {
+    //     const kind = kinds[i % kinds.length]
+    //     threads.push({
+    //       id: `PRRT_debug_inject_${kind}_${i + 1}`,
+    //       isResolved: false,
+    //       firstCommentAuthorLogin: botLogin,
+    //       path: threads[0].path,
+    //       line: 9000 + i,
+    //       firstCommentBody: `[debug] injected ${kind} failure ${i + 1}`
+    //     })
+    //   }
+    // }
+    const { ok, failed, failedItems } = await batchResolve(threads);
+    return { message: formatResult(ok, failed, threads.length, failedItems) };
+}
+// ─── Formatting ───────────────────────────────────────────────────────────────
+// TODO Refer to CodeRabbit for the original implementation of this formatting logic.
+function formatResult(ok, failed, total, failedItems) {
+    if (failed === 0) {
+        return `✅ 已解决 **${ok}** 条 CodeSentinel 审查意见`;
+    }
+    const errDetail = failedItems.length > 0
+        ? `\n\n失败详情：\n${failedItems
+            .map(({ thread, error }) => `- ${errorTag(error)} \`${threadLabel(thread)}\`：${flattenError(error.message)}`)
+            .join('\n')}${permissionHint(failedItems)}`
+        : '';
+    if (ok === 0) {
+        // 全部失败时几乎一定是权限问题：resolveReviewThread mutation 需要用户 PAT，
+        // GITHUB_TOKEN 会被 GitHub 拒为 "Resource not accessible by integration"。
+        // 给出可操作提示，避免用户只看到一句干巴巴的 forbidden。
+        const permissionHint = '\n\n💡 这通常是权限不足：解决评论线程需要把用户 PAT 配置到 `resolve_token`，' +
+            '或在 workflow 中授予 `permissions: pull-requests: write`。';
+        return `❌ 解决失败（共 **${total}** 条）${errDetail}${permissionHint}`;
+    }
+    return `⚠️ 共 **${total}** 条，成功解决 **${ok}** 条，**${failed}** 条失败（可手动解决）${errDetail}`;
+}
+/** 给每条失败打上分类标签，方便用户一眼区分错误类型 */
+function errorTag(error) {
+    if (isPermissionError(error))
+        return '🔒 权限不足';
+    if (isNetworkError(error))
+        return '🌐 网络错误';
+    return '⚠️ 其他错误';
+}
+/** 存在权限错误时，追加可操作提示 */
+function permissionHint(failedItems) {
+    if (!failedItems.some(({ error }) => isPermissionError(error)))
+        return '';
+    return ('\n\n💡 存在权限不足导致的失败：当前 token 无法解决审查线程，' +
+        '请将 `resolve_token` 输入配置为具有 repo 权限的 classic PAT，或手动解决。');
+}
+/** 将多行错误信息压成单行，避免错误中的 ` - ` 被 Markdown 当作嵌套列表渲染 */
+function flattenError(message) {
+    return message.replace(/\s+/g, ' ').trim();
+}
+
+// EXTERNAL MODULE: ./lib/review-state.js
+var review_state = __nccwpck_require__(3337);
 ;// CONCATENATED MODULE: ./lib/commands/handlers/stubs.js
+
+
 function notImplemented(name) {
     return async (_ctx) => {
         // 调度器会把抛出的标记型错误转成 NOT_IMPLEMENTED 反馈
@@ -9865,68 +10331,104 @@ function notImplemented(name) {
         throw e;
     };
 }
-/** 成员 B */
-const resolveStub = {
-    name: 'resolve',
-    description: '批量将所有 CodeSentinel 审查意见标记为已解决',
-    usage: '@ai-reviewer resolve',
-    needsAck: true,
-    minPermission: 'write',
-    execute: notImplemented('resolve')
-};
 /** 成员 C */
 const reviewStub = {
     name: 'review',
     description: '触发增量审查（仅审查自上次审查以来的新增变更）',
-    usage: '@ai-reviewer review',
+    usage: `${constants/* PRIMARY_BOT_MENTION */.a} review`,
     needsAck: true,
     minPermission: 'write',
-    execute: notImplemented('review')
+    async execute(ctx) {
+        if (ctx.triggerReview == null)
+            return await notImplemented('review')(ctx);
+        await ctx.triggerReview('incremental');
+        return { message: '增量审查已完成' };
+    }
 };
 const fullReviewStub = {
     name: 'full review',
     description: '触发全量审查（从 base 到 HEAD 的完整 diff）',
-    usage: '@ai-reviewer full review',
+    usage: `${constants/* PRIMARY_BOT_MENTION */.a} full review`,
     needsAck: true,
     minPermission: 'write',
-    execute: notImplemented('full review')
+    async execute(ctx) {
+        if (ctx.triggerReview == null)
+            return await notImplemented('full review')(ctx);
+        await ctx.triggerReview('full');
+        return { message: '全量审查已完成' };
+    }
 };
 const summaryStub = {
     name: 'summary',
     description: '基于当前最新代码重新生成 PR 摘要',
-    usage: '@ai-reviewer summary',
+    usage: `${constants/* PRIMARY_BOT_MENTION */.a} summary`,
     needsAck: true,
     minPermission: 'write',
-    execute: notImplemented('summary')
+    async execute(ctx) {
+        if (ctx.triggerReview == null)
+            return await notImplemented('summary')(ctx);
+        await ctx.triggerReview('summary');
+        return { message: 'PR 摘要已重新生成' };
+    }
 };
 const pauseStub = {
     name: 'pause',
     description: '暂停对当前 PR 的自动审查',
-    usage: '@ai-reviewer pause',
+    usage: `${constants/* PRIMARY_BOT_MENTION */.a} pause`,
     needsAck: false,
     minPermission: 'write',
-    execute: notImplemented('pause')
+    async execute(ctx) {
+        await (0,review_state/* setReviewState */.DU)(ctx.prNumber, 'paused');
+        return {
+            message: `已暂停当前 PR 的自动审查。使用 \`${constants/* PRIMARY_BOT_MENTION */.a} resume\` 恢复。`
+        };
+    }
 };
 const resumeStub = {
     name: 'resume',
     description: '恢复对当前 PR 的自动审查',
-    usage: '@ai-reviewer resume',
+    usage: `${constants/* PRIMARY_BOT_MENTION */.a} resume`,
     needsAck: false,
     minPermission: 'write',
-    execute: notImplemented('resume')
+    async execute(ctx) {
+        await (0,review_state/* setReviewState */.DU)(ctx.prNumber, 'active');
+        return { message: '已恢复当前 PR 的自动审查。' };
+    }
 };
 const configurationStub = {
     name: 'configuration',
     description: '显示当前仓库的审查配置',
-    usage: '@ai-reviewer configuration',
+    usage: `${constants/* PRIMARY_BOT_MENTION */.a} configuration`,
     needsAck: false,
     minPermission: 'read',
-    execute: notImplemented('configuration')
+    async execute(ctx) {
+        const state = await (0,review_state/* getReviewState */.Zr)(ctx.prNumber);
+        const o = ctx.options;
+        const message = `## 当前审查配置
+
+| 配置 | 值 |
+| :--- | :--- |
+| 自动审查状态 | \`${state}\` |
+| disable_review | \`${o.disableReview}\` |
+| disable_release_notes | \`${o.disableReleaseNotes}\` |
+| max_files | \`${o.maxFiles}\` |
+| review_simple_changes | \`${o.reviewSimpleChanges}\` |
+| review_comment_lgtm | \`${o.reviewCommentLGTM}\` |
+| openai_light_model | \`${o.openaiLightModel}\` |
+| openai_heavy_model | \`${o.openaiHeavyModel}\` |
+| openai_concurrency_limit | \`${o.openaiConcurrencyLimit}\` |
+| github_concurrency_limit | \`${o.githubConcurrencyLimit}\` |
+| enable_dependency_analysis | \`${o.enableDependencyAnalysis}\` |
+| max_dependency_files | \`${o.maxDependencyFiles}\` |
+| enable_web_search | \`${o.enableWebSearch}\` |
+| enable_shell | \`${o.enableShell}\` |
+| language | \`${o.language}\` |`;
+        return { message };
+    }
 };
 const ALL_STUBS = [
     reviewStub,
     fullReviewStub,
-    resolveStub,
     summaryStub,
     pauseStub,
     resumeStub,
@@ -9946,12 +10448,14 @@ const ALL_STUBS = [
 
 
 
+
 let bootstrapped = false;
 function bootstrapCommands() {
     if (bootstrapped)
         return;
-    const reg = (0,registry/* getRegistry */.JH)();
+    const reg = (0,registry/* getRegistry */.J)();
     reg.register(helpHandler);
+    reg.register(resolveHandler);
     for (const h of ALL_STUBS) {
         reg.register(h);
     }
@@ -9980,8 +10484,8 @@ __nccwpck_require__.d(__webpack_exports__, {
 var core = __nccwpck_require__(1078);
 // EXTERNAL MODULE: ./node_modules/.pnpm/@actions+github@5.1.1/node_modules/@actions/github/lib/github.js
 var github = __nccwpck_require__(3695);
-// EXTERNAL MODULE: ./lib/commands/bootstrap.js + 2 modules
-var bootstrap = __nccwpck_require__(6806);
+// EXTERNAL MODULE: ./lib/commands/bootstrap.js + 4 modules
+var bootstrap = __nccwpck_require__(5544);
 // EXTERNAL MODULE: ./lib/commands/registry.js
 var commands_registry = __nccwpck_require__(953);
 // EXTERNAL MODULE: ./lib/commands/parser.js
@@ -10117,7 +10621,7 @@ async function tryEarlyReaction(rawReaction) {
         if (actorIsBot)
             return;
         (0,bootstrap/* bootstrapCommands */.K)();
-        const registry = (0,commands_registry/* getRegistry */.JH)();
+        const registry = (0,commands_registry/* getRegistry */.J)();
         const outcome = (0,parser/* parse */.Qc)(comment.body, {
             registeredCommands: registry.getRegisteredNames(),
             botMentions: parser/* DEFAULT_BOT_MENTIONS */.gC
@@ -10152,8 +10656,29 @@ async function tryEarlyReaction(rawReaction) {
 /* harmony export */   "gC": () => (/* binding */ DEFAULT_BOT_MENTIONS)
 /* harmony export */ });
 /* unused harmony exports MAX_COMMAND_LINE_LENGTH, MAX_ARG_LENGTH, MAX_ARGS_COUNT */
-/** 默认支持的 bot mention 别名（小写，已带 @） */
-const DEFAULT_BOT_MENTIONS = ['@ai-reviewer', '@codesentinel'];
+/* harmony import */ var _constants__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(2098);
+/**
+ * commands/parser.ts - 命令解析器
+ *
+ * 输入: 评论原文 + 已注册命令列表
+ * 输出: ParseOutcome，三种情形:
+ *   1. command      — 命中白名单的命令（可能带参数）
+ *   2. conversation — 包含 @bot 但未命中命令（走对话 fallback）
+ *   3. none         — 不包含 @bot 或没有任何有效触发
+ *
+ * 关键规则（见 §5.4 设计文档）:
+ *   - 默认支持 @ai-reviewer 与 @codesentinel 两个 mention 别名
+ *   - bot mention 不区分大小写
+ *   - 命令名不区分大小写（解析后归一化为小写）
+ *   - 复合命令按最长前缀匹配（例: "full review" 先于 "full"）
+ *   - 仅处理第一行的命令体，换行后的内容进入 rawAfter
+ *   - 单条评论只识别第一个命令，其余忽略
+ *   - 参数字符集白名单: [A-Za-z0-9_\-./:=]；出现 shell 元字符 → INVALID_ARGS
+ *   - 长度上限: 命令行 ≤ 512 字符, 单个 arg ≤ 128 字符, arg 数量 ≤ 16
+ */
+
+/** 默认支持的 bot mention 别名（小写，已带 @）。共享自 constants.BOT_MENTIONS。 */
+const DEFAULT_BOT_MENTIONS = [..._constants__WEBPACK_IMPORTED_MODULE_0__/* .BOT_MENTIONS */ .T];
 /** 命令行长度上限 */
 const MAX_COMMAND_LINE_LENGTH = 512;
 /** 单个 arg 长度上限 */
@@ -10322,9 +10847,9 @@ function truncate(s, n) {
 
 "use strict";
 /* harmony export */ __nccwpck_require__.d(__webpack_exports__, {
-/* harmony export */   "JH": () => (/* binding */ getRegistry)
+/* harmony export */   "J": () => (/* binding */ getRegistry)
 /* harmony export */ });
-/* unused harmony exports registerCommand, CommandRegistry */
+/* unused harmony export CommandRegistry */
 class CommandRegistry {
     handlers = new Map();
     /** 规范名 → 注册顺序，help 命令按注册顺序输出 */
@@ -10375,9 +10900,6 @@ class CommandRegistry {
     }
 }
 const globalRegistry = new CommandRegistry();
-function registerCommand(handler) {
-    globalRegistry.register(handler);
-}
 function getRegistry() {
     return globalRegistry;
 }
@@ -11168,6 +11690,37 @@ ${commentBody}`;
 
 /***/ }),
 
+/***/ 2098:
+/***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
+
+"use strict";
+/* harmony export */ __nccwpck_require__.d(__webpack_exports__, {
+/* harmony export */   "T": () => (/* binding */ BOT_MENTIONS),
+/* harmony export */   "a": () => (/* binding */ PRIMARY_BOT_MENTION)
+/* harmony export */ });
+/**
+ * constants.ts - 全局共享常量
+ *
+ * 跨多个领域模块（命令解析 / 对话识别 / 文案展示）复用的常量集中在此，
+ * 避免同一个值在多处硬编码后发生分叉。
+ */
+/**
+ * bot mention 别名（小写，已带 @）。
+ *
+ * 命令解析（parser）与对话追问识别（conversation）共用同一份触发别名——
+ * 二者必须保持一致，否则会出现「命令能触发但对话不认」之类的隐蔽 bug。
+ * 新增/调整别名只改这里一处。
+ */
+const BOT_MENTIONS = ['@ai-reviewer', '@codesentinel'];
+/**
+ * 主 mention 别名，用于面向用户的文案/用法示例（help、命令 usage 等）。
+ * 取 BOT_MENTIONS 的第一个，保证与触发别名同源。
+ */
+const PRIMARY_BOT_MENTION = BOT_MENTIONS[0];
+
+
+/***/ }),
+
 /***/ 6305:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
@@ -11305,11 +11858,11 @@ __nccwpck_require__.r(__webpack_exports__);
 /* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(1078);
 /* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__nccwpck_require__.n(_actions_core__WEBPACK_IMPORTED_MODULE_0__);
 /* harmony import */ var _bot__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(1854);
-/* harmony import */ var _command_handler__WEBPACK_IMPORTED_MODULE_2__ = __nccwpck_require__(1085);
+/* harmony import */ var _command_handler__WEBPACK_IMPORTED_MODULE_2__ = __nccwpck_require__(8280);
 /* harmony import */ var _commands_early_reaction__WEBPACK_IMPORTED_MODULE_3__ = __nccwpck_require__(6360);
 /* harmony import */ var _options__WEBPACK_IMPORTED_MODULE_4__ = __nccwpck_require__(5341);
 /* harmony import */ var _prompts__WEBPACK_IMPORTED_MODULE_6__ = __nccwpck_require__(2379);
-/* harmony import */ var _review__WEBPACK_IMPORTED_MODULE_5__ = __nccwpck_require__(6877);
+/* harmony import */ var _review__WEBPACK_IMPORTED_MODULE_5__ = __nccwpck_require__(8726);
 /**
  * main.ts - GitHub Action 入口文件
  *
@@ -11327,6 +11880,27 @@ __nccwpck_require__.r(__webpack_exports__);
 
 
 
+function createBots(options) {
+    // 初始化轻量模型 Bot（默认 gpt-5.4-nano），用于快速生成文件摘要
+    let lightBot = null;
+    try {
+        lightBot = new _bot__WEBPACK_IMPORTED_MODULE_1__/* .Bot */ .r(options, new _options__WEBPACK_IMPORTED_MODULE_4__/* .OpenAIOptions */ .i0(options.openaiLightModel, options.lightTokenLimits, false, false));
+    }
+    catch (e) {
+        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Skipped: failed to create summary bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`);
+        return null;
+    }
+    // 初始化重量模型 Bot（默认 gpt-5.4-mini），用于深度代码审查和最终摘要生成
+    let heavyBot = null;
+    try {
+        heavyBot = new _bot__WEBPACK_IMPORTED_MODULE_1__/* .Bot */ .r(options, new _options__WEBPACK_IMPORTED_MODULE_4__/* .OpenAIOptions */ .i0(options.openaiHeavyModel, options.heavyTokenLimits, options.enableWebSearch, options.enableShell));
+    }
+    catch (e) {
+        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Skipped: failed to create review bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`);
+        return null;
+    }
+    return { lightBot, heavyBot };
+}
 async function run() {
     // 从 action.yml 中读取所有配置参数，构建 Options 配置对象
     const options = new _options__WEBPACK_IMPORTED_MODULE_4__/* .Options */ .Ei((0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('debug'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('disable_review'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('disable_release_notes'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_files'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('review_simple_changes'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('review_comment_lgtm'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getMultilineInput)('path_filters'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('system_message'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_light_model'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_heavy_model'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_model_temperature'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_retries'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_timeout_ms'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_concurrency_limit'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('github_concurrency_limit'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('openai_base_url'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('language'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_dependency_analysis'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_dependency_files'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_web_search'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_shell'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_lint_tools'), {
@@ -11334,17 +11908,19 @@ async function run() {
         eslint: (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_eslint'),
         biome: (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_biome'),
         tsc: (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_tsc'),
-        prettier: (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_prettier')
+        prettier: (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_prettier'),
+        semgrep: (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput)('enable_semgrep')
     }, 
     // 工具版本覆盖：仅收集用户**显式填写**的值；空字符串视为"用默认版本"
     Object.fromEntries([
         ['eslint', 'eslint_version'],
         ['biome', 'biome_version'],
         ['tsc', 'tsc_version'],
-        ['prettier', 'prettier_version']
+        ['prettier', 'prettier_version'],
+        ['semgrep', 'semgrep_version']
     ]
         .map(([toolName, inputName]) => [toolName, (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)(inputName).trim()])
-        .filter(([, v]) => v.length > 0)), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('command_ack_reaction'));
+        .filter(([, v]) => v.length > 0)), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('semgrep_config'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('command_ack_reaction'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('max_review_comments'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('debug_resolve_inject_failures'));
     // 打印所有配置项，方便调试
     options.print();
     // 评论事件：在 Bot 初始化前尽快给用户评论打 ACK 表情
@@ -11354,38 +11930,26 @@ async function run() {
     }
     // 构建提示词模板对象，包含用户自定义的摘要和发布说明提示词
     const prompts = new _prompts__WEBPACK_IMPORTED_MODULE_6__/* .Prompts */ .j((0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('summarize'), (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('summarize_release_notes'));
-    // 创建两个 Bot 实例：轻量 Bot 用于文件摘要，重量 Bot 用于深度代码审查
-    // 初始化轻量模型 Bot（默认 gpt-5.4-nano），用于快速生成文件摘要
-    let lightBot = null;
-    try {
-        lightBot = new _bot__WEBPACK_IMPORTED_MODULE_1__/* .Bot */ .r(options, new _options__WEBPACK_IMPORTED_MODULE_4__/* .OpenAIOptions */ .i0(options.openaiLightModel, options.lightTokenLimits, false, false));
-    }
-    catch (e) {
-        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Skipped: failed to create summary bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`);
-        return;
-    }
-    // 初始化重量模型 Bot（默认 gpt-5.4-mini），用于深度代码审查和最终摘要生成
-    let heavyBot = null;
-    try {
-        heavyBot = new _bot__WEBPACK_IMPORTED_MODULE_1__/* .Bot */ .r(options, new _options__WEBPACK_IMPORTED_MODULE_4__/* .OpenAIOptions */ .i0(options.openaiHeavyModel, options.heavyTokenLimits, options.enableWebSearch, options.enableShell));
-    }
-    catch (e) {
-        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Skipped: failed to create review bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`);
-        return;
-    }
     try {
         // 根据 GitHub 事件类型分发处理逻辑
         console.log(`GitHub event: ${process.env.GITHUB_EVENT_NAME}`);
         if (process.env.GITHUB_EVENT_NAME === 'pull_request' ||
             process.env.GITHUB_EVENT_NAME === 'pull_request_target') {
+            const bots = createBots(options);
+            if (bots == null)
+                return;
             // PR 事件：执行完整的代码审查流程（摘要 + 逐文件审查）
-            await (0,_review__WEBPACK_IMPORTED_MODULE_5__/* .codeReview */ .z)(lightBot, heavyBot, options, prompts);
+            await (0,_review__WEBPACK_IMPORTED_MODULE_5__/* .codeReview */ .z)(bots.lightBot, bots.heavyBot, options, prompts);
         }
         else if (process.env.GITHUB_EVENT_NAME === 'pull_request_review_comment' ||
             process.env.GITHUB_EVENT_NAME === 'issue_comment') {
             // 评论事件（顶层 issue_comment 或 review comment）
             // 先走命令调度，未命中命令时再透传给既有的对话式追问
-            await (0,_command_handler__WEBPACK_IMPORTED_MODULE_2__/* .handleCommentEvent */ ._)({ heavyBot, lightBot, options, prompts });
+            await (0,_command_handler__WEBPACK_IMPORTED_MODULE_2__/* .handleCommentEvent */ ._)({
+                options,
+                prompts,
+                getReviewBots: () => createBots(options)
+            });
         }
         else {
             (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)('Skipped: this action only works on push events or pull_request');
@@ -13632,8 +14196,17 @@ class Options {
      * installSpec.version 的默认值（即 ai-reviewer pin 的版本）。
      */
     toolVersionOverrides;
+    /**
+     * Semgrep 规则集（来自 Action 输入 `semgrep_config`）。
+     *
+     * 仅当 `enable_semgrep=true` 时生效；默认 `p/default`（OWASP Top 10）。
+     * 详见 action.yml 中 `semgrep_config` 输入说明。
+     */
+    semgrepConfig;
     commandAckReaction; // 命令识别后在用户评论上打的表情（空/off/none 表示禁用）
-    constructor(debug, disableReview, disableReleaseNotes, maxFiles = '0', reviewSimpleChanges = false, reviewCommentLGTM = false, pathFilters = null, systemMessage = '', openaiLightModel = 'gpt-5.4-nano', openaiHeavyModel = 'gpt-5.4-mini', openaiModelTemperature = '0.0', openaiRetries = '3', openaiTimeoutMS = '120000', openaiConcurrencyLimit = '6', githubConcurrencyLimit = '6', apiBaseUrl = 'https://api.openai.com/v1', language = 'en-US', enableDependencyAnalysis = true, maxDependencyFiles = '50', enableWebSearch = true, enableShell = true, enableLintTools = true, toolEnableOverrides = {}, toolVersionOverrides = {}, commandAckReaction = 'eyes') {
+    maxReviewComments; // 单次审查最多发布的行级评论数，按严重级别截断（0 表示不限制）
+    debugResolveInjectFailures; // 测试用：向 batchResolve 注入 N 个假 thread ID
+    constructor(debug, disableReview, disableReleaseNotes, maxFiles = '0', reviewSimpleChanges = false, reviewCommentLGTM = false, pathFilters = null, systemMessage = '', openaiLightModel = 'gpt-5.4-nano', openaiHeavyModel = 'gpt-5.4-mini', openaiModelTemperature = '0.0', openaiRetries = '3', openaiTimeoutMS = '120000', openaiConcurrencyLimit = '6', githubConcurrencyLimit = '6', apiBaseUrl = 'https://api.openai.com/v1', language = 'en-US', enableDependencyAnalysis = true, maxDependencyFiles = '50', enableWebSearch = true, enableShell = true, enableLintTools = true, toolEnableOverrides = {}, toolVersionOverrides = {}, semgrepConfig = 'p/default', commandAckReaction = 'eyes', maxReviewComments = '20', debugResolveInjectFailures = '0') {
         this.debug = debug;
         this.disableReview = disableReview;
         this.disableReleaseNotes = disableReleaseNotes;
@@ -13660,7 +14233,10 @@ class Options {
         this.enableLintTools = enableLintTools;
         this.toolEnableOverrides = toolEnableOverrides;
         this.toolVersionOverrides = toolVersionOverrides;
+        this.semgrepConfig = semgrepConfig;
         this.commandAckReaction = commandAckReaction;
+        this.maxReviewComments = parseInt(maxReviewComments);
+        this.debugResolveInjectFailures = parseInt(debugResolveInjectFailures) || 0;
     }
     /** 打印所有配置项到日志，方便调试 */
     print() {
@@ -13690,7 +14266,9 @@ class Options {
         (0,core.info)(`enable_lint_tools: ${this.enableLintTools}`);
         (0,core.info)(`tool_enable_overrides: ${JSON.stringify(this.toolEnableOverrides)}`);
         (0,core.info)(`tool_version_overrides: ${JSON.stringify(this.toolVersionOverrides)}`);
+        (0,core.info)(`semgrep_config: ${this.semgrepConfig}`);
         (0,core.info)(`command_ack_reaction: ${this.commandAckReaction}`);
+        (0,core.info)(`max_review_comments: ${this.maxReviewComments}`);
     }
     /**
      * 检查文件路径是否通过过滤规则
@@ -14168,8 +14746,9 @@ If the comment contains instructions/requests for you, please comply.
 For example, if the comment is asking you to generate documentation
 comments on the code, in your reply please generate the required code.
 
-In your reply, please make sure to begin the reply by tagging the user
-with "@user".
+Do NOT start your reply with an @mention, a username, or a greeting
+(such as "@user" or "Hi") — the bot prepends the correct @mention of the
+actual commenter automatically. Just provide the reply content directly.
 
 ## Comment format
 
@@ -14280,7 +14859,72 @@ $lint_context
 
 /***/ }),
 
-/***/ 6877:
+/***/ 3337:
+/***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
+
+"use strict";
+/* harmony export */ __nccwpck_require__.d(__webpack_exports__, {
+/* harmony export */   "DU": () => (/* binding */ setReviewState),
+/* harmony export */   "Zr": () => (/* binding */ getReviewState),
+/* harmony export */   "mf": () => (/* binding */ getReviewStateFromBody)
+/* harmony export */ });
+/* unused harmony exports REVIEW_STATE_START_TAG, REVIEW_STATE_END_TAG, writeReviewStateToBody */
+/* harmony import */ var _actions_github__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(3695);
+/* harmony import */ var _actions_github__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__nccwpck_require__.n(_actions_github__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var _octokit__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(2247);
+
+
+const context = _actions_github__WEBPACK_IMPORTED_MODULE_0__.context;
+const repo = context.repo;
+const REVIEW_STATE_START_TAG = '<!-- codesentinel-review-state:start -->';
+const REVIEW_STATE_END_TAG = '<!-- codesentinel-review-state:end -->';
+function getReviewStateFromBody(body = '') {
+    const start = body.indexOf(REVIEW_STATE_START_TAG);
+    const end = body.indexOf(REVIEW_STATE_END_TAG);
+    if (start === -1 || end === -1)
+        return 'active';
+    const block = body.slice(start + REVIEW_STATE_START_TAG.length, end);
+    return block.includes('state: paused') ? 'paused' : 'active';
+}
+function writeReviewStateToBody(body, state) {
+    const start = body.indexOf(REVIEW_STATE_START_TAG);
+    const end = body.indexOf(REVIEW_STATE_END_TAG);
+    const stateBlock = `${REVIEW_STATE_START_TAG}
+state: ${state}
+${REVIEW_STATE_END_TAG}`;
+    if (start !== -1 && end !== -1) {
+        const before = body.slice(0, start).trimEnd();
+        const after = body.slice(end + REVIEW_STATE_END_TAG.length).trim();
+        return [before, stateBlock, after].filter(Boolean).join('\n\n');
+    }
+    return [body.trimEnd(), stateBlock].filter(Boolean).join('\n\n');
+}
+async function getReviewState(pullNumber) {
+    const pr = await _octokit__WEBPACK_IMPORTED_MODULE_1__/* .octokit.pulls.get */ .K.pulls.get({
+        owner: repo.owner,
+        repo: repo.repo,
+        pull_number: pullNumber
+    });
+    return getReviewStateFromBody(pr.data.body ?? '');
+}
+async function setReviewState(pullNumber, state) {
+    const pr = await _octokit__WEBPACK_IMPORTED_MODULE_1__/* .octokit.pulls.get */ .K.pulls.get({
+        owner: repo.owner,
+        repo: repo.repo,
+        pull_number: pullNumber
+    });
+    await _octokit__WEBPACK_IMPORTED_MODULE_1__/* .octokit.pulls.update */ .K.pulls.update({
+        owner: repo.owner,
+        repo: repo.repo,
+        pull_number: pullNumber,
+        body: writeReviewStateToBody(pr.data.body ?? '', state)
+    });
+}
+
+
+/***/ }),
+
+/***/ 8726:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
 "use strict";
@@ -14296,168 +14940,8 @@ var core = __nccwpck_require__(1078);
 var external_child_process_ = __nccwpck_require__(2081);
 // EXTERNAL MODULE: ./node_modules/.pnpm/@actions+github@5.1.1/node_modules/@actions/github/lib/github.js
 var github = __nccwpck_require__(3695);
-;// CONCATENATED MODULE: ./node_modules/.pnpm/yocto-queue@1.2.2/node_modules/yocto-queue/index.js
-/*
-How it works:
-`this.#head` is an instance of `Node` which keeps track of its current value and nests another instance of `Node` that keeps the value that comes after it. When a value is provided to `.enqueue()`, the code needs to iterate through `this.#head`, going deeper and deeper to find the last value. However, iterating through every single item is slow. This problem is solved by saving a reference to the last value as `this.#tail` so that it can reference it to add a new value.
-*/
-
-class Node {
-	value;
-	next;
-
-	constructor(value) {
-		this.value = value;
-	}
-}
-
-class Queue {
-	#head;
-	#tail;
-	#size;
-
-	constructor() {
-		this.clear();
-	}
-
-	enqueue(value) {
-		const node = new Node(value);
-
-		if (this.#head) {
-			this.#tail.next = node;
-			this.#tail = node;
-		} else {
-			this.#head = node;
-			this.#tail = node;
-		}
-
-		this.#size++;
-	}
-
-	dequeue() {
-		const current = this.#head;
-		if (!current) {
-			return;
-		}
-
-		this.#head = this.#head.next;
-		this.#size--;
-
-		// Clean up tail reference when queue becomes empty
-		if (!this.#head) {
-			this.#tail = undefined;
-		}
-
-		return current.value;
-	}
-
-	peek() {
-		if (!this.#head) {
-			return;
-		}
-
-		return this.#head.value;
-
-		// TODO: Node.js 18.
-		// return this.#head?.value;
-	}
-
-	clear() {
-		this.#head = undefined;
-		this.#tail = undefined;
-		this.#size = 0;
-	}
-
-	get size() {
-		return this.#size;
-	}
-
-	* [Symbol.iterator]() {
-		let current = this.#head;
-
-		while (current) {
-			yield current.value;
-			current = current.next;
-		}
-	}
-
-	* drain() {
-		while (this.#head) {
-			yield this.dequeue();
-		}
-	}
-}
-
-;// CONCATENATED MODULE: ./node_modules/.pnpm/p-limit@4.0.0/node_modules/p-limit/index.js
-
-
-function pLimit(concurrency) {
-	if (!((Number.isInteger(concurrency) || concurrency === Number.POSITIVE_INFINITY) && concurrency > 0)) {
-		throw new TypeError('Expected `concurrency` to be a number from 1 and up');
-	}
-
-	const queue = new Queue();
-	let activeCount = 0;
-
-	const next = () => {
-		activeCount--;
-
-		if (queue.size > 0) {
-			queue.dequeue()();
-		}
-	};
-
-	const run = async (fn, resolve, args) => {
-		activeCount++;
-
-		const result = (async () => fn(...args))();
-
-		resolve(result);
-
-		try {
-			await result;
-		} catch {}
-
-		next();
-	};
-
-	const enqueue = (fn, resolve, args) => {
-		queue.enqueue(run.bind(undefined, fn, resolve, args));
-
-		(async () => {
-			// This function needs to wait until the next microtask before comparing
-			// `activeCount` to `concurrency`, because `activeCount` is updated asynchronously
-			// when the run function is dequeued and called. The comparison in the if-statement
-			// needs to happen asynchronously as well to get an up-to-date value for `activeCount`.
-			await Promise.resolve();
-
-			if (activeCount < concurrency && queue.size > 0) {
-				queue.dequeue()();
-			}
-		})();
-	};
-
-	const generator = (fn, ...args) => new Promise(resolve => {
-		enqueue(fn, resolve, args);
-	});
-
-	Object.defineProperties(generator, {
-		activeCount: {
-			get: () => activeCount,
-		},
-		pendingCount: {
-			get: () => queue.size,
-		},
-		clearQueue: {
-			value: () => {
-				queue.clear();
-			},
-		},
-	});
-
-	return generator;
-}
-
+// EXTERNAL MODULE: ./node_modules/.pnpm/p-limit@4.0.0/node_modules/p-limit/index.js + 1 modules
+var p_limit = __nccwpck_require__(9272);
 // EXTERNAL MODULE: ./lib/commenter.js
 var lib_commenter = __nccwpck_require__(4558);
 ;// CONCATENATED MODULE: ./lib/changed-lines.js
@@ -14529,12 +15013,6 @@ function scanPatch(patch) {
     return { addedLines, touchedLines };
 }
 /**
- * 兼容方法：仅返回 added 行 Set（与早期 `extractChangedLinesFromPatch` 等价）
- */
-function extractChangedLinesFromPatch(patch) {
-    return scanPatch(patch).addedLines;
-}
-/**
  * 对 PR 中所有变更文件做一次 walk，得到 PatchScanMap
  *
  * @param filesAndChanges [filename, fileContent, fileDiff, patches] 列表
@@ -14543,18 +15021,6 @@ function buildPatchScans(filesAndChanges) {
     const map = new Map();
     for (const [filename, , fileDiff] of filesAndChanges) {
         map.set(filename, scanPatch(fileDiff));
-    }
-    return map;
-}
-/**
- * 兼容方法：返回 file → addedLines Set 的映射
- *
- * 内部仍走 `buildPatchScans`，仅丢弃 touchedLines 字段。
- */
-function buildChangedLineMap(filesAndChanges) {
-    const map = new Map();
-    for (const [filename, scan] of buildPatchScans(filesAndChanges)) {
-        map.set(filename, scan.addedLines);
     }
     return map;
 }
@@ -14569,6 +15035,8 @@ function toAddedLineMap(scans) {
     return map;
 }
 
+// EXTERNAL MODULE: ./lib/constants.js
+var constants = __nccwpck_require__(2098);
 // EXTERNAL MODULE: ./lib/octokit.js
 var octokit = __nccwpck_require__(2247);
 ;// CONCATENATED MODULE: ./lib/repo-tree.js
@@ -16330,59 +16798,6 @@ function extractVersion(rawVersion) {
     const m = rawVersion.match(/v?(\d+\.\d+\.\d+)/);
     return m?.[1] ?? rawVersion.trim().split('\n')[0];
 }
-/**
- * 构造适配器 detect 失败时的诊断 reason
- *
- * 把 exitCode、cwd、node_modules 是否存在、工具 bin 是否存在、stderr 首行
- * 都带出来，让用户在 PR 摘要表里就能直接判断："是 npm install 没装上"
- * 还是"装了但 cwd 不对"。
- *
- * @param toolName     工具名称（用于探测 node_modules/.bin/<toolName>）
- * @param repoRoot     仓库根目录
- * @param npxResult    `npx --no-install <tool> --version` 的执行结果
- * @param fallbackResult 全局 `<tool> --version` 的执行结果（可选）
- */
-function buildVersionFailureReason(toolName, repoRoot, npxResult, fallbackResult) {
-    if (npxResult.spawnErrorMessage != null)
-        return npxResult.spawnErrorMessage;
-    // 探测 node_modules 是否真的存在以及工具 bin 是否在其中
-    // 用 require('fs') 而非 import 是因为本模块大量使用 child_process，
-    // 加少量 fs 不构成额外耦合
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const fs = __nccwpck_require__(7147);
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const path = __nccwpck_require__(1017);
-    const hasNodeModules = fs.existsSync(path.join(repoRoot, 'node_modules'));
-    const hasBin = fs.existsSync(path.join(repoRoot, 'node_modules', '.bin', toolName));
-    const stderrSnippet = ((npxResult.stderr || fallbackResult?.stderr) ?? '')
-        .split('\n')
-        .find(l => l.trim().length > 0)
-        ?.substring(0, 120) ?? '';
-    const parts = [
-        `${toolName} --version failed`,
-        `exit=${npxResult.exitCode ?? 'null'}`,
-        `cwd=${repoRoot}`,
-        `node_modules=${hasNodeModules ? 'yes' : 'NO'}`,
-        `${toolName}-bin=${hasBin ? 'yes' : 'NO'}`
-    ];
-    if (stderrSnippet.length > 0)
-        parts.push(`stderr="${stderrSnippet}"`);
-    // node_modules 不存在 → 几乎一定是 workflow 漏了 `npm install`
-    // 明确给出可操作建议，避免用户在 cryptic 错误里循环
-    if (!hasNodeModules) {
-        parts.push('HINT: workflow appears to have not run `npm install` before this ' +
-            'action (or checked out the wrong ref). Add `- run: npm install` ' +
-            'before the ai-reviewer step. For pull_request_target events, also ' +
-            "set `actions/checkout@v4` with `ref: \${{ github.event.pull_request.head.sha }}` " +
-            "so the PR branch's devDependencies are installed.");
-    }
-    else if (!hasBin) {
-        parts.push(`HINT: node_modules exists but ${toolName} is missing — ensure ` +
-            `${toolName} is in package.json devDependencies on the checked-out ref, ` +
-            `or add a workflow step to install it (\`npm install --no-save ${toolName}\`).`);
-    }
-    return parts.join('; ');
-}
 
 ;// CONCATENATED MODULE: ./lib/lint/tool-installer.js
 /**
@@ -16427,11 +16842,13 @@ async function ensureToolInstalled(spec) {
     switch (spec.kind) {
         case 'npm':
             return await installViaNpm(spec);
+        case 'pip':
+            return await installViaPip(spec);
         case 'binary':
-            // Phase 2+ 落地：参考 golangci-lint / ruff / semgrep 的发布形态
+            // Phase 2+ 落地：参考 golangci-lint 等纯静态二进制的发布形态
             return {
                 ok: false,
-                reason: "binary install strategy not yet implemented (planned for Phase 2+); " +
+                reason: 'binary install strategy not yet implemented (planned for Phase 2+); ' +
                     'add downloader in tool-installer.ts when needed'
             };
     }
@@ -16473,7 +16890,12 @@ async function installViaNpm(spec) {
         };
     }
     // 3) 跑 npm install
-    (0,core.info)(`lint/installer: installing ${spec.package}@${spec.version} → ${root}`);
+    // version 缺省时不带 `@<range>`，npm 安装 latest。真实 Action 运行里 version 总会
+    // 由 action.yml 的 *_version default 注入；缺省仅出现在未经 Action 的直接调用。
+    const installTarget = spec.version
+        ? `${spec.package}@${spec.version}`
+        : spec.package;
+    (0,core.info)(`lint/installer: installing ${installTarget} → ${root}`);
     const result = await runCommand({
         command: 'npm',
         args: [
@@ -16483,7 +16905,7 @@ async function installViaNpm(spec) {
             '--no-audit',
             '--no-fund',
             '--silent',
-            `${spec.package}@${spec.version}`
+            installTarget
         ],
         cwd: root,
         timeoutMs: INSTALL_TIMEOUT_MS
@@ -16496,14 +16918,17 @@ async function installViaNpm(spec) {
         };
     }
     if (result.exitCode !== 0) {
-        const stderrSnippet = result.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 200) ?? '';
+        const stderrSnippet = result.stderr
+            .split('\n')
+            .find(l => l.trim().length > 0)
+            ?.substring(0, 200) ?? '';
         return {
             ok: false,
-            reason: `npm install ${spec.package}@${spec.version} failed (exit=${result.exitCode}): ${stderrSnippet}`
+            reason: `npm install ${installTarget} failed (exit=${result.exitCode}): ${stderrSnippet}`
         };
     }
     if (!(0,external_fs_.existsSync)(binPath)) {
-        (0,core.warning)(`lint/installer: ${spec.package}@${spec.version} installed but bin not at ${binPath}`);
+        (0,core.warning)(`lint/installer: ${installTarget} installed but bin not at ${binPath}`);
         return {
             ok: false,
             reason: `package installed but bin not at ${binPath} (unexpected layout)`
@@ -16512,9 +16937,155 @@ async function installViaNpm(spec) {
     (0,core.info)(`lint/installer: ${spec.binName} ready at ${binPath}`);
     return { ok: true, binPath };
 }
+/**
+ * 沙箱内 Python 工具的安装目录（与 npm 工具的 node_modules/ 同级）
+ *
+ * 选 `--target=<dir>` 而非 `--user` 是因为：
+ *   - runner 上 `python3 -m pip install --user` 会装到 `~/.local/`，跨 job
+ *     不可控，也不便于 actions/cache 单独缓存一个子目录
+ *   - --target 让所有 Python 工具集中在沙箱里，与 npm 工具同款的缓存模型
+ */
+function getPipInstallDir() {
+    return external_path_.join(getInstallRoot(), 'python-tools');
+}
+/**
+ * 把 npm 风格的 caret/tilde range（`^1.95.0` / `~1.95.0` / `1.95.0`）
+ * 转成 pip 兼容的版本约束。pip 不认识 `^` —— 需要展开成 `>=,<` 形式。
+ *
+ *   ^1.95.0  →  >=1.95.0,<2          （锁主版本）
+ *   ~1.95.0  →  >=1.95.0,<1.96       （锁次版本）
+ *   1.95.0   →  ==1.95.0             （精确版本）
+ *   >=1.95   →  >=1.95               （原样透传，已经是 pip 语法）
+ *   *        →  ""                   （任意版本）
+ */
+function npmRangeToPipSpecifier(range) {
+    const trimmed = range.trim();
+    if (trimmed === '' || trimmed === '*' || trimmed === 'latest')
+        return '';
+    // 已经是 pip 语法（含 ==, >=, <=, >, <, ~=, !=）：原样返回
+    if (/^(==|>=|<=|>|<|~=|!=)/.test(trimmed))
+        return trimmed;
+    const caretMatch = trimmed.match(/^\^(\d+)\.(\d+)\.(\d+)$/);
+    if (caretMatch != null) {
+        const [, major, minor, patch] = caretMatch;
+        return `>=${major}.${minor}.${patch},<${parseInt(major, 10) + 1}`;
+    }
+    const tildeMatch = trimmed.match(/^~(\d+)\.(\d+)\.(\d+)$/);
+    if (tildeMatch != null) {
+        const [, major, minor, patch] = tildeMatch;
+        return `>=${major}.${minor}.${patch},<${major}.${parseInt(minor, 10) + 1}`;
+    }
+    // 形如 `1.95.0` 这种"裸版本号"：pip 视为精确等于
+    if (/^\d+\.\d+\.\d+$/.test(trimmed))
+        return `==${trimmed}`;
+    // 兜底：原样让 pip 自己尝试（如 `>=1.95,<2` 这类复合 range）
+    return trimmed;
+}
+/**
+ * pip 策略：跑 `python3 -m pip install --target=<sandbox>/python-tools <pkg><range>`
+ *
+ * 设计选择：
+ *   - 用 `python3 -m pip` 而非全局 `pip`，避免 Python 2/3 残留环境下歧义
+ *   - 用 `--target` 把所有依赖装到沙箱目录，console script 落在 bin/
+ *   - 不用 venv：venv 启动慢、跨 runner 缓存复杂；--target 同款隔离已足够
+ *   - 不用 pipx：pipx 在 ubuntu-latest 默认装了，但跨 runner 行为不一；
+ *     我们要的是"可预测、可缓存"，pip --target 是最稳的最小公倍数
+ *
+ * 失败诊断：
+ *   - python3 不存在 → spawnError，returned reason 明确指引
+ *   - pip install 失败 → exit 码 + stderr 首行
+ *   - 装完但 bin 缺失 → 防御性 false（罕见，但比静默有效）
+ */
+async function installViaPip(spec) {
+    const startedAt = Date.now();
+    const root = getInstallRoot();
+    const targetDir = getPipInstallDir();
+    const binPath = external_path_.join(targetDir, 'bin', spec.binName);
+    // 1) 缓存命中
+    if ((0,external_fs_.existsSync)(binPath)) {
+        (0,core.info)(`lint/installer[pip]: cache hit for ${spec.binName} → ${binPath}`);
+        return { ok: true, binPath };
+    }
+    // 2) 沙箱目录初始化
+    try {
+        if (!(0,external_fs_.existsSync)(root))
+            (0,external_fs_.mkdirSync)(root, { recursive: true });
+        if (!(0,external_fs_.existsSync)(targetDir))
+            (0,external_fs_.mkdirSync)(targetDir, { recursive: true });
+    }
+    catch (e) {
+        return {
+            ok: false,
+            reason: `failed to initialize pip sandbox dir ${targetDir}: ${e instanceof Error ? e.message : String(e)}`
+        };
+    }
+    // 3) 跑 pip install
+    const pipSpecifier = npmRangeToPipSpecifier(spec.version);
+    const pkgArg = pipSpecifier.length > 0 ? `${spec.package}${pipSpecifier}` : spec.package;
+    (0,core.info)(`lint/installer[pip]: installing ${spec.package} (range "${spec.version}" → pip "${pipSpecifier}") → ${targetDir}`);
+    const result = await runCommand({
+        command: 'python3',
+        args: [
+            '-m',
+            'pip',
+            'install',
+            '--quiet',
+            '--disable-pip-version-check',
+            '--no-warn-script-location',
+            `--target=${targetDir}`,
+            pkgArg
+        ],
+        cwd: root,
+        timeoutMs: INSTALL_TIMEOUT_MS,
+        env: {
+            // 让 Python 在 sys.path 中优先找沙箱目录，确保 console script 能 import 自己
+            PYTHONPATH: targetDir,
+            PYTHONDONTWRITEBYTECODE: '1'
+        }
+    });
+    const elapsed = Date.now() - startedAt;
+    if (result.spawnError) {
+        (0,core.warning)(`lint/installer[pip]: spawn failed after ${elapsed}ms — ${result.spawnErrorMessage ?? ''}`);
+        return {
+            ok: false,
+            reason: result.spawnErrorMessage != null &&
+                result.spawnErrorMessage.includes('python3')
+                ? `python3 not found on runner: ${result.spawnErrorMessage}. ` +
+                    'ubuntu-latest GitHub-hosted runners ship Python 3 by default — ' +
+                    'if you are on a self-hosted runner, install Python 3.8+ first.'
+                : `failed to invoke python3 -m pip: ${result.spawnErrorMessage ?? ''}`
+        };
+    }
+    if (result.exitCode !== 0) {
+        const stderrSnippet = result.stderr
+            .split('\n')
+            .find(l => l.trim().length > 0)
+            ?.substring(0, 200) ?? '';
+        (0,core.warning)(`lint/installer[pip]: pip exit=${result.exitCode} after ${elapsed}ms, stderr_first="${stderrSnippet}", stderr_len=${result.stderr.length}`);
+        return {
+            ok: false,
+            reason: `pip install ${pkgArg} failed (exit=${result.exitCode}): ${stderrSnippet}`
+        };
+    }
+    if (!(0,external_fs_.existsSync)(binPath)) {
+        (0,core.warning)(`lint/installer[pip]: ${spec.package} installed (exit=0, ${elapsed}ms) but console script not at ${binPath}`);
+        return {
+            ok: false,
+            reason: `package ${spec.package} installed but console script not at ${binPath} ` +
+                `(unexpected pip --target layout; check that the package declares a console_scripts entry for "${spec.binName}")`
+        };
+    }
+    (0,core.info)(`lint/installer[pip]: ${spec.binName} ready at ${binPath} after ${elapsed}ms ` +
+        `(stdout_len=${result.stdout.length}, stderr_len=${result.stderr.length})`);
+    return { ok: true, binPath };
+}
 /** 仅供测试使用：返回当前沙箱根目录路径 */
 function _getInstallRootForTest() {
     return getInstallRoot();
+}
+/** 仅供测试使用：返回 pip 工具的安装目标目录 */
+function _getPipInstallDirForTest() {
+    return getPipInstallDir();
 }
 
 ;// CONCATENATED MODULE: ./lib/lint/adapters/eslint.js
@@ -16592,7 +17163,9 @@ function classifyCategory(ruleId) {
     if (PERFORMANCE_RULE_KEYWORDS.some(p => r.includes(p)))
         return 'performance';
     // ESLint 内置 stylistic rules
-    if (r.startsWith('@stylistic/') || r.includes('indent') || r.includes('quotes')) {
+    if (r.startsWith('@stylistic/') ||
+        r.includes('indent') ||
+        r.includes('quotes')) {
         return 'style';
     }
     return 'quality';
@@ -16615,13 +17188,13 @@ class EslintAdapter {
     defaultEnabled = true;
     /**
      * 多策略：声明 ESLint 用 npm 装到沙箱目录
-     * （待审查项目无需把 eslint 写入 devDependencies）
+     * （待审查项目无需把 eslint 写入 devDependencies）。
+     * 不含 version：默认版本由 action.yml 的 `eslint_version` default 提供（见 detect）。
      */
     installSpec = {
         kind: 'npm',
         package: 'eslint',
-        binName: 'eslint',
-        version: '^9.15.0'
+        binName: 'eslint'
     };
     /** detect() 成功后填充：ESLint 版本 */
     resolvedVersion = '';
@@ -16649,7 +17222,10 @@ class EslintAdapter {
             timeoutMs: 10_000
         });
         if (versionResult.spawnError || versionResult.exitCode !== 0) {
-            const stderrSnippet = versionResult.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 120) ?? '';
+            const stderrSnippet = versionResult.stderr
+                .split('\n')
+                .find(l => l.trim().length > 0)
+                ?.substring(0, 120) ?? '';
             return {
                 available: false,
                 reason: `bundled ESLint --version failed: exit=${versionResult.exitCode}; stderr="${stderrSnippet}"`
@@ -16675,7 +17251,12 @@ class EslintAdapter {
             return [];
         // 始终使用项目自带的 eslint config（早期支持的 useProjectConfig=false 已移除，
         // 因 ESLint 9 不内置规则集，关掉项目配置会让扫描必败）
-        const args = ['--format', 'json', '--no-error-on-unmatched-pattern', ...files];
+        const args = [
+            '--format',
+            'json',
+            '--no-error-on-unmatched-pattern',
+            ...files
+        ];
         (0,core.info)(`lint/eslint: scanning ${files.length} files via ${this.resolvedBinPath}`);
         const result = await runCommand({
             command: this.resolvedBinPath,
@@ -16815,12 +17396,14 @@ class BiomeAdapter {
         '.cts'
     ];
     defaultEnabled = true;
-    /** Biome 完全零配置可用（内置 recommended 规则集），无需项目侧任何文件 */
+    /**
+     * Biome 完全零配置可用（内置 recommended 规则集），无需项目侧任何文件。
+     * 不含 version：默认版本由 action.yml 的 `biome_version` default 提供（见 detect）。
+     */
     installSpec = {
         kind: 'npm',
         package: '@biomejs/biome',
-        binName: 'biome',
-        version: '^2.3.0'
+        binName: 'biome'
     };
     resolvedVersion = '';
     resolvedBinPath = '';
@@ -16845,7 +17428,10 @@ class BiomeAdapter {
             timeoutMs: 10_000
         });
         if (versionResult.spawnError || versionResult.exitCode !== 0) {
-            const stderrSnippet = versionResult.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 120) ?? '';
+            const stderrSnippet = versionResult.stderr
+                .split('\n')
+                .find(l => l.trim().length > 0)
+                ?.substring(0, 120) ?? '';
             return {
                 available: false,
                 reason: `bundled Biome --version failed: exit=${versionResult.exitCode}; stderr="${stderrSnippet}"`
@@ -16863,12 +17449,7 @@ class BiomeAdapter {
         // --max-diagnostics=999 防止默认 20 条上限把发现截断
         const result = await runCommand({
             command: this.resolvedBinPath,
-            args: [
-                'check',
-                '--reporter=github',
-                '--max-diagnostics=999',
-                ...files
-            ],
+            args: ['check', '--reporter=github', '--max-diagnostics=999', ...files],
             cwd: repoRoot
         });
         if (result.spawnError) {
@@ -16968,12 +17549,14 @@ class PrettierAdapter {
         '.md'
     ];
     defaultEnabled = false; // 默认关闭：风格类问题信噪比较低
-    /** Prettier 自带默认格式规则，无需项目配置即可工作 */
+    /**
+     * Prettier 自带默认格式规则，无需项目配置即可工作。
+     * 不含 version：默认版本由 action.yml 的 `prettier_version` default 提供（见 detect）。
+     */
     installSpec = {
         kind: 'npm',
         package: 'prettier',
-        binName: 'prettier',
-        version: '^3.0.0'
+        binName: 'prettier'
     };
     resolvedVersion = '';
     resolvedBinPath = '';
@@ -16996,7 +17579,10 @@ class PrettierAdapter {
             timeoutMs: 10_000
         });
         if (versionResult.spawnError || versionResult.exitCode !== 0) {
-            const stderrSnippet = versionResult.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 120) ?? '';
+            const stderrSnippet = versionResult.stderr
+                .split('\n')
+                .find(l => l.trim().length > 0)
+                ?.substring(0, 120) ?? '';
             return {
                 available: false,
                 reason: `bundled Prettier --version failed: exit=${versionResult.exitCode}; stderr="${stderrSnippet}"`
@@ -17041,6 +17627,496 @@ class PrettierAdapter {
             fixable: true,
             category: 'style'
         }));
+    }
+}
+
+;// CONCATENATED MODULE: ./lib/lint/adapters/semgrep.js
+/**
+ * lint/adapters/semgrep.ts — Semgrep SAST 适配器（Phase 4：通用安全扫描）
+ *
+ * Semgrep 是支持 30+ 语言的模式匹配 SAST，与 ESLint/Biome/tsc 互补：
+ *   - ESLint/Biome：JS/TS 风格 + 通用质量规则
+ *   - tsc：类型错误
+ *   - **Semgrep：跨语言安全模式**（SQL 注入、命令注入、硬编码秘密、不安全反序列化…）
+ *
+ * 设计选择：
+ *   - 安装策略 = pip：semgrep 是 Python 工具，没有真正的"单文件预编译二进制"。
+ *     发布形态主要是 `pip install semgrep`（也支持 docker）。我们选 pip，
+ *     落到沙箱 `/tmp/ai-reviewer-lint-tools/python-tools/bin/semgrep`。
+ *   - 默认规则集 = `p/default`：覆盖 OWASP-Top-10 的 Registry 配置。
+ *     **首次运行需联网拉取规则集**（从 semgrep.dev），后续命中本地缓存即离线可用。
+ *     用户可通过 `with: semgrep_config: '<other>'` 覆盖（如 `auto` / `p/security-audit`）。
+ *   - 默认 enable = **false**：与 Prettier 同款保守。Semgrep 冷启动 +15-30s，
+ *     SAST 适合 opt-in 而非默认开启（避免给所有用户加 review 等待时间）。
+ *
+ * 输出解析：`semgrep scan --json` 返回如下结构（截取关键字段）：
+ *   {
+ *     "results": [
+ *       {
+ *         "check_id": "python.lang.security.audit.dangerous-system-call.dangerous-system-call",
+ *         "path": "src/utils.py",
+ *         "start": {"line": 42, "col": 3},
+ *         "end":   {"line": 42, "col": 60},
+ *         "extra": {
+ *           "severity": "ERROR",            // "ERROR" | "WARNING" | "INFO"
+ *           "message": "Detected subprocess call ...",
+ *           "metadata": {"cwe": [...], "owasp": [...]},
+ *           "fix": "...optional..."         // 出现时表示可自动修复
+ *         }
+ *       }
+ *     ],
+ *     "errors": [...],   // 解析失败的文件等（与 results 同级，不进 LintResult）
+ *     "version": "1.95.0"
+ *   }
+ *
+ * Semgrep 的所有 finding 都是安全相关 → category 统一标 `security`，
+ * 这样在 PR 摘要 / 评论里能与 lint findings 形成鲜明对照。
+ */
+
+
+
+
+class SemgrepAdapter {
+    name = 'semgrep';
+    displayName = 'Semgrep';
+    /**
+     * Semgrep 支持 30+ 语言，这里列出本仓库最常见 + Phase 1/2/3 已覆盖的扩展名。
+     * 即使列表里没有的扩展，semgrep 在 `--config=p/default` 下也会智能跳过。
+     */
+    supportedLanguages = [
+        'javascript',
+        'typescript',
+        'python',
+        'go',
+        'ruby',
+        'java',
+        'c',
+        'cpp',
+        'csharp',
+        'php',
+        'rust',
+        'kotlin',
+        'swift',
+        'scala'
+    ];
+    fileExtensions = [
+        '.js',
+        '.jsx',
+        '.mjs',
+        '.cjs',
+        '.ts',
+        '.tsx',
+        '.mts',
+        '.cts',
+        '.py',
+        '.pyi',
+        '.go',
+        '.rb',
+        '.java',
+        '.c',
+        '.h',
+        '.cc',
+        '.cpp',
+        '.cs',
+        '.php',
+        '.rs',
+        '.kt',
+        '.kts',
+        '.swift',
+        '.scala'
+    ];
+    /** 默认关闭：冷启动开销 + 误报噪音 → 让用户显式 opt-in */
+    defaultEnabled = false;
+    installSpec = {
+        kind: 'pip',
+        package: 'semgrep',
+        binName: 'semgrep',
+        version: '^1.95.0'
+    };
+    /** 规则集；构造时可覆盖（来自 Action 输入 `semgrep_config`） */
+    config;
+    resolvedBinPath = '';
+    resolvedVersion = '';
+    /** 沙箱 python-tools 路径，注入到 PYTHONPATH 让 semgrep CLI 能 import 自己 */
+    pythonPath = '';
+    /**
+     * 沙箱 python-tools/bin 路径，必须前置到 PATH —— 否则 `semgrep` 二进制内
+     * `execvp("pysemgrep")` 会按 PATH 查找 Python 后端而找不到，报：
+     *   `Unix_error: No such file or directory execvp pysemgrep`
+     * 这是 semgrep 1.x 以来"OCaml 壳 + Python 后端"架构的固有约束。
+     */
+    binDir = '';
+    constructor(options) {
+        this.config = options?.config ?? 'p/default';
+    }
+    async detect(repoRoot, versionOverride) {
+        const detectStart = Date.now();
+        (0,core.info)(`lint/semgrep[detect]: start repoRoot=${repoRoot}, versionOverride=${versionOverride ?? '(default)'}, config=${this.config}`);
+        // 1) pip 装包
+        const spec = versionOverride != null && versionOverride.length > 0
+            ? { ...this.installSpec, version: versionOverride }
+            : this.installSpec;
+        (0,core.info)(`lint/semgrep[detect]: ensureToolInstalled(kind=pip, package=semgrep, version=${spec.version})`);
+        const install = await ensureToolInstalled(spec);
+        if (!install.ok) {
+            (0,core.warning)(`lint/semgrep[detect]: install failed after ${Date.now() - detectStart}ms — ${install.reason ?? 'unknown'}`);
+            return {
+                available: false,
+                reason: `bundled Semgrep install failed: ${install.reason ?? 'unknown'}`
+            };
+        }
+        this.resolvedBinPath = install.binPath;
+        // pip --target 的 bin 脚本依赖 PYTHONPATH 找到包代码；
+        // 同时 semgrep 二进制内部会 `execvp("pysemgrep")`，所以 bin 目录必须前置到 PATH。
+        // `<sandbox>/python-tools/bin/semgrep` →
+        //   binDir     = `<sandbox>/python-tools/bin`（注入 PATH，execvp pysemgrep 用）
+        //   pythonPath = `<sandbox>/python-tools`  （注入 PYTHONPATH，import 找代码用）
+        // 用 path.dirname 而不是正则剥离 —— 不依赖 binName 字面值是 'semgrep'，
+        // 也兼容 Windows 路径分隔符
+        this.binDir = external_path_.dirname(this.resolvedBinPath);
+        this.pythonPath = external_path_.dirname(this.binDir);
+        (0,core.info)(`lint/semgrep[detect]: install ok — binPath=${this.resolvedBinPath}, pythonPath=${this.pythonPath}, binDir=${this.binDir}`);
+        // 2) `semgrep --version` 校验
+        (0,core.info)(`lint/semgrep[detect]: invoking ${this.resolvedBinPath} --version (with PYTHONPATH + PATH-prepend injected)`);
+        const versionResult = await runCommand({
+            command: this.resolvedBinPath,
+            args: ['--version'],
+            cwd: repoRoot,
+            timeoutMs: 15_000,
+            env: this.buildEnv()
+        });
+        if (versionResult.spawnError || versionResult.exitCode !== 0) {
+            const stderrSnippet = versionResult.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 120) ?? '';
+            (0,core.warning)(`lint/semgrep[detect]: --version failed exit=${versionResult.exitCode}, ` +
+                `spawnError=${versionResult.spawnError}, stderr="${stderrSnippet}"`);
+            return {
+                available: false,
+                reason: `bundled semgrep --version failed: exit=${versionResult.exitCode}; stderr="${stderrSnippet}"`
+            };
+        }
+        const version = extractVersion(versionResult.stdout);
+        this.resolvedVersion = version;
+        // 3) 规则集探测：用 --dump-config 独立验证 `--config=<x>` 真的解析并加载了规则。
+        //    这一步与后续 scan 解耦：即使代码 0 finding，也能从日志里看到"加载了 N 条规则"
+        //    的证据，避免"参数传对了但规则没生效"型的隐性失败。失败仅 warn，不影响 detect 结果。
+        await this.probeRulePack(repoRoot);
+        (0,core.info)(`lint/semgrep[detect]: ready in ${Date.now() - detectStart}ms — bin=${this.resolvedBinPath}, version=${version}, config=${this.config}`);
+        return { available: true, version };
+    }
+    /**
+     * 跑一次 `semgrep scan --validate --config=<this.config>`，验证规则集真的
+     * 能被加载（且 yaml/Registry 解析通过），不实际扫描任何文件。
+     *
+     * 用途：在 GitHub Action 日志里得到"规则真的被 semgrep 加载了"的物证。
+     * 这是排查 `p/default 配置传对了但 0 finding` 类问题最直接的手段。
+     *
+     * 为什么不用 `--dump-config`：semgrep 1.x 把 dump-config 收编到 scan 子命令
+     * 下，但 scan 同时要求 TARGETS 位置参数，没有 TARGETS 时返回 exit=2 + Usage。
+     * 加上 TARGETS 又会触发真扫描（即便有 --dump-config）。`--validate` 没有
+     * 这个矛盾：只加载并校验规则集然后退出。
+     *
+     * 失败容忍：任何错误（联网失败 / yaml 损坏 / --validate 不支持）只 `warning`，
+     * 不阻断 detect。即使探测失败，scan 阶段仍按原计划执行。
+     */
+    async probeRulePack(repoRoot) {
+        const probeStart = Date.now();
+        (0,core.info)(`lint/semgrep[probe]: validating rule pack "${this.config}" via semgrep scan --validate ` +
+            `(no targets needed — just confirms rules can be loaded & parsed)`);
+        const probe = await runCommand({
+            command: this.resolvedBinPath,
+            args: [
+                'scan',
+                '--validate',
+                '--disable-version-check',
+                '--metrics=off',
+                `--config=${this.config}`
+            ],
+            cwd: repoRoot,
+            timeoutMs: 30_000,
+            env: this.buildEnv()
+        });
+        const elapsed = Date.now() - probeStart;
+        if (probe.spawnError || probe.timedOut || probe.exitCode !== 0) {
+            const stderrSnippet = probe.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 300) ?? '';
+            const stdoutSnippet = probe.stdout.split('\n').find(l => l.trim().length > 0)?.substring(0, 200) ?? '';
+            (0,core.warning)(`lint/semgrep[probe]: --validate failed (exit=${probe.exitCode}, timedOut=${probe.timedOut}, ` +
+                `elapsed=${elapsed}ms). Rule pack "${this.config}" may NOT be loaded. ` +
+                `Common causes: (1) config name typo (2) cannot reach semgrep.dev to fetch ` +
+                `the ruleset (3) invalid yaml in a custom config file. ` +
+                `stderr: "${stderrSnippet}"` +
+                (stdoutSnippet.length > 0 ? ` stdout: "${stdoutSnippet}"` : ''));
+            return;
+        }
+        // semgrep --validate 在不同版本里有不同的输出：
+        //   1.x 通常往 stderr 打 "Configuration is valid - found N valid rule(s)" 一类的句子
+        //   有些版本完全静默（exit=0 即代表 valid）
+        //   有些版本在 stdout 把 rule path 打出来
+        // 这里两边都搜，能拿到 N 就给出 N，拿不到就只报"validated successfully"
+        const combined = `${probe.stderr}\n${probe.stdout}`;
+        const ruleCountMatch = combined.match(/(\d+)\s+(?:valid\s+)?rule/i);
+        const ruleCount = ruleCountMatch?.[1] ?? '?';
+        (0,core.info)(`lint/semgrep[probe]: ✅ "${this.config}" validates — ${ruleCount} rule(s) loaded in ${elapsed}ms` +
+            (ruleCount === '?'
+                ? ' (semgrep didn\'t print a rule count; exit=0 still proves config loaded)'
+                : ''));
+        // 把 stderr 头几行也打出来 —— semgrep 在 validate 时偶尔会附带规则来源 / 警告
+        // （如 "loaded rules from https://semgrep.dev/c/p/default" 或弃用提示），
+        // 对诊断"规则到底从哪来"很有价值
+        const stderrLines = probe.stderr
+            .split('\n')
+            .map(l => l.trim())
+            .filter(l => l.length > 0)
+            .slice(0, 5)
+            .map(l => l.substring(0, 200));
+        if (stderrLines.length > 0) {
+            (0,core.info)(`lint/semgrep[probe]: validate stderr (first 5 non-empty lines): ${stderrLines.join(' | ')}`);
+        }
+    }
+    async scan(files, repoRoot) {
+        if (this.resolvedBinPath === '') {
+            // 防御：orchestrator 保证 detect 成功才会调 scan；这里仅锁住"绕过 orchestrator
+            // 直接 new SemgrepAdapter().scan(...)"的误用，避免给 runCommand 传空 command
+            (0,core.warning)('lint/semgrep[scan]: called before successful detect() — bin path empty, skipping');
+            return [];
+        }
+        if (files.length === 0) {
+            (0,core.info)('lint/semgrep[scan]: targets is empty (no matching file extensions in changed set) — skip');
+            return [];
+        }
+        const scanStart = Date.now();
+        (0,core.info)(`lint/semgrep[scan]: start config=${this.config}, files=${files.length} — sample: ${files
+            .slice(0, 5)
+            .join(', ')}${files.length > 5 ? ', ...' : ''}`);
+        const args = [
+            'scan',
+            '--json',
+            '--quiet',
+            '--disable-version-check',
+            '--metrics=off',
+            `--config=${this.config}`,
+            ...files
+        ];
+        (0,core.info)(`lint/semgrep[scan]: invoking ${this.resolvedBinPath} ${args
+            .slice(0, 6)
+            .join(' ')} ... [${files.length} file arg(s)]`);
+        const result = await runCommand({
+            command: this.resolvedBinPath,
+            args,
+            cwd: repoRoot,
+            timeoutMs: 120_000,
+            env: this.buildEnv()
+        });
+        const elapsed = Date.now() - scanStart;
+        const stderrFirstLine = result.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 200) ?? '';
+        (0,core.info)(`lint/semgrep[scan]: returned in ${elapsed}ms — exit=${result.exitCode}, ` +
+            `timedOut=${result.timedOut}, spawnError=${result.spawnError}, ` +
+            `stdout_len=${result.stdout.length}, stderr_len=${result.stderr.length}` +
+            (stderrFirstLine.length > 0 ? `, stderr_first="${stderrFirstLine}"` : ''));
+        if (result.spawnError) {
+            (0,core.warning)(`lint/semgrep[scan]: spawn failed — ${result.spawnErrorMessage ?? ''}. ` +
+                `This usually means the semgrep console script lost its PYTHONPATH or python3 disappeared.`);
+            return [];
+        }
+        if (result.timedOut) {
+            (0,core.warning)(`lint/semgrep[scan]: timed out after ${elapsed}ms (limit 120000ms). ` +
+                `Reduce file count or switch to a smaller --config (e.g. p/security-audit).`);
+            return [];
+        }
+        // semgrep exit:
+        //   0 = no findings
+        //   1 = findings present（不是失败，按 lint 行业惯例）
+        //   2 = misconfig / 真正的错误（含 registry 拉规则失败）
+        // 仅当 stdout 无可解析 JSON 时才视为失败
+        const parsed = parseJsonSafe(result.stdout, 'semgrep');
+        if (parsed == null) {
+            (0,core.warning)(`lint/semgrep[scan]: no parseable JSON in stdout (exit=${result.exitCode}). ` +
+                `stderr first line: "${stderrFirstLine}". ` +
+                `Common causes: (a) semgrep can't reach semgrep.dev to fetch "${this.config}" rules — ` +
+                `try a self-contained config like p/ci or pre-cache rules; ` +
+                `(b) semgrep printed Python traceback to stderr; ` +
+                `(c) semgrep CLI was killed by signal. Raw stdout first 500 chars: "${result.stdout.substring(0, 500)}"`);
+            return [];
+        }
+        const rawCount = parsed.results?.length ?? 0;
+        const errCount = parsed.errors?.length ?? 0;
+        if (errCount > 0) {
+            // semgrep 把"无法解析的文件 / 规则加载错误"放在 errors 数组里 —— 重要诊断信号
+            const firstErr = JSON.stringify(parsed.errors?.[0] ?? {}).substring(0, 300);
+            (0,core.warning)(`lint/semgrep[scan]: ${errCount} semgrep-level error(s) reported (this is separate from "findings"); ` +
+                `first: ${firstErr}`);
+        }
+        // 扫描覆盖面：semgrep 自己上报"实际扫了哪些文件 / 跳过了哪些"。0 finding 多半
+        // 不是规则没生效，而是文件被 skipped（语言不匹配 / 大文件 / 二进制等）—— 把它显式打出来。
+        const scannedPaths = parsed.paths?.scanned ?? [];
+        const skippedPaths = parsed.paths?.skipped ?? [];
+        (0,core.info)(`lint/semgrep[scan]: coverage — scanned=${scannedPaths.length}/${files.length} input file(s), ` +
+            `skipped=${skippedPaths.length}`);
+        if (scannedPaths.length > 0) {
+            (0,core.info)(`lint/semgrep[scan]: scanned files: ${scannedPaths.slice(0, 5).join(', ')}${scannedPaths.length > 5 ? ', ...' : ''}`);
+        }
+        if (skippedPaths.length > 0) {
+            // 只取前 3 条，附带 reason；常见 reason: "too_big" / "wrong_language" / "always_skipped"
+            const skipSample = skippedPaths
+                .slice(0, 3)
+                .map(s => `${s.path ?? '?'}(${s.reason ?? '?'})`)
+                .join(', ');
+            (0,core.info)(`lint/semgrep[scan]: skipped sample: ${skipSample}`);
+        }
+        const findings = [];
+        for (const r of parsed.results ?? []) {
+            // semgrep 报告路径默认是相对 cwd 的；少数模式下可能给绝对路径
+            let relFile = r.path;
+            if (relFile.startsWith(repoRoot)) {
+                relFile = relFile.substring(repoRoot.length).replace(/^[/\\]/, '');
+            }
+            // 把 CWE / OWASP 分类拼到 message 末尾，帮 LLM 在评论里准确说出漏洞分类
+            // （Semgrep 默认 message 通常只描述"做了什么"，不带"属于哪类漏洞"）
+            const baseMessage = r.extra?.message?.trim() ?? '';
+            const tags = formatVulnTags(r.extra?.metadata);
+            const enrichedMessage = tags.length > 0 ? `${baseMessage}\n${tags}` : baseMessage;
+            const fixText = typeof r.extra?.fix === 'string' && r.extra.fix.length > 0
+                ? r.extra.fix.trim()
+                : undefined;
+            findings.push({
+                tool: this.displayName,
+                toolVersion: this.resolvedVersion,
+                file: relFile,
+                line: r.start.line,
+                column: r.start.col,
+                endLine: r.end.line,
+                endColumn: r.end.col,
+                severity: mapSemgrepSeverity(r.extra?.severity),
+                ruleId: r.check_id,
+                message: enrichedMessage,
+                // 把 semgrep 自带的自动修复文本透传给 LLM —— 评论里 AI 可以直接基于此
+                // 生成 diff 修复建议而不是凭空构造
+                suggestion: fixText,
+                fixable: fixText != null,
+                category: 'security'
+            });
+        }
+        if (rawCount === 0) {
+            // 0 findings 本身不是错误（代码可能真的没问题），但在测试场景里多半是"规则没匹配上"
+            (0,core.info)(`lint/semgrep[scan]: 0 findings. ` +
+                `If you expected findings on these files, check: ` +
+                `(1) does "${this.config}" cover the languages of the scanned files? ` +
+                `(2) is the project behind a corporate firewall blocking semgrep.dev? ` +
+                `(3) did semgrep silently skip the files (look at "scanned/skipped" log line above)`);
+        }
+        else {
+            // finding 的 check_id 前缀分布 —— 用来验证规则来源（如 `javascript.lang.security.*`
+            // 多半来自 p/default；陌生前缀提示 config 被指向了其他规则集）
+            const findingPrefixes = new Map();
+            const findingSeverities = new Map();
+            for (const f of findings) {
+                const prefix = f.ruleId.split('.').slice(0, 2).join('.');
+                findingPrefixes.set(prefix, (findingPrefixes.get(prefix) ?? 0) + 1);
+                findingSeverities.set(f.severity, (findingSeverities.get(f.severity) ?? 0) + 1);
+            }
+            const fmtMap = (m) => [...m.entries()]
+                .sort((a, b) => b[1] - a[1])
+                .map(([k, v]) => `${k}:${v}`)
+                .join(', ');
+            (0,core.info)(`lint/semgrep[scan]: finding rule_id prefix breakdown = { ${fmtMap(findingPrefixes)} }`);
+            (0,core.info)(`lint/semgrep[scan]: finding severity breakdown = { ${fmtMap(findingSeverities)} }`);
+            (0,core.info)(`lint/semgrep[scan]: first 3 finding rule_ids: ${findings
+                .slice(0, 3)
+                .map(f => f.ruleId)
+                .join(' | ')}`);
+        }
+        (0,core.info)(`lint/semgrep[scan]: parsed ${findings.length} finding(s) from ${rawCount} raw result(s) ` +
+            `across ${files.length} input file(s) in ${elapsed}ms`);
+        return findings;
+    }
+    /**
+     * 构造调用 semgrep 时的环境变量。
+     *
+     * 必须同时注入：
+     *   - PYTHONPATH（**前置**到用户原有 PYTHONPATH，不整体覆盖）：让 pip --target
+     *     装的 semgrep 包能被 Python import；保留用户原值便于自托管 runner 的
+     *     自定义 Python 配置
+     *   - PATH（前置 binDir）：semgrep OCaml 二进制内部 `execvp("pysemgrep")` /
+     *     `execvp("osemgrep")` 都会按 PATH 查找子进程；如果 binDir 不在 PATH，
+     *     会直接报 `Unix_error: No such file or directory execvp pysemgrep`
+     *
+     * 也关掉 metrics + version-check 的子流程（这些子流程偶尔也走 execvp）。
+     */
+    buildEnv() {
+        const sep = process.platform === 'win32' ? ';' : ':';
+        const existingPythonPath = process.env.PYTHONPATH ?? '';
+        const existingPath = process.env.PATH ?? '';
+        return {
+            // 前置：沙箱优先，但保留用户的 PYTHONPATH（如有）
+            PYTHONPATH: existingPythonPath.length > 0
+                ? `${this.pythonPath}${sep}${existingPythonPath}`
+                : this.pythonPath,
+            PYTHONDONTWRITEBYTECODE: '1',
+            // 前置：沙箱 bin 优先，保证 execvp pysemgrep 能找到子进程
+            PATH: `${this.binDir}${sep}${existingPath}`,
+            // 关掉 metrics 上报，避免子进程意外触发额外 execvp
+            SEMGREP_SEND_METRICS: 'off'
+        };
+    }
+}
+/**
+ * 从 semgrep finding 的 metadata 中提取 CWE / OWASP 标签，格式化为
+ * 单行 `[CWE-95, OWASP A03:2021]` 形式，拼到 message 后供 LLM 消费。
+ *
+ * 单字符串 / 字符串数组两种格式都支持。空时返回空串。
+ */
+function formatVulnTags(metadata) {
+    if (metadata == null)
+        return '';
+    const parts = [];
+    const cwe = toStringArray(metadata.cwe);
+    for (const c of cwe) {
+        // CWE 完整字符串通常是 "CWE-95: Improper Neutralization..." —— 只取冒号前的 ID
+        const id = c.split(':')[0].trim();
+        if (id.length > 0)
+            parts.push(id);
+    }
+    const owasp = toStringArray(metadata.owasp);
+    for (const o of owasp) {
+        // OWASP 字符串通常是 "A03:2021 - Injection"；不去 colon，整段保留更可读
+        const trimmed = o.trim();
+        if (trimmed.length > 0)
+            parts.push(`OWASP ${trimmed}`);
+    }
+    if (parts.length === 0)
+        return '';
+    return `[${parts.join(', ')}]`;
+}
+/** 把 string | string[] | undefined 统一成 string[] */
+function toStringArray(v) {
+    if (typeof v === 'string')
+        return [v];
+    if (Array.isArray(v))
+        return v.filter((x) => typeof x === 'string');
+    return [];
+}
+/**
+ * 把 semgrep 大写 severity 标准化到 LintResult 的小写枚举
+ *
+ *   'CRITICAL'/'HIGH' → 'error'   （semgrep 2.x+ 引入；旧版本不发，加上向后兼容也无害）
+ *   'ERROR'           → 'error'
+ *   'WARNING'/'MEDIUM'→ 'warning'
+ *   'INFO'/'LOW'      → 'info'
+ *   缺失 / 未知       → 'warning'（保守兜底）
+ */
+function mapSemgrepSeverity(raw) {
+    switch ((raw ?? '').toUpperCase()) {
+        case 'CRITICAL':
+        case 'HIGH':
+        case 'ERROR':
+            return 'error';
+        case 'INFO':
+        case 'LOW':
+            return 'info';
+        case 'WARNING':
+        case 'MEDIUM':
+            return 'warning';
+        default:
+            return 'warning';
     }
 }
 
@@ -17108,11 +18184,13 @@ class TscAdapter {
      * 没装 typescript / 没 tsconfig.json 时会优雅降级（detect 返回 unavailable）。
      */
     defaultEnabled = true;
+    /**
+     * 不含 version：默认版本由 action.yml 的 `tsc_version` default 提供（见 detect）。
+     */
     installSpec = {
         kind: 'npm',
         package: 'typescript',
-        binName: 'tsc',
-        version: '^5.6.0'
+        binName: 'tsc'
     };
     resolvedVersion = '';
     resolvedBinPath = '';
@@ -17137,7 +18215,10 @@ class TscAdapter {
             timeoutMs: 10_000
         });
         if (versionResult.spawnError || versionResult.exitCode !== 0) {
-            const stderrSnippet = versionResult.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 120) ?? '';
+            const stderrSnippet = versionResult.stderr
+                .split('\n')
+                .find(l => l.trim().length > 0)
+                ?.substring(0, 120) ?? '';
             return {
                 available: false,
                 reason: `bundled tsc --version failed: exit=${versionResult.exitCode}; stderr="${stderrSnippet}"`
@@ -17225,16 +18306,6 @@ class TscAdapter {
 /** 变更行附近的"上下文容忍范围"。单位：行 */
 const DEFAULT_CONTEXT_TOLERANCE = 3;
 /**
- * 判断行号是否在变更窗口内（变更行 ± tolerance）
- */
-function isLineInChangedWindow(line, changedLines, tolerance = DEFAULT_CONTEXT_TOLERANCE) {
-    for (const changed of changedLines) {
-        if (Math.abs(line - changed) <= tolerance)
-            return true;
-    }
-    return false;
-}
-/**
  * 过滤 lint 结果：仅保留变更行 ± tolerance 范围内的问题
  *
  * 同时会丢弃文件不在 changedLineMap 中的结果（通常意味着工具扫描了
@@ -17307,7 +18378,8 @@ function deduplicateResults(results) {
         // 故意不含 column —— 详见函数顶 doc comment
         const key = `${r.file}:${r.line}:${ruleKey}:${msgKey}`;
         const existing = map.get(key);
-        if (existing == null || SEV_RANK[r.severity] > SEV_RANK[existing.severity]) {
+        if (existing == null ||
+            SEV_RANK[r.severity] > SEV_RANK[existing.severity]) {
             map.set(key, r);
         }
     }
@@ -17407,13 +18479,15 @@ function collapseAdjacentFindings(results) {
 
 
 
+
 /** 内置适配器注册表 */
-function defaultAdapters() {
+function defaultAdapters(options) {
     return [
         new EslintAdapter(),
         new BiomeAdapter(),
         new TscAdapter(),
-        new PrettierAdapter()
+        new PrettierAdapter(),
+        new SemgrepAdapter({ config: options.semgrepConfig })
     ];
 }
 /**
@@ -17425,16 +18499,21 @@ async function runLintTools(options, adaptersOverride) {
         (0,core.info)('lint: orchestrator disabled, skipping');
         return emptyReport(startedAt);
     }
-    const adapters = adaptersOverride ?? defaultAdapters();
+    const adapters = adaptersOverride ?? defaultAdapters(options);
     const overrides = options.toolEnableOverrides ?? {};
     // 1) 选出"用户启用"的适配器：Action input override 优先，缺失时回退到 adapter.defaultEnabled
-    const enabledAdapters = adapters.filter(a => {
+    //    同时给出每个适配器的启用判定细节，便于排查"semgrep 没跑起来到底是 default-false 还是 override-false"
+    const enabledAdapters = [];
+    const decisions = [];
+    for (const a of adapters) {
         const override = overrides[a.name];
-        return override === undefined ? a.defaultEnabled : override;
-    });
-    (0,core.info)(`lint: ${enabledAdapters.length}/${adapters.length} adapters enabled by Action inputs: [${enabledAdapters
-        .map(a => a.name)
-        .join(', ')}]`);
+        const enabled = override === undefined ? a.defaultEnabled : override;
+        const src = override === undefined ? `default=${a.defaultEnabled}` : `override=${override}`;
+        decisions.push(`${a.name}:${enabled ? 'on' : 'off'}(${src})`);
+        if (enabled)
+            enabledAdapters.push(a);
+    }
+    (0,core.info)(`lint: ${enabledAdapters.length}/${adapters.length} adapters enabled — [${decisions.join(', ')}]`);
     if (enabledAdapters.length === 0) {
         return emptyReport(startedAt);
     }
@@ -17770,6 +18849,147 @@ function truncate(s, max) {
 
 
 
+;// CONCATENATED MODULE: ./lib/noise-control.js
+/**
+ * noise-control.ts - 评论噪音控制（迭代二 · 成员 D · 2.5）
+ *
+ * 避免 Bot 评论过多干扰开发者，提供：
+ *
+ *   1. 同类评论合并去重  —— 相同文件 / 相同类别的问题合并为一条
+ *   2. 单次评论数量上限  —— 默认 N=20，按优先级截断
+ *   3. 行级严重级别徽标  —— 每条行级评论顶部直接标注级别（severityBadge）
+ *
+ * 对外提供（供成员 C 在审查完成后调用，见拆分文档 §5 接口契约）：
+ *   - prepareFindings(findings, options)   去重 + 排序 + 截断后的结构化结果
+ *   - severityBadge(severity)              行级评论的严重级别徽标
+ *   - classifyFindingSeverity(text)        从评论文本启发式推断严重级别
+ *
+ * 注：早期的「低优先级折叠 / PR 顶部汇总评论」（formatComments / buildSummaryBody /
+ * postSummaryComment）已随「级别分散到各评论」改造移除——级别现以徽标形式直接置于
+ * 每条行级评论顶部。
+ */
+/** 严重级别排序权重（数值越大优先级越高） */
+const SEVERITY_RANK = {
+    critical: 4,
+    major: 3,
+    minor: 2,
+    nit: 1,
+    info: 0
+};
+/** 严重级别的展示样式（emoji + 中文标签 + GitHub 警示框类型 + 一句话说明） */
+const SEVERITY_DISPLAY = {
+    critical: {
+        emoji: '🔴',
+        label: '严重',
+        alert: 'CAUTION',
+        hint: '需优先修复'
+    },
+    major: { emoji: '🟠', label: '重要', alert: 'WARNING', hint: '建议尽快处理' },
+    minor: { emoji: '🟡', label: '次要', alert: 'NOTE', hint: '可酌情优化' },
+    nit: { emoji: '⚪', label: '吹毛求疵', alert: 'TIP', hint: '锦上添花' },
+    info: { emoji: 'ℹ️', label: '提示', alert: 'NOTE', hint: '' }
+};
+/**
+ * 行级评论的严重级别徽标。
+ *
+ * 用 GitHub 警示框（`> [!CAUTION]` 等）渲染成带颜色的标题块，配合 emoji + 中文标签，
+ * 让每条行级评论一眼能看出严重级别（取代原先在 PR 顶部单独发的汇总评论）。
+ */
+function severityBadge(severity) {
+    const { emoji, label, alert, hint } = SEVERITY_DISPLAY[severity];
+    const tail = hint ? ` — ${hint}` : '';
+    return `> [!${alert}]\n> ${emoji} **${label}**${tail}`;
+}
+const DEFAULT_MAX_COMMENTS = 20;
+/**
+ * 同类评论合并去重。
+ *
+ * 合并键 = 文件路径 + 类别 + 归一化标题（无标题则取正文首行）。
+ * 命中同一键的发现合并为一条，保留**最高严重级别**与首条正文，
+ * 并在标题后标注合并数量。
+ */
+function dedupeFindings(findings) {
+    const map = new Map();
+    const order = [];
+    for (const f of findings) {
+        const titleKey = (f.title ?? firstLine(f.body)).trim().toLowerCase();
+        const key = `${f.path}|${f.category ?? ''}|${titleKey}`;
+        const existing = map.get(key);
+        if (existing) {
+            existing.count++;
+            // 保留更高的严重级别
+            if (SEVERITY_RANK[f.severity] > SEVERITY_RANK[existing.finding.severity]) {
+                existing.finding = { ...existing.finding, severity: f.severity };
+            }
+        }
+        else {
+            map.set(key, { finding: { ...f }, count: 1 });
+            order.push(key);
+        }
+    }
+    return order.map(key => {
+        const { finding, count } = map.get(key);
+        if (count > 1) {
+            const base = finding.title ?? firstLine(finding.body);
+            return { ...finding, title: `${base}（合并 ${count} 处同类问题）` };
+        }
+        return finding;
+    });
+}
+/**
+ * 去重 + 按严重级别排序 + 截断到上限。
+ * 返回结构化结果，供调用方逐条发布行级评论。
+ *
+ * @returns kept: 保留的发现（已排序）；truncated: 被截断丢弃的数量
+ */
+function prepareFindings(findings, options = {}) {
+    const maxComments = options.maxComments ?? DEFAULT_MAX_COMMENTS;
+    const deduped = options.dedupe === false ? [...findings] : dedupeFindings(findings);
+    // 按严重级别降序稳定排序
+    const sorted = deduped
+        .map((f, i) => ({ f, i }))
+        .sort((a, b) => {
+        const diff = SEVERITY_RANK[b.f.severity] - SEVERITY_RANK[a.f.severity];
+        return diff !== 0 ? diff : a.i - b.i;
+    })
+        .map(x => x.f);
+    if (maxComments > 0 && sorted.length > maxComments) {
+        return {
+            kept: sorted.slice(0, maxComments),
+            truncated: sorted.length - maxComments
+        };
+    }
+    return { kept: sorted, truncated: 0 };
+}
+function firstLine(text) {
+    const line = (text ?? '').split('\n').find(l => l.trim().length > 0);
+    return (line ?? '').trim();
+}
+/**
+ * 启发式严重级别分类：从一条审查评论的文本推断严重级别。
+ *
+ * 审查模型当前并不直接输出级别，这里用关键词（中英）做轻量分类，
+ * 用于噪音控制的排序 / 截断 / 折叠。按"高 → 低"顺序匹配，命中即返回。
+ * 无明显信号时归为 minor（既不抢占高优先级，也不会被当作纯提示丢弃）。
+ */
+function classifyFindingSeverity(text) {
+    const t = (text ?? '').toLowerCase();
+    const has = (...kw) => kw.some(k => t.includes(k));
+    if (has('security', 'vulnerab', 'injection', 'xss', 'csrf', 'rce', 'redos', 'secret', 'credential', 'hardcoded', 'api key', '密钥', '凭证', '注入', '漏洞', '安全')) {
+        return 'critical';
+    }
+    if (has('crash', 'null pointer', 'race condition', 'data loss', 'memory leak', 'leak', 'off-by-one', 'off by one', 'incorrect', 'unhandled', 'exception', 'await', 'deadlock', '错误', '正确性', '缺陷', '异常', '泄露', '崩溃')) {
+        return 'major';
+    }
+    if (has('nit', 'typo', 'formatting', 'indentation', 'naming', '拼写', '格式', '命名')) {
+        return 'nit';
+    }
+    if (has('consider', 'recommend', 'prefer', 'readability', 'document', '建议', '可读性', '推荐')) {
+        return 'minor';
+    }
+    return 'minor';
+}
+
 // EXTERNAL MODULE: ./lib/inputs.js
 var lib_inputs = __nccwpck_require__(6305);
 ;// CONCATENATED MODULE: ./lib/review-dedup.js
@@ -18041,6 +19261,8 @@ function ensureFixSuggestionHeaders(commentBody) {
     return out.join('\n');
 }
 
+// EXTERNAL MODULE: ./lib/review-state.js
+var review_state = __nccwpck_require__(3337);
 // EXTERNAL MODULE: ./lib/tokenizer.js
 var tokenizer = __nccwpck_require__(7525);
 ;// CONCATENATED MODULE: ./lib/review.js
@@ -18073,13 +19295,16 @@ var tokenizer = __nccwpck_require__(7525);
 
 
 
+
+
+
 // eslint-disable-next-line camelcase
 const review_context = github.context;
 /** 跨文件上下文注入的 token 上限 */
 const MAX_CROSS_FILE_CONTEXT_TOKENS = 1500;
 const review_repo = review_context.repo;
 /** 在 PR 描述中添加此关键词可跳过 AI 审查 */
-const ignoreKeyword = '@ai-reviewer: ignore';
+const ignoreKeyword = `${constants/* PRIMARY_BOT_MENTION */.a}: ignore`;
 /**
  * 代码审查主函数
  *
@@ -18088,19 +19313,38 @@ const ignoreKeyword = '@ai-reviewer: ignore';
  * @param options - 全局配置选项
  * @param prompts - 提示词模板
  */
-const codeReview = async (lightBot, heavyBot, options, prompts) => {
+const codeReview = async (lightBot, heavyBot, options, prompts, runOptions = {}) => {
     const commenter = new lib_commenter/* Commenter */.Es();
+    const fromCommand = runOptions.source === 'command';
+    const reviewMode = runOptions.mode ?? 'incremental';
     // 初始化并发控制器：分别限制 OpenAI 和 GitHub API 的并发数
-    const openaiConcurrencyLimit = pLimit(options.openaiConcurrencyLimit);
-    const githubConcurrencyLimit = pLimit(options.githubConcurrencyLimit);
+    const openaiConcurrencyLimit = (0,p_limit/* default */.Z)(options.openaiConcurrencyLimit);
+    const githubConcurrencyLimit = (0,p_limit/* default */.Z)(options.githubConcurrencyLimit);
     // ==================== 事件验证 ====================
     if (review_context.eventName !== 'pull_request' &&
-        review_context.eventName !== 'pull_request_target') {
+        review_context.eventName !== 'pull_request_target' &&
+        !fromCommand) {
         (0,core.warning)(`Skipped: current event is ${review_context.eventName}, only support pull_request event`);
         return;
     }
+    if (review_context.payload.pull_request == null && fromCommand) {
+        const issueNumber = review_context.payload.issue?.number;
+        if (issueNumber != null) {
+            const pr = await octokit/* octokit.pulls.get */.K.pulls.get({
+                owner: review_repo.owner,
+                repo: review_repo.repo,
+                pull_number: issueNumber
+            });
+            review_context.payload.pull_request = pr.data;
+        }
+    }
     if (review_context.payload.pull_request == null) {
         (0,core.warning)('Skipped: context.payload.pull_request is null');
+        return;
+    }
+    if (!fromCommand &&
+        (0,review_state/* getReviewStateFromBody */.mf)(review_context.payload.pull_request.body ?? '') === 'paused') {
+        (0,core.info)('Skipped: review automation is paused for this PR');
         return;
     }
     // ==================== 填充 PR 基本信息 ====================
@@ -18137,7 +19381,11 @@ const codeReview = async (lightBot, heavyBot, options, prompts) => {
         highestReviewedCommitId = commenter.getHighestReviewedCommitId(allCommitIds, commenter.getReviewedCommitIds(existingCommitIdsBlock));
     }
     // 确定 diff 的起始 commit
-    if (highestReviewedCommitId === '' ||
+    if (reviewMode === 'full') {
+        (0,core.info)(`Will review full diff from the base commit: ${review_context.payload.pull_request.base.sha}`);
+        highestReviewedCommitId = review_context.payload.pull_request.base.sha;
+    }
+    else if (highestReviewedCommitId === '' ||
         highestReviewedCommitId === review_context.payload.pull_request.head.sha) {
         // 首次审查或已是最新：从 base 分支开始
         (0,core.info)(`Will review from the base commit: ${review_context.payload.pull_request.base.sha}`);
@@ -18205,24 +19453,29 @@ const codeReview = async (lightBot, heavyBot, options, prompts) => {
             (0,core.warning)('Skipped: context.payload.pull_request is null');
             return null;
         }
-        try {
-            const contents = await octokit/* octokit.repos.getContent */.K.repos.getContent({
-                owner: review_repo.owner,
-                repo: review_repo.repo,
-                path: file.filename,
-                ref: review_context.payload.pull_request.base.sha
-            });
-            if (contents.data != null) {
-                if (!Array.isArray(contents.data)) {
-                    if (contents.data.type === 'file' &&
-                        contents.data.content != null) {
-                        fileContent = Buffer.from(contents.data.content, 'base64').toString();
+        if (file.status === 'added') {
+            (0,core.info)(`skip base content fetch for new file: ${file.filename}`);
+        }
+        else {
+            try {
+                const contents = await octokit/* octokit.repos.getContent */.K.repos.getContent({
+                    owner: review_repo.owner,
+                    repo: review_repo.repo,
+                    path: file.filename,
+                    ref: review_context.payload.pull_request.base.sha
+                });
+                if (contents.data != null) {
+                    if (!Array.isArray(contents.data)) {
+                        if (contents.data.type === 'file' &&
+                            contents.data.content != null) {
+                            fileContent = Buffer.from(contents.data.content, 'base64').toString();
+                        }
                     }
                 }
             }
-        }
-        catch (e) {
-            (0,core.warning)(`Failed to get file contents: ${e}. This is OK if it's a new file.`);
+            catch (e) {
+                (0,core.warning)(`Failed to get file contents: ${e}. This is OK if it's a new file.`);
+            }
         }
         // 提取文件的完整 diff patch
         let fileDiff = '';
@@ -18289,6 +19542,7 @@ ${hunks.oldHunk}
                 // 取代 .codesentinel.yaml：把 Action 输入收集到的开关传给 orchestrator
                 toolEnableOverrides: options.toolEnableOverrides,
                 toolVersionOverrides: options.toolVersionOverrides,
+                semgrepConfig: options.semgrepConfig,
                 disabled: false
             });
             (0,core.info)(`Phase 0b: lint scan completed in ${lintReport.durationMs}ms — ${lintReport.results.length} findings on changed lines from ${lintReport.toolSummaries.filter(s => s.available).length} tool(s)`);
@@ -18477,7 +19731,9 @@ ${lib_commenter/* RAW_SUMMARY_END_TAG */.rV}
 ${lib_commenter/* SHORT_SUMMARY_START_TAG */.O$}
 ${inputs.shortSummary}
 ${lib_commenter/* SHORT_SUMMARY_END_TAG */.Zb}
-${dependencyContext != null ? `\n${formatDependencySummary(dependencyContext)}` : ''}
+${dependencyContext != null
+        ? `\n${formatDependencySummary(dependencyContext)}`
+        : ''}
 ${lintReport != null ? `\n${formatLintSummary(lintReport)}` : ''}
 ---
 
@@ -18512,7 +19768,7 @@ ${summariesFailed.length > 0
         : ''}
 `;
     // ==================== 阶段四：逐文件代码审查 ====================
-    if (!options.disableReview) {
+    if (!options.disableReview && runOptions.summaryOnly !== true) {
         // 筛选出需要审查的文件（分类为 NEEDS_REVIEW 的文件）
         const filesAndChangesReview = filesAndChanges.filter(([filename]) => {
             const needsReview = summaries.find(([summaryFilename]) => summaryFilename === filename)?.[2] ?? true;
@@ -18524,7 +19780,11 @@ ${summariesFailed.length > 0
             .map(([filename]) => filename);
         const reviewsFailed = [];
         let lgtmCount = 0; // LGTM 评论计数（被过滤掉的）
-        let reviewCount = 0; // 实际发布的审查评论计数
+        let reviewCount = 0; // 收集到的审查发现总数（去重/截断前）
+        // 噪音控制（成员 D · §2.5）：先把所有文件的发现收集起来，
+        // 待并行审查全部完成后统一去重 / 排序 / 截断，再发布行级评论 + PR 顶部汇总。
+        // 注意: doReview 并行执行，但 JS 单线程下 Array.push 是安全的。
+        const findings = [];
         /**
          * 对单个文件执行代码审查
          *
@@ -18694,6 +19954,16 @@ ${commentChain}
                             (0,core.info)(`[analysis_chain] ${filename}: comment line ${review.startLine}-${review.endLine}, hasChain=${shouldAttachAnalysisChain}, finalLen=${commentWithChain.length}`);
                             // 将审查评论加入缓冲区
                             await commenter.bufferReviewComment(filename, review.startLine, review.endLine, commentWithChain);
+                            // 收集为 Finding（不立即 buffer），统一在审查完成后做噪音控制。
+                            // 严重级别以警示框徽标的形式直接置于每条行级评论顶部（取代 PR 顶部汇总评论）。
+                            const severity = classifyFindingSeverity(review.comment);
+                            findings.push({
+                                path: filename,
+                                startLine: review.startLine,
+                                endLine: review.endLine,
+                                severity,
+                                body: `${severityBadge(severity)}\n\n${commentWithChain}`
+                            });
                         }
                         catch (e) {
                             reviewsFailed.push(`${filename} comment failed (${e})`);
@@ -18722,6 +19992,21 @@ ${commentChain}
             }
         }
         await Promise.all(reviewPromises);
+        // 噪音控制（成员 D · §2.5）：按严重级别排序 + 截断到上限（默认 20）。
+        // 行级评论保留每个位置（dedupe:false），避免把不同代码行的同类问题合并导致丢失位置；
+        // 同类合并仅用于下方 PR 顶部汇总评论的概览统计。
+        const { kept: keptFindings, truncated: truncatedFindings } = prepareFindings(findings, { dedupe: false, maxComments: options.maxReviewComments });
+        if (truncatedFindings > 0) {
+            (0,core.info)(`noise-control: ${findings.length} findings → posting ${keptFindings.length}, truncated ${truncatedFindings} low-priority`);
+        }
+        for (const f of keptFindings) {
+            try {
+                await commenter.bufferReviewComment(f.path, f.startLine, f.endLine, f.body);
+            }
+            catch (e) {
+                reviewsFailed.push(`${f.path} comment failed (${e})`);
+            }
+        }
         // 追加审查统计信息到状态消息
         statusMsg += `
 ${reviewsFailed.length > 0
@@ -18746,6 +20031,9 @@ ${reviewsSkipped.length > 0
 <summary>Review comments generated (${reviewCount + lgtmCount})</summary>
 
 * Review: ${reviewCount}
+* Posted (after noise control): ${keptFindings.length}${truncatedFindings > 0
+            ? ` — truncated ${truncatedFindings} lower-priority`
+            : ''}
 * LGTM: ${lgtmCount}
 
 </details>
@@ -18755,23 +20043,28 @@ ${reviewsSkipped.length > 0
 <details>
 <summary>Tips</summary>
 
-### Chat with ${botName} Bot (\`@ai-reviewer\`)
+### Chat with ${botName} Bot (\`${constants/* PRIMARY_BOT_MENTION */.a}\`)
 - Reply on review comments left by this bot to ask follow-up questions. A review comment is a comment on a diff or a file.
-- Invite the bot into a review comment chain by tagging \`@ai-reviewer\` in a reply.
+- Invite the bot into a review comment chain by tagging \`${constants/* PRIMARY_BOT_MENTION */.a}\` in a reply.
 
 ### Code suggestions
 - The bot may make code suggestions, but please review them carefully before committing since the line number ranges may be misaligned.
 - You can edit the comment made by the bot and manually tweak the suggestion if it is slightly off.
 
 ### Pausing incremental reviews
-- Add \`@ai-reviewer: ignore\` anywhere in the PR description to pause further reviews from the bot.
+- Add \`${ignoreKeyword}\` anywhere in the PR description to pause further reviews from the bot.
 
 </details>
 `;
         // 将最新的 head commit SHA 添加到已审查列表
         summarizeComment += `\n${commenter.addReviewedCommitId(existingCommitIdsBlock, review_context.payload.pull_request.head.sha)}`;
-        // 批量提交所有缓冲的审查评论
+        // 批量提交所有缓冲的审查评论（严重级别已内嵌在每条评论顶部，不再单独发汇总评论）
         await commenter.submitReview(review_context.payload.pull_request.number, commits[commits.length - 1].sha, statusMsg);
+    }
+    // summary-only 等跳过审查阶段的场景：保留既有的已审查 commit 记录，
+    // 否则 replace 摘要评论会清空增量审查标记，导致下次自动审查从 base 重审
+    if (runOptions.summaryOnly === true && existingCommitIdsBlock !== '') {
+        summarizeComment += `\n${existingCommitIdsBlock}`;
     }
     // 发布最终的摘要评论
     await commenter.comment(`${summarizeComment}`, lib_commenter/* SUMMARIZE_TAG */.Rp, 'replace');
@@ -18898,7 +20191,8 @@ const splitPatch = (patch) => {
     if (patch == null) {
         return [];
     }
-    const pattern = /(^@@ -(\d+),(\d+) \+(\d+),(\d+) @@).*$/gm;
+    // `,count` is optional in unified diff when count=1 (e.g. `@@ -0,0 +1 @@`)
+    const pattern = /(^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@).*$/gm;
     const result = [];
     let last = -1;
     let match;
@@ -18923,13 +20217,14 @@ const splitPatch = (patch) => {
  * @returns { oldHunk: { startLine, endLine }, newHunk: { startLine, endLine } }
  */
 const patchStartEndLine = (patch) => {
-    const pattern = /(^@@ -(\d+),(\d+) \+(\d+),(\d+) @@)/gm;
+    // `,count` is optional in unified diff when count=1 (e.g. `@@ -0,0 +1 @@`)
+    const pattern = /(^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@)/gm;
     const match = pattern.exec(patch);
     if (match != null) {
         const oldBegin = parseInt(match[2]);
-        const oldDiff = parseInt(match[3]);
+        const oldDiff = match[3] != null ? parseInt(match[3]) : 1;
         const newBegin = parseInt(match[4]);
-        const newDiff = parseInt(match[5]);
+        const newDiff = match[5] != null ? parseInt(match[5]) : 1;
         return {
             oldHunk: {
                 startLine: oldBegin,
@@ -19004,7 +20299,6 @@ const parsePatch = (patch) => {
     };
 };
 // ==================== AI 响应解析 ====================
-// `Review` 接口与 `mergeReviewsByLineRange` 已抽到 src/review-dedup.ts，便于单元测试
 /**
  * 解析 AI 的代码审查响应，提取结构化的评论列表
  *
@@ -87989,6 +89283,181 @@ module.exports.__wbindgen_throw = function(arg0, arg1) {
 };
 ;
 
+
+
+/***/ }),
+
+/***/ 9272:
+/***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __nccwpck_require__) => {
+
+"use strict";
+
+// EXPORTS
+__nccwpck_require__.d(__webpack_exports__, {
+  "Z": () => (/* binding */ pLimit)
+});
+
+;// CONCATENATED MODULE: ./node_modules/.pnpm/yocto-queue@1.2.2/node_modules/yocto-queue/index.js
+/*
+How it works:
+`this.#head` is an instance of `Node` which keeps track of its current value and nests another instance of `Node` that keeps the value that comes after it. When a value is provided to `.enqueue()`, the code needs to iterate through `this.#head`, going deeper and deeper to find the last value. However, iterating through every single item is slow. This problem is solved by saving a reference to the last value as `this.#tail` so that it can reference it to add a new value.
+*/
+
+class Node {
+	value;
+	next;
+
+	constructor(value) {
+		this.value = value;
+	}
+}
+
+class Queue {
+	#head;
+	#tail;
+	#size;
+
+	constructor() {
+		this.clear();
+	}
+
+	enqueue(value) {
+		const node = new Node(value);
+
+		if (this.#head) {
+			this.#tail.next = node;
+			this.#tail = node;
+		} else {
+			this.#head = node;
+			this.#tail = node;
+		}
+
+		this.#size++;
+	}
+
+	dequeue() {
+		const current = this.#head;
+		if (!current) {
+			return;
+		}
+
+		this.#head = this.#head.next;
+		this.#size--;
+
+		// Clean up tail reference when queue becomes empty
+		if (!this.#head) {
+			this.#tail = undefined;
+		}
+
+		return current.value;
+	}
+
+	peek() {
+		if (!this.#head) {
+			return;
+		}
+
+		return this.#head.value;
+
+		// TODO: Node.js 18.
+		// return this.#head?.value;
+	}
+
+	clear() {
+		this.#head = undefined;
+		this.#tail = undefined;
+		this.#size = 0;
+	}
+
+	get size() {
+		return this.#size;
+	}
+
+	* [Symbol.iterator]() {
+		let current = this.#head;
+
+		while (current) {
+			yield current.value;
+			current = current.next;
+		}
+	}
+
+	* drain() {
+		while (this.#head) {
+			yield this.dequeue();
+		}
+	}
+}
+
+;// CONCATENATED MODULE: ./node_modules/.pnpm/p-limit@4.0.0/node_modules/p-limit/index.js
+
+
+function pLimit(concurrency) {
+	if (!((Number.isInteger(concurrency) || concurrency === Number.POSITIVE_INFINITY) && concurrency > 0)) {
+		throw new TypeError('Expected `concurrency` to be a number from 1 and up');
+	}
+
+	const queue = new Queue();
+	let activeCount = 0;
+
+	const next = () => {
+		activeCount--;
+
+		if (queue.size > 0) {
+			queue.dequeue()();
+		}
+	};
+
+	const run = async (fn, resolve, args) => {
+		activeCount++;
+
+		const result = (async () => fn(...args))();
+
+		resolve(result);
+
+		try {
+			await result;
+		} catch {}
+
+		next();
+	};
+
+	const enqueue = (fn, resolve, args) => {
+		queue.enqueue(run.bind(undefined, fn, resolve, args));
+
+		(async () => {
+			// This function needs to wait until the next microtask before comparing
+			// `activeCount` to `concurrency`, because `activeCount` is updated asynchronously
+			// when the run function is dequeued and called. The comparison in the if-statement
+			// needs to happen asynchronously as well to get an up-to-date value for `activeCount`.
+			await Promise.resolve();
+
+			if (activeCount < concurrency && queue.size > 0) {
+				queue.dequeue()();
+			}
+		})();
+	};
+
+	const generator = (fn, ...args) => new Promise(resolve => {
+		enqueue(fn, resolve, args);
+	});
+
+	Object.defineProperties(generator, {
+		activeCount: {
+			get: () => activeCount,
+		},
+		pendingCount: {
+			get: () => queue.size,
+		},
+		clearQueue: {
+			value: () => {
+				queue.clear();
+			},
+		},
+	});
+
+	return generator;
+}
 
 
 /***/ }),

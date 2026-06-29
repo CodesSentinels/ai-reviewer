@@ -23,6 +23,7 @@ import {
 import {EslintAdapter} from './adapters/eslint'
 import {BiomeAdapter} from './adapters/biome'
 import {PrettierAdapter} from './adapters/prettier'
+import {SemgrepAdapter} from './adapters/semgrep'
 import {TscAdapter} from './adapters/tsc'
 import {
   collapseAdjacentFindings,
@@ -71,15 +72,24 @@ export interface OrchestratorOptions {
    * 单元测试与独立调用方的兼容性）。
    */
   patchScans?: PatchScanMap
+  /**
+   * Semgrep 规则集（来自 Action 输入 `semgrep_config`）。
+   *
+   * 仅在用户开启 `enable_semgrep` 时生效；未传入时 SemgrepAdapter 用
+   * 默认值 `p/default`（OWASP-Top-10）。
+   * 典型取值：`p/default` / `auto` / `p/security-audit` / `p/owasp-top-ten`。
+   */
+  semgrepConfig?: string
 }
 
 /** 内置适配器注册表 */
-function defaultAdapters(): ToolAdapter[] {
+function defaultAdapters(options: OrchestratorOptions): ToolAdapter[] {
   return [
     new EslintAdapter(),
     new BiomeAdapter(),
     new TscAdapter(),
-    new PrettierAdapter()
+    new PrettierAdapter(),
+    new SemgrepAdapter({config: options.semgrepConfig})
   ]
 }
 
@@ -97,18 +107,25 @@ export async function runLintTools(
     return emptyReport(startedAt)
   }
 
-  const adapters = adaptersOverride ?? defaultAdapters()
+  const adapters = adaptersOverride ?? defaultAdapters(options)
   const overrides = options.toolEnableOverrides ?? {}
 
   // 1) 选出"用户启用"的适配器：Action input override 优先，缺失时回退到 adapter.defaultEnabled
-  const enabledAdapters = adapters.filter(a => {
+  //    同时给出每个适配器的启用判定细节，便于排查"semgrep 没跑起来到底是 default-false 还是 override-false"
+  const enabledAdapters: ToolAdapter[] = []
+  const decisions: string[] = []
+  for (const a of adapters) {
     const override = overrides[a.name]
-    return override === undefined ? a.defaultEnabled : override
-  })
+    const enabled = override === undefined ? a.defaultEnabled : override
+    const src =
+      override === undefined ? `default=${a.defaultEnabled}` : `override=${override}`
+    decisions.push(`${a.name}:${enabled ? 'on' : 'off'}(${src})`)
+    if (enabled) enabledAdapters.push(a)
+  }
   info(
-    `lint: ${enabledAdapters.length}/${adapters.length} adapters enabled by Action inputs: [${enabledAdapters
-      .map(a => a.name)
-      .join(', ')}]`
+    `lint: ${enabledAdapters.length}/${adapters.length} adapters enabled — [${decisions.join(
+      ', '
+    )}]`
   )
   if (enabledAdapters.length === 0) {
     return emptyReport(startedAt)

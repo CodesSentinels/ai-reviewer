@@ -8,6 +8,7 @@
  * 因此 bootstrap 必须保证只被调用一次（用模块级 flag 保护）。
  */
 import {helpHandler} from './handlers/help'
+import {resolveHandler} from './handlers/resolve'
 import {ALL_STUBS} from './handlers/stubs'
 import {getRegistry} from './registry'
 
@@ -17,6 +18,7 @@ export function bootstrapCommands(): void {
   if (bootstrapped) return
   const reg = getRegistry()
   reg.register(helpHandler)
+  reg.register(resolveHandler)
   for (const h of ALL_STUBS) {
     reg.register(h)
   }

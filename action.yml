@@ -5,16 +5,47 @@ branding:
   color: 'orange'
 author: 'AI Reviewer'
 inputs:
+  # resolve_token:
+  #   required: false
+  #   description: |
+  #     Token used for the resolveReviewThread GraphQL mutation.
+  #     GitHub App installation tokens and the default GITHUB_TOKEN are both
+  #     rejected by this mutation ("Resource not accessible by integration").
+  #     A classic PAT with repo scope is required for resolve to work.
+  #   default: ''
+  bot_github_login:
+    required: false
+    description: |
+      GitHub login of the bot account used to identify bot-authored review threads
+      for the resolve command (e.g. 'my-app[bot]' or just 'my-app').
+      Required when using a custom GitHub App — GitHub App installation tokens
+      cannot call GET /user, so auto-detection falls back to 'github-actions[bot]'
+      which would be wrong. Leave empty when using the default GITHUB_TOKEN.
+    default: ''
   debug:
     required: false
     description: 'Enable debug mode'
     default: 'false'
+  # debug_resolve_inject_failures:
+  #   required: false
+  #   description: >
+  #     FOR TESTING ONLY. When set to a positive integer N, the resolve command
+  #     appends N fake thread IDs to the batchResolve call, producing controlled
+  #     partial-failure output (ok=real failed=N). Remove from production workflows.
+  #   default: '0'
   max_files:
     required: false
     description:
       'Max files to summarize and review. Less than or equal to 0 means no
       limit.'
     default: '150'
+  max_review_comments:
+    required: false
+    description:
+      'Max inline review comments to post per review (noise control). Findings
+      are sorted by severity and truncated to this limit. Less than or equal to
+      0 means no limit.'
+    default: '20'
   review_simple_changes:
     required: false
     description: 'Review even when the changes are simple'
@@ -274,8 +305,8 @@ inputs:
     description:
       'Enable the TypeScript Compiler adapter (tsc --noEmit). Requires a
       tsconfig.json at the repo root. Tool itself is auto-installed; consumer
-      project does NOT need typescript in their package.json (though most
-      TS projects already have it).'
+      project does NOT need typescript in their package.json (though most TS
+      projects already have it).'
     default: 'true'
   enable_prettier:
     required: false
@@ -284,32 +315,41 @@ inputs:
       already enforce Prettier via pre-commit hooks; enabling here can spam
       "file is not formatted" warnings.'
     default: 'false'
+  enable_semgrep:
+    required: false
+    description:
+      'Enable the Semgrep SAST adapter (Phase 4 — multi-language security
+      scanner). Disabled by default because (a) cold install via pip adds
+      ~15-30s to every review and (b) SAST findings benefit from opt-in to avoid
+      noise. Set to true on repos that need security scanning. Requires Python
+      3.8+ on the runner (ubuntu-latest has it by default).'
+    default: 'false'
   eslint_version:
     required: false
     description:
-      'ESLint version (semver range) installed into ai-reviewer''s sandbox.
-      This default IS the version pinned by ai-reviewer — override it with your
+      'ESLint version (semver range) installed into ai-reviewer''s sandbox. This
+      default IS the version pinned by ai-reviewer — override it with your
       team''s local version to avoid behaviour drift between local lint and PR
       review (e.g. "^8.57.0" when your project still uses ESLint 8).'
     default: '^9.15.0'
   biome_version:
     required: false
     description:
-      'Biome version (semver range) installed into ai-reviewer''s sandbox.
-      This default IS the pinned version; override to match your project.'
+      "Biome version (semver range) installed into ai-reviewer's sandbox. This
+      default IS the pinned version; override to match your project."
     default: '^2.3.0'
   tsc_version:
     required: false
     description:
-      'TypeScript version (semver range) installed into ai-reviewer''s sandbox.
+      "TypeScript version (semver range) installed into ai-reviewer's sandbox.
       This default IS the pinned version. Most projects can leave it; only
-      override if your code uses TS features that differ across major versions.'
+      override if your code uses TS features that differ across major versions."
     default: '^5.6.0'
   prettier_version:
     required: false
     description:
-      'Prettier version (semver range) installed into ai-reviewer''s sandbox.
-      This default IS the pinned version; override to match your project.'
+      "Prettier version (semver range) installed into ai-reviewer's sandbox.
+      This default IS the pinned version; override to match your project."
     default: '^3.0.0'
   command_ack_reaction:
     required: false
@@ -347,5 +387,5 @@ inputs:
     # default: 'AI Reviewer'
     default: 'CodeSentinel'
 runs:
-  using: 'node20'
+  using: 'node24'
   main: 'dist/index.js'

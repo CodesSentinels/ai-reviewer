@@ -51,6 +51,7 @@ describe('parse — bot mention 识别', () => {
     expect(r.command?.name).toBe('help')
   })
 
+
   test('bot mention 忽略大小写', () => {
     expect(parse('@AI-Reviewer help', opts).command?.name).toBe('help')
     expect(parse('@CodeSentinel help', opts).command?.name).toBe('help')

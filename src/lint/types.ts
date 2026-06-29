@@ -57,10 +57,9 @@ export interface LintResult {
 // 不同语言/工具有不同的发布形态，把"如何获得这个工具的二进制"抽象成一个
 // 声明式的 InstallSpec：
 //
-//   - npm   ：JS/TS 工具（eslint / @biomejs/biome / prettier）
-//   - binary：直接从 GitHub Releases 下载预编译压缩包（golangci-lint / ruff /
-//             semgrep 等大多数 Phase 2-4 工具）— Phase 2 实现
-//   - 后续可加 pip / jar 等
+//   - npm   ：JS/TS 工具（eslint / @biomejs/biome / prettier / typescript）
+//   - pip   ：Python 工具（semgrep；后续 ruff / bandit / pylint）
+//   - binary：直接从 GitHub Releases 下载预编译压缩包（golangci-lint 等）— Phase 2+ 实现
 //
 // 适配器在自身字段上声明 installSpec，由 src/lint/tool-installer.ts 统一处理：
 // 待审查项目无需把工具写入自己的 package.json/devDependencies。
@@ -84,10 +83,30 @@ export interface NpmInstallSpec {
 }
 
 /**
+ * Python 包安装策略（Phase 4 落地）：调用 `python3 -m pip install --target=<dir>`
+ * 把 wheel + console scripts 装到沙箱 python-tools 子目录
+ *
+ * 与 npm 策略类似，但安装目标是 `python-tools/` 而非 `node_modules/`，
+ * console script 落在 `python-tools/bin/<binName>`。
+ */
+export interface PipInstallSpec {
+  readonly kind: 'pip'
+  /** PyPI 包名，如 'semgrep' / 'ruff' / 'bandit' */
+  readonly package: string
+  /** 可执行脚本名（pip 生成在 python-tools/bin/ 下） */
+  readonly binName: string
+  /**
+   * 版本约束，pip 风格（如 `~=1.95` / `==1.95.0` / `>=1.95,<2`）。
+   * 用 npm 风格 `^x.y.z` 也允许，installer 内部会转成等价 pip 语法。
+   */
+  readonly version: string
+}
+
+/**
  * 二进制下载策略（Phase 2+）：从 URL 下载预编译归档并解压
  *
  * 现阶段保留为接口，installer 调用时返回"未实现"。新增 Adapter（如
- * golangci-lint / ruff）时打开实现即可，无需触动 Phase 1 适配器。
+ * golangci-lint）时打开实现即可，无需触动现有适配器。
  */
 export interface BinaryInstallSpec {
   readonly kind: 'binary'
@@ -104,7 +123,7 @@ export interface BinaryInstallSpec {
 }
 
 /** 适配器声明的安装方式 */
-export type InstallSpec = NpmInstallSpec | BinaryInstallSpec
+export type InstallSpec = NpmInstallSpec | PipInstallSpec | BinaryInstallSpec
 
 /** 工具检测结果 */
 export interface ToolDetection {

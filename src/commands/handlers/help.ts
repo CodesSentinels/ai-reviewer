@@ -9,6 +9,7 @@
 import {getInput} from '@actions/core'
 import type {CommandHandler, CommandResult, CommandContext} from '../types'
 import {getRegistry} from '../registry'
+import {BOT_MENTIONS, PRIMARY_BOT_MENTION} from '../../constants'
 
 /**
  * 纯函数：根据命令列表生成 help Markdown。
@@ -30,7 +31,7 @@ export function buildHelpMessage(commands: CommandHandler[]): string {
 
   for (const c of ordered) {
     const perm = c.minPermission ?? 'write'
-    const usage = c.usage ?? `@ai-reviewer ${c.name}`
+    const usage = c.usage ?? `${PRIMARY_BOT_MENTION} ${c.name}`
     lines.push(`| \`${usage}\` | ${c.description} | \`${perm}\` |`)
   }
 
@@ -48,7 +49,9 @@ export function buildHelpMessage(commands: CommandHandler[]): string {
 
   lines.push('')
   lines.push(
-    `> ${getInput('bot_icon') || '🤖'} Bot 同时支持 \`@ai-reviewer\` 与 \`@codesentinel\` 两个 mention。`
+    `> ${getInput('bot_icon') || '🤖'} Bot 同时支持 ${BOT_MENTIONS.map(
+      m => `\`${m}\``
+    ).join(' 与 ')} 共 ${BOT_MENTIONS.length} 个 mention。`
   )
   return lines.join('\n')
 }
@@ -56,7 +59,7 @@ export function buildHelpMessage(commands: CommandHandler[]): string {
 export const helpHandler: CommandHandler = {
   name: 'help',
   description: '显示所有支持的命令及用法',
-  usage: '@ai-reviewer help',
+  usage: `${PRIMARY_BOT_MENTION} help`,
   needsAck: false,
   minPermission: 'read',
   async execute(_ctx: CommandContext): Promise<CommandResult> {
