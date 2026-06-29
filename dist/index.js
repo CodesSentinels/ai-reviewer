@@ -16890,7 +16890,12 @@ async function installViaNpm(spec) {
         };
     }
     // 3) 跑 npm install
-    (0,core.info)(`lint/installer: installing ${spec.package}@${spec.version} → ${root}`);
+    // version 缺省时不带 `@<range>`，npm 安装 latest。真实 Action 运行里 version 总会
+    // 由 action.yml 的 *_version default 注入；缺省仅出现在未经 Action 的直接调用。
+    const installTarget = spec.version
+        ? `${spec.package}@${spec.version}`
+        : spec.package;
+    (0,core.info)(`lint/installer: installing ${installTarget} → ${root}`);
     const result = await runCommand({
         command: 'npm',
         args: [
@@ -16900,7 +16905,7 @@ async function installViaNpm(spec) {
             '--no-audit',
             '--no-fund',
             '--silent',
-            `${spec.package}@${spec.version}`
+            installTarget
         ],
         cwd: root,
         timeoutMs: INSTALL_TIMEOUT_MS
@@ -16919,11 +16924,11 @@ async function installViaNpm(spec) {
             ?.substring(0, 200) ?? '';
         return {
             ok: false,
-            reason: `npm install ${spec.package}@${spec.version} failed (exit=${result.exitCode}): ${stderrSnippet}`
+            reason: `npm install ${installTarget} failed (exit=${result.exitCode}): ${stderrSnippet}`
         };
     }
     if (!(0,external_fs_.existsSync)(binPath)) {
-        (0,core.warning)(`lint/installer: ${spec.package}@${spec.version} installed but bin not at ${binPath}`);
+        (0,core.warning)(`lint/installer: ${installTarget} installed but bin not at ${binPath}`);
         return {
             ok: false,
             reason: `package installed but bin not at ${binPath} (unexpected layout)`
@@ -17158,7 +17163,9 @@ function classifyCategory(ruleId) {
     if (PERFORMANCE_RULE_KEYWORDS.some(p => r.includes(p)))
         return 'performance';
     // ESLint 内置 stylistic rules
-    if (r.startsWith('@stylistic/') || r.includes('indent') || r.includes('quotes')) {
+    if (r.startsWith('@stylistic/') ||
+        r.includes('indent') ||
+        r.includes('quotes')) {
         return 'style';
     }
     return 'quality';
@@ -17181,13 +17188,13 @@ class EslintAdapter {
     defaultEnabled = true;
     /**
      * 多策略：声明 ESLint 用 npm 装到沙箱目录
-     * （待审查项目无需把 eslint 写入 devDependencies）
+     * （待审查项目无需把 eslint 写入 devDependencies）。
+     * 不含 version：默认版本由 action.yml 的 `eslint_version` default 提供（见 detect）。
      */
     installSpec = {
         kind: 'npm',
         package: 'eslint',
-        binName: 'eslint',
-        version: '^9.15.0'
+        binName: 'eslint'
     };
     /** detect() 成功后填充：ESLint 版本 */
     resolvedVersion = '';
@@ -17215,7 +17222,10 @@ class EslintAdapter {
             timeoutMs: 10_000
         });
         if (versionResult.spawnError || versionResult.exitCode !== 0) {
-            const stderrSnippet = versionResult.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 120) ?? '';
+            const stderrSnippet = versionResult.stderr
+                .split('\n')
+                .find(l => l.trim().length > 0)
+                ?.substring(0, 120) ?? '';
             return {
                 available: false,
                 reason: `bundled ESLint --version failed: exit=${versionResult.exitCode}; stderr="${stderrSnippet}"`
@@ -17241,7 +17251,12 @@ class EslintAdapter {
             return [];
         // 始终使用项目自带的 eslint config（早期支持的 useProjectConfig=false 已移除，
         // 因 ESLint 9 不内置规则集，关掉项目配置会让扫描必败）
-        const args = ['--format', 'json', '--no-error-on-unmatched-pattern', ...files];
+        const args = [
+            '--format',
+            'json',
+            '--no-error-on-unmatched-pattern',
+            ...files
+        ];
         (0,core.info)(`lint/eslint: scanning ${files.length} files via ${this.resolvedBinPath}`);
         const result = await runCommand({
             command: this.resolvedBinPath,
@@ -17381,12 +17396,14 @@ class BiomeAdapter {
         '.cts'
     ];
     defaultEnabled = true;
-    /** Biome 完全零配置可用（内置 recommended 规则集），无需项目侧任何文件 */
+    /**
+     * Biome 完全零配置可用（内置 recommended 规则集），无需项目侧任何文件。
+     * 不含 version：默认版本由 action.yml 的 `biome_version` default 提供（见 detect）。
+     */
     installSpec = {
         kind: 'npm',
         package: '@biomejs/biome',
-        binName: 'biome',
-        version: '^2.3.0'
+        binName: 'biome'
     };
     resolvedVersion = '';
     resolvedBinPath = '';
@@ -17411,7 +17428,10 @@ class BiomeAdapter {
             timeoutMs: 10_000
         });
         if (versionResult.spawnError || versionResult.exitCode !== 0) {
-            const stderrSnippet = versionResult.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 120) ?? '';
+            const stderrSnippet = versionResult.stderr
+                .split('\n')
+                .find(l => l.trim().length > 0)
+                ?.substring(0, 120) ?? '';
             return {
                 available: false,
                 reason: `bundled Biome --version failed: exit=${versionResult.exitCode}; stderr="${stderrSnippet}"`
@@ -17429,12 +17449,7 @@ class BiomeAdapter {
         // --max-diagnostics=999 防止默认 20 条上限把发现截断
         const result = await runCommand({
             command: this.resolvedBinPath,
-            args: [
-                'check',
-                '--reporter=github',
-                '--max-diagnostics=999',
-                ...files
-            ],
+            args: ['check', '--reporter=github', '--max-diagnostics=999', ...files],
             cwd: repoRoot
         });
         if (result.spawnError) {
@@ -17534,12 +17549,14 @@ class PrettierAdapter {
         '.md'
     ];
     defaultEnabled = false; // 默认关闭：风格类问题信噪比较低
-    /** Prettier 自带默认格式规则，无需项目配置即可工作 */
+    /**
+     * Prettier 自带默认格式规则，无需项目配置即可工作。
+     * 不含 version：默认版本由 action.yml 的 `prettier_version` default 提供（见 detect）。
+     */
     installSpec = {
         kind: 'npm',
         package: 'prettier',
-        binName: 'prettier',
-        version: '^3.0.0'
+        binName: 'prettier'
     };
     resolvedVersion = '';
     resolvedBinPath = '';
@@ -17562,7 +17579,10 @@ class PrettierAdapter {
             timeoutMs: 10_000
         });
         if (versionResult.spawnError || versionResult.exitCode !== 0) {
-            const stderrSnippet = versionResult.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 120) ?? '';
+            const stderrSnippet = versionResult.stderr
+                .split('\n')
+                .find(l => l.trim().length > 0)
+                ?.substring(0, 120) ?? '';
             return {
                 available: false,
                 reason: `bundled Prettier --version failed: exit=${versionResult.exitCode}; stderr="${stderrSnippet}"`
@@ -18164,11 +18184,13 @@ class TscAdapter {
      * 没装 typescript / 没 tsconfig.json 时会优雅降级（detect 返回 unavailable）。
      */
     defaultEnabled = true;
+    /**
+     * 不含 version：默认版本由 action.yml 的 `tsc_version` default 提供（见 detect）。
+     */
     installSpec = {
         kind: 'npm',
         package: 'typescript',
-        binName: 'tsc',
-        version: '^5.6.0'
+        binName: 'tsc'
     };
     resolvedVersion = '';
     resolvedBinPath = '';
@@ -18193,7 +18215,10 @@ class TscAdapter {
             timeoutMs: 10_000
         });
         if (versionResult.spawnError || versionResult.exitCode !== 0) {
-            const stderrSnippet = versionResult.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 120) ?? '';
+            const stderrSnippet = versionResult.stderr
+                .split('\n')
+                .find(l => l.trim().length > 0)
+                ?.substring(0, 120) ?? '';
             return {
                 available: false,
                 reason: `bundled tsc --version failed: exit=${versionResult.exitCode}; stderr="${stderrSnippet}"`

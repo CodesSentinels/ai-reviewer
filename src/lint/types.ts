@@ -71,8 +71,15 @@ export interface NpmInstallSpec {
   readonly package: string
   /** 二进制名（出现在 node_modules/.bin/ 下） */
   readonly binName: string
-  /** 版本范围，如 '^9.15.0' */
-  readonly version: string
+  /**
+   * 版本范围，如 '^9.15.0'。
+   *
+   * 适配器**不再硬编码**默认版本——默认值唯一来源是 action.yml 各 `*_version`
+   * 输入的 `default:` 字段，经 main.ts → toolVersionOverrides → detect 的
+   * versionOverride 注入。此处可选：detect 传入解析后的版本即填充；缺省（仅在
+   * 退化场景，如未经 Action 的直接调用）时不带版本，installer 安装 latest。
+   */
+  readonly version?: string
 }
 
 /**
@@ -171,15 +178,12 @@ export interface ToolAdapter {
    * - 限制超时（建议 ≤ 5 秒）
    *
    * @param repoRoot 仓库根目录（绝对路径），用于检查项目侧的工具配置文件
-   * @param versionOverride （可选）用户通过 Action 输入指定的工具版本范围，
-   *   如 `^8.57.0`。非空时适配器应**覆盖** `installSpec.version`
-   *   传给 `ensureToolInstalled`，从而装到与消费方本地一致的版本。
-   *   未提供或空字符串时使用适配器自身的 `installSpec.version` 默认值。
+   * @param versionOverride 工具版本范围（如 `^9.15.0`），来源为 action.yml 的
+   *   `<tool>_version` 输入（其 `default:` 即 ai-reviewer pin 的默认版本，用户也可
+   *   覆盖）。适配器把它填入 installSpec 后传给 `ensureToolInstalled`。空/缺省时
+   *   不带版本，installer 安装 latest（仅在未经 Action 的直接调用等退化场景出现）。
    */
-  detect(
-    repoRoot: string,
-    versionOverride?: string
-  ): Promise<ToolDetection>
+  detect(repoRoot: string, versionOverride?: string): Promise<ToolDetection>
 
   /**
    * 执行扫描
