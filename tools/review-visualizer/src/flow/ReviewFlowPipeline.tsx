@@ -167,6 +167,8 @@ export default function ReviewFlowPipeline({state}: Props) {
     ]
   }, [state, passCount, failCount])
 
+  const blocked = state.hasIgnore || state.reviewState === 'paused'
+
   const initialEdges: Edge[] = useMemo(
     () => [
       {
@@ -187,54 +189,90 @@ export default function ReviewFlowPipeline({state}: Props) {
         target: 'pause-check',
         animated: true
       },
-      {
-        id: 'e-ignore-lightbot',
-        source: 'ignore-check',
-        target: 'lightbot',
-        animated: true,
-        label: state.hasIgnore ? 'BLOCKED' : 'pass'
-      },
-      {
-        id: 'e-pause-filter',
-        source: 'pause-check',
-        target: 'path-filter',
-        animated: true,
-        label: state.reviewState === 'paused' ? 'BLOCKED' : 'pass'
-      },
-      {
-        id: 'e-rules-filter',
-        source: 'filter-rules',
-        target: 'path-filter',
-        animated: true
-      },
-      {
-        id: 'e-filter-lightbot',
-        source: 'path-filter',
-        target: 'lightbot',
-        animated: true,
-        label: `${passCount} files`
-      },
-      {
-        id: 'e-lightbot-triage',
-        source: 'lightbot',
-        target: 'triage',
-        animated: true
-      },
-      {
-        id: 'e-triage-decision',
-        source: 'triage',
-        target: 'review-decision',
-        animated: true
-      },
-      {
-        id: 'e-lightbot-tags',
-        source: 'lightbot',
-        target: 'tags-info',
-        animated: true,
-        label: 'comment format'
-      }
+      ...(state.hasIgnore
+        ? [
+            {
+              id: 'e-ignore-decision',
+              source: 'ignore-check',
+              target: 'review-decision',
+              animated: true,
+              label: 'SKIP — ignore found',
+              style: {stroke: '#c62828'}
+            }
+          ]
+        : [
+            {
+              id: 'e-ignore-pause',
+              source: 'ignore-check',
+              target: 'pause-check',
+              animated: true,
+              label: 'pass'
+            }
+          ]),
+      ...(state.reviewState === 'paused' && !state.hasIgnore
+        ? [
+            {
+              id: 'e-pause-decision',
+              source: 'pause-check',
+              target: 'review-decision',
+              animated: true,
+              label: 'SKIP — paused',
+              style: {stroke: '#c62828'}
+            }
+          ]
+        : !blocked
+          ? [
+              {
+                id: 'e-pause-filter',
+                source: 'pause-check',
+                target: 'path-filter',
+                animated: true,
+                label: 'pass'
+              }
+            ]
+          : []),
+      ...(!blocked
+        ? [
+            {
+              id: 'e-rules-filter',
+              source: 'filter-rules',
+              target: 'path-filter',
+              animated: true
+            },
+            {
+              id: 'e-filter-lightbot',
+              source: 'path-filter',
+              target: 'lightbot',
+              animated: true,
+              label: `${passCount} files`
+            }
+          ]
+        : []),
+      ...(!blocked
+        ? [
+            {
+              id: 'e-lightbot-triage',
+              source: 'lightbot',
+              target: 'triage',
+              animated: true
+            },
+            {
+              id: 'e-triage-decision',
+              source: 'triage',
+              target: 'review-decision',
+              animated: true
+            },
+            {
+              id: 'e-lightbot-tags',
+              source: 'lightbot',
+              target: 'tags-info',
+              animated: true,
+              label: 'comment format'
+            }
+          ]
+        : [])
     ],
-    [state.hasIgnore, state.reviewState, passCount]
+    [state.hasIgnore, state.reviewState, passCount, blocked]
   )
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes)
