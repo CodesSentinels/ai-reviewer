@@ -8,7 +8,14 @@
  * `findEslintConfig` 内部的所有候选文件。
  */
 
-import {describe, expect, jest, test, beforeEach, afterEach} from '@jest/globals'
+import {
+  describe,
+  expect,
+  jest,
+  test,
+  beforeEach,
+  afterEach
+} from '@jest/globals'
 import {mkdtempSync, rmSync, writeFileSync} from 'fs'
 import {tmpdir} from 'os'
 import * as path from 'path'
@@ -37,8 +44,9 @@ jest.mock('../src/lint/adapters/exec', () => ({
     spawnError: false
   })),
   parseJsonSafe: jest.fn(),
-  extractVersion: jest.fn((s: string) => s.match(/v?(\d+\.\d+\.\d+)/)?.[1] ?? ''),
-  buildVersionFailureReason: jest.fn(() => 'mocked failure reason')
+  extractVersion: jest.fn(
+    (s: string) => s.match(/v?(\d+\.\d+\.\d+)/)?.[1] ?? ''
+  )
 }))
 
 import {EslintAdapter} from '../src/lint/adapters/eslint'
@@ -65,10 +73,7 @@ describe('EslintAdapter.detect — 项目配置检查（改进 A）', () => {
   })
 
   test('Flat Config (eslint.config.js) 存在 → available=true', async () => {
-    writeFileSync(
-      path.join(tmpRoot, 'eslint.config.js'),
-      'export default []\n'
-    )
+    writeFileSync(path.join(tmpRoot, 'eslint.config.js'), 'export default []\n')
     const adapter = new EslintAdapter()
     const det = await adapter.detect(tmpRoot)
 
@@ -78,16 +83,16 @@ describe('EslintAdapter.detect — 项目配置检查（改进 A）', () => {
   })
 
   test('Flat Config (eslint.config.mjs) 存在 → available=true', async () => {
-    writeFileSync(path.join(tmpRoot, 'eslint.config.mjs'), 'export default []\n')
+    writeFileSync(
+      path.join(tmpRoot, 'eslint.config.mjs'),
+      'export default []\n'
+    )
     const det = await new EslintAdapter().detect(tmpRoot)
     expect(det.available).toBe(true)
   })
 
   test('Legacy .eslintrc.json 存在 → available=true', async () => {
-    writeFileSync(
-      path.join(tmpRoot, '.eslintrc.json'),
-      '{"rules": {}}\n'
-    )
+    writeFileSync(path.join(tmpRoot, '.eslintrc.json'), '{"rules": {}}\n')
     const det = await new EslintAdapter().detect(tmpRoot)
     expect(det.available).toBe(true)
   })

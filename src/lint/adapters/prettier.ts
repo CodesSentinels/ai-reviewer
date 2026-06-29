@@ -51,12 +51,14 @@ export class PrettierAdapter implements ToolAdapter {
   ]
   readonly defaultEnabled = false // 默认关闭：风格类问题信噪比较低
 
-  /** Prettier 自带默认格式规则，无需项目配置即可工作 */
+  /**
+   * Prettier 自带默认格式规则，无需项目配置即可工作。
+   * 不含 version：默认版本由 action.yml 的 `prettier_version` default 提供（见 detect）。
+   */
   readonly installSpec: InstallSpec = {
     kind: 'npm',
     package: 'prettier',
-    binName: 'prettier',
-    version: '^3.0.0'
+    binName: 'prettier'
   }
 
   private resolvedVersion = ''
@@ -74,7 +76,9 @@ export class PrettierAdapter implements ToolAdapter {
     if (!install.ok) {
       return {
         available: false,
-        reason: `bundled Prettier install failed: ${install.reason ?? 'unknown'}`
+        reason: `bundled Prettier install failed: ${
+          install.reason ?? 'unknown'
+        }`
       }
     }
     this.resolvedBinPath = install.binPath as string
@@ -87,7 +91,10 @@ export class PrettierAdapter implements ToolAdapter {
     })
     if (versionResult.spawnError || versionResult.exitCode !== 0) {
       const stderrSnippet =
-        versionResult.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 120) ?? ''
+        versionResult.stderr
+          .split('\n')
+          .find(l => l.trim().length > 0)
+          ?.substring(0, 120) ?? ''
       return {
         available: false,
         reason: `bundled Prettier --version failed: exit=${versionResult.exitCode}; stderr="${stderrSnippet}"`

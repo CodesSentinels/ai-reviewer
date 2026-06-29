@@ -66,7 +66,7 @@ export async function ensureToolInstalled(
       return {
         ok: false,
         reason:
-          "binary install strategy not yet implemented (planned for Phase 2+); " +
+          'binary install strategy not yet implemented (planned for Phase 2+); ' +
           'add downloader in tool-installer.ts when needed'
       }
   }
@@ -103,7 +103,8 @@ async function installViaNpm(spec: NpmInstallSpec): Promise<InstallResult> {
             name: 'ai-reviewer-lint-tools',
             private: true,
             version: '0.0.0',
-            description: 'ai-reviewer 内部 lint 工具沙箱（自动管理，请勿手动修改）'
+            description:
+              'ai-reviewer 内部 lint 工具沙箱（自动管理，请勿手动修改）'
           },
           null,
           2
@@ -120,7 +121,12 @@ async function installViaNpm(spec: NpmInstallSpec): Promise<InstallResult> {
   }
 
   // 3) 跑 npm install
-  info(`lint/installer: installing ${spec.package}@${spec.version} → ${root}`)
+  // version 缺省时不带 `@<range>`，npm 安装 latest。真实 Action 运行里 version 总会
+  // 由 action.yml 的 *_version default 注入；缺省仅出现在未经 Action 的直接调用。
+  const installTarget = spec.version
+    ? `${spec.package}@${spec.version}`
+    : spec.package
+  info(`lint/installer: installing ${installTarget} → ${root}`)
   const result = await runCommand({
     command: 'npm',
     args: [
@@ -130,7 +136,7 @@ async function installViaNpm(spec: NpmInstallSpec): Promise<InstallResult> {
       '--no-audit',
       '--no-fund',
       '--silent',
-      `${spec.package}@${spec.version}`
+      installTarget
     ],
     cwd: root,
     timeoutMs: INSTALL_TIMEOUT_MS
@@ -145,15 +151,18 @@ async function installViaNpm(spec: NpmInstallSpec): Promise<InstallResult> {
   }
   if (result.exitCode !== 0) {
     const stderrSnippet =
-      result.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 200) ?? ''
+      result.stderr
+        .split('\n')
+        .find(l => l.trim().length > 0)
+        ?.substring(0, 200) ?? ''
     return {
       ok: false,
-      reason: `npm install ${spec.package}@${spec.version} failed (exit=${result.exitCode}): ${stderrSnippet}`
+      reason: `npm install ${installTarget} failed (exit=${result.exitCode}): ${stderrSnippet}`
     }
   }
   if (!existsSync(binPath)) {
     warning(
-      `lint/installer: ${spec.package}@${spec.version} installed but bin not at ${binPath}`
+      `lint/installer: ${installTarget} installed but bin not at ${binPath}`
     )
     return {
       ok: false,
@@ -255,7 +264,8 @@ async function installViaPip(spec: PipInstallSpec): Promise<InstallResult> {
 
   // 3) 跑 pip install
   const pipSpecifier = npmRangeToPipSpecifier(spec.version)
-  const pkgArg = pipSpecifier.length > 0 ? `${spec.package}${pipSpecifier}` : spec.package
+  const pkgArg =
+    pipSpecifier.length > 0 ? `${spec.package}${pipSpecifier}` : spec.package
   info(
     `lint/installer[pip]: installing ${spec.package} (range "${spec.version}" → pip "${pipSpecifier}") → ${targetDir}`
   )
@@ -283,7 +293,9 @@ async function installViaPip(spec: PipInstallSpec): Promise<InstallResult> {
   const elapsed = Date.now() - startedAt
   if (result.spawnError) {
     warning(
-      `lint/installer[pip]: spawn failed after ${elapsed}ms — ${result.spawnErrorMessage ?? ''}`
+      `lint/installer[pip]: spawn failed after ${elapsed}ms — ${
+        result.spawnErrorMessage ?? ''
+      }`
     )
     return {
       ok: false,
@@ -298,7 +310,10 @@ async function installViaPip(spec: PipInstallSpec): Promise<InstallResult> {
   }
   if (result.exitCode !== 0) {
     const stderrSnippet =
-      result.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 200) ?? ''
+      result.stderr
+        .split('\n')
+        .find(l => l.trim().length > 0)
+        ?.substring(0, 200) ?? ''
     warning(
       `lint/installer[pip]: pip exit=${result.exitCode} after ${elapsed}ms, stderr_first="${stderrSnippet}", stderr_len=${result.stderr.length}`
     )
@@ -313,7 +328,8 @@ async function installViaPip(spec: PipInstallSpec): Promise<InstallResult> {
     )
     return {
       ok: false,
-      reason: `package ${spec.package} installed but console script not at ${binPath} ` +
+      reason:
+        `package ${spec.package} installed but console script not at ${binPath} ` +
         `(unexpected pip --target layout; check that the package declares a console_scripts entry for "${spec.binName}")`
     }
   }

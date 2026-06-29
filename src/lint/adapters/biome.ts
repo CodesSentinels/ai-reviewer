@@ -70,9 +70,7 @@ function severityFromLevel(
   return 'info'
 }
 
-function categoryToType(
-  category: string | undefined
-): LintResult['category'] {
+function categoryToType(category: string | undefined): LintResult['category'] {
   if (category == null) return 'quality'
   if (category.includes('suspicious') || category.includes('correctness')) {
     return 'quality'
@@ -99,12 +97,14 @@ export class BiomeAdapter implements ToolAdapter {
   ]
   readonly defaultEnabled = true
 
-  /** Biome 完全零配置可用（内置 recommended 规则集），无需项目侧任何文件 */
+  /**
+   * Biome 完全零配置可用（内置 recommended 规则集），无需项目侧任何文件。
+   * 不含 version：默认版本由 action.yml 的 `biome_version` default 提供（见 detect）。
+   */
   readonly installSpec: InstallSpec = {
     kind: 'npm',
     package: '@biomejs/biome',
-    binName: 'biome',
-    version: '^2.3.0'
+    binName: 'biome'
   }
 
   private resolvedVersion = ''
@@ -137,7 +137,10 @@ export class BiomeAdapter implements ToolAdapter {
     })
     if (versionResult.spawnError || versionResult.exitCode !== 0) {
       const stderrSnippet =
-        versionResult.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 120) ?? ''
+        versionResult.stderr
+          .split('\n')
+          .find(l => l.trim().length > 0)
+          ?.substring(0, 120) ?? ''
       return {
         available: false,
         reason: `bundled Biome --version failed: exit=${versionResult.exitCode}; stderr="${stderrSnippet}"`
@@ -159,12 +162,7 @@ export class BiomeAdapter implements ToolAdapter {
     // --max-diagnostics=999 防止默认 20 条上限把发现截断
     const result = await runCommand({
       command: this.resolvedBinPath,
-      args: [
-        'check',
-        '--reporter=github',
-        '--max-diagnostics=999',
-        ...files
-      ],
+      args: ['check', '--reporter=github', '--max-diagnostics=999', ...files],
       cwd: repoRoot
     })
 
@@ -194,10 +192,7 @@ export class BiomeAdapter implements ToolAdapter {
       }
 
       const lineNo = parseInt(ann.fields.line ?? '1', 10)
-      const colNo = parseInt(
-        ann.fields.col ?? ann.fields.column ?? '1',
-        10
-      )
+      const colNo = parseInt(ann.fields.col ?? ann.fields.column ?? '1', 10)
       const endLineNo = ann.fields.endLine
         ? parseInt(ann.fields.endLine, 10)
         : undefined

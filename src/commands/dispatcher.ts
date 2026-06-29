@@ -53,16 +53,20 @@ export interface DispatcherDeps {
   options: Options
   /** 可选: 覆盖默认 bot mention 列表 */
   botMentions?: string[]
+  triggerReview?: CommandContext['triggerReview']
 }
 
 /**
  * 主调度入口。
  * 调用方 (command-handler.ts) 负责:
- *   - 当返回 'fallback_conversation' 时，调用旧的 handleReviewComment
+ *   - 当返回 'fallback_conversation' 时，调用成员 D 的 handleConversation（对话式追问）
  */
 export async function dispatchCommentEvent(
   deps: DispatcherDeps
 ): Promise<DispatchOutcome> {
+  // [事件白名单] 仅放行 issue_comment / pull_request_review_comment 两类带评论的事件；
+  // 其余事件（push、pull_request、schedule 等）不携带用户评论，直接忽略，
+  // 同时把 eventName 收窄为 CommandEventName 供后续分支安全使用。
   const eventName = context.eventName as CommandEventName
   if (
     eventName !== 'issue_comment' &&
@@ -71,6 +75,8 @@ export async function dispatchCommentEvent(
     return {kind: 'ignored', reason: `unsupported event: ${eventName}`}
   }
 
+  // [action 校验] 只处理"新建评论"(created)，忽略 edited / deleted 等动作，
+  // 避免编辑历史评论时重复触发命令。
   const payload = context.payload
   if (!payload || payload.action !== 'created') {
     return {kind: 'ignored', reason: `action not created`}
@@ -86,6 +92,8 @@ export async function dispatchCommentEvent(
   let threadNodeId: string | undefined
 
   if (eventName === 'issue_comment') {
+    // [issue_comment 分支] PR 主评论区。GitHub 中 PR 复用 issue 模型，
+    // 只有当该 issue 关联 pull_request 时才是 PR 评论；否则是普通 issue，忽略。
     if (!payload.issue?.pull_request) {
       return {kind: 'ignored', reason: 'issue_comment on non-PR issue'}
     }
@@ -94,11 +102,14 @@ export async function dispatchCommentEvent(
     // issue_comment 的 payload 没有 head/base SHA，需由 handler 自行查
     prAuthor = payload.issue.user?.login ?? ''
   } else {
+    // [pull_request_review_comment 分支] 代码 diff 上的行级评论。
+    // 缺少 pull_request 字段属于异常 payload，忽略。
     if (!payload.pull_request) {
       return {kind: 'ignored', reason: 'review_comment missing pull_request'}
     }
     prNumber = payload.pull_request.number
     comment = payload.comment
+    // 行级评论 payload 自带 head/base SHA，可直接用于后续 diff 定位
     headSha = payload.pull_request.head?.sha ?? ''
     baseSha = payload.pull_request.base?.sha ?? ''
     prAuthor = payload.pull_request.user?.login ?? ''
@@ -106,15 +117,21 @@ export async function dispatchCommentEvent(
     // review_thread 的 nodeId 需要另查 GraphQL；此处置空由 B 在 handler 中补齐
   }
 
+  // [字段完整性校验] 评论体非字符串或缺 PR number 则无法解析命令，忽略。
   if (!comment || typeof comment.body !== 'string' || !prNumber) {
     return {kind: 'ignored', reason: 'missing comment body or pr number'}
   }
 
-  // 过滤 bot 自身（避免自我触发）
+  // [bot 自评论过滤] 通过 user.type 或登录名 `xxx[bot]` 后缀识别机器人，
+  // 防止 bot 自己回帖再次触发命令造成死循环。
   const actorLogin: string = comment.user?.login ?? ''
   const actorIsBot =
     comment.user?.type === 'Bot' || /\[bot\]$/i.test(actorLogin)
   if (actorIsBot) {
+    // 打印作者信息，便于排查"明明是人却被当成 bot"的情况
+    info(
+      `command dispatcher: ignored comment from bot (login=${actorLogin}, type=${comment.user?.type})`
+    )
     return {kind: 'ignored', reason: 'comment from bot'}
   }
 
@@ -126,14 +143,18 @@ export async function dispatchCommentEvent(
   }
   const outcome = parse(comment.body, parseOpts)
 
+  // [解析结果分支] parser 返回三种形态：
   if (outcome.kind === 'none') {
+    // none：未 @bot 或非命令。对话必须显式 @bot 才触发（包括续轮），
+    // 避免与真人之间的普通讨论冲突。
     return {kind: 'ignored', reason: 'no bot mention'}
   }
   if (outcome.kind === 'conversation') {
+    // conversation：@bot 但非已注册命令 → 交回 command-handler 走对话式追问 fallback。
     return {kind: 'fallback_conversation'}
   }
 
-  // outcome.kind === 'command'
+  // outcome.kind === 'command'：解析出一条已知命令，进入执行流程。
   // 即便解析出错，也尽量构造 reply 以反馈用户
   const owner = context.repo.owner
   const repoName = context.repo.repo
@@ -146,6 +167,7 @@ export async function dispatchCommentEvent(
     commandName: cmdNameForReply
   })
 
+  // [解析错误] 命令名识别成功但参数非法等（如 INVALID_ARGS），直接回帖报错并结束。
   if (outcome.error) {
     await reply.error(outcome.error.code, outcome.error.detail)
     return {
@@ -158,7 +180,8 @@ export async function dispatchCommentEvent(
 
   const parsed = outcome.command as ParsedCommand
 
-  // 幂等检查: 同一 commentId × 同一 command 是否已有回复
+  // [幂等检查] 同一 commentId × 同一 command 是否已有回复；
+  // Actions 可能因重试/重复投递触发多次，命中则跳过避免重复执行。
   const processed = await hasBeenProcessed(
     owner,
     repoName,
@@ -170,10 +193,15 @@ export async function dispatchCommentEvent(
     info(
       `command dispatcher: skip duplicate commentId=${comment.id} cmd=${parsed.name}`
     )
-    return {kind: 'executed', command: parsed.name, ok: false, error: 'DUPLICATE'}
+    return {
+      kind: 'executed',
+      command: parsed.name,
+      ok: false,
+      error: 'DUPLICATE'
+    }
   }
 
-  // 速率限制
+  // [速率限制] 按操作者维度限流；超限则回帖提示重试时间并结束。
   const rl = checkRateLimit(actorLogin)
   if (!rl.allowed) {
     await reply.error(
@@ -188,7 +216,7 @@ export async function dispatchCommentEvent(
     }
   }
 
-  // 查找 handler
+  // [查找 handler] 从注册表取命令处理器；命令名虽通过解析但未注册（如已下线）则报 UNKNOWN_COMMAND。
   const handler = registry.get(parsed.name)
   if (!handler) {
     await reply.error('UNKNOWN_COMMAND', `\`${parsed.name}\``)
@@ -200,7 +228,8 @@ export async function dispatchCommentEvent(
     }
   }
 
-  // 权限: 查询 + 校验
+  // [权限校验] 查询操作者在仓库的权限等级，结合"是否为 PR 作者"判断能否执行该命令；
+  // 不满足则回帖 FORBIDDEN 并结束。
   const permission = await getPermission({
     owner,
     repo: repoName,
@@ -242,23 +271,25 @@ export async function dispatchCommentEvent(
     commentNodeId,
     threadNodeId,
     reply,
-    options: deps.options
+    options: deps.options,
+    triggerReview: deps.triggerReview
   }
 
-  // ACK
+  // [ACK 回复] 仅对声明 needsAck 的耗时命令先回一条"正在执行"，
+  // 后续 success/error 会复用该 ackId 原地更新，避免刷屏。
   let ackId: number | null = null
   if (handler.needsAck) {
     ackId = await reply.ack(`正在执行 \`${parsed.name}\` …`)
   }
 
-  // 执行
+  // [执行] 调用 handler，成功回 success；
   try {
     const result = await handler.execute(ctx)
-    const message =
-      result?.message ?? `✅ 命令 \`${parsed.name}\` 执行完成`
+    const message = result?.message ?? `✅ 命令 \`${parsed.name}\` 执行完成`
     await reply.success(message, ackId)
     return {kind: 'executed', command: parsed.name, ok: true}
   } catch (e) {
+    // 抛错则归一化错误码后回 error，并打 warning 便于排查。
     const code = extractErrorCode(e)
     const detail = e instanceof Error ? e.message : String(e)
     await reply.error(code, detail, ackId)
@@ -274,10 +305,17 @@ export async function dispatchCommentEvent(
   }
 }
 
+/**
+ * 把任意抛出的异常归一化为已知 ErrorCode。
+ * 仅当 e 是对象、带 string 类型的 code、且 code 属于白名单时才采用，
+ * 否则一律兜底为 'INTERNAL'。
+ */
 function extractErrorCode(e: unknown): ErrorCode {
+  // 非对象或无 code 字段 → 走末尾 INTERNAL 兜底
   if (e && typeof e === 'object' && 'code' in e) {
     const c = (e as {code?: unknown}).code
     if (typeof c === 'string') {
+      // code 必须命中已知错误码白名单，防止把任意字符串当成合法 ErrorCode
       if (
         [
           'UNKNOWN_COMMAND',

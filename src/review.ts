@@ -12,12 +12,12 @@
  * 支持增量审查：通过在摘要评论中存储已审查的 commit ID，
  * 后续运行只审查新增的变更，避免重复审查。
  */
-import { error, getInput, info, warning } from '@actions/core'
-import { execFileSync } from 'child_process'
+import {error, getInput, info, warning} from '@actions/core'
+import {execFileSync} from 'child_process'
 // eslint-disable-next-line camelcase
-import { context as github_context } from '@actions/github'
+import {context as github_context} from '@actions/github'
 import pLimit from 'p-limit'
-import { type AnalysisStep, type Bot } from './bot'
+import {type AnalysisStep, type Bot} from './bot'
 import {
   Commenter,
   COMMENT_REPLY_TAG,
@@ -28,6 +28,7 @@ import {
   SUMMARIZE_TAG
 } from './commenter'
 import {buildPatchScans} from './changed-lines'
+import {PRIMARY_BOT_MENTION} from './constants'
 import {
   analyzeDependencies,
   formatCrossFileContext,
@@ -41,14 +42,21 @@ import {
   runLintTools,
   type LintReport
 } from './lint'
-import { Inputs } from './inputs'
-import { octokit } from './octokit'
-import { type Options } from './options'
-import { type Prompts } from './prompts'
+import {
+  classifyFindingSeverity,
+  prepareFindings,
+  severityBadge,
+  type Finding
+} from './noise-control'
+import {Inputs} from './inputs'
+import {octokit} from './octokit'
+import {type Options} from './options'
+import {type Prompts} from './prompts'
 import {mergeReviewsByTopic, type Review} from './review-dedup'
 import {ensureFixSuggestionHeaders} from './fix-suggestion-header'
-import { getRepoFileTree } from './repo-tree'
-import { getTokenCount } from './tokenizer'
+import {getRepoFileTree} from './repo-tree'
+import {getReviewStateFromBody} from './review-state'
+import {getTokenCount} from './tokenizer'
 
 // eslint-disable-next-line camelcase
 const context = github_context
@@ -58,7 +66,13 @@ const MAX_CROSS_FILE_CONTEXT_TOKENS = 1500
 const repo = context.repo
 
 /** 在 PR 描述中添加此关键词可跳过 AI 审查 */
-const ignoreKeyword = '@ai-reviewer: ignore'
+const ignoreKeyword = `${PRIMARY_BOT_MENTION}: ignore`
+
+export interface CodeReviewRunOptions {
+  mode?: 'incremental' | 'full'
+  source?: 'auto' | 'command'
+  summaryOnly?: boolean
+}
 
 /**
  * 代码审查主函数
@@ -72,9 +86,12 @@ export const codeReview = async (
   lightBot: Bot,
   heavyBot: Bot,
   options: Options,
-  prompts: Prompts
+  prompts: Prompts,
+  runOptions: CodeReviewRunOptions = {}
 ): Promise<void> => {
   const commenter: Commenter = new Commenter()
+  const fromCommand = runOptions.source === 'command'
+  const reviewMode = runOptions.mode ?? 'incremental'
 
   // 初始化并发控制器：分别限制 OpenAI 和 GitHub API 的并发数
   const openaiConcurrencyLimit = pLimit(options.openaiConcurrencyLimit)
@@ -83,15 +100,35 @@ export const codeReview = async (
   // ==================== 事件验证 ====================
   if (
     context.eventName !== 'pull_request' &&
-    context.eventName !== 'pull_request_target'
+    context.eventName !== 'pull_request_target' &&
+    !fromCommand
   ) {
     warning(
       `Skipped: current event is ${context.eventName}, only support pull_request event`
     )
     return
   }
+  if (context.payload.pull_request == null && fromCommand) {
+    const issueNumber = context.payload.issue?.number
+    if (issueNumber != null) {
+      const pr = await octokit.pulls.get({
+        owner: repo.owner,
+        repo: repo.repo,
+        pull_number: issueNumber
+      })
+      ;(context.payload as any).pull_request = pr.data
+    }
+  }
   if (context.payload.pull_request == null) {
     warning('Skipped: context.payload.pull_request is null')
+    return
+  }
+
+  if (
+    !fromCommand &&
+    getReviewStateFromBody(context.payload.pull_request.body ?? '') === 'paused'
+  ) {
+    info('Skipped: review automation is paused for this PR')
     return
   }
 
@@ -145,13 +182,21 @@ export const codeReview = async (
   }
 
   // 确定 diff 的起始 commit
-  if (
+  if (reviewMode === 'full') {
+    info(
+      `Will review full diff from the base commit: ${
+        context.payload.pull_request.base.sha as string
+      }`
+    )
+    highestReviewedCommitId = context.payload.pull_request.base.sha
+  } else if (
     highestReviewedCommitId === '' ||
     highestReviewedCommitId === context.payload.pull_request.head.sha
   ) {
     // 首次审查或已是最新：从 base 分支开始
     info(
-      `Will review from the base commit: ${context.payload.pull_request.base.sha as string
+      `Will review from the base commit: ${
+        context.payload.pull_request.base.sha as string
       }`
     )
     highestReviewedCommitId = context.payload.pull_request.base.sha
@@ -236,31 +281,36 @@ export const codeReview = async (
           warning('Skipped: context.payload.pull_request is null')
           return null
         }
-        try {
-          const contents = await octokit.repos.getContent({
-            owner: repo.owner,
-            repo: repo.repo,
-            path: file.filename,
-            ref: context.payload.pull_request.base.sha
-          })
-          if (contents.data != null) {
-            if (!Array.isArray(contents.data)) {
-              if (
-                contents.data.type === 'file' &&
-                contents.data.content != null
-              ) {
-                fileContent = Buffer.from(
-                  contents.data.content,
-                  'base64'
-                ).toString()
+        if (file.status === 'added') {
+          info(`skip base content fetch for new file: ${file.filename}`)
+        } else {
+          try {
+            const contents = await octokit.repos.getContent({
+              owner: repo.owner,
+              repo: repo.repo,
+              path: file.filename,
+              ref: context.payload.pull_request.base.sha
+            })
+            if (contents.data != null) {
+              if (!Array.isArray(contents.data)) {
+                if (
+                  contents.data.type === 'file' &&
+                  contents.data.content != null
+                ) {
+                  fileContent = Buffer.from(
+                    contents.data.content,
+                    'base64'
+                  ).toString()
+                }
               }
             }
+          } catch (e: any) {
+            warning(
+              `Failed to get file contents: ${
+                e as string
+              }. This is OK if it's a new file.`
+            )
           }
-        } catch (e: any) {
-          warning(
-            `Failed to get file contents: ${e as string
-            }. This is OK if it's a new file.`
-          )
         }
 
         // 提取文件的完整 diff patch
@@ -345,7 +395,11 @@ ${hunks.oldHunk}
         disabled: false
       })
       info(
-        `Phase 0b: lint scan completed in ${lintReport.durationMs}ms — ${lintReport.results.length} findings on changed lines from ${lintReport.toolSummaries.filter(s => s.available).length} tool(s)`
+        `Phase 0b: lint scan completed in ${lintReport.durationMs}ms — ${
+          lintReport.results.length
+        } findings on changed lines from ${
+          lintReport.toolSummaries.filter(s => s.available).length
+        } tool(s)`
       )
     } catch (e: any) {
       warning(`Phase 0b: lint scan failed: ${e.message}, skipping`)
@@ -381,11 +435,13 @@ ${hunks.oldHunk}
   // ==================== 构建状态消息 ====================
   let statusMsg = `<details>
 <summary>Commits</summary>
-Files that changed from the base of the PR and between ${highestReviewedCommitId} and ${context.payload.pull_request.head.sha
-    } commits.
+Files that changed from the base of the PR and between ${highestReviewedCommitId} and ${
+    context.payload.pull_request.head.sha
+  } commits.
 </details>
-${filesAndChanges.length > 0
-      ? `
+${
+  filesAndChanges.length > 0
+    ? `
 <details>
 <summary>Files selected (${filesAndChanges.length})</summary>
 
@@ -394,10 +450,11 @@ ${filesAndChanges.length > 0
         .join('\n* ')}
 </details>
 `
-      : ''
-    }
-${filterIgnoredFiles.length > 0
-      ? `
+    : ''
+}
+${
+  filterIgnoredFiles.length > 0
+    ? `
 <details>
 <summary>Files ignored due to filter (${filterIgnoredFiles.length})</summary>
 
@@ -405,8 +462,8 @@ ${filterIgnoredFiles.length > 0
 
 </details>
 `
-      : ''
-    }
+    : ''
+}
 `
 
   // 更新摘要评论为"审查进行中"状态
@@ -587,7 +644,11 @@ ${RAW_SUMMARY_END_TAG}
 ${SHORT_SUMMARY_START_TAG}
 ${inputs.shortSummary}
 ${SHORT_SUMMARY_END_TAG}
-${dependencyContext != null ? `\n${formatDependencySummary(dependencyContext)}` : ''}
+${
+  dependencyContext != null
+    ? `\n${formatDependencySummary(dependencyContext)}`
+    : ''
+}
 ${lintReport != null ? `\n${formatLintSummary(lintReport)}` : ''}
 ---
 
@@ -601,34 +662,38 @@ ${botName} is an AI-powered code review tool that helps improve code quality.
 
   // 追加处理统计信息到状态消息
   statusMsg += `
-${skippedFiles.length > 0
-      ? `
+${
+  skippedFiles.length > 0
+    ? `
 <details>
-<summary>Files not processed due to max files limit (${skippedFiles.length
+<summary>Files not processed due to max files limit (${
+        skippedFiles.length
       })</summary>
 
 * ${skippedFiles.join('\n* ')}
 
 </details>
 `
-      : ''
-    }
-${summariesFailed.length > 0
-      ? `
+    : ''
+}
+${
+  summariesFailed.length > 0
+    ? `
 <details>
-<summary>Files not summarized due to errors (${summariesFailed.length
+<summary>Files not summarized due to errors (${
+        summariesFailed.length
       })</summary>
 
 * ${summariesFailed.join('\n* ')}
 
 </details>
 `
-      : ''
-    }
+    : ''
+}
 `
 
   // ==================== 阶段四：逐文件代码审查 ====================
-  if (!options.disableReview) {
+  if (!options.disableReview && runOptions.summaryOnly !== true) {
     // 筛选出需要审查的文件（分类为 NEEDS_REVIEW 的文件）
     const filesAndChangesReview = filesAndChanges.filter(([filename]) => {
       const needsReview =
@@ -649,8 +714,13 @@ ${summariesFailed.length > 0
       .map(([filename]) => filename)
 
     const reviewsFailed: string[] = []
-    let lgtmCount = 0    // LGTM 评论计数（被过滤掉的）
-    let reviewCount = 0   // 实际发布的审查评论计数
+    let lgtmCount = 0 // LGTM 评论计数（被过滤掉的）
+    let reviewCount = 0 // 收集到的审查发现总数（去重/截断前）
+
+    // 噪音控制（成员 D · §2.5）：先把所有文件的发现收集起来，
+    // 待并行审查全部完成后统一去重 / 排序 / 截断，再发布行级评论 + PR 顶部汇总。
+    // 注意: doReview 并行执行，但 JS 单线程下 Array.push 是安全的。
+    const findings: Finding[] = []
 
     /**
      * 对单个文件执行代码审查
@@ -677,7 +747,11 @@ ${summariesFailed.length > 0
         const lintCtx = formatLintContextForFile(filename, lintReport)
         if (lintCtx.length > 0) {
           ins.lintContext = lintCtx
-          info(`injected lint context for ${filename}: ${getTokenCount(lintCtx)} tokens`)
+          info(
+            `injected lint context for ${filename}: ${getTokenCount(
+              lintCtx
+            )} tokens`
+          )
         }
       }
 
@@ -690,9 +764,13 @@ ${summariesFailed.length > 0
             const ctxTokens = getTokenCount(crossFileCtx)
             if (ctxTokens <= MAX_CROSS_FILE_CONTEXT_TOKENS) {
               ins.crossFileContext = crossFileCtx
-              info(`injected cross-file context for ${filename}: ${ctxTokens} tokens`)
+              info(
+                `injected cross-file context for ${filename}: ${ctxTokens} tokens`
+              )
             } else {
-              info(`cross-file context too large for ${filename}: ${ctxTokens} tokens, skipping`)
+              info(
+                `cross-file context too large for ${filename}: ${ctxTokens} tokens, skipping`
+              )
             }
           }
         }
@@ -751,7 +829,8 @@ ${summariesFailed.length > 0
           }
         } catch (e: any) {
           warning(
-            `Failed to get comments: ${e as string}, skipping. backtrace: ${e.stack as string
+            `Failed to get comments: ${e as string}, skipping. backtrace: ${
+              e.stack as string
             }`
           )
         }
@@ -801,12 +880,18 @@ ${commentChain}
           }
 
           // 格式化 Analysis chain（模型执行的 shell / web_search 步骤）
-          info(`[analysis_chain] ${filename}: received ${analysisSteps.length} analysis steps from bot`)
+          info(
+            `[analysis_chain] ${filename}: received ${analysisSteps.length} analysis steps from bot`
+          )
           const analysisChainMd = formatAnalysisChain(
             analysisSteps,
             resolveAnalysisRepositoryUrl()
           )
-          info(`[analysis_chain] ${filename}: formatted markdown length=${analysisChainMd.length}, empty=${analysisChainMd === ''}`)
+          info(
+            `[analysis_chain] ${filename}: formatted markdown length=${
+              analysisChainMd.length
+            }, empty=${analysisChainMd === ''}`
+          )
 
           // 解析 AI 响应，提取结构化的审查评论
           // 然后做**议题级合并去重**：LLM 经常对同一个 tool finding 写出多条
@@ -868,7 +953,9 @@ ${commentChain}
               // 块自动加标头。
               commentWithChain = ensureFixSuggestionHeaders(commentWithChain)
 
-              info(`[analysis_chain] ${filename}: comment line ${review.startLine}-${review.endLine}, hasChain=${shouldAttachAnalysisChain}, finalLen=${commentWithChain.length}`)
+              info(
+                `[analysis_chain] ${filename}: comment line ${review.startLine}-${review.endLine}, hasChain=${shouldAttachAnalysisChain}, finalLen=${commentWithChain.length}`
+              )
               // 将审查评论加入缓冲区
               await commenter.bufferReviewComment(
                 filename,
@@ -876,13 +963,24 @@ ${commentChain}
                 review.endLine,
                 commentWithChain
               )
+              // 收集为 Finding（不立即 buffer），统一在审查完成后做噪音控制。
+              // 严重级别以警示框徽标的形式直接置于每条行级评论顶部（取代 PR 顶部汇总评论）。
+              const severity = classifyFindingSeverity(review.comment)
+              findings.push({
+                path: filename,
+                startLine: review.startLine,
+                endLine: review.endLine,
+                severity,
+                body: `${severityBadge(severity)}\n\n${commentWithChain}`
+              })
             } catch (e: any) {
               reviewsFailed.push(`${filename} comment failed (${e as string})`)
             }
           }
         } catch (e: any) {
           warning(
-            `Failed to review: ${e as string}, skipping. backtrace: ${e.stack as string
+            `Failed to review: ${e as string}, skipping. backtrace: ${
+              e.stack as string
             }`
           )
           reviewsFailed.push(`${filename} (${e as string})`)
@@ -908,33 +1006,66 @@ ${commentChain}
 
     await Promise.all(reviewPromises)
 
+    // 噪音控制（成员 D · §2.5）：按严重级别排序 + 截断到上限（默认 20）。
+    // 行级评论保留每个位置（dedupe:false），避免把不同代码行的同类问题合并导致丢失位置；
+    // 同类合并仅用于下方 PR 顶部汇总评论的概览统计。
+    const {kept: keptFindings, truncated: truncatedFindings} = prepareFindings(
+      findings,
+      {dedupe: false, maxComments: options.maxReviewComments}
+    )
+    if (truncatedFindings > 0) {
+      info(
+        `noise-control: ${findings.length} findings → posting ${keptFindings.length}, truncated ${truncatedFindings} low-priority`
+      )
+    }
+    for (const f of keptFindings) {
+      try {
+        await commenter.bufferReviewComment(
+          f.path,
+          f.startLine,
+          f.endLine,
+          f.body
+        )
+      } catch (e: any) {
+        reviewsFailed.push(`${f.path} comment failed (${e as string})`)
+      }
+    }
+
     // 追加审查统计信息到状态消息
     statusMsg += `
-${reviewsFailed.length > 0
-        ? `<details>
+${
+  reviewsFailed.length > 0
+    ? `<details>
 <summary>Files not reviewed due to errors (${reviewsFailed.length})</summary>
 
 * ${reviewsFailed.join('\n* ')}
 
 </details>
 `
-        : ''
-      }
-${reviewsSkipped.length > 0
-        ? `<details>
-<summary>Files skipped from review due to trivial changes (${reviewsSkipped.length
-        })</summary>
+    : ''
+}
+${
+  reviewsSkipped.length > 0
+    ? `<details>
+<summary>Files skipped from review due to trivial changes (${
+        reviewsSkipped.length
+      })</summary>
 
 * ${reviewsSkipped.join('\n* ')}
 
 </details>
 `
-        : ''
-      }
+    : ''
+}
 <details>
 <summary>Review comments generated (${reviewCount + lgtmCount})</summary>
 
 * Review: ${reviewCount}
+* Posted (after noise control): ${keptFindings.length}${
+      truncatedFindings > 0
+        ? ` — truncated ${truncatedFindings} lower-priority`
+        : ''
+    }
 * LGTM: ${lgtmCount}
 
 </details>
@@ -944,16 +1075,16 @@ ${reviewsSkipped.length > 0
 <details>
 <summary>Tips</summary>
 
-### Chat with ${botName} Bot (\`@ai-reviewer\`)
+### Chat with ${botName} Bot (\`${PRIMARY_BOT_MENTION}\`)
 - Reply on review comments left by this bot to ask follow-up questions. A review comment is a comment on a diff or a file.
-- Invite the bot into a review comment chain by tagging \`@ai-reviewer\` in a reply.
+- Invite the bot into a review comment chain by tagging \`${PRIMARY_BOT_MENTION}\` in a reply.
 
 ### Code suggestions
 - The bot may make code suggestions, but please review them carefully before committing since the line number ranges may be misaligned.
 - You can edit the comment made by the bot and manually tweak the suggestion if it is slightly off.
 
 ### Pausing incremental reviews
-- Add \`@ai-reviewer: ignore\` anywhere in the PR description to pause further reviews from the bot.
+- Add \`${ignoreKeyword}\` anywhere in the PR description to pause further reviews from the bot.
 
 </details>
 `
@@ -963,12 +1094,18 @@ ${reviewsSkipped.length > 0
       context.payload.pull_request.head.sha
     )}`
 
-    // 批量提交所有缓冲的审查评论
+    // 批量提交所有缓冲的审查评论（严重级别已内嵌在每条评论顶部，不再单独发汇总评论）
     await commenter.submitReview(
       context.payload.pull_request.number,
       commits[commits.length - 1].sha,
       statusMsg
     )
+  }
+
+  // summary-only 等跳过审查阶段的场景：保留既有的已审查 commit 记录，
+  // 否则 replace 摘要评论会清空增量审查标记，导致下次自动审查从 base 重审
+  if (runOptions.summaryOnly === true && existingCommitIdsBlock !== '') {
+    summarizeComment += `\n${existingCommitIdsBlock}`
   }
 
   // 发布最终的摘要评论
@@ -1028,17 +1165,23 @@ function buildGithubRepositoryUrl(): string | undefined {
 
 function readOriginRemoteUrl(): string | undefined {
   try {
-    const originUrl = execFileSync('git', ['config', '--get', 'remote.origin.url'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore']
-    }).trim()
+    const originUrl = execFileSync(
+      'git',
+      ['config', '--get', 'remote.origin.url'],
+      {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore']
+      }
+    ).trim()
     return originUrl === '' ? undefined : originUrl
   } catch {
     return undefined
   }
 }
 
-function normalizeRepositoryUrl(rawUrl: string | undefined): string | undefined {
+function normalizeRepositoryUrl(
+  rawUrl: string | undefined
+): string | undefined {
   if (rawUrl == null) return undefined
 
   const trimmed = rawUrl.trim()
@@ -1092,7 +1235,9 @@ function formatAnalysisChain(
         const command = step.commands?.[cmdIdx] ?? ''
         const commandOutput = step.commandOutputs?.[cmdIdx]
         chain += `\n🏁 Shell executed:\n`
-        chain += `\`\`\`bash\n${formatShellCommandForDisplay(command)}\n\`\`\`\n\n`
+        chain += `\`\`\`bash\n${formatShellCommandForDisplay(
+          command
+        )}\n\`\`\`\n\n`
         chain += `Repository: ${repositoryUrl}\n`
         if (commandOutput != null) {
           chain += `\nLength of output: ${commandOutput.stdoutLength}\n`
@@ -1100,9 +1245,10 @@ function formatAnalysisChain(
         }
         chain += '---\n\n'
       }
-      
     } else if (step.type === 'web_search') {
-      chain += `🔍 Web search executed (status: ${step.status ?? 'unknown'})\n\n---\n\n`
+      chain += `🔍 Web search executed (status: ${
+        step.status ?? 'unknown'
+      })\n\n---\n\n`
     }
   }
 
@@ -1119,7 +1265,8 @@ const splitPatch = (patch: string | null | undefined): string[] => {
     return []
   }
 
-  const pattern = /(^@@ -(\d+),(\d+) \+(\d+),(\d+) @@).*$/gm
+  // `,count` is optional in unified diff when count=1 (e.g. `@@ -0,0 +1 @@`)
+  const pattern = /(^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@).*$/gm
 
   const result: string[] = []
   let last = -1
@@ -1147,16 +1294,17 @@ const splitPatch = (patch: string | null | undefined): string[] => {
 const patchStartEndLine = (
   patch: string
 ): {
-  oldHunk: { startLine: number; endLine: number }
-  newHunk: { startLine: number; endLine: number }
+  oldHunk: {startLine: number; endLine: number}
+  newHunk: {startLine: number; endLine: number}
 } | null => {
-  const pattern = /(^@@ -(\d+),(\d+) \+(\d+),(\d+) @@)/gm
+  // `,count` is optional in unified diff when count=1 (e.g. `@@ -0,0 +1 @@`)
+  const pattern = /(^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@)/gm
   const match = pattern.exec(patch)
   if (match != null) {
     const oldBegin = parseInt(match[2])
-    const oldDiff = parseInt(match[3])
+    const oldDiff = match[3] != null ? parseInt(match[3]) : 1
     const newBegin = parseInt(match[4])
-    const newDiff = parseInt(match[5])
+    const newDiff = match[5] != null ? parseInt(match[5]) : 1
     return {
       oldHunk: {
         startLine: oldBegin,
@@ -1182,7 +1330,7 @@ const patchStartEndLine = (
  */
 const parsePatch = (
   patch: string
-): { oldHunk: string; newHunk: string } | null => {
+): {oldHunk: string; newHunk: string} | null => {
   const hunkInfo = patchStartEndLine(patch)
   if (hunkInfo == null) {
     return null
@@ -1242,8 +1390,6 @@ const parsePatch = (
 }
 
 // ==================== AI 响应解析 ====================
-
-// `Review` 接口与 `mergeReviewsByLineRange` 已抽到 src/review-dedup.ts，便于单元测试
 
 /**
  * 解析 AI 的代码审查响应，提取结构化的评论列表
@@ -1375,9 +1521,9 @@ ${review.comment}`
       codeBlockStartIndex = comment.indexOf(
         codeBlockStart,
         codeBlockStartIndex +
-        codeBlockStart.length +
-        sanitizedBlock.length +
-        codeBlockEnd.length
+          codeBlockStart.length +
+          sanitizedBlock.length +
+          codeBlockEnd.length
       )
     }
 
