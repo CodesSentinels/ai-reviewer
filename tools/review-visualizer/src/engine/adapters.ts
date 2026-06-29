@@ -37,8 +37,7 @@ export function runPipeline(input: {
     ? extractVueScriptContent(input.sourceContent)
     : ''
 
-  const contentForImports = isVue ? input.sourceContent : input.sourceContent
-  const imports = parseImports(contentForImports, input.sourceFilename)
+  const imports = parseImports(input.refContent, input.refFilename)
 
   const symbols = extractModifiedSymbols(input.sourceFilename, input.diffPatch)
 

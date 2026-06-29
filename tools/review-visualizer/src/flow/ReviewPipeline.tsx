@@ -28,15 +28,15 @@ export default function ReviewPipeline({
   const isVue = sourceFilename.endsWith('.vue')
 
   const initialNodes: Node[] = useMemo(() => {
-    const rowGap = isVue ? 200 : 160
-    const row0 = 0
-    const row1 = rowGap
-    const row2 = isVue ? rowGap * 2 : -1
-    const rowRef = isVue ? rowGap * 3 : rowGap * 2
-    const rowFindRefs = rowRef
+    const rowGap = 180
     const col0 = 0
-    const col1 = isVue ? 380 : 320
-    const col2 = isVue ? 760 : 680
+    const col1 = 360
+    const col2 = 740
+
+    const row0 = 0                          // Diff Patch → extractModifiedSymbols
+    const row1 = rowGap                     // Source Content (→ Vue extract if Vue)
+    const rowRef = isVue ? rowGap * 2 : rowGap   // Reference File → parseImports
+    const rowRefs = rowRef + rowGap               // findReferencesInContent
 
     const nodes: Node[] = [
       {
@@ -47,7 +47,7 @@ export default function ReviewPipeline({
           label: 'Diff Patch',
           type: 'input',
           data: `${state.symbols.length} symbols extracted`,
-          description: 'git diff output'
+          description: `modified file: ${sourceFilename}`
         }
       },
       {
@@ -69,18 +69,7 @@ export default function ReviewPipeline({
           label: 'Source Content',
           type: 'input',
           data: `${sourceFilename}`,
-          description: isVue ? 'Vue SFC file' : 'TS/JS file'
-        }
-      },
-      {
-        id: 'parse-imports',
-        type: 'dataNode',
-        position: {x: col1, y: isVue ? row2 : row1},
-        data: {
-          label: isVue ? 'parseImports' : 'parseImports',
-          type: 'process',
-          data: state.imports,
-          description: `${state.imports.length} imports found`
+          description: isVue ? 'Vue SFC — modified file' : 'TS/JS — modified file'
         }
       },
       {
@@ -95,9 +84,20 @@ export default function ReviewPipeline({
         }
       },
       {
+        id: 'parse-imports',
+        type: 'dataNode',
+        position: {x: col1, y: rowRef},
+        data: {
+          label: 'parseImports',
+          type: 'process',
+          data: state.imports,
+          description: `${refFilename}: ${state.imports.length} imports found`
+        }
+      },
+      {
         id: 'find-refs',
         type: 'dataNode',
-        position: {x: col1, y: rowFindRefs},
+        position: {x: col1, y: rowRefs},
         data: {
           label: 'findReferencesInContent',
           type: 'process',
@@ -108,7 +108,7 @@ export default function ReviewPipeline({
       {
         id: 'format-output',
         type: 'dataNode',
-        position: {x: col2, y: isVue ? row2 : row1},
+        position: {x: col2, y: rowRef},
         data: {
           label: 'formatCrossFileContext',
           type: 'output',
@@ -127,7 +127,7 @@ export default function ReviewPipeline({
           label: 'extractVueScriptContent',
           type: 'process',
           data: state.vueScriptContent || '(empty)',
-          description: '<script> block extraction'
+          description: `<script> from ${sourceFilename}`
         }
       })
     }
@@ -143,16 +143,12 @@ export default function ReviewPipeline({
         target: 'extract-symbols',
         animated: true
       },
-      ...(!isVue
-        ? [
-            {
-              id: 'e-source-imports',
-              source: 'source-input',
-              target: 'parse-imports',
-              animated: true
-            }
-          ]
-        : []),
+      {
+        id: 'e-ref-imports',
+        source: 'ref-input',
+        target: 'parse-imports',
+        animated: true
+      },
       {
         id: 'e-ref-refs',
         source: 'ref-input',
@@ -190,13 +186,8 @@ export default function ReviewPipeline({
         id: 'e-source-vue',
         source: 'source-input',
         target: 'vue-extract',
-        animated: true
-      })
-      edges.push({
-        id: 'e-vue-imports',
-        source: 'vue-extract',
-        target: 'parse-imports',
-        animated: true
+        animated: true,
+        label: '<script> extraction'
       })
     }
     return edges

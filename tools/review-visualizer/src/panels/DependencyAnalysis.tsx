@@ -21,7 +21,8 @@ function internalHelper() {
   return 'not exported'
 }`
 
-const DEFAULT_REF = `import { formatPrice, MAX_RETRY } from '~/utils/format'
+const DEFAULT_REF = `<script setup lang="ts">
+import { formatPrice, MAX_RETRY } from '~/utils/format'
 
 const display = formatPrice(100)
 console.log('retries:', MAX_RETRY)
@@ -29,7 +30,9 @@ console.log('retries:', MAX_RETRY)
 function checkout() {
   const total = formatPrice(599.9)
   return total
-}`
+}
+</script>
+<template><div>{{ display }}</div></template>`
 
 const PRESETS = {
   'TS exports': {
