@@ -139,4 +139,59 @@ Vue SFC [可编辑]   → extractVueScriptContent → script content → parseIm
 
 ---
 
+## OPT-003：Issue #28 — 设计缺陷与文档问题
+
+**来源：** [GitHub Issue #28](https://github.com/CodesSentinels/ai-reviewer/issues/28)
+**发现日期：** 2026-06-29
+
+> 以下按原 issue 的分类整理，优先级标注沿用原 issue 的评级。
+
+### I. 安全缺陷（Critical）
+
+| ID | 问题 | 优先级 | 涉及文件 |
+|----|------|--------|---------|
+| 28-S1 | Shell 命令注入 — `enable_shell=true` 时 bot 可执行 AI 请求的任意 shell 命令，攻击者可在 PR diff 中嵌入恶意指令 | 🔴 Critical | `runLocalShellCommand()` |
+| 28-S2 | `runLocalShellCommand()` 无命令白名单，GitHub Actions runner 可访问 secrets | 🔴 Critical | `action.yml`, shell 执行逻辑 |
+
+### II. 设计缺陷（Major）
+
+| ID | 问题 | 优先级 | 涉及文件 |
+|----|------|--------|---------|
+| 28-D1 | "In Review" 状态未清除 — `addInProgressStatus()` 无对应 `removeInProgressStatus()` 调用，出错时 PR 永久标记为审查中 | 🟠 Major | `src/review.ts`, `src/commenter.ts` |
+| 28-D2 | 评论删除后缓存未失效 — 删除操作后缓存未清除，同一 Action run 内幂等检查失败 | 🟠 Major | `src/commenter.ts` |
+| 28-D3 | God Function — `codeReview()` 830 行，嵌套闭包，混合 diff 解析/过滤/摘要/提交，难以测试 | 🟠 Major | `src/review.ts` |
+| 28-D4 | API 错误掩盖 — 空响应记录为 "nothing obtained" 而非实际错误 | 🟠 Major | `src/review.ts` |
+| 28-D5 | 死代码 — `chat_()` 中 `setFailed()` 不可达（`this.client` 不会为 null） | 🟡 Minor | bot 相关文件 |
+| 28-D6 | 输入校验缺失 — token 参数无校验，非数字字符串导致 NaN | 🟠 Major | `src/options.ts` |
+| 28-D7 | `issue_comment` 对话回复功能硬编码跳过，无跟踪 issue | 🟡 Minor | `src/main.ts` |
+| 28-D8 | HTML 评论标签硬编码 bot 名称 — 配置修改后幂等检测失效 | 🟠 Major | `src/commenter.ts` |
+| 28-D9 | 竞态条件 — 并发 Action run 可因删除-创建序列无保护而产生重复评论 | 🟠 Major | `src/commenter.ts` |
+
+### III. 代码质量问题
+
+| ID | 问题 | 优先级 |
+|----|------|--------|
+| 28-Q1 | GitHub API 处理中过多 `any` 类型 | 🟡 Minor |
+| 28-Q2 | 进程内限流在无状态环境中无实际作用 | 🟡 Minor |
+| 28-Q3 | 正则缓存无清理机制 | 🟡 Minor |
+| 28-Q4 | 路径过滤产生过多日志 | 🟡 Minor |
+
+### IV. 文档问题
+
+| ID | 问题 | 优先级 |
+|----|------|--------|
+| 28-DOC1 | 架构图遗漏命令系统 | 🟠 Major |
+| 28-DOC2 | 新功能（shell 执行、依赖分析、web 搜索）未更新 README | 🟠 Major |
+| 28-DOC3 | `action.yml` 默认值与 `options.ts` 默认值不一致 | 🟠 Major |
+| 28-DOC4 | `enable_shell` 缺少安全警告 | 🔴 Critical |
+| 28-DOC5 | workflow 示例缺少 `issue_comment` 事件 | 🟠 Major |
+
+### 处理建议
+
+1. **立即处理**：28-S1、28-S2、28-DOC4（安全相关）
+2. **近期迭代**：28-D1、28-D2、28-D3、28-D8、28-D9（影响可靠性）
+3. **后续优化**：其余 Major/Minor 项
+
+---
+
 <!-- 新增优化项请追加在此分隔线之后，格式参照 OPT-001 -->
