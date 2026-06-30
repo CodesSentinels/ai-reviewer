@@ -92,6 +92,12 @@ const DEFAULT_LOCAL_SHELL_MAX_OUTPUT_LENGTH = 4_096
 const MAX_LOCAL_SHELL_TURNS = 8
 const LOCAL_SHELL_OUTPUT_TRUNCATED = '\n... (truncated)'
 const LOCAL_SHELL_MAX_BUFFER_BYTES = 4 * 1024 * 1024
+const LOCAL_SHELL_SENSITIVE_ENV_KEYS = [
+  'OPENAI_API_KEY',
+  'GITHUB_TOKEN',
+  'INPUT_OPENAI-API-KEY',
+  'INPUT_GITHUB-TOKEN'
+]
 
 const getLocalShellBinary = (): string | undefined => {
   if (process.env.SHELL) {
@@ -615,6 +621,11 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
       )
     )
 
+    const sanitizedEnv = {...process.env}
+    for (const key of LOCAL_SHELL_SENSITIVE_ENV_KEYS) {
+      delete sanitizedEnv[key]
+    }
+
     try {
       const {stdout, stderr} = await new Promise<{
         stdout: string
@@ -622,6 +633,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
       }>((resolve, reject) => {
         execCallback(command, {
           cwd: process.cwd(),
+          env: sanitizedEnv,
           timeout: timeoutMs,
           maxBuffer,
           ...(shell ? {shell} : {})
