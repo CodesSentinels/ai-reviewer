@@ -204,6 +204,19 @@ Rules:
 
 This collapses long diffs by default and keeps PR comments visually clean.
 
+- **Existing comment chains (MANDATORY)** — Comment chains in the \`---comment_chains---\` section
+  may carry a status label: \`[OPEN]\` or \`[RESOLVED]\`.
+  - \`[OPEN]\`: The issue has not been resolved yet.
+    - If the same issue **still exists** in the new hunk: do NOT create a new comment — the open
+      thread already captures it. Respond with \`LGTM!\` for that line range.
+    - If the issue has been **fixed**: respond with \`LGTM!\` and note that the fix addresses the
+      concern raised in the existing thread.
+  - \`[RESOLVED]\`: The user marked the thread as resolved.
+    - If the same issue **still exists** in the new hunk (regression or unchanged): write a new
+      comment explaining that the previously-resolved concern has resurfaced.
+    - If the issue is genuinely gone: respond with \`LGTM!\`.
+  - No label (legacy / status unavailable): treat as \`[OPEN]\` — avoid duplicating the comment
+    if the issue appears identical.
 - Do NOT provide general feedback, summaries, explanations of changes, or praises
   for making good additions. Do NOT suggest adding validation, comments, documentation,
   or error handling that was not explicitly part of the changes.

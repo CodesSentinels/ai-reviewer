@@ -549,13 +549,18 @@ ${COMMENT_REPLY_TAG}
   /**
    * 获取指定行号范围内的所有评论对话链
    * 用于在代码审查时提供已有评论上下文
+   *
+   * @param threadStatusMap 可选的线程状态 map（path:line → isResolved），
+   *   由 fetchThreadStatusMap() 生成。传入后每条链头部会加上
+   *   [OPEN] 或 [RESOLVED] 标签，让 AI 知道是否应跳过 / reopen。
    */
   async getCommentChainsWithinRange(
     pullNumber: number,
     path: string,
     startLine: number,
     endLine: number,
-    tag = ''
+    tag = '',
+    threadStatusMap?: Map<string, boolean>
   ) {
     const existingComments = await this.getCommentsWithinRange(
       pullNumber,
@@ -581,7 +586,21 @@ ${COMMENT_REPLY_TAG}
       )
       if (chain && chain.includes(tag)) {
         chainNum += 1
-        allChains += `Conversation Chain ${chainNum}:
+        // 从 threadStatusMap 推断该评论所在行是否已 resolved
+        let statusLabel = ''
+        if (threadStatusMap != null) {
+          const commentLine: number =
+            topLevelComment.line ?? topLevelComment.original_line ?? startLine
+          const key = `${path}:${commentLine}`
+          const isResolved = threadStatusMap.get(key)
+          // 只在明确知道状态时加标签；未命中 map 的保持无标签（兼容旧行为）
+          if (isResolved === true) {
+            statusLabel = ' [RESOLVED]'
+          } else if (isResolved === false) {
+            statusLabel = ' [OPEN]'
+          }
+        }
+        allChains += `Conversation Chain ${chainNum}${statusLabel}:
 ${chain}
 ---
 `
