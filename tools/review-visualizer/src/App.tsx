@@ -2,11 +2,13 @@ import {useState} from 'react'
 import BasicReviewFlow from './panels/BasicReviewFlow'
 import IncrementalReview from './panels/IncrementalReview'
 import DependencyAnalysis from './panels/DependencyAnalysis'
+import CommentChainStatus from './panels/CommentChainStatus'
 
 const TABS = [
   {key: 'basic', label: '1.1 Basic Review Flow'},
   {key: 'incremental', label: '1.2 Incremental Review'},
-  {key: 'dependency', label: '1.3 Dependency Analysis'}
+  {key: 'dependency', label: '1.3 Dependency Analysis'},
+  {key: 'comment-chain', label: 'OPT-001 Comment Chain Status'}
 ] as const
 
 type TabKey = (typeof TABS)[number]['key']
@@ -49,6 +51,7 @@ export default function App() {
         {tab === 'basic' && <BasicReviewFlow />}
         {tab === 'incremental' && <IncrementalReview />}
         {tab === 'dependency' && <DependencyAnalysis />}
+        {tab === 'comment-chain' && <CommentChainStatus />}
       </div>
     </div>
   )
