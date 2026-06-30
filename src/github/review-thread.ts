@@ -136,6 +136,55 @@ function normalizeLogin(login: string): string {
 
 // ─── Query ────────────────────────────────────────────────────────────────────
 
+/**
+ * `path:line` → `isResolved` の lookup table for a PR.
+ *
+ * Built from GraphQL reviewThreads which carry the resolved flag.
+ * Used to annotate comment chains injected into the review prompt so the AI
+ * knows whether a thread is still open or has already been resolved.
+ *
+ * Key format: `${path}:${line}` — matches REST comment's `path` + `line`.
+ * When multiple threads share the same location the most conservative value
+ * (false = unresolved) wins, matching the "still needs attention" intent.
+ */
+export type ThreadStatusMap = Map<string, boolean>
+
+export async function fetchThreadStatusMap(
+  params: {owner: string; repo: string; prNumber: number}
+): Promise<ThreadStatusMap> {
+  const map: ThreadStatusMap = new Map()
+  let cursor: string | null = null
+
+  do {
+    const data: GetReviewThreadsResponse = await octokit.graphql(
+      GET_REVIEW_THREADS,
+      {
+        owner: params.owner,
+        repo: params.repo,
+        number: params.prNumber,
+        after: cursor ?? undefined
+      }
+    )
+
+    const page =
+      data.repository.pullRequest.reviewThreads
+
+    for (const node of page.nodes) {
+      if (node.path != null && node.line != null) {
+        const key = `${node.path}:${node.line}`
+        // If any thread at this location is unresolved, mark as unresolved
+        if (!map.has(key) || !node.isResolved) {
+          map.set(key, node.isResolved)
+        }
+      }
+    }
+
+    cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null
+  } while (cursor !== null)
+
+  return map
+}
+
 export async function fetchUnresolvedBotThreads(
   params: {owner: string; repo: string; prNumber: number},
   botLogin: string

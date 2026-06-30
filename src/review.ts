@@ -57,6 +57,7 @@ import {ensureFixSuggestionHeaders} from './fix-suggestion-header'
 import {getRepoFileTree} from './repo-tree'
 import {getReviewStateFromBody} from './review-state'
 import {getTokenCount} from './tokenizer'
+import {fetchThreadStatusMap, type ThreadStatusMap} from './github/review-thread'
 
 // eslint-disable-next-line camelcase
 const context = github_context
@@ -722,6 +723,22 @@ ${
     // 注意: doReview 并行执行，但 JS 单线程下 Array.push 是安全的。
     const findings: Finding[] = []
 
+    // PR 级别的线程状态 map（path:line → isResolved）
+    // 一次性拉取，复用于所有文件的评论链注入，让 AI 感知 [OPEN]/[RESOLVED] 状态
+    let threadStatusMap: ThreadStatusMap = new Map()
+    if (context.payload.pull_request != null) {
+      try {
+        threadStatusMap = await fetchThreadStatusMap({
+          owner: repo.owner,
+          repo: repo.repo,
+          prNumber: context.payload.pull_request.number
+        })
+        info(`thread-status: fetched ${threadStatusMap.size} thread locations`)
+      } catch (e) {
+        warning(`thread-status: failed to fetch, comment chains will not have [OPEN]/[RESOLVED] labels: ${String(e)}`)
+      }
+    }
+
     /**
      * 对单个文件执行代码审查
      *
@@ -820,7 +837,8 @@ ${
             filename,
             startLine,
             endLine,
-            COMMENT_REPLY_TAG
+            COMMENT_REPLY_TAG,
+            threadStatusMap
           )
 
           if (allChains.length > 0) {
