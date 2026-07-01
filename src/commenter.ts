@@ -875,6 +875,9 @@ ${chain}
       return `${commentBody}\n${COMMIT_ID_START_TAG}\n<!-- ${commitId} -->\n${COMMIT_ID_END_TAG}`
     }
     const ids = commentBody.substring(start + COMMIT_ID_START_TAG.length, end)
+    if (ids.includes(`<!-- ${commitId} -->`)) {
+      return commentBody
+    }
     return `${commentBody.substring(
       0,
       start + COMMIT_ID_START_TAG.length
