@@ -850,6 +850,9 @@ ${chain}
    * 如果标签不存在则创建新的区块
    */
   addReviewedCommitId(commentBody: string, commitId: string): string {
+    if (this.getReviewedCommitIds(commentBody).includes(commitId)) {
+      return commentBody
+    }
     const start = commentBody.indexOf(COMMIT_ID_START_TAG)
     const end = commentBody.indexOf(COMMIT_ID_END_TAG)
     if (start === -1 || end === -1) {
