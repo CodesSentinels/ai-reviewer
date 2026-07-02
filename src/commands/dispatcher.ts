@@ -166,7 +166,8 @@ export async function dispatchCommentEvent(
     repo: repoName,
     issueNumber: prNumber,
     originalCommentId: comment.id,
-    commandName: cmdNameForReply
+    commandName: cmdNameForReply,
+    eventName
   })
 
   // [解析错误] 处理命令解析阶段的错误。

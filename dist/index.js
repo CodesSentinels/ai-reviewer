@@ -9241,6 +9241,16 @@ class Reply {
     async ack(message) {
         const body = this.wrap(`⏳ ${message}`);
         try {
+            if (this.ctx.eventName === 'pull_request_review_comment') {
+                const res = await octokit/* octokit.pulls.createReplyForReviewComment */.K.pulls.createReplyForReviewComment({
+                    owner: this.ctx.owner,
+                    repo: this.ctx.repo,
+                    pull_number: this.ctx.issueNumber,
+                    comment_id: this.ctx.originalCommentId,
+                    body
+                });
+                return res.data.id;
+            }
             const res = await octokit/* octokit.issues.createComment */.K.issues.createComment({
                 owner: this.ctx.owner,
                 repo: this.ctx.repo,
@@ -9291,6 +9301,22 @@ class Reply {
             }
             catch (e) {
                 (0,core.warning)(`reply.publish update failed, falling back to create: ${String(e)}`);
+            }
+        }
+        // 行级评论场景：回复到同一 review thread
+        if (this.ctx.eventName === 'pull_request_review_comment') {
+            try {
+                await octokit/* octokit.pulls.createReplyForReviewComment */.K.pulls.createReplyForReviewComment({
+                    owner: this.ctx.owner,
+                    repo: this.ctx.repo,
+                    pull_number: this.ctx.issueNumber,
+                    comment_id: this.ctx.originalCommentId,
+                    body
+                });
+                return;
+            }
+            catch (e) {
+                (0,core.warning)(`reply.publish review thread reply failed, falling back to issue comment: ${String(e)}`);
             }
         }
         try {
@@ -9473,7 +9499,8 @@ async function dispatchCommentEvent(deps) {
         repo: repoName,
         issueNumber: prNumber,
         originalCommentId: comment.id,
-        commandName: cmdNameForReply
+        commandName: cmdNameForReply,
+        eventName
     });
     // [解析错误] 处理命令解析阶段的错误。
     if (outcome.error) {

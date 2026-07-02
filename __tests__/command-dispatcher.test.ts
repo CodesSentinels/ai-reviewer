@@ -39,6 +39,7 @@ const octokitState: Record<string, any> = {
   getCollaboratorPermissionLevel: jest.fn(),
   getPull: jest.fn(),
   updatePull: jest.fn(),
+  createReplyForReviewComment: jest.fn(),
   createReactionForIssueComment: jest.fn(),
   createReactionForPRComment: jest.fn()
 }
@@ -52,7 +53,9 @@ jest.mock('../src/octokit', () => ({
     },
     pulls: {
       get: (...a: any[]) => octokitState.getPull(...a),
-      update: (...a: any[]) => octokitState.updatePull(...a)
+      update: (...a: any[]) => octokitState.updatePull(...a),
+      createReplyForReviewComment: (...a: any[]) =>
+        octokitState.createReplyForReviewComment(...a)
     },
     repos: {
       getCollaboratorPermissionLevel: (...a: any[]) =>
@@ -132,6 +135,7 @@ beforeEach(() => {
   octokitState.getCollaboratorPermissionLevel.mockReset()
   octokitState.getPull.mockReset()
   octokitState.updatePull.mockReset()
+  octokitState.createReplyForReviewComment.mockReset()
   octokitState.createReactionForIssueComment.mockReset()
   octokitState.createReactionForPRComment.mockReset()
 
@@ -141,6 +145,7 @@ beforeEach(() => {
   octokitState.updateComment.mockResolvedValue({data: {id: 9000}})
   octokitState.getPull.mockResolvedValue({data: {body: 'PR body'}})
   octokitState.updatePull.mockResolvedValue({data: {id: 42}})
+  octokitState.createReplyForReviewComment.mockResolvedValue({data: {id: 9001}})
   octokitState.createReactionForIssueComment.mockResolvedValue({data: {id: 1}})
   octokitState.createReactionForPRComment.mockResolvedValue({data: {id: 1}})
   // 默认: alice 有 write 权限
@@ -235,6 +240,30 @@ describe('dispatcher — 解析与 fallback', () => {
     setEvent('pull_request_review_comment', payload)
     const r = await dispatchCommentEvent({options: stubOptions})
     expect(r.kind).toBe('fallback_conversation')
+  })
+
+  test('review_comment 未知命令 → 回复到 thread 而非主评论区', async () => {
+    setEvent(
+      'pull_request_review_comment',
+      buildReviewCommentPayload('@ai-reviewer invalidcmd')
+    )
+    const r = await dispatchCommentEvent({options: stubOptions})
+    expect(r).toEqual({
+      kind: 'executed',
+      command: 'unknown',
+      ok: false,
+      error: 'UNKNOWN_COMMAND'
+    })
+    // 应添加 ACK reaction（PR review comment endpoint）
+    expect(octokitState.createReactionForPRComment).toHaveBeenCalled()
+    // 应使用 createReplyForReviewComment 回复到 thread
+    expect(octokitState.createReplyForReviewComment).toHaveBeenCalled()
+    // 不应使用 issues.createComment
+    expect(octokitState.createComment).not.toHaveBeenCalled()
+    const body =
+      octokitState.createReplyForReviewComment.mock.calls[0][0].body
+    expect(body).toContain('invalidcmd')
+    expect(body).toContain('commands I support')
   })
 })
 
