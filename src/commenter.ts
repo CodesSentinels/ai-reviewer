@@ -874,10 +874,10 @@ ${chain}
     if (start === -1 || end === -1) {
       return `${commentBody}\n${COMMIT_ID_START_TAG}\n<!-- ${commitId} -->\n${COMMIT_ID_END_TAG}`
     }
-    const ids = commentBody.substring(start + COMMIT_ID_START_TAG.length, end)
-    if (ids.includes(`<!-- ${commitId} -->`)) {
+    if (this.getReviewedCommitIds(commentBody).includes(commitId)) {
       return commentBody
     }
+    const ids = commentBody.substring(start + COMMIT_ID_START_TAG.length, end)
     return `${commentBody.substring(
       0,
       start + COMMIT_ID_START_TAG.length
