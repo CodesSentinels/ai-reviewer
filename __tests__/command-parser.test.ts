@@ -84,7 +84,8 @@ describe('parse — 命令命中', () => {
     expect(r.command?.args).toEqual([])
   })
 
-  test('full 单独不在白名单时不匹配', () => {
+  test('full 单独不在白名单时 → UNKNOWN_COMMAND', () => {
+    // 未注册 'full'，首 token 是 ASCII 单词 → 视为无效命令
     const r = parse('@ai-reviewer full', opts)
     expect(r.kind).toBe('command')
     expect(r.error?.code).toBe('UNKNOWN_COMMAND')
@@ -170,25 +171,41 @@ describe('parse — 非法参数拦截', () => {
   })
 })
 
-describe('parse — 未知命令', () => {
-  test('@bot 但命令未命中 → UNKNOWN_COMMAND', () => {
+describe('parse — 未知命令 vs 对话 fallback', () => {
+  test('@bot 后跟中文 → conversation（自然语言）', () => {
     const r = parse('@ai-reviewer 为什么这里用 forEach？', opts)
-    expect(r.kind).toBe('command')
-    expect(r.error?.code).toBe('UNKNOWN_COMMAND')
+    expect(r.kind).toBe('conversation')
   })
 
-  test('@bot 单独出现 → UNKNOWN_COMMAND', () => {
+  test('@bot 单独出现 → conversation', () => {
     const r = parse('@ai-reviewer', opts)
-    expect(r.kind).toBe('command')
-    expect(r.error?.code).toBe('UNKNOWN_COMMAND')
-    expect(r.error?.detail).toBe('')
+    expect(r.kind).toBe('conversation')
   })
 
-  test('@bot 后跟未知单词 → UNKNOWN_COMMAND', () => {
+  test('@bot 后跟未知 ASCII 单词 → UNKNOWN_COMMAND', () => {
     const r = parse('@ai-reviewer foobar', opts)
     expect(r.kind).toBe('command')
     expect(r.error?.code).toBe('UNKNOWN_COMMAND')
     expect(r.error?.detail).toBe('foobar')
+  })
+
+  test('@bot 后跟 invalidcmd → UNKNOWN_COMMAND', () => {
+    const r = parse('@ai-reviewer invalidcmd', opts)
+    expect(r.kind).toBe('command')
+    expect(r.error?.code).toBe('UNKNOWN_COMMAND')
+    expect(r.error?.detail).toBe('invalidcmd')
+  })
+
+  test('@bot 后跟含连字符的未知命令 → UNKNOWN_COMMAND', () => {
+    const r = parse('@ai-reviewer my-command', opts)
+    expect(r.kind).toBe('command')
+    expect(r.error?.code).toBe('UNKNOWN_COMMAND')
+    expect(r.error?.detail).toBe('my-command')
+  })
+
+  test('@bot 后跟中文开头文字 → conversation', () => {
+    const r = parse('@ai-reviewer 这个问题严重吗', opts)
+    expect(r.kind).toBe('conversation')
   })
 })
 

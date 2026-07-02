@@ -96,7 +96,8 @@ export function parse(body: string, opts: ParserOptions): ParseOutcome {
 
   const firstLine = firstLineRaw.trim()
   if (firstLine.length === 0) {
-    return {kind: 'command', error: {code: 'UNKNOWN_COMMAND', detail: ''}}
+    // 仅 @bot 单独出现 → 视为对话触发
+    return {kind: 'conversation'}
   }
 
   // 4. 分词（空白分隔）
@@ -105,7 +106,16 @@ export function parse(body: string, opts: ParserOptions): ParseOutcome {
   // 5. 尝试匹配命令名（最长前缀匹配，最多看前 3 个 token）
   const matched = matchCommandName(tokens, opts.registeredCommands)
   if (!matched) {
-    return {kind: 'command', error: {code: 'UNKNOWN_COMMAND', detail: firstLine}}
+    // 未命中已注册命令。判断是"无效命令"还是"自然语言对话"：
+    // - 首 token 纯 ASCII 字母（看起来像命令名）→ UNKNOWN_COMMAND
+    // - 否则（含 CJK、标点开头等自然语言）→ conversation fallback
+    if (looksLikeCommandAttempt(tokens[0])) {
+      return {
+        kind: 'command',
+        error: {code: 'UNKNOWN_COMMAND', detail: firstLine}
+      }
+    }
+    return {kind: 'conversation'}
   }
 
   const {name, consumed} = matched
@@ -204,6 +214,15 @@ function matchCommandName(
     }
   }
   return null
+}
+
+/**
+ * 判断 token 是否"看起来像一条命令"。
+ * 纯 ASCII 字母（允许连字符）→ 极可能是用户尝试输入命令名；
+ * 含中文、日文、韩文等非 ASCII 字符 → 自然语言对话。
+ */
+function looksLikeCommandAttempt(token: string): boolean {
+  return /^[A-Za-z][A-Za-z0-9_-]*$/.test(token)
 }
 
 function truncate(s: string, n: number): string {
