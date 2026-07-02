@@ -5,6 +5,17 @@ import {
   SUMMARIZE_TAG
 } from './commenter'
 
+export async function isHeadAlreadyReviewed(
+  prNumber: number,
+  headSha: string
+): Promise<boolean> {
+  const commenter = new Commenter()
+  const comment = await commenter.findCommentWithTag(SUMMARIZE_TAG, prNumber)
+  if (comment == null) return false
+  const reviewedIds = commenter.getReviewedCommitIds(comment.body)
+  return reviewedIds.includes(headSha)
+}
+
 export async function clearReviewedCommitIds(
   prNumber: number
 ): Promise<void> {

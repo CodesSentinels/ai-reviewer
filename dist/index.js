@@ -10127,6 +10127,14 @@ var review_state = __nccwpck_require__(3337);
 var lib_commenter = __nccwpck_require__(4558);
 ;// CONCATENATED MODULE: ./lib/review-commit-ids.js
 
+async function isHeadAlreadyReviewed(prNumber, headSha) {
+    const commenter = new lib_commenter/* Commenter */.Es();
+    const comment = await commenter.findCommentWithTag(lib_commenter/* SUMMARIZE_TAG */.Rp, prNumber);
+    if (comment == null)
+        return false;
+    const reviewedIds = commenter.getReviewedCommitIds(comment.body);
+    return reviewedIds.includes(headSha);
+}
 async function clearReviewedCommitIds(prNumber) {
     const commenter = new lib_commenter/* Commenter */.Es();
     const comment = await commenter.findCommentWithTag(lib_commenter/* SUMMARIZE_TAG */.Rp, prNumber);
@@ -10187,8 +10195,14 @@ const fullReviewStub = {
     async execute(ctx) {
         if (ctx.triggerReview == null)
             return await notImplemented('full review')(ctx);
+        const alreadyReviewed = await isHeadAlreadyReviewed(ctx.prNumber, ctx.headSha);
+        if (alreadyReviewed) {
+            return {
+                message: `✅ Full review finished.\n\n> **Note:** The current HEAD (\`${ctx.headSha.slice(0, 7)}\`) has already been reviewed. No new changes detected since the last review.`
+            };
+        }
         await ctx.triggerReview('full');
-        return { message: '全量审查已完成' };
+        return { message: '✅ Full review finished.' };
     }
 };
 const summaryStub = {
