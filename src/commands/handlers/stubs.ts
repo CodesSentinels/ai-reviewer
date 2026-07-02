@@ -34,8 +34,14 @@ export const reviewStub: CommandHandler = {
     const state = await getReviewState(ctx.prNumber)
     if (state !== 'paused') {
       return {
-        message:
-          '✅ Review finished. Note: CodeSentinel is an incremental review system and does not re-review already reviewed commits. This command is applicable only when automatic reviews are paused.'
+        message: `<details>
+<summary>✅ Action performed</summary>
+
+Review finished.
+
+> **Note:** CodeSentinel is an incremental review system and does not re-review already reviewed commits. This command is applicable only when automatic reviews are paused.
+
+</details>`
       }
     }
     await ctx.triggerReview('incremental')

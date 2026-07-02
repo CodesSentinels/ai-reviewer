@@ -10166,7 +10166,14 @@ const reviewStub = {
         const state = await (0,review_state/* getReviewState */.Zr)(ctx.prNumber);
         if (state !== 'paused') {
             return {
-                message: '✅ Review finished. Note: CodeSentinel is an incremental review system and does not re-review already reviewed commits. This command is applicable only when automatic reviews are paused.'
+                message: `<details>
+<summary>✅ Action performed</summary>
+
+Review finished.
+
+> **Note:** CodeSentinel is an incremental review system and does not re-review already reviewed commits. This command is applicable only when automatic reviews are paused.
+
+</details>`
             };
         }
         await ctx.triggerReview('incremental');
