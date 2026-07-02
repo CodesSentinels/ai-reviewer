@@ -71,17 +71,19 @@ AI 输出标准化节点/边 JSON → visualizer 渲染为可交互的 React Flo
 
 ## 实现路径（分阶段）
 
-### Phase 1 — 命令入口 + Mermaid 输出
+### Phase 1 — 命令入口 + Mermaid 输出 ✅
 
-1. **新增 prompt**：`src/prompts.ts` 新增 `explainBusinessLogic(diff, fileContents)` 模板
-   - 目标：提炼入口函数 → 核心状态变更 → 出口/副作用
-   - 输出：Mermaid flowchart + 3~5 条关键设计点
+1. **新增 prompt**：`src/prompts.ts` 新增 `explainBusinessLogic` 模板 + `renderExplainBusinessLogic()` 方法
+   - 聚焦业务语义（入口 → 状态变更 → 出口/副作用），不找 bug
+   - Mermaid 规则：最多 12 节点、subgraph 隔离子系统、节点用业务概念命名
 2. **新增 handler**：`src/commands/handlers/explain.ts`
-   - 接收 `@codesentinel explain` 命令
-   - 拉取当前 PR diff + 依赖分析上下文（复用 `analyzeDependencies`）
-   - 调用 heavyBot 生成说明
-   - 通过 `ctx.reply` 发布评论
-3. **注册命令**：更新 `src/commands/handlers/stubs.ts`
+   - `@codesentinel explain` 命令，minPermission: `read`
+   - 拉取 PR base→head 完整 diff（`compareCommits`）
+   - 超 80k 字符自动截断
+   - 调用 heavyBot，通过 `ctx.reply` 发布 Mermaid 评论
+3. **注册命令**：`stubs.ts` → `ALL_STUBS` → `bootstrapCommands()` 自动注册
+4. **单元测试**：`__tests__/command-explain.test.ts`，10 个测试覆盖正常流程、边界情况、失败降级
+5. **端到端验证**：[ai-reviewer-test PR #253](https://github.com/CodesSentinels/ai-reviewer-test/pull/253) — 购物车结算流程，待验证 Mermaid 输出质量
 
 ### Phase 2 — 质量提升
 
