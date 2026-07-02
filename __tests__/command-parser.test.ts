@@ -85,9 +85,10 @@ describe('parse — 命令命中', () => {
   })
 
   test('full 单独不在白名单时不匹配', () => {
-    // 未注册 'full'，应走 conversation fallback
     const r = parse('@ai-reviewer full', opts)
-    expect(r.kind).toBe('conversation')
+    expect(r.kind).toBe('command')
+    expect(r.error?.code).toBe('UNKNOWN_COMMAND')
+    expect(r.error?.detail).toBe('full')
   })
 
   test('命令名不区分大小写', () => {
@@ -169,20 +170,25 @@ describe('parse — 非法参数拦截', () => {
   })
 })
 
-describe('parse — 对话 fallback', () => {
-  test('@bot 但命令未命中 → conversation', () => {
+describe('parse — 未知命令', () => {
+  test('@bot 但命令未命中 → UNKNOWN_COMMAND', () => {
     const r = parse('@ai-reviewer 为什么这里用 forEach？', opts)
-    expect(r.kind).toBe('conversation')
+    expect(r.kind).toBe('command')
+    expect(r.error?.code).toBe('UNKNOWN_COMMAND')
   })
 
-  test('@bot 单独出现 → conversation', () => {
+  test('@bot 单独出现 → UNKNOWN_COMMAND', () => {
     const r = parse('@ai-reviewer', opts)
-    expect(r.kind).toBe('conversation')
+    expect(r.kind).toBe('command')
+    expect(r.error?.code).toBe('UNKNOWN_COMMAND')
+    expect(r.error?.detail).toBe('')
   })
 
-  test('@bot 后跟未知单词 → conversation', () => {
+  test('@bot 后跟未知单词 → UNKNOWN_COMMAND', () => {
     const r = parse('@ai-reviewer foobar', opts)
-    expect(r.kind).toBe('conversation')
+    expect(r.kind).toBe('command')
+    expect(r.error?.code).toBe('UNKNOWN_COMMAND')
+    expect(r.error?.detail).toBe('foobar')
   })
 })
 

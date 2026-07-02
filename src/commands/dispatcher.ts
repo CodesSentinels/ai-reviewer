@@ -32,6 +32,7 @@ import {getPermission} from './permission'
 import {canExecute} from './permission'
 import {checkRateLimit} from './rate-limit'
 import {hasBeenProcessed, Reply} from './reply'
+import {buildHelpMessage} from './handlers/help'
 import type {
   ActorInfo,
   CommandContext,
@@ -150,8 +151,7 @@ export async function dispatchCommentEvent(
     return {kind: 'ignored', reason: 'no bot mention'}
   }
   if (outcome.kind === 'conversation') {
-    // conversation：@bot 但非已注册命令 → 交回 command-handler 走对话式追问 fallback。
-    return {kind: 'fallback_conversation'}
+    return {kind: 'ignored', reason: 'unexpected conversation outcome'}
   }
 
   // outcome.kind === 'command'：解析出一条已知命令，进入执行流程。
@@ -167,9 +167,19 @@ export async function dispatchCommentEvent(
     commandName: cmdNameForReply
   })
 
-  // [解析错误] 命令名识别成功但参数非法等（如 INVALID_ARGS），直接回帖报错并结束。
+  // [解析错误] UNKNOWN_COMMAND 回帖带命令列表；其他错误（如 INVALID_ARGS）直接报错。
   if (outcome.error) {
-    await reply.error(outcome.error.code, outcome.error.detail)
+    if (outcome.error.code === 'UNKNOWN_COMMAND') {
+      const cmds = registry.listCommands()
+      const helpText = buildHelpMessage(cmds)
+      const detail = outcome.error.detail
+      const msg = detail
+        ? `❓ I didn't recognize \`${detail}\` as a valid command. Here are the commands I support:\n\n${helpText}`
+        : `❓ Here are the commands I support:\n\n${helpText}`
+      await reply.success(msg)
+    } else {
+      await reply.error(outcome.error.code, outcome.error.detail)
+    }
     return {
       kind: 'executed',
       command: cmdNameForReply,

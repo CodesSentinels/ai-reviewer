@@ -96,8 +96,7 @@ export function parse(body: string, opts: ParserOptions): ParseOutcome {
 
   const firstLine = firstLineRaw.trim()
   if (firstLine.length === 0) {
-    // 仅 @bot 单独出现 → 视为对话触发
-    return {kind: 'conversation'}
+    return {kind: 'command', error: {code: 'UNKNOWN_COMMAND', detail: ''}}
   }
 
   // 4. 分词（空白分隔）
@@ -106,8 +105,7 @@ export function parse(body: string, opts: ParserOptions): ParseOutcome {
   // 5. 尝试匹配命令名（最长前缀匹配，最多看前 3 个 token）
   const matched = matchCommandName(tokens, opts.registeredCommands)
   if (!matched) {
-    // 未命中命令但有 @bot → 交给对话 fallback
-    return {kind: 'conversation'}
+    return {kind: 'command', error: {code: 'UNKNOWN_COMMAND', detail: firstLine}}
   }
 
   const {name, consumed} = matched

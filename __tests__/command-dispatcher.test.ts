@@ -4,7 +4,7 @@
  * 覆盖:
  * - 非支持事件/action → ignored
  * - bot 自评论 → ignored
- * - 未命中命令 → fallback_conversation
+ * - 未命中命令 → UNKNOWN_COMMAND (with help listing)
  * - 命令命中但未注册 → UNKNOWN_COMMAND（其实用非法命令名构造比较难，因为 parser 先拦截；这里用注销的 handler 场景）
  * - 命令权限不足 → FORBIDDEN
  * - 命令非法参数 → INVALID_ARGS
@@ -172,20 +172,28 @@ describe('dispatcher — 事件过滤', () => {
   })
 })
 
-describe('dispatcher — 解析与 fallback', () => {
+describe('dispatcher — 解析与未知命令', () => {
   test('无 @bot → ignored', async () => {
     setEvent('issue_comment', buildIssueCommentPayload('普通评论'))
     const r = await dispatchCommentEvent({options: stubOptions})
     expect(r.kind).toBe('ignored')
   })
 
-  test('@bot 但未命中命令 → fallback_conversation', async () => {
+  test('@bot 但未命中命令 → UNKNOWN_COMMAND with help listing', async () => {
     setEvent(
       'issue_comment',
       buildIssueCommentPayload('@ai-reviewer 这里为啥这样写？')
     )
     const r = await dispatchCommentEvent({options: stubOptions})
-    expect(r.kind).toBe('fallback_conversation')
+    expect(r).toEqual({
+      kind: 'executed',
+      command: 'unknown',
+      ok: false,
+      error: 'UNKNOWN_COMMAND'
+    })
+    expect(octokitState.createComment).toHaveBeenCalled()
+    const body = octokitState.createComment.mock.calls[0][0].body
+    expect(body).toContain('支持的命令')
   })
 
   test('review_comment 线程内回复（无 @bot）→ ignored（对话必须 @bot）', async () => {
@@ -196,12 +204,17 @@ describe('dispatcher — 解析与 fallback', () => {
     expect(r.kind).toBe('ignored')
   })
 
-  test('review_comment 线程内回复（带 @bot）→ fallback_conversation', async () => {
+  test('review_comment 线程内回复（带 @bot）→ UNKNOWN_COMMAND', async () => {
     const payload = buildReviewCommentPayload('@ai-reviewer 这个问题严重吗')
     ;(payload.comment as any).in_reply_to_id = 2001
     setEvent('pull_request_review_comment', payload)
     const r = await dispatchCommentEvent({options: stubOptions})
-    expect(r.kind).toBe('fallback_conversation')
+    expect(r).toEqual({
+      kind: 'executed',
+      command: 'unknown',
+      ok: false,
+      error: 'UNKNOWN_COMMAND'
+    })
   })
 })
 
