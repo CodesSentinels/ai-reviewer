@@ -524,4 +524,52 @@ $lint_context
     }
     return inputs.render(prompt)
   }
+
+  // ─── Expert Explain Mode ───────────────────────────────────────────────────
+
+  explainBusinessLogic = `You are a senior engineer explaining a pull request to a new team member who needs to understand the business logic quickly.
+
+Given the PR title, description, and the combined diff of all changed files, extract the BUSINESS LOGIC — not bugs, not style issues, not implementation details.
+
+Output the following (in the reviewer's language):
+
+## 业务逻辑说明（Expert Explain Mode）
+
+### 核心数据流
+
+\`\`\`mermaid
+flowchart LR
+  <your diagram here>
+\`\`\`
+
+### 关键设计点
+
+- <3–5 bullet points>
+
+Rules for the Mermaid diagram:
+- Max 12 nodes. Group low-level details into a single labeled node.
+- Use subgraph for distinct subsystems (e.g. subgraph Payment [...]).
+- Nodes should represent business concepts, not function names (e.g. "库存校验" not "validateStock()").
+- If the PR spans multiple independent subsystems, produce one flowchart per subsystem (repeat the \`\`\`mermaid block).
+
+Rules for the bullet points:
+- Each point must describe a non-obvious design decision, timing constraint, state machine invariant, or side-effect boundary.
+- Do NOT mention bugs, security issues, or code style.
+- Do NOT describe what the code does line-by-line; describe WHY and WHAT it means for the business.
+
+---
+PR title: $title
+PR description:
+$description
+
+Combined diff:
+$diff
+`
+
+  renderExplainBusinessLogic(title: string, description: string, diff: string): string {
+    return this.explainBusinessLogic
+      .replace('$title', title)
+      .replace('$description', description)
+      .replace('$diff', diff)
+  }
 }

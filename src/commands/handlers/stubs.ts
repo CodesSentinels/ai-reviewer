@@ -11,6 +11,7 @@
 import type {CommandHandler, CommandContext, CommandResult} from '../types'
 import {getReviewState, setReviewState} from '../../review-state'
 import {PRIMARY_BOT_MENTION} from '../../constants'
+import {explainHandler} from './explain'
 
 function notImplemented(name: string): CommandHandler['execute'] {
   return async (_ctx: CommandContext): Promise<CommandResult> => {
@@ -126,5 +127,6 @@ export const ALL_STUBS: CommandHandler[] = [
   summaryStub,
   pauseStub,
   resumeStub,
-  configurationStub
+  configurationStub,
+  explainHandler
 ]
