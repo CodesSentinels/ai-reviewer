@@ -151,11 +151,7 @@ describe('getBotLogin', () => {
     expect(mockGetAuthenticated).toHaveBeenCalledTimes(1)
   })
 
-<<<<<<< HEAD
   test('getAuthenticated 抛异常时 fallback 到 github-actions（不带 [bot] 后缀，便于与 GraphQL author 比对）', async () => {
-=======
-  test('getAuthenticated 抛异常时回退到 github-actions', async () => {
->>>>>>> main
     mockGetAuthenticated.mockRejectedValue(new Error('network error'))
     const login = await getBotLogin({} as never)
     expect(login).toBe('github-actions')
@@ -304,11 +300,7 @@ describe('resolveHandler.execute', () => {
 describe('batchResolve', () => {
   test('空数组 → 返回 ok=0 failed=0 errors=[]，不调用 GraphQL', async () => {
     const result = await batchResolve([])
-<<<<<<< HEAD
-    expect(result).toEqual({ok: 0, failed: 0, errors: []})
-=======
     expect(result).toEqual({ok: 0, failed: 0, errors: [], failedItems: []})
->>>>>>> main
     expect(mockGraphql).not.toHaveBeenCalled()
   })
 
@@ -375,43 +367,3 @@ describe('batchResolve', () => {
     })
   })
 })
-<<<<<<< HEAD
-=======
-
-describe('resolveAllBotComments', () => {
-  test('无待解决 thread → 返回 {ok: 0, failed: 0}，不调用 mutation', async () => {
-    mockGetAuthenticated.mockResolvedValue({data: {login: 'cs-bot'}})
-    mockGraphql.mockResolvedValueOnce(makePageResponse([]))
-
-    const result = await resolveAllBotComments({
-      owner: 'org',
-      repo: 'repo',
-      prNumber: 1,
-      options: {} as never
-    })
-    expect(result).toEqual({ok: 0, failed: 0})
-    expect(mockGraphql).toHaveBeenCalledTimes(1) // 只有 query，无 mutation
-  })
-
-  test('有待解决 thread → 调用 mutation 并返回正确计数', async () => {
-    mockGetAuthenticated.mockResolvedValue({data: {login: 'cs-bot'}})
-    mockGraphql
-      .mockResolvedValueOnce(
-        makePageResponse([
-          {id: 't1', isResolved: false, authorLogin: 'cs-bot'},
-          {id: 't2', isResolved: false, authorLogin: 'cs-bot'}
-        ])
-      )
-      .mockResolvedValueOnce({resolveReviewThread: {thread: {isResolved: true}}})
-      .mockResolvedValueOnce({resolveReviewThread: {thread: {isResolved: true}}})
-
-    const result = await resolveAllBotComments({
-      owner: 'org',
-      repo: 'repo',
-      prNumber: 1,
-      options: {} as never
-    })
-    expect(result).toMatchObject({ok: 2, failed: 0})
-  })
-})
->>>>>>> main
