@@ -9042,7 +9042,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
 
 /***/ }),
 
-/***/ 8280:
+/***/ 4729:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
 "use strict";
@@ -9054,10 +9054,10 @@ __nccwpck_require__.d(__webpack_exports__, {
 
 // EXTERNAL MODULE: ./node_modules/.pnpm/@actions+core@1.11.1/node_modules/@actions/core/lib/core.js
 var core = __nccwpck_require__(1078);
+// EXTERNAL MODULE: ./lib/commands/bootstrap.js + 2 modules
+var bootstrap = __nccwpck_require__(842);
 // EXTERNAL MODULE: ./node_modules/.pnpm/@actions+github@5.1.1/node_modules/@actions/github/lib/github.js
 var github = __nccwpck_require__(3695);
-// EXTERNAL MODULE: ./lib/commands/bootstrap.js + 4 modules
-var bootstrap = __nccwpck_require__(5544);
 // EXTERNAL MODULE: ./lib/commands/registry.js
 var commands_registry = __nccwpck_require__(953);
 // EXTERNAL MODULE: ./lib/commands/parser.js
@@ -9337,6 +9337,8 @@ async function hasBeenProcessed(owner, repo, issueNumber, originalCommentId, com
     }
 }
 
+// EXTERNAL MODULE: ./lib/commands/handlers/help.js
+var help = __nccwpck_require__(660);
 ;// CONCATENATED MODULE: ./lib/commands/dispatcher.js
 /**
  * commands/dispatcher.ts - 命令调度主流程
@@ -9364,6 +9366,7 @@ async function hasBeenProcessed(owner, repo, issueNumber, originalCommentId, com
  */
 
 // eslint-disable-next-line camelcase
+
 
 
 
@@ -9454,8 +9457,7 @@ async function dispatchCommentEvent(deps) {
         return { kind: 'ignored', reason: 'no bot mention' };
     }
     if (outcome.kind === 'conversation') {
-        // conversation：@bot 但非已注册命令 → 交回 command-handler 走对话式追问 fallback。
-        return { kind: 'fallback_conversation' };
+        return { kind: 'ignored', reason: 'unexpected conversation outcome' };
     }
     // outcome.kind === 'command'：解析出一条已知命令，进入执行流程。
     // 即便解析出错，也尽量构造 reply 以反馈用户
@@ -9469,9 +9471,20 @@ async function dispatchCommentEvent(deps) {
         originalCommentId: comment.id,
         commandName: cmdNameForReply
     });
-    // [解析错误] 命令名识别成功但参数非法等（如 INVALID_ARGS），直接回帖报错并结束。
+    // [解析错误] UNKNOWN_COMMAND 回帖带命令列表；其他错误（如 INVALID_ARGS）直接报错。
     if (outcome.error) {
-        await reply.error(outcome.error.code, outcome.error.detail);
+        if (outcome.error.code === 'UNKNOWN_COMMAND') {
+            const cmds = registry.listCommands();
+            const helpText = (0,help/* buildHelpMessage */.W)(cmds);
+            const detail = outcome.error.detail;
+            const msg = detail
+                ? `❓ I didn't recognize \`${detail}\` as a valid command. Here are the commands I support:\n\n${helpText}`
+                : `❓ Here are the commands I support:\n\n${helpText}`;
+            await reply.success(msg);
+        }
+        else {
+            await reply.error(outcome.error.code, outcome.error.detail);
+        }
         return {
             kind: 'executed',
             command: cmdNameForReply,
@@ -9610,292 +9623,8 @@ function extractErrorCode(e) {
     return 'INTERNAL';
 }
 
-// EXTERNAL MODULE: ./lib/review.js + 17 modules
-var review = __nccwpck_require__(8726);
-// EXTERNAL MODULE: ./lib/commenter.js
-var lib_commenter = __nccwpck_require__(4558);
-// EXTERNAL MODULE: ./lib/constants.js
-var constants = __nccwpck_require__(2098);
-// EXTERNAL MODULE: ./lib/inputs.js
-var lib_inputs = __nccwpck_require__(6305);
-// EXTERNAL MODULE: ./lib/tokenizer.js
-var tokenizer = __nccwpck_require__(7525);
-;// CONCATENATED MODULE: ./lib/conversation.js
-/**
- * conversation.ts - 对话式追问交互（迭代二 · 成员 D · 2.3）
- *
- * 当开发者在 PR 的代码审查评论中回复并 @ 机器人，或在已有的 bot 对话链中继续
- * 追问时，本模块负责：
- *
- *   1. 追问意图识别        —— 区分"追问 Bot"与"普通评论"，避免无关回帖
- *   2. Thread 对话历史收集  —— 拉取完整对话链并格式化
- *   3. 关联代码行/扩展上下文 —— 评论所在 diff hunk + 文件完整 diff
- *   4. 对话 Prompt 组装     —— 历史 + 代码 + diff + PR 摘要
- *   5. LLM 对话推理         —— 复用迭代一的重量模型（Analysis Chain / Web Query）
- *   6. 回复发布到 thread
- *   7. 上下文截断 + 摘要压缩 —— 防止长对话 Token 超限
- *   8. 对话轮次上限控制     —— 防止无限对话消耗资源
- *
- * 设计原则：纯逻辑（意图识别 / 截断 / 轮次统计）抽成可独立单测的函数，
- * I/O 编排集中在 handleConversation 中，复用既有 Commenter / Bot / Prompts。
- */
-
-// eslint-disable-next-line camelcase
-
-
-
-
-
-
-// eslint-disable-next-line camelcase
-const conversation_context = github.context;
-/** 默认的 bot mention 别名（小写匹配，与命令解析器保持一致）。共享自 constants。 */
-
-/** 标识 bot 在对话链中出现过的标签（用于轮次统计 / 意图识别） */
-const BOT_COMMENT_TAGS = [lib_commenter/* COMMENT_TAG */.Rs, lib_commenter/* COMMENT_REPLY_TAG */.aD];
-/** 单个 thread 的对话轮次上限（bot 已回复的次数），超过后停止追问 */
-const MAX_CONVERSATION_TURNS = 10;
-/** 对话历史进入 Prompt 时的字符上限（粗粒度预算，token 预算另行精确校验） */
-const MAX_CHAIN_CHARS = 12_000;
-/** 对话历史截断时的分隔符（与 Commenter.composeCommentChain 对齐） */
-const CHAIN_SEPARATOR = '\n---\n';
-/**
- * 追问意图识别：判断一条评论是否应触发 bot 对话回复。
- *
- * 触发条件：**评论必须显式 @ 了机器人**（首轮与续轮一致），
- * 以避免把 thread 内真人之间的讨论误当成追问。
- *
- * 排除规则（优先级最高）：
- *   - 评论来自 bot 自身（避免自我触发循环）
- *   - 评论正文含 bot 专属标签（视为 bot 文案）
- *
- * @returns true 表示需要 bot 介入回复
- */
-function isFollowUpQuestion(opts) {
-    const { commentBody, authorIsBot } = opts;
-    if (authorIsBot) {
-        return false;
-    }
-    const body = commentBody ?? '';
-    // bot 自动生成的内容带有专属标签，二次保险，避免把 bot 文案当成追问
-    const botTags = opts.botCommentTags ?? BOT_COMMENT_TAGS;
-    if (botTags.some(tag => body.includes(tag))) {
-        return false;
-    }
-    const mentions = (opts.mentions ?? constants/* BOT_MENTIONS */.T).map(m => m.toLowerCase());
-    const lowerBody = body.toLowerCase();
-    return mentions.some(m => lowerBody.includes(m));
-}
-/**
- * 统计对话链中 bot 已回复的轮次。
- * 以 bot 专属标签出现次数为准（每条 bot 评论都会携带一个标签）。
- */
-function countBotTurns(commentChain, botCommentTags = BOT_COMMENT_TAGS) {
-    if (!commentChain) {
-        return 0;
-    }
-    let count = 0;
-    for (const tag of botCommentTags) {
-        count += occurrences(commentChain, tag);
-    }
-    return count;
-}
-function occurrences(haystack, needle) {
-    if (!needle) {
-        return 0;
-    }
-    let count = 0;
-    let idx = haystack.indexOf(needle);
-    while (idx !== -1) {
-        count++;
-        idx = haystack.indexOf(needle, idx + needle.length);
-    }
-    return count;
-}
-/**
- * 对话历史截断 + 摘要压缩。
- *
- * 长对话会撑爆 Token 预算。这里保留**最近**的若干轮对话（信息最相关），
- * 较早的内容压缩为一行提示，避免直接截断造成上下文割裂。
- *
- * @param chain    composeCommentChain 产出的对话链字符串
- * @param maxChars 字符预算上限
- */
-function truncateConversationChain(chain, maxChars = MAX_CHAIN_CHARS) {
-    if (!chain || chain.length <= maxChars) {
-        return chain;
-    }
-    const turns = chain.split(CHAIN_SEPARATOR);
-    const kept = [];
-    let used = 0;
-    let omitted = 0;
-    // 从最新的一轮往前累加，直到预算用尽
-    for (let i = turns.length - 1; i >= 0; i--) {
-        const turn = turns[i];
-        const cost = turn.length + CHAIN_SEPARATOR.length;
-        if (used + cost <= maxChars || kept.length === 0) {
-            kept.unshift(turn);
-            used += cost;
-        }
-        else {
-            omitted = i + 1;
-            break;
-        }
-    }
-    if (omitted > 0) {
-        kept.unshift(`> _（为控制上下文长度，较早的 ${omitted} 条对话已省略，仅保留最近 ${kept.length} 条）_`);
-    }
-    return kept.join(CHAIN_SEPARATOR);
-}
-/**
- * 对话式追问主入口。
- *
- * 仅处理 pull_request_review_comment 事件（代码行级评论中的追问）。
- * 由 command-handler.ts 在命令解析判定为 "fallback_conversation" 时调用。
- *
- * @param heavyBot - 重量级模型，用于生成高质量回复
- * @param options  - 全局配置
- * @param prompts  - 提示词模板
- */
-const handleConversation = async (heavyBot, options, prompts) => {
-    const commenter = new lib_commenter/* Commenter */.Es();
-    const inputs = new lib_inputs/* Inputs */.k();
-    const repo = conversation_context.repo;
-    // ===== 1. 事件与 payload 校验 =====
-    if (conversation_context.eventName !== 'pull_request_review_comment') {
-        (0,core.info)(`conversation: skip non review_comment event (${conversation_context.eventName})`);
-        return;
-    }
-    const payload = conversation_context.payload;
-    if (!payload || payload.action !== 'created') {
-        (0,core.info)('conversation: skip (missing payload or action != created)');
-        return;
-    }
-    const comment = payload.comment;
-    if (comment == null || typeof comment.body !== 'string') {
-        (0,core.warning)('conversation: skip (missing comment body)');
-        return;
-    }
-    if (payload.pull_request == null || payload.repository == null) {
-        (0,core.warning)('conversation: skip (missing pull_request/repository)');
-        return;
-    }
-    // ===== 2. 过滤 bot 自身评论 =====
-    const authorIsBot = comment.user?.type === 'Bot' ||
-        /\[bot\]$/i.test(comment.user?.login ?? '') ||
-        comment.body.includes(lib_commenter/* COMMENT_TAG */.Rs) ||
-        comment.body.includes(lib_commenter/* COMMENT_REPLY_TAG */.aD);
-    if (authorIsBot) {
-        (0,core.info)('conversation: skip (comment from bot itself)');
-        return;
-    }
-    const pullNumber = payload.pull_request.number;
-    // 填充 PR 基本信息
-    inputs.title = payload.pull_request.title;
-    if (payload.pull_request.body) {
-        inputs.description = commenter.getDescription(payload.pull_request.body);
-    }
-    inputs.comment = `${comment.user.login}: ${comment.body}`;
-    inputs.diff = comment.diff_hunk ?? '';
-    inputs.filename = comment.path ?? '';
-    // ===== 3. Thread 对话历史收集 =====
-    const { chain: rawChain, topLevelComment } = await commenter.getCommentChain(pullNumber, comment);
-    if (!topLevelComment) {
-        (0,core.warning)('conversation: cannot locate top-level comment, abort');
-        return;
-    }
-    // ===== 4. 追问意图识别（必须 @bot） =====
-    if (!isFollowUpQuestion({
-        commentBody: comment.body,
-        authorIsBot: false
-    })) {
-        (0,core.info)('conversation: not a follow-up question (no @mention), skip');
-        return;
-    }
-    // ===== 5. 对话轮次上限控制 =====
-    const turns = countBotTurns(rawChain);
-    if (turns >= MAX_CONVERSATION_TURNS) {
-        (0,core.info)(`conversation: turn limit reached (${turns}/${MAX_CONVERSATION_TURNS})`);
-        await commenter.reviewCommentReply(pullNumber, topLevelComment, `本话题的自动对话轮次已达上限（${MAX_CONVERSATION_TURNS} 轮）。如需继续深入，请新开一条评论或联系人工 reviewer。`);
-        return;
-    }
-    // ===== 6. 上下文截断 + 摘要压缩 =====
-    inputs.commentChain = truncateConversationChain(rawChain);
-    // ===== 7. 关联代码行及扩展上下文（文件完整 diff） =====
-    let fileDiff = '';
-    try {
-        const diffAll = await octokit/* octokit.repos.compareCommits */.K.repos.compareCommits({
-            owner: repo.owner,
-            repo: repo.repo,
-            base: payload.pull_request.base.sha,
-            head: payload.pull_request.head.sha
-        });
-        const file = diffAll.data?.files?.find(f => f.filename === comment.path);
-        if (file?.patch) {
-            fileDiff = file.patch;
-        }
-    }
-    catch (e) {
-        (0,core.warning)(`conversation: failed to get file diff: ${e}, continue without it`);
-    }
-    // 评论本身没有 diff 片段时，退化为使用完整文件 diff
-    if (inputs.diff.length === 0) {
-        if (fileDiff.length > 0) {
-            inputs.diff = fileDiff;
-            fileDiff = '';
-        }
-        else {
-            await commenter.reviewCommentReply(pullNumber, topLevelComment, '无法回复该评论：未能定位关联的代码 diff。');
-            return;
-        }
-    }
-    // ===== 8. Token 预算内打包上下文 =====
-    let tokens = (0,tokenizer/* getTokenCount */.V)(prompts.renderComment(inputs));
-    if (tokens > options.heavyTokenLimits.requestTokens) {
-        // 对话链可能仍过长，进一步压缩后重试一次
-        inputs.commentChain = truncateConversationChain(rawChain, Math.floor(MAX_CHAIN_CHARS / 2));
-        tokens = (0,tokenizer/* getTokenCount */.V)(prompts.renderComment(inputs));
-    }
-    if (tokens > options.heavyTokenLimits.requestTokens) {
-        await commenter.reviewCommentReply(pullNumber, topLevelComment, '无法回复该评论：关联的上下文过大，超出了模型的 token 限制。');
-        return;
-    }
-    // 预算允许时补充完整文件 diff
-    if (fileDiff.length > 0) {
-        const fileDiffCount = prompts.comment.split('$file_diff').length - 1;
-        const fileDiffTokens = (0,tokenizer/* getTokenCount */.V)(fileDiff);
-        if (fileDiffCount > 0 &&
-            tokens + fileDiffTokens * fileDiffCount <=
-                options.heavyTokenLimits.requestTokens) {
-            tokens += fileDiffTokens * fileDiffCount;
-            inputs.fileDiff = fileDiff;
-        }
-    }
-    // 预算允许时补充 PR 精简摘要
-    const summary = await commenter.findCommentWithTag(lib_commenter/* SUMMARIZE_TAG */.Rp, pullNumber);
-    if (summary) {
-        const shortSummary = commenter.getShortSummary(summary.body);
-        const shortSummaryTokens = (0,tokenizer/* getTokenCount */.V)(shortSummary);
-        if (tokens + shortSummaryTokens <= options.heavyTokenLimits.requestTokens) {
-            tokens += shortSummaryTokens;
-            inputs.shortSummary = shortSummary;
-        }
-    }
-    // ===== 9. LLM 对话推理 + 发布回复 =====
-    const [reply] = await heavyBot.chat(prompts.renderComment(inputs), {});
-    if (!reply) {
-        (0,core.warning)('conversation: empty reply from model, skip posting');
-        return;
-    }
-    // 由我们用真实评论者用户名前缀回复（模型已被要求不要自行 @）。
-    // 防御性去掉模型可能仍残留的开头 "@user"（历史 prompt 遗留），避免误链到真实账号 user。
-    const cleanedReply = reply.replace(/^\s*@user[，,：:\s]*/i, '').trimStart();
-    const authorLogin = comment.user?.login ?? '';
-    const mention = authorLogin ? `@${authorLogin} ` : '';
-    await commenter.reviewCommentReply(pullNumber, topLevelComment, `${mention}${cleanedReply}`);
-    (0,core.info)(`conversation: replied on PR #${pullNumber} thread (top-level comment ${topLevelComment.id})`);
-};
-
+// EXTERNAL MODULE: ./lib/review.js + 20 modules
+var review = __nccwpck_require__(4541);
 ;// CONCATENATED MODULE: ./lib/command-handler.js
 /**
  * command-handler.ts - 评论事件的顶层入口
@@ -9905,20 +9634,11 @@ const handleConversation = async (heavyBot, options, prompts) => {
  * 职责:
  *   1. 启动命令注册表（只需一次）
  *   2. 调用 dispatcher 处理事件
- *   3. 当 dispatcher 判定为 "fallback_conversation" 时，
- *      透传给成员 D 的对话式追问处理器 handleConversation，
- *      但仅当事件是 pull_request_review_comment 时才透传
- *      （issue_comment 场景的对话暂不支持）。
  */
 
-// eslint-disable-next-line camelcase
 
 
 
-
-
-// eslint-disable-next-line camelcase
-const command_handler_context = github.context;
 async function handleCommentEvent(deps) {
     (0,bootstrap/* bootstrapCommands */.K)();
     const triggerReview = async (mode) => {
@@ -9940,29 +9660,14 @@ async function handleCommentEvent(deps) {
     });
     (0,core.info)(`commentEvent dispatcher outcome: ${JSON.stringify(outcome)}`);
     if (outcome.kind === 'fallback_conversation') {
-        if (command_handler_context.eventName === 'pull_request_review_comment') {
-            const bots = deps.heavyBot != null
-                ? { heavyBot: deps.heavyBot }
-                : deps.getReviewBots?.();
-            if (bots == null) {
-                (0,core.info)('commentEvent: conversation fallback skipped (OpenAI bot unavailable)');
-                return;
-            }
-            // 对话式追问（成员 D · 2.3）仅支持 pull_request_review_comment。
-            // handleConversation 已取代旧的 handleReviewComment（含意图识别 / 轮次上限 /
-            // 上下文截断），两者都会向 thread 回帖，**不可同时调用**，否则重复回复 + 双倍 LLM 开销。
-            await handleConversation(bots.heavyBot, deps.options, deps.prompts);
-        }
-        else {
-            (0,core.info)('commentEvent: conversation fallback skipped (issue_comment 对话暂不支持)');
-        }
+        (0,core.info)('commentEvent: fallback_conversation is no longer used');
     }
 }
 
 
 /***/ }),
 
-/***/ 5544:
+/***/ 842:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
 "use strict";
@@ -9974,271 +9679,12 @@ __nccwpck_require__.d(__webpack_exports__, {
 
 // UNUSED EXPORTS: _resetBootstrap
 
-// EXTERNAL MODULE: ./node_modules/.pnpm/@actions+core@1.11.1/node_modules/@actions/core/lib/core.js
-var core = __nccwpck_require__(1078);
-// EXTERNAL MODULE: ./lib/commands/registry.js
-var registry = __nccwpck_require__(953);
+// EXTERNAL MODULE: ./lib/commands/handlers/help.js
+var help = __nccwpck_require__(660);
+// EXTERNAL MODULE: ./lib/github/review-thread.js
+var review_thread = __nccwpck_require__(2688);
 // EXTERNAL MODULE: ./lib/constants.js
 var constants = __nccwpck_require__(2098);
-;// CONCATENATED MODULE: ./lib/commands/handlers/help.js
-/**
- * commands/handlers/help.ts - help 命令的参考实现（成员 A 交付）
- *
- * 功能:
- * - 自动聚合 registry 中已注册的所有命令
- * - 按注册顺序输出命令名、描述、用法
- * - 提供 buildHelpMessage() 纯函数，便于单测
- */
-
-
-
-/**
- * 纯函数：根据命令列表生成 help Markdown。
- * 提取出来便于单元测试（不依赖 registry 单例）。
- */
-function buildHelpMessage(commands) {
-    const lines = [];
-    lines.push('## 支持的命令');
-    lines.push('');
-    lines.push('| 命令 | 描述 | 最低权限 |');
-    lines.push('| :--- | :--- | :------- |');
-    // help 自身也要出现在列表里，但排在最后
-    const ordered = [...commands].sort((a, b) => {
-        if (a.name === 'help')
-            return 1;
-        if (b.name === 'help')
-            return -1;
-        return 0;
-    });
-    for (const c of ordered) {
-        const perm = c.minPermission ?? 'write';
-        const usage = c.usage ?? `${constants/* PRIMARY_BOT_MENTION */.a} ${c.name}`;
-        lines.push(`| \`${usage}\` | ${c.description} | \`${perm}\` |`);
-    }
-    if (ordered.some(c => (c.aliases?.length ?? 0) > 0)) {
-        lines.push('');
-        lines.push('### 别名');
-        for (const c of ordered) {
-            if (c.aliases && c.aliases.length > 0) {
-                lines.push(`- \`${c.name}\` → ${c.aliases.map(a => `\`${a}\``).join(', ')}`);
-            }
-        }
-    }
-    lines.push('');
-    lines.push(`> ${(0,core.getInput)('bot_icon') || '🤖'} Bot 同时支持 ${constants/* BOT_MENTIONS.map */.T.map(m => `\`${m}\``).join(' 与 ')} 共 ${constants/* BOT_MENTIONS.length */.T.length} 个 mention。`);
-    return lines.join('\n');
-}
-const helpHandler = {
-    name: 'help',
-    description: '显示所有支持的命令及用法',
-    usage: `${constants/* PRIMARY_BOT_MENTION */.a} help`,
-    needsAck: false,
-    minPermission: 'read',
-    async execute(_ctx) {
-        const cmds = (0,registry/* getRegistry */.J)().listCommands();
-        return { message: buildHelpMessage(cmds) };
-    }
-};
-
-// EXTERNAL MODULE: ./node_modules/.pnpm/p-limit@4.0.0/node_modules/p-limit/index.js + 1 modules
-var p_limit = __nccwpck_require__(9272);
-// EXTERNAL MODULE: ./lib/octokit.js
-var octokit = __nccwpck_require__(2247);
-;// CONCATENATED MODULE: ./lib/github/review-thread.js
-
-
-
-// ─── GraphQL documents ───────────────────────────────────────────────────────
-const GET_REVIEW_THREADS = `
-  query GetReviewThreads(
-    $owner: String!
-    $repo: String!
-    $number: Int!
-    $after: String
-  ) {
-    repository(owner: $owner, name: $repo) {
-      pullRequest(number: $number) {
-        reviewThreads(first: 100, after: $after) {
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-          nodes {
-            id
-            isResolved
-            path
-            line
-            comments(first: 1) {
-              nodes {
-                author {
-                  login
-                }
-                body
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-`;
-const RESOLVE_THREAD = `
-  mutation ResolveThread($threadId: ID!) {
-    resolveReviewThread(input: { threadId: $threadId }) {
-      thread {
-        isResolved
-      }
-    }
-  }
-`;
-// ─── Bot identity ─────────────────────────────────────────────────────────────
-let cachedBotLogin = null;
-async function getBotLogin(options) {
-    if (cachedBotLogin !== null)
-        return cachedBotLogin;
-    void options;
-    // Explicit override for custom GitHub App: installation tokens cannot call
-    // GET /user, so auto-detection would wrongly fall back to 'github-actions'.
-    const explicitLogin = (0,core.getInput)('bot_github_login');
-    if (explicitLogin) {
-        cachedBotLogin = explicitLogin;
-        return cachedBotLogin;
-    }
-    try {
-        const { data } = await octokit/* octokit.users.getAuthenticated */.K.users.getAuthenticated();
-        cachedBotLogin = data.login;
-    }
-    catch (e) {
-        (0,core.warning)(`getBotLogin: failed to get authenticated user – ${String(e)}`);
-        // Default GITHUB_TOKEN (integration token) lacks read:user scope.
-        // GraphQL returns the login WITHOUT the "[bot]" suffix, so use 'github-actions'
-        // (not 'github-actions[bot]') to match the author field in reviewThread queries.
-        cachedBotLogin = 'github-actions';
-    }
-    return cachedBotLogin;
-}
-/** Visible for testing only */
-function _resetBotLoginCache() {
-    cachedBotLogin = null;
-}
-/**
- * Normalize a GitHub login for bot identity comparison.
- *
- * GitHub is inconsistent about the `[bot]` suffix on bot accounts:
- *   - REST (`getAuthenticated`, comment.user.login) → `github-actions[bot]`
- *   - GraphQL (reviewThread author.login)           → `github-actions`
- * Stripping the suffix (and lowercasing) lets the two representations match.
- */
-function normalizeLogin(login) {
-    return login.replace(/\[bot\]$/i, '').toLowerCase();
-}
-// ─── Query ────────────────────────────────────────────────────────────────────
-async function fetchUnresolvedBotThreads(params, botLogin) {
-    const results = [];
-    let cursor = null;
-    do {
-        const data = await octokit/* octokit.graphql */.K.graphql(GET_REVIEW_THREADS, {
-            owner: params.owner,
-            repo: params.repo,
-            number: params.prNumber,
-            after: cursor ?? undefined
-        });
-        const page = data.repository.pullRequest.reviewThreads;
-        const normalizedBot = normalizeLogin(botLogin);
-        for (const node of page.nodes) {
-            const firstComment = node.comments.nodes[0];
-            const authorLogin = firstComment?.author?.login ?? null;
-            if (!node.isResolved &&
-                authorLogin !== null &&
-                normalizeLogin(authorLogin) === normalizedBot) {
-                results.push({
-                    id: node.id,
-                    isResolved: node.isResolved,
-                    firstCommentAuthorLogin: authorLogin,
-                    path: node.path,
-                    line: node.line ?? null,
-                    firstCommentBody: firstComment?.body ?? null
-                });
-            }
-        }
-        cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
-    } while (cursor !== null);
-    return results;
-}
-function isPermissionError(e) {
-    return String(e).includes('not accessible by integration');
-}
-/** 网络/超时类错误（与权限、node-not-found 区分，便于给出不同提示） */
-function isNetworkError(e) {
-    return /ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|network|timed? ?out/i.test(String(e));
-}
-/**
- * 测试用：识别注入的假 thread ID（`PRRT_debug_inject_<kind>_<n>`），
- * 返回对应类型的模拟错误，不实际发起 GraphQL 请求。
- *
- * 真实运行时 thread ID 不会带此前缀，函数返回 null，走正常 GraphQL 流程。
- */
-function simulateDebugError(threadId) {
-    if (!threadId.startsWith('PRRT_debug_inject_'))
-        return null;
-    if (threadId.includes('_permission_')) {
-        return new Error("Resource not accessible by integration (mutation 'resolveReviewThread')");
-    }
-    if (threadId.includes('_network_')) {
-        // TODO: Maybe gitlab in the future, or other network errors, but for now just simulate a connection reset.
-        return new Error('request to https://api.github.com/graphql failed, reason: read ECONNRESET');
-    }
-    // 默认：node not found（无效的 global id）
-    return new Error('Request failed due to following response errors:\n' +
-        ` - Could not resolve to a node with the global id of '${threadId}'`);
-}
-function threadLabel(t) {
-    if (t.path) {
-        const loc = t.line != null ? `${t.path}:${t.line}` : t.path;
-        if (t.firstCommentBody) {
-            const snippet = t.firstCommentBody.trim().replace(/\s+/g, ' ').slice(0, 60);
-            const ellipsis = snippet.length === 60 ? '…' : '';
-            return `${loc} – "${snippet}${ellipsis}"`;
-        }
-        return loc;
-    }
-    return t.id;
-}
-async function batchResolve(threads) {
-    const limit = (0,p_limit/* default */.Z)(6);
-    let ok = 0;
-    const errors = [];
-    const failedItems = [];
-    await Promise.allSettled(threads.map(t => limit(async () => {
-        try {
-            const simulated = simulateDebugError(t.id);
-            if (simulated)
-                throw simulated;
-            await octokit/* octokit.graphql */.K.graphql(RESOLVE_THREAD, { threadId: t.id });
-            ok++;
-        }
-        catch (e) {
-            const err = e instanceof Error ? e : new Error(String(e));
-            errors.push(err);
-            failedItems.push({ thread: t, error: err });
-        }
-    })));
-    const permissionFailed = failedItems.filter(({ error }) => isPermissionError(error));
-    const otherFailed = failedItems.filter(({ error }) => !isPermissionError(error));
-    if (permissionFailed.length > 0) {
-        (0,core.warning)('batchResolve: token lacks permission to resolve review threads ' +
-            '("Resource not accessible by integration"). ' +
-            'Set the `resolve_token` input to a classic PAT with repo scope.');
-    }
-    if (otherFailed.length > 0) {
-        const lines = otherFailed
-            .map(({ thread, error }) => `  • ${threadLabel(thread)}: ${error.message}`)
-            .join('\n');
-        (0,core.warning)(`batchResolve: failed to resolve ${otherFailed.length}/${threads.length} thread(s):\n${lines}`);
-    }
-    return { ok, failed: errors.length, errors, failedItems };
-}
-
 ;// CONCATENATED MODULE: ./lib/commands/handlers/resolve.js
 
 
@@ -10252,8 +9698,8 @@ const resolveHandler = {
     execute
 };
 async function execute(ctx) {
-    const botLogin = await getBotLogin(ctx.options);
-    const threads = await fetchUnresolvedBotThreads({ owner: ctx.owner, repo: ctx.repo, prNumber: ctx.prNumber }, botLogin);
+    const botLogin = await (0,review_thread/* getBotLogin */.ZY)(ctx.options);
+    const threads = await (0,review_thread/* fetchUnresolvedBotThreads */.J9)({ owner: ctx.owner, repo: ctx.repo, prNumber: ctx.prNumber }, botLogin);
     if (threads.length === 0) {
         return { message: 'ℹ️ 没有找到待解决的 CodeSentinel 审查意见' };
     }
@@ -10274,7 +9720,7 @@ async function execute(ctx) {
     //     })
     //   }
     // }
-    const { ok, failed, failedItems } = await batchResolve(threads);
+    const { ok, failed, failedItems } = await (0,review_thread/* batchResolve */.zO)(threads);
     return { message: formatResult(ok, failed, threads.length, failedItems) };
 }
 // ─── Formatting ───────────────────────────────────────────────────────────────
@@ -10285,7 +9731,7 @@ function formatResult(ok, failed, total, failedItems) {
     }
     const errDetail = failedItems.length > 0
         ? `\n\n失败详情：\n${failedItems
-            .map(({ thread, error }) => `- ${errorTag(error)} \`${threadLabel(thread)}\`：${flattenError(error.message)}`)
+            .map(({ thread, error }) => `- ${errorTag(error)} \`${(0,review_thread/* threadLabel */.J1)(thread)}\`：${flattenError(error.message)}`)
             .join('\n')}${permissionHint(failedItems)}`
         : '';
     if (ok === 0) {
@@ -10300,15 +9746,15 @@ function formatResult(ok, failed, total, failedItems) {
 }
 /** 给每条失败打上分类标签，方便用户一眼区分错误类型 */
 function errorTag(error) {
-    if (isPermissionError(error))
+    if ((0,review_thread/* isPermissionError */.nS)(error))
         return '🔒 权限不足';
-    if (isNetworkError(error))
+    if ((0,review_thread/* isNetworkError */.eE)(error))
         return '🌐 网络错误';
     return '⚠️ 其他错误';
 }
 /** 存在权限错误时，追加可操作提示 */
 function permissionHint(failedItems) {
-    if (!failedItems.some(({ error }) => isPermissionError(error)))
+    if (!failedItems.some(({ error }) => (0,review_thread/* isPermissionError */.nS)(error)))
         return '';
     return ('\n\n💡 存在权限不足导致的失败：当前 token 无法解决审查线程，' +
         '请将 `resolve_token` 输入配置为具有 repo 权限的 classic PAT，或手动解决。');
@@ -10435,6 +9881,8 @@ const ALL_STUBS = [
     configurationStub
 ];
 
+// EXTERNAL MODULE: ./lib/commands/registry.js
+var registry = __nccwpck_require__(953);
 ;// CONCATENATED MODULE: ./lib/commands/bootstrap.js
 /**
  * commands/bootstrap.ts - 命令框架启动注册
@@ -10454,7 +9902,7 @@ function bootstrapCommands() {
     if (bootstrapped)
         return;
     const reg = (0,registry/* getRegistry */.J)();
-    reg.register(helpHandler);
+    reg.register(help/* helpHandler */.u);
     reg.register(resolveHandler);
     for (const h of ALL_STUBS) {
         reg.register(h);
@@ -10484,8 +9932,8 @@ __nccwpck_require__.d(__webpack_exports__, {
 var core = __nccwpck_require__(1078);
 // EXTERNAL MODULE: ./node_modules/.pnpm/@actions+github@5.1.1/node_modules/@actions/github/lib/github.js
 var github = __nccwpck_require__(3695);
-// EXTERNAL MODULE: ./lib/commands/bootstrap.js + 4 modules
-var bootstrap = __nccwpck_require__(5544);
+// EXTERNAL MODULE: ./lib/commands/bootstrap.js + 2 modules
+var bootstrap = __nccwpck_require__(842);
 // EXTERNAL MODULE: ./lib/commands/registry.js
 var commands_registry = __nccwpck_require__(953);
 // EXTERNAL MODULE: ./lib/commands/parser.js
@@ -10647,6 +10095,80 @@ async function tryEarlyReaction(rawReaction) {
 
 /***/ }),
 
+/***/ 660:
+/***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
+
+"use strict";
+/* harmony export */ __nccwpck_require__.d(__webpack_exports__, {
+/* harmony export */   "W": () => (/* binding */ buildHelpMessage),
+/* harmony export */   "u": () => (/* binding */ helpHandler)
+/* harmony export */ });
+/* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(1078);
+/* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__nccwpck_require__.n(_actions_core__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var _registry__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(953);
+/* harmony import */ var _constants__WEBPACK_IMPORTED_MODULE_2__ = __nccwpck_require__(2098);
+/**
+ * commands/handlers/help.ts - help 命令的参考实现（成员 A 交付）
+ *
+ * 功能:
+ * - 自动聚合 registry 中已注册的所有命令
+ * - 按注册顺序输出命令名、描述、用法
+ * - 提供 buildHelpMessage() 纯函数，便于单测
+ */
+
+
+
+/**
+ * 纯函数：根据命令列表生成 help Markdown。
+ * 提取出来便于单元测试（不依赖 registry 单例）。
+ */
+function buildHelpMessage(commands) {
+    const lines = [];
+    lines.push('## 支持的命令');
+    lines.push('');
+    lines.push('| 命令 | 描述 | 最低权限 |');
+    lines.push('| :--- | :--- | :------- |');
+    // help 自身也要出现在列表里，但排在最后
+    const ordered = [...commands].sort((a, b) => {
+        if (a.name === 'help')
+            return 1;
+        if (b.name === 'help')
+            return -1;
+        return 0;
+    });
+    for (const c of ordered) {
+        const perm = c.minPermission ?? 'write';
+        const usage = c.usage ?? `${_constants__WEBPACK_IMPORTED_MODULE_2__/* .PRIMARY_BOT_MENTION */ .a} ${c.name}`;
+        lines.push(`| \`${usage}\` | ${c.description} | \`${perm}\` |`);
+    }
+    if (ordered.some(c => (c.aliases?.length ?? 0) > 0)) {
+        lines.push('');
+        lines.push('### 别名');
+        for (const c of ordered) {
+            if (c.aliases && c.aliases.length > 0) {
+                lines.push(`- \`${c.name}\` → ${c.aliases.map(a => `\`${a}\``).join(', ')}`);
+            }
+        }
+    }
+    lines.push('');
+    lines.push(`> ${(0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('bot_icon') || '🤖'} Bot 同时支持 ${_constants__WEBPACK_IMPORTED_MODULE_2__/* .BOT_MENTIONS.map */ .T.map(m => `\`${m}\``).join(' 与 ')} 共 ${_constants__WEBPACK_IMPORTED_MODULE_2__/* .BOT_MENTIONS.length */ .T.length} 个 mention。`);
+    return lines.join('\n');
+}
+const helpHandler = {
+    name: 'help',
+    description: '显示所有支持的命令及用法',
+    usage: `${_constants__WEBPACK_IMPORTED_MODULE_2__/* .PRIMARY_BOT_MENTION */ .a} help`,
+    needsAck: false,
+    minPermission: 'read',
+    async execute(_ctx) {
+        const cmds = (0,_registry__WEBPACK_IMPORTED_MODULE_1__/* .getRegistry */ .J)().listCommands();
+        return { message: buildHelpMessage(cmds) };
+    }
+};
+
+
+/***/ }),
+
 /***/ 5964:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
@@ -10735,16 +10257,14 @@ function parse(body, opts) {
     }
     const firstLine = firstLineRaw.trim();
     if (firstLine.length === 0) {
-        // 仅 @bot 单独出现 → 视为对话触发
-        return { kind: 'conversation' };
+        return { kind: 'command', error: { code: 'UNKNOWN_COMMAND', detail: '' } };
     }
     // 4. 分词（空白分隔）
     const tokens = firstLine.split(/\s+/);
     // 5. 尝试匹配命令名（最长前缀匹配，最多看前 3 个 token）
     const matched = matchCommandName(tokens, opts.registeredCommands);
     if (!matched) {
-        // 未命中命令但有 @bot → 交给对话 fallback
-        return { kind: 'conversation' };
+        return { kind: 'command', error: { code: 'UNKNOWN_COMMAND', detail: firstLine } };
     }
     const { name, consumed } = matched;
     const argTokens = tokens.slice(consumed);
@@ -10908,788 +10428,6 @@ function getRegistry() {
 
 /***/ }),
 
-/***/ 4558:
-/***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
-
-"use strict";
-/* harmony export */ __nccwpck_require__.d(__webpack_exports__, {
-/* harmony export */   "Es": () => (/* binding */ Commenter),
-/* harmony export */   "O$": () => (/* binding */ SHORT_SUMMARY_START_TAG),
-/* harmony export */   "Rp": () => (/* binding */ SUMMARIZE_TAG),
-/* harmony export */   "Rs": () => (/* binding */ COMMENT_TAG),
-/* harmony export */   "Zb": () => (/* binding */ SHORT_SUMMARY_END_TAG),
-/* harmony export */   "aD": () => (/* binding */ COMMENT_REPLY_TAG),
-/* harmony export */   "oi": () => (/* binding */ RAW_SUMMARY_START_TAG),
-/* harmony export */   "rV": () => (/* binding */ RAW_SUMMARY_END_TAG)
-/* harmony export */ });
-/* unused harmony exports COMMENT_GREETING, IN_PROGRESS_START_TAG, IN_PROGRESS_END_TAG, DESCRIPTION_START_TAG, DESCRIPTION_END_TAG, COMMIT_ID_START_TAG, COMMIT_ID_END_TAG */
-/* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(1078);
-/* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__nccwpck_require__.n(_actions_core__WEBPACK_IMPORTED_MODULE_0__);
-/* harmony import */ var _actions_github__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(3695);
-/* harmony import */ var _actions_github__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__nccwpck_require__.n(_actions_github__WEBPACK_IMPORTED_MODULE_1__);
-/* harmony import */ var _octokit__WEBPACK_IMPORTED_MODULE_2__ = __nccwpck_require__(2247);
-/**
- * commenter.ts - GitHub 评论管理模块
- *
- * 负责所有与 GitHub PR 评论相关的操作，包括：
- * 1. 创建/替换 PR 评论（issue comment）
- * 2. 缓冲和批量提交代码审查评论（review comment）
- * 3. 回复用户的 review comment
- * 4. 更新 PR 描述（写入发布说明）
- * 5. 管理增量审查状态（已审查的 commit ID 追踪）
- * 6. 评论链（conversation chain）的获取和组装
- *
- * 使用 HTML 注释标签（如 <!-- tag -->）作为唯一标识，
- * 实现评论的幂等性操作（查找并替换已有评论，而非重复创建）
- */
-
-// eslint-disable-next-line camelcase
-
-
-// eslint-disable-next-line camelcase
-const context = _actions_github__WEBPACK_IMPORTED_MODULE_1__.context;
-const repo = context.repo;
-// ==================== 标签常量 ====================
-// 这些 HTML 注释标签用于标识和定位 bot 生成的各类评论
-/** 评论顶部的问候语（包含 bot 图标 + 可配置名称） */
-const COMMENT_GREETING = `${(0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('bot_icon') || '🤖'}   ${(0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('bot_name') || 'AI Reviewer'}`;
-/** 标识 bot 自动生成的代码审查评论 */
-const COMMENT_TAG = '<!-- This is an auto-generated comment by AI Reviewer -->';
-/** 标识 bot 自动生成的回复评论 */
-const COMMENT_REPLY_TAG = '<!-- This is an auto-generated reply by AI Reviewer -->';
-/** 标识 bot 的摘要评论 */
-const SUMMARIZE_TAG = '<!-- This is an auto-generated comment: summarize by AI Reviewer -->';
-/** 标识审查进行中的状态标签（开始） */
-const IN_PROGRESS_START_TAG = '<!-- This is an auto-generated comment: summarize review in progress by AI Reviewer -->';
-/** 标识审查进行中的状态标签（结束） */
-const IN_PROGRESS_END_TAG = '<!-- end of auto-generated comment: summarize review in progress by AI Reviewer -->';
-/** 标识 PR 描述中发布说明区域（开始） */
-const DESCRIPTION_START_TAG = '<!-- This is an auto-generated comment: release notes by AI Reviewer -->';
-/** 标识 PR 描述中发布说明区域（结束） */
-const DESCRIPTION_END_TAG = '<!-- end of auto-generated comment: release notes by AI Reviewer -->';
-/** 标识隐藏的原始摘要区域（开始），存储在摘要评论的 HTML 注释中 */
-const RAW_SUMMARY_START_TAG = `<!-- This is an auto-generated comment: raw summary by AI Reviewer -->
-<!--
-`;
-/** 标识隐藏的原始摘要区域（结束） */
-const RAW_SUMMARY_END_TAG = `-->
-<!-- end of auto-generated comment: raw summary by AI Reviewer -->`;
-/** 标识隐藏的精简摘要区域（开始） */
-const SHORT_SUMMARY_START_TAG = `<!-- This is an auto-generated comment: short summary by AI Reviewer -->
-<!--
-`;
-/** 标识隐藏的精简摘要区域（结束） */
-const SHORT_SUMMARY_END_TAG = `-->
-<!-- end of auto-generated comment: short summary by AI Reviewer -->`;
-/** 标识已审查的 commit ID 列表（开始） */
-const COMMIT_ID_START_TAG = '<!-- commit_ids_reviewed_start -->';
-/** 标识已审查的 commit ID 列表（结束） */
-const COMMIT_ID_END_TAG = '<!-- commit_ids_reviewed_end -->';
-/**
- * Commenter 类 - GitHub 评论管理器
- *
- * 封装所有 GitHub 评论的 CRUD 操作，提供：
- * - 评论的创建、替换、查找
- * - 审查评论的缓冲和批量提交
- * - 评论链的获取和组装
- * - 增量审查状态管理
- */
-class Commenter {
-    /**
-     * 创建或替换 PR 评论
-     * @param message - 评论内容
-     * @param tag - HTML 标签，用于标识和查找评论
-     * @param mode - "create"（新建）或 "replace"（查找并替换已有评论）
-     */
-    async comment(message, tag, mode) {
-        let target;
-        if (context.payload.pull_request != null) {
-            target = context.payload.pull_request.number;
-        }
-        else if (context.payload.issue != null) {
-            target = context.payload.issue.number;
-        }
-        else {
-            (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)('Skipped: context.payload.pull_request and context.payload.issue are both null');
-            return;
-        }
-        if (!tag) {
-            tag = COMMENT_TAG;
-        }
-        // 组装评论正文：问候语 + 消息内容 + 标签
-        const body = `${COMMENT_GREETING}
-
-${message}
-
-${tag}`;
-        if (mode === 'create') {
-            await this.create(body, target);
-        }
-        else if (mode === 'replace') {
-            await this.replace(body, tag, target);
-        }
-        else {
-            (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Unknown mode: ${mode}, use "replace" instead`);
-            await this.replace(body, tag, target);
-        }
-    }
-    /**
-     * 提取标签对之间的内容
-     * 用于从评论正文中提取隐藏的状态数据（如原始摘要、已审查 commit ID 等）
-     */
-    getContentWithinTags(content, startTag, endTag) {
-        const start = content.indexOf(startTag);
-        const end = content.indexOf(endTag);
-        if (start >= 0 && end >= 0) {
-            return content.slice(start + startTag.length, end);
-        }
-        return '';
-    }
-    /** 移除标签对及其包含的内容 */
-    removeContentWithinTags(content, startTag, endTag) {
-        const start = content.indexOf(startTag);
-        const end = content.lastIndexOf(endTag);
-        if (start >= 0 && end >= 0) {
-            return content.slice(0, start) + content.slice(end + endTag.length);
-        }
-        return content;
-    }
-    /** 从摘要评论中提取原始摘要内容 */
-    getRawSummary(summary) {
-        return this.getContentWithinTags(summary, RAW_SUMMARY_START_TAG, RAW_SUMMARY_END_TAG);
-    }
-    /** 从摘要评论中提取精简摘要内容 */
-    getShortSummary(summary) {
-        return this.getContentWithinTags(summary, SHORT_SUMMARY_START_TAG, SHORT_SUMMARY_END_TAG);
-    }
-    /** 从 PR 描述中提取用户原始描述（移除 bot 生成的发布说明部分） */
-    getDescription(description) {
-        return this.removeContentWithinTags(description, DESCRIPTION_START_TAG, DESCRIPTION_END_TAG);
-    }
-    /** 从 PR 描述中提取发布说明内容 */
-    getReleaseNotes(description) {
-        const releaseNotes = this.getContentWithinTags(description, DESCRIPTION_START_TAG, DESCRIPTION_END_TAG);
-        return releaseNotes.replace(/(^|\n)> .*/g, '');
-    }
-    /**
-     * 更新 PR 描述，写入 AI 生成的发布说明
-     * 将发布说明嵌入到 DESCRIPTION_START_TAG 和 DESCRIPTION_END_TAG 之间
-     */
-    async updateDescription(pullNumber, message) {
-        try {
-            // 获取 PR 的最新描述
-            const pr = await _octokit__WEBPACK_IMPORTED_MODULE_2__/* .octokit.pulls.get */ .K.pulls.get({
-                owner: repo.owner,
-                repo: repo.repo,
-                // eslint-disable-next-line camelcase
-                pull_number: pullNumber
-            });
-            let body = '';
-            if (pr.data.body) {
-                body = pr.data.body;
-            }
-            // 移除已有的发布说明，保留用户原始描述
-            const description = this.getDescription(body);
-            const messageClean = this.removeContentWithinTags(message, DESCRIPTION_START_TAG, DESCRIPTION_END_TAG);
-            // 在用户描述后追加发布说明（用标签包裹）
-            const newDescription = `${description}\n${DESCRIPTION_START_TAG}\n${messageClean}\n${DESCRIPTION_END_TAG}`;
-            await _octokit__WEBPACK_IMPORTED_MODULE_2__/* .octokit.pulls.update */ .K.pulls.update({
-                owner: repo.owner,
-                repo: repo.repo,
-                // eslint-disable-next-line camelcase
-                pull_number: pullNumber,
-                body: newDescription
-            });
-        }
-        catch (e) {
-            (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Failed to get PR: ${e}, skipping adding release notes to description.`);
-        }
-    }
-    // ==================== 代码审查评论缓冲区 ====================
-    /** 审查评论缓冲区：在内存中暂存所有审查评论，最后一次性提交 */
-    reviewCommentsBuffer = [];
-    /**
-     * 将审查评论添加到缓冲区（不立即提交）
-     * 所有缓冲的评论将在 submitReview() 中一次性提交
-     */
-    async bufferReviewComment(path, startLine, endLine, message) {
-        message = `${COMMENT_GREETING}
-
-${message}
-
-${COMMENT_TAG}`;
-        this.reviewCommentsBuffer.push({
-            path,
-            startLine,
-            endLine,
-            message
-        });
-    }
-    /**
-     * 删除处于 PENDING 状态的审查
-     * 在提交新审查前调用，避免残留的待处理审查
-     */
-    async deletePendingReview(pullNumber) {
-        try {
-            const reviews = await _octokit__WEBPACK_IMPORTED_MODULE_2__/* .octokit.pulls.listReviews */ .K.pulls.listReviews({
-                owner: repo.owner,
-                repo: repo.repo,
-                // eslint-disable-next-line camelcase
-                pull_number: pullNumber
-            });
-            const pendingReview = reviews.data.find(review => review.state === 'PENDING');
-            if (pendingReview) {
-                (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`Deleting pending review for PR #${pullNumber} id: ${pendingReview.id}`);
-                try {
-                    await _octokit__WEBPACK_IMPORTED_MODULE_2__/* .octokit.pulls.deletePendingReview */ .K.pulls.deletePendingReview({
-                        owner: repo.owner,
-                        repo: repo.repo,
-                        // eslint-disable-next-line camelcase
-                        pull_number: pullNumber,
-                        // eslint-disable-next-line camelcase
-                        review_id: pendingReview.id
-                    });
-                }
-                catch (e) {
-                    (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Failed to delete pending review: ${e}`);
-                }
-            }
-        }
-        catch (e) {
-            (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Failed to list reviews: ${e}`);
-        }
-    }
-    /**
-     * 提交所有缓冲的审查评论
-     *
-     * 流程：
-     * 1. 如果缓冲区为空，提交一个仅包含状态消息的空审查
-     * 2. 删除同一位置的旧 bot 评论（避免重复）
-     * 3. 清理已有的 PENDING 审查
-     * 4. 尝试一次性提交所有评论（createReview + submitReview）
-     * 5. 如果批量提交失败，降级为逐条提交（createReviewComment）
-     *
-     * @param pullNumber - PR 编号
-     * @param commitId - 提交的 commit SHA
-     * @param statusMsg - 审查状态消息（包含处理统计信息）
-     */
-    async submitReview(pullNumber, commitId, statusMsg) {
-        const body = `${COMMENT_GREETING}
-
-${statusMsg}
-`;
-        if (this.reviewCommentsBuffer.length === 0) {
-            // 没有审查评论时，跳过空审查提交（GitHub API 不允许无评论的 COMMENT 审查）
-            (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`Skipping empty review for PR #${pullNumber} — no review comments to submit`);
-            return;
-        }
-        // 删除同一位置的旧 bot 评论，避免重复评论
-        for (const comment of this.reviewCommentsBuffer) {
-            const comments = await this.getCommentsAtRange(pullNumber, comment.path, comment.startLine, comment.endLine);
-            for (const c of comments) {
-                if (c.body.includes(COMMENT_TAG)) {
-                    (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`Deleting review comment for ${comment.path}:${comment.startLine}-${comment.endLine}: ${comment.message}`);
-                    try {
-                        await _octokit__WEBPACK_IMPORTED_MODULE_2__/* .octokit.pulls.deleteReviewComment */ .K.pulls.deleteReviewComment({
-                            owner: repo.owner,
-                            repo: repo.repo,
-                            // eslint-disable-next-line camelcase
-                            comment_id: c.id
-                        });
-                    }
-                    catch (e) {
-                        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Failed to delete review comment: ${e}`);
-                    }
-                }
-            }
-        }
-        // 清理已有的 PENDING 审查
-        await this.deletePendingReview(pullNumber);
-        // 生成单条评论的 API 数据格式
-        const generateCommentData = (comment) => {
-            const commentData = {
-                path: comment.path,
-                body: comment.message,
-                line: comment.endLine
-            };
-            // 如果是多行评论，添加起始行信息
-            if (comment.startLine !== comment.endLine) {
-                // eslint-disable-next-line camelcase
-                commentData.start_line = comment.startLine;
-                // eslint-disable-next-line camelcase
-                commentData.start_side = 'RIGHT';
-            }
-            return commentData;
-        };
-        try {
-            // 尝试一次性批量提交所有审查评论
-            const review = await _octokit__WEBPACK_IMPORTED_MODULE_2__/* .octokit.pulls.createReview */ .K.pulls.createReview({
-                owner: repo.owner,
-                repo: repo.repo,
-                // eslint-disable-next-line camelcase
-                pull_number: pullNumber,
-                // eslint-disable-next-line camelcase
-                commit_id: commitId,
-                comments: this.reviewCommentsBuffer.map(comment => generateCommentData(comment))
-            });
-            (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`Submitting review for PR #${pullNumber}, total comments: ${this.reviewCommentsBuffer.length}, review id: ${review.data.id}`);
-            // 正式提交审查（从 PENDING 变为 COMMENT）
-            await _octokit__WEBPACK_IMPORTED_MODULE_2__/* .octokit.pulls.submitReview */ .K.pulls.submitReview({
-                owner: repo.owner,
-                repo: repo.repo,
-                // eslint-disable-next-line camelcase
-                pull_number: pullNumber,
-                // eslint-disable-next-line camelcase
-                review_id: review.data.id,
-                event: 'COMMENT',
-                body
-            });
-        }
-        catch (e) {
-            // 批量提交失败时，降级为逐条提交
-            (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Failed to create review: ${e}. Falling back to individual comments.`);
-            await this.deletePendingReview(pullNumber);
-            let commentCounter = 0;
-            for (const comment of this.reviewCommentsBuffer) {
-                (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`Creating new review comment for ${comment.path}:${comment.startLine}-${comment.endLine}: ${comment.message}`);
-                const commentData = {
-                    owner: repo.owner,
-                    repo: repo.repo,
-                    // eslint-disable-next-line camelcase
-                    pull_number: pullNumber,
-                    // eslint-disable-next-line camelcase
-                    commit_id: commitId,
-                    ...generateCommentData(comment)
-                };
-                try {
-                    await _octokit__WEBPACK_IMPORTED_MODULE_2__/* .octokit.pulls.createReviewComment */ .K.pulls.createReviewComment(commentData);
-                }
-                catch (ee) {
-                    (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Failed to create review comment: ${ee}`);
-                }
-                commentCounter++;
-                (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`Comment ${commentCounter}/${this.reviewCommentsBuffer.length} posted`);
-            }
-        }
-    }
-    /**
-     * 回复用户的 review comment
-     *
-     * 在顶层评论下创建回复，并将顶层评论的标签从 COMMENT_TAG 更新为 COMMENT_REPLY_TAG，
-     * 表示该评论链已有 bot 参与回复
-     */
-    async reviewCommentReply(pullNumber, topLevelComment, message) {
-        const reply = `${COMMENT_GREETING}
-
-${message}
-
-${COMMENT_REPLY_TAG}
-`;
-        try {
-            // 在顶层评论下发布回复
-            await _octokit__WEBPACK_IMPORTED_MODULE_2__/* .octokit.pulls.createReplyForReviewComment */ .K.pulls.createReplyForReviewComment({
-                owner: repo.owner,
-                repo: repo.repo,
-                // eslint-disable-next-line camelcase
-                pull_number: pullNumber,
-                body: reply,
-                // eslint-disable-next-line camelcase
-                comment_id: topLevelComment.id
-            });
-        }
-        catch (error) {
-            (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Failed to reply to the top-level comment ${error}`);
-            try {
-                await _octokit__WEBPACK_IMPORTED_MODULE_2__/* .octokit.pulls.createReplyForReviewComment */ .K.pulls.createReplyForReviewComment({
-                    owner: repo.owner,
-                    repo: repo.repo,
-                    // eslint-disable-next-line camelcase
-                    pull_number: pullNumber,
-                    body: `Could not post the reply to the top-level comment due to the following error: ${error}`,
-                    // eslint-disable-next-line camelcase
-                    comment_id: topLevelComment.id
-                });
-            }
-            catch (e) {
-                (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Failed to reply to the top-level comment ${e}`);
-            }
-        }
-        try {
-            // 将顶层评论的标签更新为回复标签，标识该链已有 bot 参与
-            if (topLevelComment.body.includes(COMMENT_TAG)) {
-                const newBody = topLevelComment.body.replace(COMMENT_TAG, COMMENT_REPLY_TAG);
-                await _octokit__WEBPACK_IMPORTED_MODULE_2__/* .octokit.pulls.updateReviewComment */ .K.pulls.updateReviewComment({
-                    owner: repo.owner,
-                    repo: repo.repo,
-                    // eslint-disable-next-line camelcase
-                    comment_id: topLevelComment.id,
-                    body: newBody
-                });
-            }
-        }
-        catch (error) {
-            (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Failed to update the top-level comment ${error}`);
-        }
-    }
-    // ==================== 评论查询方法 ====================
-    /** 获取指定行号范围内的所有 review comment */
-    async getCommentsWithinRange(pullNumber, path, startLine, endLine) {
-        const comments = await this.listReviewComments(pullNumber);
-        return comments.filter((comment) => comment.path === path &&
-            comment.body !== '' &&
-            ((comment.start_line !== undefined &&
-                comment.start_line >= startLine &&
-                comment.line <= endLine) ||
-                (startLine === endLine && comment.line === endLine)));
-    }
-    /** 获取精确匹配指定行号范围的 review comment */
-    async getCommentsAtRange(pullNumber, path, startLine, endLine) {
-        const comments = await this.listReviewComments(pullNumber);
-        return comments.filter((comment) => comment.path === path &&
-            comment.body !== '' &&
-            ((comment.start_line !== undefined &&
-                comment.start_line === startLine &&
-                comment.line === endLine) ||
-                (startLine === endLine && comment.line === endLine)));
-    }
-    /**
-     * 获取指定行号范围内的所有评论对话链
-     * 用于在代码审查时提供已有评论上下文
-     */
-    async getCommentChainsWithinRange(pullNumber, path, startLine, endLine, tag = '') {
-        const existingComments = await this.getCommentsWithinRange(pullNumber, path, startLine, endLine);
-        // 找出所有顶层评论（没有 in_reply_to_id 的评论）
-        const topLevelComments = [];
-        for (const comment of existingComments) {
-            if (!comment.in_reply_to_id) {
-                topLevelComments.push(comment);
-            }
-        }
-        // 组装所有包含指定标签的对话链
-        let allChains = '';
-        let chainNum = 0;
-        for (const topLevelComment of topLevelComments) {
-            const chain = await this.composeCommentChain(existingComments, topLevelComment);
-            if (chain && chain.includes(tag)) {
-                chainNum += 1;
-                allChains += `Conversation Chain ${chainNum}:
-${chain}
----
-`;
-            }
-        }
-        return allChains;
-    }
-    /**
-     * 组装单个评论对话链
-     * 将顶层评论和其所有回复按顺序拼接为 "用户: 内容" 格式的字符串
-     */
-    async composeCommentChain(reviewComments, topLevelComment) {
-        const conversationChain = reviewComments
-            .filter((cmt) => cmt.in_reply_to_id === topLevelComment.id)
-            .map((cmt) => `${cmt.user.login}: ${cmt.body}`);
-        conversationChain.unshift(`${topLevelComment.user.login}: ${topLevelComment.body}`);
-        return conversationChain.join('\n---\n');
-    }
-    /**
-     * 获取指定评论的完整对话链
-     * @returns { chain: 对话链字符串, topLevelComment: 顶层评论对象 }
-     */
-    async getCommentChain(pullNumber, comment) {
-        try {
-            const reviewComments = await this.listReviewComments(pullNumber);
-            const topLevelComment = await this.getTopLevelComment(reviewComments, comment);
-            const chain = await this.composeCommentChain(reviewComments, topLevelComment);
-            return { chain, topLevelComment };
-        }
-        catch (e) {
-            (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Failed to get conversation chain: ${e}`);
-            return {
-                chain: '',
-                topLevelComment: null
-            };
-        }
-    }
-    /**
-     * 沿着 in_reply_to_id 链向上查找顶层评论
-     * 顶层评论是对话链的起始评论（没有 in_reply_to_id）
-     */
-    async getTopLevelComment(reviewComments, comment) {
-        let topLevelComment = comment;
-        while (topLevelComment.in_reply_to_id) {
-            const parentComment = reviewComments.find((cmt) => cmt.id === topLevelComment.in_reply_to_id);
-            if (parentComment) {
-                topLevelComment = parentComment;
-            }
-            else {
-                break;
-            }
-        }
-        return topLevelComment;
-    }
-    // ==================== 评论缓存和分页列表 ====================
-    /** review comment 缓存（按 PR 编号索引），避免重复 API 调用 */
-    reviewCommentsCache = {};
-    /**
-     * 分页获取 PR 的所有 review comment
-     * 结果会被缓存，同一 PR 编号的后续调用直接返回缓存
-     */
-    async listReviewComments(target) {
-        if (this.reviewCommentsCache[target]) {
-            return this.reviewCommentsCache[target];
-        }
-        const allComments = [];
-        let page = 1;
-        try {
-            for (;;) {
-                const { data: comments } = await _octokit__WEBPACK_IMPORTED_MODULE_2__/* .octokit.pulls.listReviewComments */ .K.pulls.listReviewComments({
-                    owner: repo.owner,
-                    repo: repo.repo,
-                    // eslint-disable-next-line camelcase
-                    pull_number: target,
-                    page,
-                    // eslint-disable-next-line camelcase
-                    per_page: 100
-                });
-                allComments.push(...comments);
-                page++;
-                if (!comments || comments.length < 100) {
-                    break;
-                }
-            }
-            this.reviewCommentsCache[target] = allComments;
-            return allComments;
-        }
-        catch (e) {
-            (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Failed to list review comments: ${e}`);
-            return allComments;
-        }
-    }
-    /** 创建新的 issue comment */
-    async create(body, target) {
-        try {
-            const response = await _octokit__WEBPACK_IMPORTED_MODULE_2__/* .octokit.issues.createComment */ .K.issues.createComment({
-                owner: repo.owner,
-                repo: repo.repo,
-                // eslint-disable-next-line camelcase
-                issue_number: target,
-                body
-            });
-            // 将新评论添加到缓存
-            if (this.issueCommentsCache[target]) {
-                this.issueCommentsCache[target].push(response.data);
-            }
-            else {
-                this.issueCommentsCache[target] = [response.data];
-            }
-        }
-        catch (e) {
-            (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Failed to create comment: ${e}`);
-        }
-    }
-    /** 查找并替换已有评论；如果不存在则新建。同时清理并发运行产生的重复评论 */
-    async replace(body, tag, target) {
-        try {
-            const comments = await this.listComments(target);
-            const matchedComments = comments.filter((cmt) => cmt.body && cmt.body.includes(tag));
-            if (matchedComments.length > 0) {
-                // 更新第一条匹配的评论
-                await _octokit__WEBPACK_IMPORTED_MODULE_2__/* .octokit.issues.updateComment */ .K.issues.updateComment({
-                    owner: repo.owner,
-                    repo: repo.repo,
-                    // eslint-disable-next-line camelcase
-                    comment_id: matchedComments[0].id,
-                    body
-                });
-                // 删除多余的重复评论（并发运行时可能产生）
-                for (let i = 1; i < matchedComments.length; i++) {
-                    (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`Deleting duplicate comment ${matchedComments[i].id} with tag ${tag}`);
-                    try {
-                        await _octokit__WEBPACK_IMPORTED_MODULE_2__/* .octokit.issues.deleteComment */ .K.issues.deleteComment({
-                            owner: repo.owner,
-                            repo: repo.repo,
-                            // eslint-disable-next-line camelcase
-                            comment_id: matchedComments[i].id
-                        });
-                    }
-                    catch (e) {
-                        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Failed to delete duplicate comment: ${e}`);
-                    }
-                }
-            }
-            else {
-                // 未找到，创建新评论
-                await this.create(body, target);
-            }
-        }
-        catch (e) {
-            (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Failed to replace comment: ${e}`);
-        }
-    }
-    /** 查找包含指定标签的 issue comment */
-    async findCommentWithTag(tag, target) {
-        try {
-            const comments = await this.listComments(target);
-            for (const cmt of comments) {
-                if (cmt.body && cmt.body.includes(tag)) {
-                    return cmt;
-                }
-            }
-            return null;
-        }
-        catch (e) {
-            (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Failed to find comment with tag: ${e}`);
-            return null;
-        }
-    }
-    /** issue comment 缓存（按 issue/PR 编号索引） */
-    issueCommentsCache = {};
-    /** 分页获取 PR/issue 的所有 issue comment（带缓存） */
-    async listComments(target) {
-        if (this.issueCommentsCache[target]) {
-            return this.issueCommentsCache[target];
-        }
-        const allComments = [];
-        let page = 1;
-        try {
-            for (;;) {
-                const { data: comments } = await _octokit__WEBPACK_IMPORTED_MODULE_2__/* .octokit.issues.listComments */ .K.issues.listComments({
-                    owner: repo.owner,
-                    repo: repo.repo,
-                    // eslint-disable-next-line camelcase
-                    issue_number: target,
-                    page,
-                    // eslint-disable-next-line camelcase
-                    per_page: 100
-                });
-                allComments.push(...comments);
-                page++;
-                if (!comments || comments.length < 100) {
-                    break;
-                }
-            }
-            this.issueCommentsCache[target] = allComments;
-            return allComments;
-        }
-        catch (e) {
-            (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Failed to list comments: ${e}`);
-            return allComments;
-        }
-    }
-    // ==================== 增量审查状态管理 ====================
-    // 使用 HTML 注释标签在摘要评论中存储已审查的 commit ID 列表
-    // 格式：<!-- commit_ids_reviewed_start --><!-- sha1 --><!-- sha2 --><!-- commit_ids_reviewed_end -->
-    /**
-     * 从评论正文中提取已审查的 commit ID 列表
-     * @returns commit SHA 字符串数组
-     */
-    getReviewedCommitIds(commentBody) {
-        const start = commentBody.indexOf(COMMIT_ID_START_TAG);
-        const end = commentBody.indexOf(COMMIT_ID_END_TAG);
-        if (start === -1 || end === -1) {
-            return [];
-        }
-        const ids = commentBody.substring(start + COMMIT_ID_START_TAG.length, end);
-        // 解析 <!-- sha --> 格式的 commit ID
-        return ids
-            .split('<!--')
-            .map(id => id.replace('-->', '').trim())
-            .filter(id => id !== '');
-    }
-    /** 提取已审查 commit ID 的完整区块（包含标签） */
-    getReviewedCommitIdsBlock(commentBody) {
-        const start = commentBody.indexOf(COMMIT_ID_START_TAG);
-        const end = commentBody.indexOf(COMMIT_ID_END_TAG);
-        if (start === -1 || end === -1) {
-            return '';
-        }
-        return commentBody.substring(start, end + COMMIT_ID_END_TAG.length);
-    }
-    /**
-     * 向已审查 commit ID 列表中添加新的 commit ID
-     * 如果标签不存在则创建新的区块
-     */
-    addReviewedCommitId(commentBody, commitId) {
-        const start = commentBody.indexOf(COMMIT_ID_START_TAG);
-        const end = commentBody.indexOf(COMMIT_ID_END_TAG);
-        if (start === -1 || end === -1) {
-            return `${commentBody}\n${COMMIT_ID_START_TAG}\n<!-- ${commitId} -->\n${COMMIT_ID_END_TAG}`;
-        }
-        const ids = commentBody.substring(start + COMMIT_ID_START_TAG.length, end);
-        return `${commentBody.substring(0, start + COMMIT_ID_START_TAG.length)}${ids}<!-- ${commitId} -->\n${commentBody.substring(end)}`;
-    }
-    /**
-     * 从 commit 列表中找到最近一次已审查的 commit ID
-     * 从后向前遍历，返回第一个匹配的已审查 commit
-     */
-    getHighestReviewedCommitId(commitIds, reviewedCommitIds) {
-        for (let i = commitIds.length - 1; i >= 0; i--) {
-            if (reviewedCommitIds.includes(commitIds[i])) {
-                return commitIds[i];
-            }
-        }
-        return '';
-    }
-    /** 获取 PR 的所有 commit ID（分页获取完整列表） */
-    async getAllCommitIds() {
-        const allCommits = [];
-        let page = 1;
-        let commits;
-        if (context && context.payload && context.payload.pull_request != null) {
-            do {
-                commits = await _octokit__WEBPACK_IMPORTED_MODULE_2__/* .octokit.pulls.listCommits */ .K.pulls.listCommits({
-                    owner: repo.owner,
-                    repo: repo.repo,
-                    // eslint-disable-next-line camelcase
-                    pull_number: context.payload.pull_request.number,
-                    // eslint-disable-next-line camelcase
-                    per_page: 100,
-                    page
-                });
-                allCommits.push(...commits.data.map(commit => commit.sha));
-                page++;
-            } while (commits.data.length > 0);
-        }
-        return allCommits;
-    }
-    // ==================== 审查进度状态管理 ====================
-    /**
-     * 在摘要评论中添加"审查进行中"的状态提示
-     * 如果已存在则不重复添加
-     */
-    addInProgressStatus(commentBody, statusMsg) {
-        const start = commentBody.indexOf(IN_PROGRESS_START_TAG);
-        const end = commentBody.indexOf(IN_PROGRESS_END_TAG);
-        if (start === -1 || end === -1) {
-            return `${IN_PROGRESS_START_TAG}
-
-Currently reviewing new changes in this PR...
-
-${statusMsg}
-
-${IN_PROGRESS_END_TAG}
-
----
-
-${commentBody}`;
-        }
-        return commentBody;
-    }
-    /** 从摘要评论中移除"审查进行中"的状态提示 */
-    removeInProgressStatus(commentBody) {
-        const start = commentBody.indexOf(IN_PROGRESS_START_TAG);
-        const end = commentBody.indexOf(IN_PROGRESS_END_TAG);
-        if (start !== -1 && end !== -1) {
-            return (commentBody.substring(0, start) +
-                commentBody.substring(end + IN_PROGRESS_END_TAG.length));
-        }
-        return commentBody;
-    }
-}
-
-
-/***/ }),
-
 /***/ 2098:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
@@ -11721,129 +10459,239 @@ const PRIMARY_BOT_MENTION = BOT_MENTIONS[0];
 
 /***/ }),
 
-/***/ 6305:
+/***/ 2688:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
 "use strict";
 /* harmony export */ __nccwpck_require__.d(__webpack_exports__, {
-/* harmony export */   "k": () => (/* binding */ Inputs)
+/* harmony export */   "J1": () => (/* binding */ threadLabel),
+/* harmony export */   "J9": () => (/* binding */ fetchUnresolvedBotThreads),
+/* harmony export */   "Rn": () => (/* binding */ fetchThreadStatusMap),
+/* harmony export */   "ZY": () => (/* binding */ getBotLogin),
+/* harmony export */   "eE": () => (/* binding */ isNetworkError),
+/* harmony export */   "nS": () => (/* binding */ isPermissionError),
+/* harmony export */   "zO": () => (/* binding */ batchResolve)
 /* harmony export */ });
+/* unused harmony export _resetBotLoginCache */
 /* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(1078);
 /* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__nccwpck_require__.n(_actions_core__WEBPACK_IMPORTED_MODULE_0__);
-/**
- * inputs.ts - 提示词上下文数据容器
- *
- * Inputs 类是一个纯数据容器，持有所有用于渲染 LLM 提示词模板的上下文变量。
- * 提供 render() 方法将模板中的 $variable 占位符替换为实际值。
- * 提供 clone() 方法用于并行处理时创建独立副本，避免数据竞争。
- */
+/* harmony import */ var p_limit__WEBPACK_IMPORTED_MODULE_2__ = __nccwpck_require__(9272);
+/* harmony import */ var _octokit__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(2247);
 
-class Inputs {
-    systemMessage; // 系统消息（定义 AI 的角色和行为准则）
-    title; // PR 标题
-    description; // PR 描述
-    rawSummary; // 原始摘要（所有文件摘要的汇总，用于后续处理）
-    shortSummary; // 精简摘要（用于代码审查时提供上下文）
-    filename; // 当前处理的文件名
-    fileContent; // 文件原始内容（基准分支的版本）
-    fileDiff; // 文件的完整 diff
-    patches; // 打包后的代码变更块（hunk），用于逐段审查
-    diff; // 当前被评论的 diff 片段
-    commentChain; // 评论对话链（已有的评论上下文）
-    comment; // 当前用户的评论内容
-    crossFileContext; // 跨文件引用上下文（依赖分析生成，注入到审查提示词）
-    analysisChain; // 分析链（逐步推理过程，由轻量模型生成，注入到审查提示词）
-    lintContext; // 静态分析工具结果上下文（Linter/SAST 适配器生成，注入到审查提示词）
-    constructor(systemMessage = '', title = 'no title provided', description = 'no description provided', rawSummary = '', shortSummary = '', filename = '', fileContent = 'file contents cannot be provided', fileDiff = 'file diff cannot be provided', patches = '', diff = 'no diff', commentChain = 'no other comments on this patch', comment = 'no comment provided', crossFileContext = '', analysisChain = '', lintContext = '') {
-        this.systemMessage = systemMessage;
-        this.title = title;
-        this.description = description;
-        this.rawSummary = rawSummary;
-        this.shortSummary = shortSummary;
-        this.filename = filename;
-        this.fileContent = fileContent;
-        this.fileDiff = fileDiff;
-        this.patches = patches;
-        this.diff = diff;
-        this.commentChain = commentChain;
-        this.comment = comment;
-        this.crossFileContext = crossFileContext;
-        this.analysisChain = analysisChain;
-        this.lintContext = lintContext;
+
+
+// ─── GraphQL documents ───────────────────────────────────────────────────────
+const GET_REVIEW_THREADS = `
+  query GetReviewThreads(
+    $owner: String!
+    $repo: String!
+    $number: Int!
+    $after: String
+  ) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $number) {
+        reviewThreads(first: 100, after: $after) {
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+          nodes {
+            id
+            isResolved
+            path
+            line
+            comments(first: 1) {
+              nodes {
+                author {
+                  login
+                }
+                body
+              }
+            }
+          }
+        }
+      }
     }
-    /**
-     * 创建当前对象的深拷贝
-     * 用于并行处理多个文件时，每个任务持有独立的 Inputs 副本
-     */
-    clone() {
-        return new Inputs(this.systemMessage, this.title, this.description, this.rawSummary, this.shortSummary, this.filename, this.fileContent, this.fileDiff, this.patches, this.diff, this.commentChain, this.comment, this.crossFileContext, this.analysisChain, this.lintContext);
+  }
+`;
+const RESOLVE_THREAD = `
+  mutation ResolveThread($threadId: ID!) {
+    resolveReviewThread(input: { threadId: $threadId }) {
+      thread {
+        isResolved
+      }
     }
-    /**
-     * 渲染提示词模板：将模板中的 $variable 占位符替换为实际值
-     * @param content - 包含 $variable 占位符的提示词模板
-     * @returns 替换后的完整提示词
-     */
-    render(content) {
-        if (!content) {
-            return '';
-        }
-        if (this.systemMessage) {
-            content = content.replace('$system_message', this.systemMessage);
-        }
-        if (this.title) {
-            content = content.replace('$title', this.title);
-        }
-        if (this.description) {
-            content = content.replace('$description', this.description);
-        }
-        if (this.rawSummary) {
-            content = content.replace('$raw_summary', this.rawSummary);
-        }
-        if (this.shortSummary) {
-            content = content.replace('$short_summary', this.shortSummary);
-        }
-        if (this.filename) {
-            content = content.replace('$filename', this.filename);
-        }
-        if (this.fileContent) {
-            content = content.replace('$file_content', this.fileContent);
-        }
-        if (this.fileDiff) {
-            content = content.replace('$file_diff', this.fileDiff);
-        }
-        if (this.patches) {
-            content = content.replace('$patches', this.patches);
-        }
-        if (this.diff) {
-            content = content.replace('$diff', this.diff);
-        }
-        if (this.commentChain) {
-            content = content.replace('$comment_chain', this.commentChain);
-        }
-        if (this.comment) {
-            content = content.replace('$comment', this.comment);
-        }
-        // 跨文件上下文：无论是否有值，都替换占位符（避免模板残留）
-        content = content.replace('$cross_file_context', this.crossFileContext || 'No cross-file references detected.');
-        // 分析链：无论是否有值，都替换占位符（避免模板残留）
-        const analysisChainValue = this.analysisChain || 'No analysis chain available.';
-        const hadPlaceholder = content.includes('$analysis_chain');
-        content = content.replace('$analysis_chain', analysisChainValue);
-        if (hadPlaceholder) {
-            (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`[render] $analysis_chain replaced: hasValue=${!!this.analysisChain}, valueLen=${analysisChainValue.length}, preview="${analysisChainValue.substring(0, 100).replace(/\n/g, '\\n')}"`);
-        }
-        // 静态分析工具结果：仅在 lintContext 非空时替换。
-        // 杠杆 A：当无 finding 时，prompts.renderReviewFileDiff 已整体移除
-        // "$lint_section" 段，故占位符不应出现；这里保留兜底替换以防未来其他模板
-        // 直接消费 $lint_context。
-        if (this.lintContext) {
-            content = content.replace('$lint_context', this.lintContext);
-        }
-        else {
-            content = content.replace('$lint_context', 'No static analysis tool results available.');
-        }
-        return content;
+  }
+`;
+// ─── Bot identity ─────────────────────────────────────────────────────────────
+let cachedBotLogin = null;
+async function getBotLogin(options) {
+    if (cachedBotLogin !== null)
+        return cachedBotLogin;
+    void options;
+    // Explicit override for custom GitHub App: installation tokens cannot call
+    // GET /user, so auto-detection would wrongly fall back to 'github-actions'.
+    const explicitLogin = (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('bot_github_login');
+    if (explicitLogin) {
+        cachedBotLogin = explicitLogin;
+        return cachedBotLogin;
     }
+    try {
+        const { data } = await _octokit__WEBPACK_IMPORTED_MODULE_1__/* .octokit.users.getAuthenticated */ .K.users.getAuthenticated();
+        cachedBotLogin = data.login;
+    }
+    catch (e) {
+        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`getBotLogin: failed to get authenticated user – ${String(e)}`);
+        // Default GITHUB_TOKEN (integration token) lacks read:user scope.
+        // GraphQL returns the login WITHOUT the "[bot]" suffix, so use 'github-actions'
+        // (not 'github-actions[bot]') to match the author field in reviewThread queries.
+        cachedBotLogin = 'github-actions';
+    }
+    return cachedBotLogin;
+}
+/** Visible for testing only */
+function _resetBotLoginCache() {
+    cachedBotLogin = null;
+}
+/**
+ * Normalize a GitHub login for bot identity comparison.
+ *
+ * GitHub is inconsistent about the `[bot]` suffix on bot accounts:
+ *   - REST (`getAuthenticated`, comment.user.login) → `github-actions[bot]`
+ *   - GraphQL (reviewThread author.login)           → `github-actions`
+ * Stripping the suffix (and lowercasing) lets the two representations match.
+ */
+function normalizeLogin(login) {
+    return login.replace(/\[bot\]$/i, '').toLowerCase();
+}
+async function fetchThreadStatusMap(params) {
+    const map = new Map();
+    let cursor = null;
+    do {
+        const data = await _octokit__WEBPACK_IMPORTED_MODULE_1__/* .octokit.graphql */ .K.graphql(GET_REVIEW_THREADS, {
+            owner: params.owner,
+            repo: params.repo,
+            number: params.prNumber,
+            after: cursor ?? undefined
+        });
+        const page = data.repository.pullRequest.reviewThreads;
+        for (const node of page.nodes) {
+            if (node.path != null && node.line != null) {
+                const key = `${node.path}:${node.line}`;
+                // If any thread at this location is unresolved, mark as unresolved
+                if (!map.has(key) || !node.isResolved) {
+                    map.set(key, node.isResolved);
+                }
+            }
+        }
+        cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+    } while (cursor !== null);
+    return map;
+}
+async function fetchUnresolvedBotThreads(params, botLogin) {
+    const results = [];
+    let cursor = null;
+    do {
+        const data = await _octokit__WEBPACK_IMPORTED_MODULE_1__/* .octokit.graphql */ .K.graphql(GET_REVIEW_THREADS, {
+            owner: params.owner,
+            repo: params.repo,
+            number: params.prNumber,
+            after: cursor ?? undefined
+        });
+        const page = data.repository.pullRequest.reviewThreads;
+        const normalizedBot = normalizeLogin(botLogin);
+        for (const node of page.nodes) {
+            const firstComment = node.comments.nodes[0];
+            const authorLogin = firstComment?.author?.login ?? null;
+            if (!node.isResolved &&
+                authorLogin !== null &&
+                normalizeLogin(authorLogin) === normalizedBot) {
+                results.push({
+                    id: node.id,
+                    isResolved: node.isResolved,
+                    firstCommentAuthorLogin: authorLogin,
+                    path: node.path,
+                    line: node.line ?? null,
+                    firstCommentBody: firstComment?.body ?? null
+                });
+            }
+        }
+        cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+    } while (cursor !== null);
+    return results;
+}
+function isPermissionError(e) {
+    return String(e).includes('not accessible by integration');
+}
+/** 网络/超时类错误（与权限、node-not-found 区分，便于给出不同提示） */
+function isNetworkError(e) {
+    return /ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|network|timed? ?out/i.test(String(e));
+}
+/**
+ * 测试用：识别注入的假 thread ID（`PRRT_debug_inject_<kind>_<n>`），
+ * 返回对应类型的模拟错误，不实际发起 GraphQL 请求。
+ *
+ * 真实运行时 thread ID 不会带此前缀，函数返回 null，走正常 GraphQL 流程。
+ */
+function simulateDebugError(threadId) {
+    if (!threadId.startsWith('PRRT_debug_inject_'))
+        return null;
+    if (threadId.includes('_permission_')) {
+        return new Error("Resource not accessible by integration (mutation 'resolveReviewThread')");
+    }
+    if (threadId.includes('_network_')) {
+        // TODO: Maybe gitlab in the future, or other network errors, but for now just simulate a connection reset.
+        return new Error('request to https://api.github.com/graphql failed, reason: read ECONNRESET');
+    }
+    // 默认：node not found（无效的 global id）
+    return new Error('Request failed due to following response errors:\n' +
+        ` - Could not resolve to a node with the global id of '${threadId}'`);
+}
+function threadLabel(t) {
+    if (t.path) {
+        const loc = t.line != null ? `${t.path}:${t.line}` : t.path;
+        if (t.firstCommentBody) {
+            const snippet = t.firstCommentBody.trim().replace(/\s+/g, ' ').slice(0, 60);
+            const ellipsis = snippet.length === 60 ? '…' : '';
+            return `${loc} – "${snippet}${ellipsis}"`;
+        }
+        return loc;
+    }
+    return t.id;
+}
+async function batchResolve(threads) {
+    const limit = (0,p_limit__WEBPACK_IMPORTED_MODULE_2__/* ["default"] */ .Z)(6);
+    let ok = 0;
+    const errors = [];
+    const failedItems = [];
+    await Promise.allSettled(threads.map(t => limit(async () => {
+        try {
+            const simulated = simulateDebugError(t.id);
+            if (simulated)
+                throw simulated;
+            await _octokit__WEBPACK_IMPORTED_MODULE_1__/* .octokit.graphql */ .K.graphql(RESOLVE_THREAD, { threadId: t.id });
+            ok++;
+        }
+        catch (e) {
+            const err = e instanceof Error ? e : new Error(String(e));
+            errors.push(err);
+            failedItems.push({ thread: t, error: err });
+        }
+    })));
+    const permissionFailed = failedItems.filter(({ error }) => isPermissionError(error));
+    const otherFailed = failedItems.filter(({ error }) => !isPermissionError(error));
+    if (permissionFailed.length > 0) {
+        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)('batchResolve: token lacks permission to resolve review threads ' +
+            '("Resource not accessible by integration"). ' +
+            'Set the `resolve_token` input to a classic PAT with repo scope.');
+    }
+    if (otherFailed.length > 0) {
+        const lines = otherFailed
+            .map(({ thread, error }) => `  • ${threadLabel(thread)}: ${error.message}`)
+            .join('\n');
+        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`batchResolve: failed to resolve ${otherFailed.length}/${threads.length} thread(s):\n${lines}`);
+    }
+    return { ok, failed: errors.length, errors, failedItems };
 }
 
 
@@ -11858,11 +10706,11 @@ __nccwpck_require__.r(__webpack_exports__);
 /* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(1078);
 /* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__nccwpck_require__.n(_actions_core__WEBPACK_IMPORTED_MODULE_0__);
 /* harmony import */ var _bot__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(1854);
-/* harmony import */ var _command_handler__WEBPACK_IMPORTED_MODULE_2__ = __nccwpck_require__(8280);
+/* harmony import */ var _command_handler__WEBPACK_IMPORTED_MODULE_2__ = __nccwpck_require__(4729);
 /* harmony import */ var _commands_early_reaction__WEBPACK_IMPORTED_MODULE_3__ = __nccwpck_require__(6360);
 /* harmony import */ var _options__WEBPACK_IMPORTED_MODULE_4__ = __nccwpck_require__(5341);
 /* harmony import */ var _prompts__WEBPACK_IMPORTED_MODULE_6__ = __nccwpck_require__(2379);
-/* harmony import */ var _review__WEBPACK_IMPORTED_MODULE_5__ = __nccwpck_require__(8726);
+/* harmony import */ var _review__WEBPACK_IMPORTED_MODULE_5__ = __nccwpck_require__(4541);
 /**
  * main.ts - GitHub Action 入口文件
  *
@@ -14565,6 +13413,19 @@ Rules:
 
 This collapses long diffs by default and keeps PR comments visually clean.
 
+- **Existing comment chains (MANDATORY)** — Comment chains in the \`---comment_chains---\` section
+  may carry a status label: \`[OPEN]\` or \`[RESOLVED]\`.
+  - \`[OPEN]\`: The issue has not been resolved yet.
+    - If the same issue **still exists** in the new hunk: do NOT create a new comment — the open
+      thread already captures it. Respond with \`LGTM!\` for that line range.
+    - If the issue has been **fixed**: respond with \`LGTM!\` and note that the fix addresses the
+      concern raised in the existing thread.
+  - \`[RESOLVED]\`: The user marked the thread as resolved.
+    - If the same issue **still exists** in the new hunk (regression or unchanged): write a new
+      comment explaining that the previously-resolved concern has resurfaced.
+    - If the issue is genuinely gone: respond with \`LGTM!\`.
+  - No label (legacy / status unavailable): treat as \`[OPEN]\` — avoid duplicating the comment
+    if the issue appears identical.
 - Do NOT provide general feedback, summaries, explanations of changes, or praises
   for making good additions. Do NOT suggest adding validation, comments, documentation,
   or error handling that was not explicitly part of the changes.
@@ -14924,7 +13785,7 @@ async function setReviewState(pullNumber, state) {
 
 /***/ }),
 
-/***/ 8726:
+/***/ 4541:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
 "use strict";
@@ -14942,8 +13803,789 @@ var external_child_process_ = __nccwpck_require__(2081);
 var github = __nccwpck_require__(3695);
 // EXTERNAL MODULE: ./node_modules/.pnpm/p-limit@4.0.0/node_modules/p-limit/index.js + 1 modules
 var p_limit = __nccwpck_require__(9272);
-// EXTERNAL MODULE: ./lib/commenter.js
-var lib_commenter = __nccwpck_require__(4558);
+// EXTERNAL MODULE: ./lib/octokit.js
+var octokit = __nccwpck_require__(2247);
+;// CONCATENATED MODULE: ./lib/commenter.js
+/**
+ * commenter.ts - GitHub 评论管理模块
+ *
+ * 负责所有与 GitHub PR 评论相关的操作，包括：
+ * 1. 创建/替换 PR 评论（issue comment）
+ * 2. 缓冲和批量提交代码审查评论（review comment）
+ * 3. 回复用户的 review comment
+ * 4. 更新 PR 描述（写入发布说明）
+ * 5. 管理增量审查状态（已审查的 commit ID 追踪）
+ * 6. 评论链（conversation chain）的获取和组装
+ *
+ * 使用 HTML 注释标签（如 <!-- tag -->）作为唯一标识，
+ * 实现评论的幂等性操作（查找并替换已有评论，而非重复创建）
+ */
+
+// eslint-disable-next-line camelcase
+
+
+// eslint-disable-next-line camelcase
+const context = github.context;
+const repo = context.repo;
+// ==================== 标签常量 ====================
+// 这些 HTML 注释标签用于标识和定位 bot 生成的各类评论
+/** 评论顶部的问候语（包含 bot 图标 + 可配置名称） */
+const COMMENT_GREETING = `${(0,core.getInput)('bot_icon') || '🤖'}   ${(0,core.getInput)('bot_name') || 'AI Reviewer'}`;
+/** 标识 bot 自动生成的代码审查评论 */
+const COMMENT_TAG = '<!-- This is an auto-generated comment by AI Reviewer -->';
+/** 标识 bot 自动生成的回复评论 */
+const COMMENT_REPLY_TAG = '<!-- This is an auto-generated reply by AI Reviewer -->';
+/** 标识 bot 的摘要评论 */
+const SUMMARIZE_TAG = '<!-- This is an auto-generated comment: summarize by AI Reviewer -->';
+/** 标识审查进行中的状态标签（开始） */
+const IN_PROGRESS_START_TAG = '<!-- This is an auto-generated comment: summarize review in progress by AI Reviewer -->';
+/** 标识审查进行中的状态标签（结束） */
+const IN_PROGRESS_END_TAG = '<!-- end of auto-generated comment: summarize review in progress by AI Reviewer -->';
+/** 标识 PR 描述中发布说明区域（开始） */
+const DESCRIPTION_START_TAG = '<!-- This is an auto-generated comment: release notes by AI Reviewer -->';
+/** 标识 PR 描述中发布说明区域（结束） */
+const DESCRIPTION_END_TAG = '<!-- end of auto-generated comment: release notes by AI Reviewer -->';
+/** 标识隐藏的原始摘要区域（开始），存储在摘要评论的 HTML 注释中 */
+const RAW_SUMMARY_START_TAG = `<!-- This is an auto-generated comment: raw summary by AI Reviewer -->
+<!--
+`;
+/** 标识隐藏的原始摘要区域（结束） */
+const RAW_SUMMARY_END_TAG = `-->
+<!-- end of auto-generated comment: raw summary by AI Reviewer -->`;
+/** 标识隐藏的精简摘要区域（开始） */
+const SHORT_SUMMARY_START_TAG = `<!-- This is an auto-generated comment: short summary by AI Reviewer -->
+<!--
+`;
+/** 标识隐藏的精简摘要区域（结束） */
+const SHORT_SUMMARY_END_TAG = `-->
+<!-- end of auto-generated comment: short summary by AI Reviewer -->`;
+/** 标识已审查的 commit ID 列表（开始） */
+const COMMIT_ID_START_TAG = '<!-- commit_ids_reviewed_start -->';
+/** 标识已审查的 commit ID 列表（结束） */
+const COMMIT_ID_END_TAG = '<!-- commit_ids_reviewed_end -->';
+/**
+ * Commenter 类 - GitHub 评论管理器
+ *
+ * 封装所有 GitHub 评论的 CRUD 操作，提供：
+ * - 评论的创建、替换、查找
+ * - 审查评论的缓冲和批量提交
+ * - 评论链的获取和组装
+ * - 增量审查状态管理
+ */
+class Commenter {
+    /**
+     * 创建或替换 PR 评论
+     * @param message - 评论内容
+     * @param tag - HTML 标签，用于标识和查找评论
+     * @param mode - "create"（新建）或 "replace"（查找并替换已有评论）
+     */
+    async comment(message, tag, mode) {
+        let target;
+        if (context.payload.pull_request != null) {
+            target = context.payload.pull_request.number;
+        }
+        else if (context.payload.issue != null) {
+            target = context.payload.issue.number;
+        }
+        else {
+            (0,core.warning)('Skipped: context.payload.pull_request and context.payload.issue are both null');
+            return;
+        }
+        if (!tag) {
+            tag = COMMENT_TAG;
+        }
+        // 组装评论正文：问候语 + 消息内容 + 标签
+        const body = `${COMMENT_GREETING}
+
+${message}
+
+${tag}`;
+        if (mode === 'create') {
+            await this.create(body, target);
+        }
+        else if (mode === 'replace') {
+            await this.replace(body, tag, target);
+        }
+        else {
+            (0,core.warning)(`Unknown mode: ${mode}, use "replace" instead`);
+            await this.replace(body, tag, target);
+        }
+    }
+    /**
+     * 提取标签对之间的内容
+     * 用于从评论正文中提取隐藏的状态数据（如原始摘要、已审查 commit ID 等）
+     */
+    getContentWithinTags(content, startTag, endTag) {
+        const start = content.indexOf(startTag);
+        const end = content.indexOf(endTag);
+        if (start >= 0 && end >= 0) {
+            return content.slice(start + startTag.length, end);
+        }
+        return '';
+    }
+    /** 移除标签对及其包含的内容 */
+    removeContentWithinTags(content, startTag, endTag) {
+        const start = content.indexOf(startTag);
+        const end = content.lastIndexOf(endTag);
+        if (start >= 0 && end >= 0) {
+            return content.slice(0, start) + content.slice(end + endTag.length);
+        }
+        return content;
+    }
+    /** 从摘要评论中提取原始摘要内容 */
+    getRawSummary(summary) {
+        return this.getContentWithinTags(summary, RAW_SUMMARY_START_TAG, RAW_SUMMARY_END_TAG);
+    }
+    /** 从摘要评论中提取精简摘要内容 */
+    getShortSummary(summary) {
+        return this.getContentWithinTags(summary, SHORT_SUMMARY_START_TAG, SHORT_SUMMARY_END_TAG);
+    }
+    /** 从 PR 描述中提取用户原始描述（移除 bot 生成的发布说明部分） */
+    getDescription(description) {
+        return this.removeContentWithinTags(description, DESCRIPTION_START_TAG, DESCRIPTION_END_TAG);
+    }
+    /** 从 PR 描述中提取发布说明内容 */
+    getReleaseNotes(description) {
+        const releaseNotes = this.getContentWithinTags(description, DESCRIPTION_START_TAG, DESCRIPTION_END_TAG);
+        return releaseNotes.replace(/(^|\n)> .*/g, '');
+    }
+    /**
+     * 更新 PR 描述，写入 AI 生成的发布说明
+     * 将发布说明嵌入到 DESCRIPTION_START_TAG 和 DESCRIPTION_END_TAG 之间
+     */
+    async updateDescription(pullNumber, message) {
+        try {
+            // 获取 PR 的最新描述
+            const pr = await octokit/* octokit.pulls.get */.K.pulls.get({
+                owner: repo.owner,
+                repo: repo.repo,
+                // eslint-disable-next-line camelcase
+                pull_number: pullNumber
+            });
+            let body = '';
+            if (pr.data.body) {
+                body = pr.data.body;
+            }
+            // 移除已有的发布说明，保留用户原始描述
+            const description = this.getDescription(body);
+            const messageClean = this.removeContentWithinTags(message, DESCRIPTION_START_TAG, DESCRIPTION_END_TAG);
+            // 在用户描述后追加发布说明（用标签包裹）
+            const newDescription = `${description}\n${DESCRIPTION_START_TAG}\n${messageClean}\n${DESCRIPTION_END_TAG}`;
+            await octokit/* octokit.pulls.update */.K.pulls.update({
+                owner: repo.owner,
+                repo: repo.repo,
+                // eslint-disable-next-line camelcase
+                pull_number: pullNumber,
+                body: newDescription
+            });
+        }
+        catch (e) {
+            (0,core.warning)(`Failed to get PR: ${e}, skipping adding release notes to description.`);
+        }
+    }
+    // ==================== 代码审查评论缓冲区 ====================
+    /** 审查评论缓冲区：在内存中暂存所有审查评论，最后一次性提交 */
+    reviewCommentsBuffer = [];
+    /**
+     * 将审查评论添加到缓冲区（不立即提交）
+     * 所有缓冲的评论将在 submitReview() 中一次性提交
+     */
+    async bufferReviewComment(path, startLine, endLine, message) {
+        message = `${COMMENT_GREETING}
+
+${message}
+
+${COMMENT_TAG}`;
+        this.reviewCommentsBuffer.push({
+            path,
+            startLine,
+            endLine,
+            message
+        });
+    }
+    /**
+     * 删除处于 PENDING 状态的审查
+     * 在提交新审查前调用，避免残留的待处理审查
+     */
+    async deletePendingReview(pullNumber) {
+        try {
+            const reviews = await octokit/* octokit.pulls.listReviews */.K.pulls.listReviews({
+                owner: repo.owner,
+                repo: repo.repo,
+                // eslint-disable-next-line camelcase
+                pull_number: pullNumber
+            });
+            const pendingReview = reviews.data.find(review => review.state === 'PENDING');
+            if (pendingReview) {
+                (0,core.info)(`Deleting pending review for PR #${pullNumber} id: ${pendingReview.id}`);
+                try {
+                    await octokit/* octokit.pulls.deletePendingReview */.K.pulls.deletePendingReview({
+                        owner: repo.owner,
+                        repo: repo.repo,
+                        // eslint-disable-next-line camelcase
+                        pull_number: pullNumber,
+                        // eslint-disable-next-line camelcase
+                        review_id: pendingReview.id
+                    });
+                }
+                catch (e) {
+                    (0,core.warning)(`Failed to delete pending review: ${e}`);
+                }
+            }
+        }
+        catch (e) {
+            (0,core.warning)(`Failed to list reviews: ${e}`);
+        }
+    }
+    /**
+     * 提交所有缓冲的审查评论
+     *
+     * 流程：
+     * 1. 如果缓冲区为空，提交一个仅包含状态消息的空审查
+     * 2. 删除同一位置的旧 bot 评论（避免重复）
+     * 3. 清理已有的 PENDING 审查
+     * 4. 尝试一次性提交所有评论（createReview + submitReview）
+     * 5. 如果批量提交失败，降级为逐条提交（createReviewComment）
+     *
+     * @param pullNumber - PR 编号
+     * @param commitId - 提交的 commit SHA
+     * @param statusMsg - 审查状态消息（包含处理统计信息）
+     */
+    async submitReview(pullNumber, commitId, statusMsg) {
+        const body = `${COMMENT_GREETING}
+
+${statusMsg}
+`;
+        if (this.reviewCommentsBuffer.length === 0) {
+            // 没有审查评论时，跳过空审查提交（GitHub API 不允许无评论的 COMMENT 审查）
+            (0,core.info)(`Skipping empty review for PR #${pullNumber} — no review comments to submit`);
+            return;
+        }
+        // 删除同一位置的旧 bot 评论，避免重复评论
+        for (const comment of this.reviewCommentsBuffer) {
+            const comments = await this.getCommentsAtRange(pullNumber, comment.path, comment.startLine, comment.endLine);
+            for (const c of comments) {
+                if (c.body.includes(COMMENT_TAG)) {
+                    (0,core.info)(`Deleting review comment for ${comment.path}:${comment.startLine}-${comment.endLine}: ${comment.message}`);
+                    try {
+                        await octokit/* octokit.pulls.deleteReviewComment */.K.pulls.deleteReviewComment({
+                            owner: repo.owner,
+                            repo: repo.repo,
+                            // eslint-disable-next-line camelcase
+                            comment_id: c.id
+                        });
+                    }
+                    catch (e) {
+                        (0,core.warning)(`Failed to delete review comment: ${e}`);
+                    }
+                }
+            }
+        }
+        // 清理已有的 PENDING 审查
+        await this.deletePendingReview(pullNumber);
+        // 生成单条评论的 API 数据格式
+        const generateCommentData = (comment) => {
+            const commentData = {
+                path: comment.path,
+                body: comment.message,
+                line: comment.endLine
+            };
+            // 如果是多行评论，添加起始行信息
+            if (comment.startLine !== comment.endLine) {
+                // eslint-disable-next-line camelcase
+                commentData.start_line = comment.startLine;
+                // eslint-disable-next-line camelcase
+                commentData.start_side = 'RIGHT';
+            }
+            return commentData;
+        };
+        try {
+            // 尝试一次性批量提交所有审查评论
+            const review = await octokit/* octokit.pulls.createReview */.K.pulls.createReview({
+                owner: repo.owner,
+                repo: repo.repo,
+                // eslint-disable-next-line camelcase
+                pull_number: pullNumber,
+                // eslint-disable-next-line camelcase
+                commit_id: commitId,
+                comments: this.reviewCommentsBuffer.map(comment => generateCommentData(comment))
+            });
+            (0,core.info)(`Submitting review for PR #${pullNumber}, total comments: ${this.reviewCommentsBuffer.length}, review id: ${review.data.id}`);
+            // 正式提交审查（从 PENDING 变为 COMMENT）
+            await octokit/* octokit.pulls.submitReview */.K.pulls.submitReview({
+                owner: repo.owner,
+                repo: repo.repo,
+                // eslint-disable-next-line camelcase
+                pull_number: pullNumber,
+                // eslint-disable-next-line camelcase
+                review_id: review.data.id,
+                event: 'COMMENT',
+                body
+            });
+        }
+        catch (e) {
+            // 批量提交失败时，降级为逐条提交
+            (0,core.warning)(`Failed to create review: ${e}. Falling back to individual comments.`);
+            await this.deletePendingReview(pullNumber);
+            let commentCounter = 0;
+            for (const comment of this.reviewCommentsBuffer) {
+                (0,core.info)(`Creating new review comment for ${comment.path}:${comment.startLine}-${comment.endLine}: ${comment.message}`);
+                const commentData = {
+                    owner: repo.owner,
+                    repo: repo.repo,
+                    // eslint-disable-next-line camelcase
+                    pull_number: pullNumber,
+                    // eslint-disable-next-line camelcase
+                    commit_id: commitId,
+                    ...generateCommentData(comment)
+                };
+                try {
+                    await octokit/* octokit.pulls.createReviewComment */.K.pulls.createReviewComment(commentData);
+                }
+                catch (ee) {
+                    (0,core.warning)(`Failed to create review comment: ${ee}`);
+                }
+                commentCounter++;
+                (0,core.info)(`Comment ${commentCounter}/${this.reviewCommentsBuffer.length} posted`);
+            }
+        }
+    }
+    /**
+     * 回复用户的 review comment
+     *
+     * 在顶层评论下创建回复，并将顶层评论的标签从 COMMENT_TAG 更新为 COMMENT_REPLY_TAG，
+     * 表示该评论链已有 bot 参与回复
+     */
+    async reviewCommentReply(pullNumber, topLevelComment, message) {
+        const reply = `${COMMENT_GREETING}
+
+${message}
+
+${COMMENT_REPLY_TAG}
+`;
+        try {
+            // 在顶层评论下发布回复
+            await octokit/* octokit.pulls.createReplyForReviewComment */.K.pulls.createReplyForReviewComment({
+                owner: repo.owner,
+                repo: repo.repo,
+                // eslint-disable-next-line camelcase
+                pull_number: pullNumber,
+                body: reply,
+                // eslint-disable-next-line camelcase
+                comment_id: topLevelComment.id
+            });
+        }
+        catch (error) {
+            (0,core.warning)(`Failed to reply to the top-level comment ${error}`);
+            try {
+                await octokit/* octokit.pulls.createReplyForReviewComment */.K.pulls.createReplyForReviewComment({
+                    owner: repo.owner,
+                    repo: repo.repo,
+                    // eslint-disable-next-line camelcase
+                    pull_number: pullNumber,
+                    body: `Could not post the reply to the top-level comment due to the following error: ${error}`,
+                    // eslint-disable-next-line camelcase
+                    comment_id: topLevelComment.id
+                });
+            }
+            catch (e) {
+                (0,core.warning)(`Failed to reply to the top-level comment ${e}`);
+            }
+        }
+        try {
+            // 将顶层评论的标签更新为回复标签，标识该链已有 bot 参与
+            if (topLevelComment.body.includes(COMMENT_TAG)) {
+                const newBody = topLevelComment.body.replace(COMMENT_TAG, COMMENT_REPLY_TAG);
+                await octokit/* octokit.pulls.updateReviewComment */.K.pulls.updateReviewComment({
+                    owner: repo.owner,
+                    repo: repo.repo,
+                    // eslint-disable-next-line camelcase
+                    comment_id: topLevelComment.id,
+                    body: newBody
+                });
+            }
+        }
+        catch (error) {
+            (0,core.warning)(`Failed to update the top-level comment ${error}`);
+        }
+    }
+    // ==================== 评论查询方法 ====================
+    /** 获取指定行号范围内的所有 review comment */
+    async getCommentsWithinRange(pullNumber, path, startLine, endLine) {
+        const comments = await this.listReviewComments(pullNumber);
+        return comments.filter((comment) => comment.path === path &&
+            comment.body !== '' &&
+            ((comment.start_line !== undefined &&
+                comment.start_line >= startLine &&
+                comment.line <= endLine) ||
+                (startLine === endLine && comment.line === endLine)));
+    }
+    /** 获取精确匹配指定行号范围的 review comment */
+    async getCommentsAtRange(pullNumber, path, startLine, endLine) {
+        const comments = await this.listReviewComments(pullNumber);
+        return comments.filter((comment) => comment.path === path &&
+            comment.body !== '' &&
+            ((comment.start_line !== undefined &&
+                comment.start_line === startLine &&
+                comment.line === endLine) ||
+                (startLine === endLine && comment.line === endLine)));
+    }
+    /**
+     * 获取指定行号范围内的所有评论对话链
+     * 用于在代码审查时提供已有评论上下文
+     *
+     * @param threadStatusMap 可选的线程状态 map（path:line → isResolved），
+     *   由 fetchThreadStatusMap() 生成。传入后每条链头部会加上
+     *   [OPEN] 或 [RESOLVED] 标签，让 AI 知道是否应跳过 / reopen。
+     */
+    async getCommentChainsWithinRange(pullNumber, path, startLine, endLine, tag = '', threadStatusMap) {
+        const existingComments = await this.getCommentsWithinRange(pullNumber, path, startLine, endLine);
+        // 找出所有顶层评论（没有 in_reply_to_id 的评论）
+        const topLevelComments = [];
+        for (const comment of existingComments) {
+            if (!comment.in_reply_to_id) {
+                topLevelComments.push(comment);
+            }
+        }
+        // 组装所有包含指定标签的对话链
+        let allChains = '';
+        let chainNum = 0;
+        for (const topLevelComment of topLevelComments) {
+            const chain = await this.composeCommentChain(existingComments, topLevelComment);
+            if (chain && chain.includes(tag)) {
+                chainNum += 1;
+                // 从 threadStatusMap 推断该评论所在行是否已 resolved
+                let statusLabel = '';
+                if (threadStatusMap != null) {
+                    const commentLine = topLevelComment.line ?? topLevelComment.original_line ?? startLine;
+                    const key = `${path}:${commentLine}`;
+                    const isResolved = threadStatusMap.get(key);
+                    // 只在明确知道状态时加标签；未命中 map 的保持无标签（兼容旧行为）
+                    if (isResolved === true) {
+                        statusLabel = ' [RESOLVED]';
+                    }
+                    else if (isResolved === false) {
+                        statusLabel = ' [OPEN]';
+                    }
+                }
+                allChains += `Conversation Chain ${chainNum}${statusLabel}:
+${chain}
+---
+`;
+            }
+        }
+        return allChains;
+    }
+    /**
+     * 组装单个评论对话链
+     * 将顶层评论和其所有回复按顺序拼接为 "用户: 内容" 格式的字符串
+     */
+    async composeCommentChain(reviewComments, topLevelComment) {
+        const conversationChain = reviewComments
+            .filter((cmt) => cmt.in_reply_to_id === topLevelComment.id)
+            .map((cmt) => `${cmt.user.login}: ${cmt.body}`);
+        conversationChain.unshift(`${topLevelComment.user.login}: ${topLevelComment.body}`);
+        return conversationChain.join('\n---\n');
+    }
+    /**
+     * 获取指定评论的完整对话链
+     * @returns { chain: 对话链字符串, topLevelComment: 顶层评论对象 }
+     */
+    async getCommentChain(pullNumber, comment) {
+        try {
+            const reviewComments = await this.listReviewComments(pullNumber);
+            const topLevelComment = await this.getTopLevelComment(reviewComments, comment);
+            const chain = await this.composeCommentChain(reviewComments, topLevelComment);
+            return { chain, topLevelComment };
+        }
+        catch (e) {
+            (0,core.warning)(`Failed to get conversation chain: ${e}`);
+            return {
+                chain: '',
+                topLevelComment: null
+            };
+        }
+    }
+    /**
+     * 沿着 in_reply_to_id 链向上查找顶层评论
+     * 顶层评论是对话链的起始评论（没有 in_reply_to_id）
+     */
+    async getTopLevelComment(reviewComments, comment) {
+        let topLevelComment = comment;
+        while (topLevelComment.in_reply_to_id) {
+            const parentComment = reviewComments.find((cmt) => cmt.id === topLevelComment.in_reply_to_id);
+            if (parentComment) {
+                topLevelComment = parentComment;
+            }
+            else {
+                break;
+            }
+        }
+        return topLevelComment;
+    }
+    // ==================== 评论缓存和分页列表 ====================
+    /** review comment 缓存（按 PR 编号索引），避免重复 API 调用 */
+    reviewCommentsCache = {};
+    /**
+     * 分页获取 PR 的所有 review comment
+     * 结果会被缓存，同一 PR 编号的后续调用直接返回缓存
+     */
+    async listReviewComments(target) {
+        if (this.reviewCommentsCache[target]) {
+            return this.reviewCommentsCache[target];
+        }
+        const allComments = [];
+        let page = 1;
+        try {
+            for (;;) {
+                const { data: comments } = await octokit/* octokit.pulls.listReviewComments */.K.pulls.listReviewComments({
+                    owner: repo.owner,
+                    repo: repo.repo,
+                    // eslint-disable-next-line camelcase
+                    pull_number: target,
+                    page,
+                    // eslint-disable-next-line camelcase
+                    per_page: 100
+                });
+                allComments.push(...comments);
+                page++;
+                if (!comments || comments.length < 100) {
+                    break;
+                }
+            }
+            this.reviewCommentsCache[target] = allComments;
+            return allComments;
+        }
+        catch (e) {
+            (0,core.warning)(`Failed to list review comments: ${e}`);
+            return allComments;
+        }
+    }
+    /** 创建新的 issue comment */
+    async create(body, target) {
+        try {
+            const response = await octokit/* octokit.issues.createComment */.K.issues.createComment({
+                owner: repo.owner,
+                repo: repo.repo,
+                // eslint-disable-next-line camelcase
+                issue_number: target,
+                body
+            });
+            // 将新评论添加到缓存
+            if (this.issueCommentsCache[target]) {
+                this.issueCommentsCache[target].push(response.data);
+            }
+            else {
+                this.issueCommentsCache[target] = [response.data];
+            }
+        }
+        catch (e) {
+            (0,core.warning)(`Failed to create comment: ${e}`);
+        }
+    }
+    /** 查找并替换已有评论；如果不存在则新建。同时清理并发运行产生的重复评论 */
+    async replace(body, tag, target) {
+        try {
+            const comments = await this.listComments(target);
+            const matchedComments = comments.filter((cmt) => cmt.body && cmt.body.includes(tag));
+            if (matchedComments.length > 0) {
+                // 更新第一条匹配的评论
+                await octokit/* octokit.issues.updateComment */.K.issues.updateComment({
+                    owner: repo.owner,
+                    repo: repo.repo,
+                    // eslint-disable-next-line camelcase
+                    comment_id: matchedComments[0].id,
+                    body
+                });
+                // 删除多余的重复评论（并发运行时可能产生）
+                for (let i = 1; i < matchedComments.length; i++) {
+                    (0,core.info)(`Deleting duplicate comment ${matchedComments[i].id} with tag ${tag}`);
+                    try {
+                        await octokit/* octokit.issues.deleteComment */.K.issues.deleteComment({
+                            owner: repo.owner,
+                            repo: repo.repo,
+                            // eslint-disable-next-line camelcase
+                            comment_id: matchedComments[i].id
+                        });
+                    }
+                    catch (e) {
+                        (0,core.warning)(`Failed to delete duplicate comment: ${e}`);
+                    }
+                }
+            }
+            else {
+                // 未找到，创建新评论
+                await this.create(body, target);
+            }
+        }
+        catch (e) {
+            (0,core.warning)(`Failed to replace comment: ${e}`);
+        }
+    }
+    /** 查找包含指定标签的 issue comment */
+    async findCommentWithTag(tag, target) {
+        try {
+            const comments = await this.listComments(target);
+            for (const cmt of comments) {
+                if (cmt.body && cmt.body.includes(tag)) {
+                    return cmt;
+                }
+            }
+            return null;
+        }
+        catch (e) {
+            (0,core.warning)(`Failed to find comment with tag: ${e}`);
+            return null;
+        }
+    }
+    /** issue comment 缓存（按 issue/PR 编号索引） */
+    issueCommentsCache = {};
+    /** 分页获取 PR/issue 的所有 issue comment（带缓存） */
+    async listComments(target) {
+        if (this.issueCommentsCache[target]) {
+            return this.issueCommentsCache[target];
+        }
+        const allComments = [];
+        let page = 1;
+        try {
+            for (;;) {
+                const { data: comments } = await octokit/* octokit.issues.listComments */.K.issues.listComments({
+                    owner: repo.owner,
+                    repo: repo.repo,
+                    // eslint-disable-next-line camelcase
+                    issue_number: target,
+                    page,
+                    // eslint-disable-next-line camelcase
+                    per_page: 100
+                });
+                allComments.push(...comments);
+                page++;
+                if (!comments || comments.length < 100) {
+                    break;
+                }
+            }
+            this.issueCommentsCache[target] = allComments;
+            return allComments;
+        }
+        catch (e) {
+            (0,core.warning)(`Failed to list comments: ${e}`);
+            return allComments;
+        }
+    }
+    // ==================== 增量审查状态管理 ====================
+    // 使用 HTML 注释标签在摘要评论中存储已审查的 commit ID 列表
+    // 格式：<!-- commit_ids_reviewed_start --><!-- sha1 --><!-- sha2 --><!-- commit_ids_reviewed_end -->
+    /**
+     * 从评论正文中提取已审查的 commit ID 列表
+     * @returns commit SHA 字符串数组
+     */
+    getReviewedCommitIds(commentBody) {
+        const start = commentBody.indexOf(COMMIT_ID_START_TAG);
+        const end = commentBody.indexOf(COMMIT_ID_END_TAG);
+        if (start === -1 || end === -1) {
+            return [];
+        }
+        const ids = commentBody.substring(start + COMMIT_ID_START_TAG.length, end);
+        // 解析 <!-- sha --> 格式的 commit ID
+        return ids
+            .split('<!--')
+            .map(id => id.replace('-->', '').trim())
+            .filter(id => id !== '');
+    }
+    /** 提取已审查 commit ID 的完整区块（包含标签） */
+    getReviewedCommitIdsBlock(commentBody) {
+        const start = commentBody.indexOf(COMMIT_ID_START_TAG);
+        const end = commentBody.indexOf(COMMIT_ID_END_TAG);
+        if (start === -1 || end === -1) {
+            return '';
+        }
+        return commentBody.substring(start, end + COMMIT_ID_END_TAG.length);
+    }
+    /**
+     * 向已审查 commit ID 列表中添加新的 commit ID
+     * 如果标签不存在则创建新的区块
+     */
+    addReviewedCommitId(commentBody, commitId) {
+        const start = commentBody.indexOf(COMMIT_ID_START_TAG);
+        const end = commentBody.indexOf(COMMIT_ID_END_TAG);
+        if (start === -1 || end === -1) {
+            return `${commentBody}\n${COMMIT_ID_START_TAG}\n<!-- ${commitId} -->\n${COMMIT_ID_END_TAG}`;
+        }
+        if (this.getReviewedCommitIds(commentBody).includes(commitId)) {
+            return commentBody;
+        }
+        const ids = commentBody.substring(start + COMMIT_ID_START_TAG.length, end);
+        return `${commentBody.substring(0, start + COMMIT_ID_START_TAG.length)}${ids}<!-- ${commitId} -->\n${commentBody.substring(end)}`;
+    }
+    /**
+     * 从 commit 列表中找到最近一次已审查的 commit ID
+     * 从后向前遍历，返回第一个匹配的已审查 commit
+     */
+    getHighestReviewedCommitId(commitIds, reviewedCommitIds) {
+        for (let i = commitIds.length - 1; i >= 0; i--) {
+            if (reviewedCommitIds.includes(commitIds[i])) {
+                return commitIds[i];
+            }
+        }
+        return '';
+    }
+    /** 获取 PR 的所有 commit ID（分页获取完整列表） */
+    async getAllCommitIds() {
+        const allCommits = [];
+        let page = 1;
+        let commits;
+        if (context && context.payload && context.payload.pull_request != null) {
+            do {
+                commits = await octokit/* octokit.pulls.listCommits */.K.pulls.listCommits({
+                    owner: repo.owner,
+                    repo: repo.repo,
+                    // eslint-disable-next-line camelcase
+                    pull_number: context.payload.pull_request.number,
+                    // eslint-disable-next-line camelcase
+                    per_page: 100,
+                    page
+                });
+                allCommits.push(...commits.data.map(commit => commit.sha));
+                page++;
+            } while (commits.data.length > 0);
+        }
+        return allCommits;
+    }
+    // ==================== 审查进度状态管理 ====================
+    /**
+     * 在摘要评论中添加"审查进行中"的状态提示
+     * 如果已存在则不重复添加
+     */
+    addInProgressStatus(commentBody, statusMsg) {
+        const start = commentBody.indexOf(IN_PROGRESS_START_TAG);
+        const end = commentBody.indexOf(IN_PROGRESS_END_TAG);
+        if (start === -1 || end === -1) {
+            return `${IN_PROGRESS_START_TAG}
+
+Currently reviewing new changes in this PR...
+
+${statusMsg}
+
+${IN_PROGRESS_END_TAG}
+
+---
+
+${commentBody}`;
+        }
+        return commentBody;
+    }
+    /** 从摘要评论中移除"审查进行中"的状态提示 */
+    removeInProgressStatus(commentBody) {
+        const start = commentBody.indexOf(IN_PROGRESS_START_TAG);
+        const end = commentBody.indexOf(IN_PROGRESS_END_TAG);
+        if (start !== -1 && end !== -1) {
+            return (commentBody.substring(0, start) +
+                commentBody.substring(end + IN_PROGRESS_END_TAG.length));
+        }
+        return commentBody;
+    }
+}
+
 ;// CONCATENATED MODULE: ./lib/changed-lines.js
 /**
  * changed-lines.ts - 统一的 unified diff 行号扫描器
@@ -15037,8 +14679,6 @@ function toAddedLineMap(scans) {
 
 // EXTERNAL MODULE: ./lib/constants.js
 var constants = __nccwpck_require__(2098);
-// EXTERNAL MODULE: ./lib/octokit.js
-var octokit = __nccwpck_require__(2247);
 ;// CONCATENATED MODULE: ./lib/repo-tree.js
 /**
  * repo-tree.ts - 仓库文件树获取与缓存
@@ -15052,8 +14692,8 @@ var octokit = __nccwpck_require__(2247);
 
 
 // eslint-disable-next-line camelcase
-const context = github.context;
-const repo = context.repo;
+const repo_tree_context = github.context;
+const repo_tree_repo = repo_tree_context.repo;
 /** 语言到扩展名的映射 */
 const LANGUAGE_EXTENSIONS = {
     typescript: ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.vue'],
@@ -15083,8 +14723,8 @@ async function getRepoFileTree(ref) {
     try {
         (0,core.info)(`fetching repo tree for ref: ${ref}`);
         const { data } = await octokit/* octokit.git.getTree */.K.git.getTree({
-            owner: repo.owner,
-            repo: repo.repo,
+            owner: repo_tree_repo.owner,
+            repo: repo_tree_repo.repo,
             tree_sha: ref,
             recursive: 'true'
         });
@@ -18990,8 +18630,123 @@ function classifyFindingSeverity(text) {
     return 'minor';
 }
 
-// EXTERNAL MODULE: ./lib/inputs.js
-var lib_inputs = __nccwpck_require__(6305);
+;// CONCATENATED MODULE: ./lib/inputs.js
+/**
+ * inputs.ts - 提示词上下文数据容器
+ *
+ * Inputs 类是一个纯数据容器，持有所有用于渲染 LLM 提示词模板的上下文变量。
+ * 提供 render() 方法将模板中的 $variable 占位符替换为实际值。
+ * 提供 clone() 方法用于并行处理时创建独立副本，避免数据竞争。
+ */
+
+class Inputs {
+    systemMessage; // 系统消息（定义 AI 的角色和行为准则）
+    title; // PR 标题
+    description; // PR 描述
+    rawSummary; // 原始摘要（所有文件摘要的汇总，用于后续处理）
+    shortSummary; // 精简摘要（用于代码审查时提供上下文）
+    filename; // 当前处理的文件名
+    fileContent; // 文件原始内容（基准分支的版本）
+    fileDiff; // 文件的完整 diff
+    patches; // 打包后的代码变更块（hunk），用于逐段审查
+    diff; // 当前被评论的 diff 片段
+    commentChain; // 评论对话链（已有的评论上下文）
+    comment; // 当前用户的评论内容
+    crossFileContext; // 跨文件引用上下文（依赖分析生成，注入到审查提示词）
+    analysisChain; // 分析链（逐步推理过程，由轻量模型生成，注入到审查提示词）
+    lintContext; // 静态分析工具结果上下文（Linter/SAST 适配器生成，注入到审查提示词）
+    constructor(systemMessage = '', title = 'no title provided', description = 'no description provided', rawSummary = '', shortSummary = '', filename = '', fileContent = 'file contents cannot be provided', fileDiff = 'file diff cannot be provided', patches = '', diff = 'no diff', commentChain = 'no other comments on this patch', comment = 'no comment provided', crossFileContext = '', analysisChain = '', lintContext = '') {
+        this.systemMessage = systemMessage;
+        this.title = title;
+        this.description = description;
+        this.rawSummary = rawSummary;
+        this.shortSummary = shortSummary;
+        this.filename = filename;
+        this.fileContent = fileContent;
+        this.fileDiff = fileDiff;
+        this.patches = patches;
+        this.diff = diff;
+        this.commentChain = commentChain;
+        this.comment = comment;
+        this.crossFileContext = crossFileContext;
+        this.analysisChain = analysisChain;
+        this.lintContext = lintContext;
+    }
+    /**
+     * 创建当前对象的深拷贝
+     * 用于并行处理多个文件时，每个任务持有独立的 Inputs 副本
+     */
+    clone() {
+        return new Inputs(this.systemMessage, this.title, this.description, this.rawSummary, this.shortSummary, this.filename, this.fileContent, this.fileDiff, this.patches, this.diff, this.commentChain, this.comment, this.crossFileContext, this.analysisChain, this.lintContext);
+    }
+    /**
+     * 渲染提示词模板：将模板中的 $variable 占位符替换为实际值
+     * @param content - 包含 $variable 占位符的提示词模板
+     * @returns 替换后的完整提示词
+     */
+    render(content) {
+        if (!content) {
+            return '';
+        }
+        if (this.systemMessage) {
+            content = content.replace('$system_message', this.systemMessage);
+        }
+        if (this.title) {
+            content = content.replace('$title', this.title);
+        }
+        if (this.description) {
+            content = content.replace('$description', this.description);
+        }
+        if (this.rawSummary) {
+            content = content.replace('$raw_summary', this.rawSummary);
+        }
+        if (this.shortSummary) {
+            content = content.replace('$short_summary', this.shortSummary);
+        }
+        if (this.filename) {
+            content = content.replace('$filename', this.filename);
+        }
+        if (this.fileContent) {
+            content = content.replace('$file_content', this.fileContent);
+        }
+        if (this.fileDiff) {
+            content = content.replace('$file_diff', this.fileDiff);
+        }
+        if (this.patches) {
+            content = content.replace('$patches', this.patches);
+        }
+        if (this.diff) {
+            content = content.replace('$diff', this.diff);
+        }
+        if (this.commentChain) {
+            content = content.replace('$comment_chain', this.commentChain);
+        }
+        if (this.comment) {
+            content = content.replace('$comment', this.comment);
+        }
+        // 跨文件上下文：无论是否有值，都替换占位符（避免模板残留）
+        content = content.replace('$cross_file_context', this.crossFileContext || 'No cross-file references detected.');
+        // 分析链：无论是否有值，都替换占位符（避免模板残留）
+        const analysisChainValue = this.analysisChain || 'No analysis chain available.';
+        const hadPlaceholder = content.includes('$analysis_chain');
+        content = content.replace('$analysis_chain', analysisChainValue);
+        if (hadPlaceholder) {
+            (0,core.info)(`[render] $analysis_chain replaced: hasValue=${!!this.analysisChain}, valueLen=${analysisChainValue.length}, preview="${analysisChainValue.substring(0, 100).replace(/\n/g, '\\n')}"`);
+        }
+        // 静态分析工具结果：仅在 lintContext 非空时替换。
+        // 杠杆 A：当无 finding 时，prompts.renderReviewFileDiff 已整体移除
+        // "$lint_section" 段，故占位符不应出现；这里保留兜底替换以防未来其他模板
+        // 直接消费 $lint_context。
+        if (this.lintContext) {
+            content = content.replace('$lint_context', this.lintContext);
+        }
+        else {
+            content = content.replace('$lint_context', 'No static analysis tool results available.');
+        }
+        return content;
+    }
+}
+
 ;// CONCATENATED MODULE: ./lib/review-dedup.js
 /**
  * review-dedup.ts - AI 评论级去重（基于"共享 tool finding"的贪心聚类）
@@ -19263,8 +19018,41 @@ function ensureFixSuggestionHeaders(commentBody) {
 
 // EXTERNAL MODULE: ./lib/review-state.js
 var review_state = __nccwpck_require__(3337);
-// EXTERNAL MODULE: ./lib/tokenizer.js
-var tokenizer = __nccwpck_require__(7525);
+// EXTERNAL MODULE: ./node_modules/.pnpm/@dqbd+tiktoken@1.0.22/node_modules/@dqbd/tiktoken/tiktoken.cjs
+var tiktoken = __nccwpck_require__(4032);
+;// CONCATENATED MODULE: ./lib/tokenizer.js
+/**
+ * tokenizer.ts - Token 计数工具
+ *
+ * 使用 tiktoken 库（o200k_base 编码）对文本进行 token 计数。
+ * o200k_base 是 GPT-4o / GPT-4o-mini 系列模型使用的编码方式。
+ * 在发送 API 请求前，用于检查提示词是否超出模型的 token 限制。
+ */
+// eslint-disable-next-line camelcase
+
+// 初始化 o200k_base 编码器（GPT-4o / GPT-4o-mini 系列模型使用的编码方式）
+const tokenizer = (0,tiktoken/* get_encoding */.iw)('o200k_base');
+/**
+ * 将输入文本编码为 token ID 数组
+ * @param input - 待编码的文本
+ * @returns token ID 数组（Uint32Array）
+ */
+function encode(input) {
+    return tokenizer.encode(input);
+}
+/**
+ * 计算输入文本的 token 数量
+ * @param input - 待计算的文本
+ * @returns token 数量
+ */
+function getTokenCount(input) {
+    // 移除特殊的结束标记，避免影响 token 计数
+    input = input.replace(/<\|endoftext\|>/g, '');
+    return encode(input).length;
+}
+
+// EXTERNAL MODULE: ./lib/github/review-thread.js
+var review_thread = __nccwpck_require__(2688);
 ;// CONCATENATED MODULE: ./lib/review.js
 /**
  * review.ts - 核心代码审查模块
@@ -19298,6 +19086,7 @@ var tokenizer = __nccwpck_require__(7525);
 
 
 
+
 // eslint-disable-next-line camelcase
 const review_context = github.context;
 /** 跨文件上下文注入的 token 上限 */
@@ -19314,7 +19103,7 @@ const ignoreKeyword = `${constants/* PRIMARY_BOT_MENTION */.a}: ignore`;
  * @param prompts - 提示词模板
  */
 const codeReview = async (lightBot, heavyBot, options, prompts, runOptions = {}) => {
-    const commenter = new lib_commenter/* Commenter */.Es();
+    const commenter = new Commenter();
     const fromCommand = runOptions.source === 'command';
     const reviewMode = runOptions.mode ?? 'incremental';
     // 初始化并发控制器：分别限制 OpenAI 和 GitHub API 的并发数
@@ -19348,7 +19137,7 @@ const codeReview = async (lightBot, heavyBot, options, prompts, runOptions = {})
         return;
     }
     // ==================== 填充 PR 基本信息 ====================
-    const inputs = new lib_inputs/* Inputs */.k();
+    const inputs = new Inputs();
     inputs.title = review_context.payload.pull_request.title;
     if (review_context.payload.pull_request.body != null) {
         inputs.description = commenter.getDescription(review_context.payload.pull_request.body);
@@ -19362,7 +19151,7 @@ const codeReview = async (lightBot, heavyBot, options, prompts, runOptions = {})
     inputs.systemMessage = options.systemMessage;
     // ==================== 恢复增量审查状态 ====================
     // 从已有的摘要评论中恢复上次审查的状态
-    const existingSummarizeCmt = await commenter.findCommentWithTag(lib_commenter/* SUMMARIZE_TAG */.Rp, review_context.payload.pull_request.number);
+    const existingSummarizeCmt = await commenter.findCommentWithTag(SUMMARIZE_TAG, review_context.payload.pull_request.number);
     let existingCommitIdsBlock = '';
     let existingSummarizeCmtBody = '';
     if (existingSummarizeCmt != null) {
@@ -19599,7 +19388,7 @@ ${filterIgnoredFiles.length > 0
 `;
     // 更新摘要评论为"审查进行中"状态
     const inProgressSummarizeCmt = commenter.addInProgressStatus(existingSummarizeCmtBody, statusMsg);
-    await commenter.comment(`${inProgressSummarizeCmt}`, lib_commenter/* SUMMARIZE_TAG */.Rp, 'replace');
+    await commenter.comment(`${inProgressSummarizeCmt}`, SUMMARIZE_TAG, 'replace');
     // ==================== 阶段一：并行文件摘要 ====================
     const summariesFailed = [];
     /**
@@ -19624,7 +19413,7 @@ ${filterIgnoredFiles.length > 0
         ins.fileDiff = fileDiff;
         // 渲染摘要提示词
         const summarizePrompt = prompts.renderSummarizeFileDiff(ins, options.reviewSimpleChanges);
-        const tokens = (0,tokenizer/* getTokenCount */.V)(summarizePrompt);
+        const tokens = getTokenCount(summarizePrompt);
         // 检查 token 是否超出轻量模型的限制
         if (tokens > options.lightTokenLimits.requestTokens) {
             (0,core.info)(`summarize: diff tokens exceeds limit, skip ${filename}`);
@@ -19725,12 +19514,12 @@ ${filename}: ${summary}
     inputs.shortSummary = summarizeShortResponse;
     // 构建最终的摘要评论内容（包含隐藏的状态数据）
     let summarizeComment = `${summarizeFinalResponse}
-${lib_commenter/* RAW_SUMMARY_START_TAG */.oi}
+${RAW_SUMMARY_START_TAG}
 ${inputs.rawSummary}
-${lib_commenter/* RAW_SUMMARY_END_TAG */.rV}
-${lib_commenter/* SHORT_SUMMARY_START_TAG */.O$}
+${RAW_SUMMARY_END_TAG}
+${SHORT_SUMMARY_START_TAG}
 ${inputs.shortSummary}
-${lib_commenter/* SHORT_SUMMARY_END_TAG */.Zb}
+${SHORT_SUMMARY_END_TAG}
 ${dependencyContext != null
         ? `\n${formatDependencySummary(dependencyContext)}`
         : ''}
@@ -19785,6 +19574,22 @@ ${summariesFailed.length > 0
         // 待并行审查全部完成后统一去重 / 排序 / 截断，再发布行级评论 + PR 顶部汇总。
         // 注意: doReview 并行执行，但 JS 单线程下 Array.push 是安全的。
         const findings = [];
+        // PR 级别的线程状态 map（path:line → isResolved）
+        // 一次性拉取，复用于所有文件的评论链注入，让 AI 感知 [OPEN]/[RESOLVED] 状态
+        let threadStatusMap = new Map();
+        if (review_context.payload.pull_request != null) {
+            try {
+                threadStatusMap = await (0,review_thread/* fetchThreadStatusMap */.Rn)({
+                    owner: review_repo.owner,
+                    repo: review_repo.repo,
+                    prNumber: review_context.payload.pull_request.number
+                });
+                (0,core.info)(`thread-status: fetched ${threadStatusMap.size} thread locations`);
+            }
+            catch (e) {
+                (0,core.warning)(`thread-status: failed to fetch, comment chains will not have [OPEN]/[RESOLVED] labels: ${String(e)}`);
+            }
+        }
         /**
          * 对单个文件执行代码审查
          *
@@ -19805,7 +19610,7 @@ ${summariesFailed.length > 0
                 const lintCtx = formatLintContextForFile(filename, lintReport);
                 if (lintCtx.length > 0) {
                     ins.lintContext = lintCtx;
-                    (0,core.info)(`injected lint context for ${filename}: ${(0,tokenizer/* getTokenCount */.V)(lintCtx)} tokens`);
+                    (0,core.info)(`injected lint context for ${filename}: ${getTokenCount(lintCtx)} tokens`);
                 }
             }
             // 注入跨文件引用上下文（在 token 预算内）
@@ -19814,7 +19619,7 @@ ${summariesFailed.length > 0
                 if (fileAnalysis != null && fileAnalysis.references.length > 0) {
                     const crossFileCtx = formatCrossFileContext(fileAnalysis);
                     if (crossFileCtx.length > 0) {
-                        const ctxTokens = (0,tokenizer/* getTokenCount */.V)(crossFileCtx);
+                        const ctxTokens = getTokenCount(crossFileCtx);
                         if (ctxTokens <= MAX_CROSS_FILE_CONTEXT_TOKENS) {
                             ins.crossFileContext = crossFileCtx;
                             (0,core.info)(`injected cross-file context for ${filename}: ${ctxTokens} tokens`);
@@ -19826,11 +19631,11 @@ ${summariesFailed.length > 0
                 }
             }
             // 计算基础提示词的 token 数
-            let tokens = (0,tokenizer/* getTokenCount */.V)(prompts.renderReviewFileDiff(ins));
+            let tokens = getTokenCount(prompts.renderReviewFileDiff(ins));
             // 计算在 token 预算内能装入多少个 patch
             let patchesToPack = 0;
             for (const [, , patch] of patches) {
-                const patchTokens = (0,tokenizer/* getTokenCount */.V)(patch);
+                const patchTokens = getTokenCount(patch);
                 if (tokens + patchTokens > options.heavyTokenLimits.requestTokens) {
                     (0,core.info)(`only packing ${patchesToPack} / ${patches.length} patches, tokens: ${tokens} / ${options.heavyTokenLimits.requestTokens}`);
                     break;
@@ -19857,7 +19662,7 @@ ${summariesFailed.length > 0
                 // 获取该 patch 行号范围内已有的评论对话链（提供额外上下文）
                 let commentChain = '';
                 try {
-                    const allChains = await commenter.getCommentChainsWithinRange(review_context.payload.pull_request.number, filename, startLine, endLine, lib_commenter/* COMMENT_REPLY_TAG */.aD);
+                    const allChains = await commenter.getCommentChainsWithinRange(review_context.payload.pull_request.number, filename, startLine, endLine, COMMENT_REPLY_TAG, threadStatusMap);
                     if (allChains.length > 0) {
                         (0,core.info)(`Found comment chains: ${allChains} for ${filename}`);
                         commentChain = allChains;
@@ -19867,7 +19672,7 @@ ${summariesFailed.length > 0
                     (0,core.warning)(`Failed to get comments: ${e}, skipping. backtrace: ${e.stack}`);
                 }
                 // 尝试将评论链加入 token 预算（超出则丢弃评论链上下文）
-                const commentChainTokens = (0,tokenizer/* getTokenCount */.V)(commentChain);
+                const commentChainTokens = getTokenCount(commentChain);
                 if (tokens + commentChainTokens >
                     options.heavyTokenLimits.requestTokens) {
                     commentChain = '';
@@ -20067,7 +19872,7 @@ ${reviewsSkipped.length > 0
         summarizeComment += `\n${existingCommitIdsBlock}`;
     }
     // 发布最终的摘要评论
-    await commenter.comment(`${summarizeComment}`, lib_commenter/* SUMMARIZE_TAG */.Rp, 'replace');
+    await commenter.comment(`${summarizeComment}`, SUMMARIZE_TAG, 'replace');
 };
 // ==================== Diff 解析辅助函数 ====================
 // ==================== Analysis Chain 格式化 ====================
@@ -20442,48 +20247,6 @@ ${review.comment}`;
     // 保存最后一条评论
     storeReview();
     return reviews;
-}
-
-
-/***/ }),
-
-/***/ 7525:
-/***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
-
-"use strict";
-/* harmony export */ __nccwpck_require__.d(__webpack_exports__, {
-/* harmony export */   "V": () => (/* binding */ getTokenCount)
-/* harmony export */ });
-/* unused harmony export encode */
-/* harmony import */ var _dqbd_tiktoken__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(4032);
-/**
- * tokenizer.ts - Token 计数工具
- *
- * 使用 tiktoken 库（o200k_base 编码）对文本进行 token 计数。
- * o200k_base 是 GPT-4o / GPT-4o-mini 系列模型使用的编码方式。
- * 在发送 API 请求前，用于检查提示词是否超出模型的 token 限制。
- */
-// eslint-disable-next-line camelcase
-
-// 初始化 o200k_base 编码器（GPT-4o / GPT-4o-mini 系列模型使用的编码方式）
-const tokenizer = (0,_dqbd_tiktoken__WEBPACK_IMPORTED_MODULE_0__/* .get_encoding */ .iw)('o200k_base');
-/**
- * 将输入文本编码为 token ID 数组
- * @param input - 待编码的文本
- * @returns token ID 数组（Uint32Array）
- */
-function encode(input) {
-    return tokenizer.encode(input);
-}
-/**
- * 计算输入文本的 token 数量
- * @param input - 待计算的文本
- * @returns token 数量
- */
-function getTokenCount(input) {
-    // 移除特殊的结束标记，避免影响 token 计数
-    input = input.replace(/<\|endoftext\|>/g, '');
-    return encode(input).length;
 }
 
 
