@@ -19556,8 +19556,13 @@ const codeReview = async (lightBot, heavyBot, options, prompts, runOptions = {})
         (0,core.warning)('Skipped: files data is missing');
         return;
     }
-    // 取两个 diff 的交集：既是整体变更的一部分，又包含新增内容的文件
-    const files = targetBranchFiles.filter(targetBranchFile => incrementalFiles.some(incrementalFile => incrementalFile.filename === targetBranchFile.filename));
+    // 增量审查：使用 incrementalFiles 的 patch（仅包含新增变更的 hunk）
+    // 全量审查（首次或 full mode）：incremental 与 targetBranch 相同，直接使用
+    // 关键：必须用 incrementalFiles 的 patch 送入 AI，否则 AI 会看到已审查过的旧变更
+    const isFirstOrFullReview = highestReviewedCommitId === review_context.payload.pull_request.base.sha;
+    const files = isFirstOrFullReview
+        ? targetBranchFiles.filter(targetBranchFile => incrementalFiles.some(incrementalFile => incrementalFile.filename === targetBranchFile.filename))
+        : incrementalFiles.filter(incrementalFile => targetBranchFiles.some(targetBranchFile => targetBranchFile.filename === incrementalFile.filename));
     if (files.length === 0) {
         (0,core.warning)('Skipped: files is null');
         return;
@@ -20147,9 +20152,7 @@ ${commentChain}
                             // 块自动加标头。
                             commentWithChain = ensureFixSuggestionHeaders(commentWithChain);
                             (0,core.info)(`[analysis_chain] ${filename}: comment line ${review.startLine}-${review.endLine}, hasChain=${shouldAttachAnalysisChain}, finalLen=${commentWithChain.length}`);
-                            // 将审查评论加入缓冲区
-                            await commenter.bufferReviewComment(filename, review.startLine, review.endLine, commentWithChain);
-                            // 收集为 Finding（不立即 buffer），统一在审查完成后做噪音控制。
+                            // 收集为 Finding，统一在审查完成后做噪音控制再 buffer。
                             // 严重级别以警示框徽标的形式直接置于每条行级评论顶部（取代 PR 顶部汇总评论）。
                             const severity = classifyFindingSeverity(review.comment);
                             findings.push({
