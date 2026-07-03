@@ -346,10 +346,14 @@ export const handleConversation = async (
   const cleanedReply = reply.replace(/^\s*@user[，,：:\s]*/i, '').trimStart()
   const authorLogin: string = comment.user?.login ?? ''
   const mention = authorLogin ? `@${authorLogin} ` : ''
+  const quotedQuestion = comment.body
+    .split('\n')
+    .map((l: string) => `> ${l}`)
+    .join('\n')
   await commenter.reviewCommentReply(
     pullNumber,
     topLevelComment,
-    `${mention}${cleanedReply}`
+    `${quotedQuestion}\n\n${mention}${cleanedReply}`
   )
   info(
     `conversation: replied on PR #${pullNumber} thread (top-level comment ${topLevelComment.id})`
