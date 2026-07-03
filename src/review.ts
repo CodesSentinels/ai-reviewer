@@ -21,6 +21,7 @@ import {type AnalysisStep, type Bot} from './bot'
 import {
   Commenter,
   COMMENT_REPLY_TAG,
+  COMMENT_TAG,
   RAW_SUMMARY_END_TAG,
   RAW_SUMMARY_START_TAG,
   SHORT_SUMMARY_END_TAG,
@@ -739,6 +740,34 @@ ${
       }
     }
 
+    // full review 去重：构建已有未 resolved 的 bot review comment 位置索引
+    // 用于跳过已有评论覆盖的 patch，避免重复调用大模型
+    const existingBotCommentRanges: Map<string, Array<{startLine: number, endLine: number}>> = new Map()
+    if (reviewMode === 'full' && context.payload.pull_request != null) {
+      try {
+        const allReviewComments = await commenter.listReviewComments(
+          context.payload.pull_request.number
+        )
+        for (const c of allReviewComments) {
+          if (!c.body?.includes(COMMENT_TAG)) continue
+          const key = `${c.path}:${c.line}`
+          const isResolved = threadStatusMap.get(key)
+          if (isResolved === true) continue
+          const range = {
+            startLine: c.start_line ?? c.line,
+            endLine: c.line
+          }
+          const ranges = existingBotCommentRanges.get(c.path) ?? []
+          ranges.push(range)
+          existingBotCommentRanges.set(c.path, ranges)
+        }
+        const totalComments = [...existingBotCommentRanges.values()].reduce((s, a) => s + a.length, 0)
+        info(`full-review-dedup: indexed ${totalComments} existing bot comment(s) across ${existingBotCommentRanges.size} file(s)`)
+      } catch (e) {
+        warning(`full-review-dedup: failed to build index, will not skip any patches: ${String(e)}`)
+      }
+    }
+
     /**
      * 对单个文件执行代码审查
      *
@@ -812,10 +841,23 @@ ${
 
       // 逐个 patch 打包到提示词中
       let patchesPacked = 0
+      let patchesSkippedByDedup = 0
       for (const [startLine, endLine, patch] of patches) {
         if (context.payload.pull_request == null) {
           warning('No pull request found, skipping.')
           continue
+        }
+        // full review 去重：跳过已有未 resolved bot 评论覆盖的 patch
+        if (existingBotCommentRanges.has(filename)) {
+          const ranges = existingBotCommentRanges.get(filename)!
+          const isCovered = ranges.some(r =>
+            r.startLine <= startLine && r.endLine >= endLine
+          )
+          if (isCovered) {
+            info(`[full-review-dedup] skipping patch ${filename}:${startLine}-${endLine} — already covered by existing bot comment`)
+            patchesSkippedByDedup += 1
+            continue
+          }
         }
         // 检查是否已达到可打包的 patch 上限
         if (patchesPacked >= patchesToPack) {
@@ -1003,6 +1045,8 @@ ${commentChain}
           )
           reviewsFailed.push(`${filename} (${e as string})`)
         }
+      } else if (patchesSkippedByDedup > 0 && patchesPacked === 0) {
+        reviewsSkipped.push(`${filename} (all patches already reviewed)`)
       } else {
         reviewsSkipped.push(`${filename} (diff too large)`)
       }
@@ -1065,9 +1109,7 @@ ${
 ${
   reviewsSkipped.length > 0
     ? `<details>
-<summary>Files skipped from review due to trivial changes (${
-        reviewsSkipped.length
-      })</summary>
+<summary>Files skipped from review (${reviewsSkipped.length})</summary>
 
 * ${reviewsSkipped.join('\n* ')}
 
@@ -1116,7 +1158,8 @@ ${
     await commenter.submitReview(
       context.payload.pull_request.number,
       commits[commits.length - 1].sha,
-      statusMsg
+      statusMsg,
+      threadStatusMap
     )
   }
 

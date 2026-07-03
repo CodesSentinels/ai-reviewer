@@ -11023,7 +11023,7 @@ ${COMMENT_TAG}`;
      * @param commitId - 提交的 commit SHA
      * @param statusMsg - 审查状态消息（包含处理统计信息）
      */
-    async submitReview(pullNumber, commitId, statusMsg) {
+    async submitReview(pullNumber, commitId, statusMsg, threadStatusMap) {
         const body = `${COMMENT_GREETING}
 
 ${statusMsg}
@@ -11033,12 +11033,22 @@ ${statusMsg}
             (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`Skipping empty review for PR #${pullNumber} — no review comments to submit`);
             return;
         }
-        // 删除同一位置的旧 bot 评论，避免重复评论
+        // 去重：跳过同位置已有未 resolved bot 评论的新评论，避免重复
+        const commentsToSubmit = [];
         for (const comment of this.reviewCommentsBuffer) {
-            const comments = await this.getCommentsAtRange(pullNumber, comment.path, comment.startLine, comment.endLine);
-            for (const c of comments) {
-                if (c.body.includes(COMMENT_TAG)) {
-                    (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`Deleting review comment for ${comment.path}:${comment.startLine}-${comment.endLine}: ${comment.message}`);
+            const existingComments = await this.getCommentsAtRange(pullNumber, comment.path, comment.startLine, comment.endLine);
+            const existingBotComments = existingComments.filter(c => c.body.includes(COMMENT_TAG));
+            if (existingBotComments.length > 0) {
+                // 检查该位置是否已 resolved
+                const key = `${comment.path}:${comment.endLine}`;
+                const isResolved = threadStatusMap?.get(key);
+                if (isResolved !== true) {
+                    (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`[submit-dedup] skipping comment for ${comment.path}:${comment.startLine}-${comment.endLine} — existing unresolved bot comment found`);
+                    continue;
+                }
+                // 已 resolved 的旧评论：删除后重新发布
+                for (const c of existingBotComments) {
+                    (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`Deleting resolved review comment for ${comment.path}:${comment.startLine}-${comment.endLine}`);
                     try {
                         await _octokit__WEBPACK_IMPORTED_MODULE_2__/* .octokit.pulls.deleteReviewComment */ .K.pulls.deleteReviewComment({
                             owner: repo.owner,
@@ -11052,6 +11062,11 @@ ${statusMsg}
                     }
                 }
             }
+            commentsToSubmit.push(comment);
+        }
+        if (commentsToSubmit.length === 0) {
+            (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`[submit-dedup] all ${this.reviewCommentsBuffer.length} comment(s) skipped — already covered by existing bot comments`);
+            return;
         }
         // 清理已有的 PENDING 审查
         await this.deletePendingReview(pullNumber);
@@ -11080,9 +11095,9 @@ ${statusMsg}
                 pull_number: pullNumber,
                 // eslint-disable-next-line camelcase
                 commit_id: commitId,
-                comments: this.reviewCommentsBuffer.map(comment => generateCommentData(comment))
+                comments: commentsToSubmit.map(comment => generateCommentData(comment))
             });
-            (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`Submitting review for PR #${pullNumber}, total comments: ${this.reviewCommentsBuffer.length}, review id: ${review.data.id}`);
+            (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`Submitting review for PR #${pullNumber}, total comments: ${commentsToSubmit.length}, review id: ${review.data.id}`);
             // 正式提交审查（从 PENDING 变为 COMMENT）
             await _octokit__WEBPACK_IMPORTED_MODULE_2__/* .octokit.pulls.submitReview */ .K.pulls.submitReview({
                 owner: repo.owner,
@@ -11100,7 +11115,7 @@ ${statusMsg}
             (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Failed to create review: ${e}. Falling back to individual comments.`);
             await this.deletePendingReview(pullNumber);
             let commentCounter = 0;
-            for (const comment of this.reviewCommentsBuffer) {
+            for (const comment of commentsToSubmit) {
                 (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`Creating new review comment for ${comment.path}:${comment.startLine}-${comment.endLine}: ${comment.message}`);
                 const commentData = {
                     owner: repo.owner,
@@ -11118,7 +11133,7 @@ ${statusMsg}
                     (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Failed to create review comment: ${ee}`);
                 }
                 commentCounter++;
-                (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`Comment ${commentCounter}/${this.reviewCommentsBuffer.length} posted`);
+                (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`Comment ${commentCounter}/${commentsToSubmit.length} posted`);
             }
         }
     }
@@ -19926,6 +19941,34 @@ ${summariesFailed.length > 0
                 (0,core.warning)(`thread-status: failed to fetch, comment chains will not have [OPEN]/[RESOLVED] labels: ${String(e)}`);
             }
         }
+        // full review 去重：构建已有未 resolved 的 bot review comment 位置索引
+        // 用于跳过已有评论覆盖的 patch，避免重复调用大模型
+        const existingBotCommentRanges = new Map();
+        if (reviewMode === 'full' && review_context.payload.pull_request != null) {
+            try {
+                const allReviewComments = await commenter.listReviewComments(review_context.payload.pull_request.number);
+                for (const c of allReviewComments) {
+                    if (!c.body?.includes(lib_commenter/* COMMENT_TAG */.Rs))
+                        continue;
+                    const key = `${c.path}:${c.line}`;
+                    const isResolved = threadStatusMap.get(key);
+                    if (isResolved === true)
+                        continue;
+                    const range = {
+                        startLine: c.start_line ?? c.line,
+                        endLine: c.line
+                    };
+                    const ranges = existingBotCommentRanges.get(c.path) ?? [];
+                    ranges.push(range);
+                    existingBotCommentRanges.set(c.path, ranges);
+                }
+                const totalComments = [...existingBotCommentRanges.values()].reduce((s, a) => s + a.length, 0);
+                (0,core.info)(`full-review-dedup: indexed ${totalComments} existing bot comment(s) across ${existingBotCommentRanges.size} file(s)`);
+            }
+            catch (e) {
+                (0,core.warning)(`full-review-dedup: failed to build index, will not skip any patches: ${String(e)}`);
+            }
+        }
         /**
          * 对单个文件执行代码审查
          *
@@ -19981,10 +20024,21 @@ ${summariesFailed.length > 0
             }
             // 逐个 patch 打包到提示词中
             let patchesPacked = 0;
+            let patchesSkippedByDedup = 0;
             for (const [startLine, endLine, patch] of patches) {
                 if (review_context.payload.pull_request == null) {
                     (0,core.warning)('No pull request found, skipping.');
                     continue;
+                }
+                // full review 去重：跳过已有未 resolved bot 评论覆盖的 patch
+                if (existingBotCommentRanges.has(filename)) {
+                    const ranges = existingBotCommentRanges.get(filename);
+                    const isCovered = ranges.some(r => r.startLine <= startLine && r.endLine >= endLine);
+                    if (isCovered) {
+                        (0,core.info)(`[full-review-dedup] skipping patch ${filename}:${startLine}-${endLine} — already covered by existing bot comment`);
+                        patchesSkippedByDedup += 1;
+                        continue;
+                    }
                 }
                 // 检查是否已达到可打包的 patch 上限
                 if (patchesPacked >= patchesToPack) {
@@ -20116,6 +20170,9 @@ ${commentChain}
                     reviewsFailed.push(`${filename} (${e})`);
                 }
             }
+            else if (patchesSkippedByDedup > 0 && patchesPacked === 0) {
+                reviewsSkipped.push(`${filename} (all patches already reviewed)`);
+            }
             else {
                 reviewsSkipped.push(`${filename} (diff too large)`);
             }
@@ -20161,7 +20218,7 @@ ${reviewsFailed.length > 0
             : ''}
 ${reviewsSkipped.length > 0
             ? `<details>
-<summary>Files skipped from review due to trivial changes (${reviewsSkipped.length})</summary>
+<summary>Files skipped from review (${reviewsSkipped.length})</summary>
 
 * ${reviewsSkipped.join('\n* ')}
 
@@ -20200,7 +20257,7 @@ ${reviewsSkipped.length > 0
         // 将最新的 head commit SHA 添加到已审查列表
         summarizeComment += `\n${commenter.addReviewedCommitId(existingCommitIdsBlock, review_context.payload.pull_request.head.sha)}`;
         // 批量提交所有缓冲的审查评论（严重级别已内嵌在每条评论顶部，不再单独发汇总评论）
-        await commenter.submitReview(review_context.payload.pull_request.number, commits[commits.length - 1].sha, statusMsg);
+        await commenter.submitReview(review_context.payload.pull_request.number, commits[commits.length - 1].sha, statusMsg, threadStatusMap);
     }
     // summary-only 等跳过审查阶段的场景：保留既有的已审查 commit 记录，
     // 否则 replace 摘要评论会清空增量审查标记，导致下次自动审查从 base 重审
