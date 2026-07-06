@@ -26,9 +26,11 @@ sequenceDiagram
     Note right of Conv: 检查: body 含 @codesentinel<br/>且事件是 review_comment → true
     Conv->>GH: 收集 thread 历史<br/>(getCommentChain)
     Conv->>Conv: countBotTurns(chain)
+    Note right of Conv: 统计 bot 专属标签在 chain 中的出现次数<br/>每条 bot 评论携带一个标签，出现几次=回了几轮
     
     alt turns < MAX_CONVERSATION_TURNS (10)
         Conv->>Conv: truncateConversationChain(chain, MAX_CHAIN_CHARS)
+        Note right of Conv: 从最新一轮往前累加，保留最近对话<br/>超出 12k 预算的早期内容丢弃<br/>顶部插入"N 条已省略"提示
         Conv->>Bot: chat(prompt + chain + diff_context)
         Bot-->>Conv: AI 回复
         Conv->>GH: 回帖到 thread
