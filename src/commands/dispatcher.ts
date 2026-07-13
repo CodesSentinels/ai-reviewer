@@ -32,6 +32,8 @@ import {getPermission} from './permission'
 import {canExecute} from './permission'
 import {checkRateLimit} from './rate-limit'
 import {hasBeenProcessed, Reply} from './reply'
+import {addAckReaction} from './reaction'
+import {buildUnknownCommandMessage} from './handlers/help'
 import type {
   ActorInfo,
   CommandContext,
@@ -164,12 +166,28 @@ export async function dispatchCommentEvent(
     repo: repoName,
     issueNumber: prNumber,
     originalCommentId: comment.id,
-    commandName: cmdNameForReply
+    commandName: cmdNameForReply,
+    eventName
   })
 
-  // [解析错误] 命令名识别成功但参数非法等（如 INVALID_ARGS），直接回帖报错并结束。
+  // [解析错误] 处理命令解析阶段的错误。
   if (outcome.error) {
-    await reply.error(outcome.error.code, outcome.error.detail)
+    if (outcome.error.code === 'UNKNOWN_COMMAND') {
+      // 未识别的命令：先打 ACK reaction，再回复支持的命令列表
+      await addAckReaction({
+        owner,
+        repo: repoName,
+        commentId: comment.id,
+        eventName,
+        rawReaction: deps.options.commandAckReaction
+      })
+      const cmds = registry.listCommands()
+      const invalidCmd = outcome.error.detail ?? 'unknown'
+      const msg = buildUnknownCommandMessage(invalidCmd, actorLogin, cmds)
+      await reply.success(msg)
+    } else {
+      await reply.error(outcome.error.code, outcome.error.detail)
+    }
     return {
       kind: 'executed',
       command: cmdNameForReply,

@@ -38,7 +38,10 @@ const octokitState: Record<string, any> = {
   updateComment: jest.fn(),
   getCollaboratorPermissionLevel: jest.fn(),
   getPull: jest.fn(),
-  updatePull: jest.fn()
+  updatePull: jest.fn(),
+  createReplyForReviewComment: jest.fn(),
+  createReactionForIssueComment: jest.fn(),
+  createReactionForPRComment: jest.fn()
 }
 
 jest.mock('../src/octokit', () => ({
@@ -50,11 +53,19 @@ jest.mock('../src/octokit', () => ({
     },
     pulls: {
       get: (...a: any[]) => octokitState.getPull(...a),
-      update: (...a: any[]) => octokitState.updatePull(...a)
+      update: (...a: any[]) => octokitState.updatePull(...a),
+      createReplyForReviewComment: (...a: any[]) =>
+        octokitState.createReplyForReviewComment(...a)
     },
     repos: {
       getCollaboratorPermissionLevel: (...a: any[]) =>
         octokitState.getCollaboratorPermissionLevel(...a)
+    },
+    reactions: {
+      createForIssueComment: (...a: any[]) =>
+        octokitState.createReactionForIssueComment(...a),
+      createForPullRequestReviewComment: (...a: any[]) =>
+        octokitState.createReactionForPRComment(...a)
     }
   }
 }))
@@ -67,7 +78,7 @@ import {_resetPermissionCache} from '../src/commands/permission'
 import {_resetRateLimit} from '../src/commands/rate-limit'
 
 // 一个最小的 Options 存根；dispatcher 只是传递不使用
-const stubOptions: any = {}
+const stubOptions: any = {commandAckReaction: 'eyes'}
 
 function setEvent(
   eventName: 'issue_comment' | 'pull_request_review_comment' | 'push',
@@ -124,6 +135,9 @@ beforeEach(() => {
   octokitState.getCollaboratorPermissionLevel.mockReset()
   octokitState.getPull.mockReset()
   octokitState.updatePull.mockReset()
+  octokitState.createReplyForReviewComment.mockReset()
+  octokitState.createReactionForIssueComment.mockReset()
+  octokitState.createReactionForPRComment.mockReset()
 
   // 默认: 不存在已处理标记
   octokitState.listComments.mockResolvedValue({data: []})
@@ -131,6 +145,9 @@ beforeEach(() => {
   octokitState.updateComment.mockResolvedValue({data: {id: 9000}})
   octokitState.getPull.mockResolvedValue({data: {body: 'PR body'}})
   octokitState.updatePull.mockResolvedValue({data: {id: 42}})
+  octokitState.createReplyForReviewComment.mockResolvedValue({data: {id: 9001}})
+  octokitState.createReactionForIssueComment.mockResolvedValue({data: {id: 1}})
+  octokitState.createReactionForPRComment.mockResolvedValue({data: {id: 1}})
   // 默认: alice 有 write 权限
   octokitState.getCollaboratorPermissionLevel.mockResolvedValue({
     data: {permission: 'write'}
@@ -179,13 +196,34 @@ describe('dispatcher — 解析与 fallback', () => {
     expect(r.kind).toBe('ignored')
   })
 
-  test('@bot 但未命中命令 → fallback_conversation', async () => {
+  test('@bot 后跟自然语言（中文）→ fallback_conversation', async () => {
     setEvent(
       'issue_comment',
       buildIssueCommentPayload('@ai-reviewer 这里为啥这样写？')
     )
     const r = await dispatchCommentEvent({options: stubOptions})
     expect(r.kind).toBe('fallback_conversation')
+  })
+
+  test('@bot 后跟未知 ASCII 命令 → UNKNOWN_COMMAND with help listing and ACK reaction', async () => {
+    setEvent(
+      'issue_comment',
+      buildIssueCommentPayload('@ai-reviewer invalidcmd')
+    )
+    const r = await dispatchCommentEvent({options: stubOptions})
+    expect(r).toEqual({
+      kind: 'executed',
+      command: 'unknown',
+      ok: false,
+      error: 'UNKNOWN_COMMAND'
+    })
+    // 应添加 ACK reaction
+    expect(octokitState.createReactionForIssueComment).toHaveBeenCalled()
+    // 应回复评论并包含支持的命令列表
+    expect(octokitState.createComment).toHaveBeenCalled()
+    const body = octokitState.createComment.mock.calls[0][0].body
+    expect(body).toContain('invalidcmd')
+    expect(body).toContain('commands I support')
   })
 
   test('review_comment 线程内回复（无 @bot）→ ignored（对话必须 @bot）', async () => {
@@ -196,12 +234,36 @@ describe('dispatcher — 解析与 fallback', () => {
     expect(r.kind).toBe('ignored')
   })
 
-  test('review_comment 线程内回复（带 @bot）→ fallback_conversation', async () => {
+  test('review_comment 线程内回复（带 @bot 自然语言）→ fallback_conversation', async () => {
     const payload = buildReviewCommentPayload('@ai-reviewer 这个问题严重吗')
     ;(payload.comment as any).in_reply_to_id = 2001
     setEvent('pull_request_review_comment', payload)
     const r = await dispatchCommentEvent({options: stubOptions})
     expect(r.kind).toBe('fallback_conversation')
+  })
+
+  test('review_comment 未知命令 → 回复到 thread 而非主评论区', async () => {
+    setEvent(
+      'pull_request_review_comment',
+      buildReviewCommentPayload('@ai-reviewer invalidcmd')
+    )
+    const r = await dispatchCommentEvent({options: stubOptions})
+    expect(r).toEqual({
+      kind: 'executed',
+      command: 'unknown',
+      ok: false,
+      error: 'UNKNOWN_COMMAND'
+    })
+    // 应添加 ACK reaction（PR review comment endpoint）
+    expect(octokitState.createReactionForPRComment).toHaveBeenCalled()
+    // 应使用 createReplyForReviewComment 回复到 thread
+    expect(octokitState.createReplyForReviewComment).toHaveBeenCalled()
+    // 不应使用 issues.createComment
+    expect(octokitState.createComment).not.toHaveBeenCalled()
+    const body =
+      octokitState.createReplyForReviewComment.mock.calls[0][0].body
+    expect(body).toContain('invalidcmd')
+    expect(body).toContain('commands I support')
   })
 })
 

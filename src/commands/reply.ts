@@ -31,6 +31,8 @@ export interface ReplyContext {
   originalCommentId: number
   /** 命令名（写入 tag 用于去重） */
   commandName: string
+  /** 事件类型：当为 pull_request_review_comment 时回复到 thread */
+  eventName?: 'issue_comment' | 'pull_request_review_comment'
 }
 
 /** 组装幂等 tag */
@@ -78,6 +80,16 @@ export class Reply implements IReply {
   async ack(message: string): Promise<number | null> {
     const body = this.wrap(`⏳ ${message}`)
     try {
+      if (this.ctx.eventName === 'pull_request_review_comment') {
+        const res = await octokit.pulls.createReplyForReviewComment({
+          owner: this.ctx.owner,
+          repo: this.ctx.repo,
+          pull_number: this.ctx.issueNumber,
+          comment_id: this.ctx.originalCommentId,
+          body
+        })
+        return res.data.id
+      }
       const res = await octokit.issues.createComment({
         owner: this.ctx.owner,
         repo: this.ctx.repo,
@@ -141,6 +153,21 @@ export class Reply implements IReply {
         return
       } catch (e) {
         warning(`reply.publish update failed, falling back to create: ${String(e)}`)
+      }
+    }
+    // 行级评论场景：回复到同一 review thread
+    if (this.ctx.eventName === 'pull_request_review_comment') {
+      try {
+        await octokit.pulls.createReplyForReviewComment({
+          owner: this.ctx.owner,
+          repo: this.ctx.repo,
+          pull_number: this.ctx.issueNumber,
+          comment_id: this.ctx.originalCommentId,
+          body
+        })
+        return
+      } catch (e) {
+        warning(`reply.publish review thread reply failed, falling back to issue comment: ${String(e)}`)
       }
     }
     try {
