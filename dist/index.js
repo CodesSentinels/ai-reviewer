@@ -8627,6 +8627,12 @@ const DEFAULT_LOCAL_SHELL_MAX_OUTPUT_LENGTH = 4_096;
 const MAX_LOCAL_SHELL_TURNS = 8;
 const LOCAL_SHELL_OUTPUT_TRUNCATED = '\n... (truncated)';
 const LOCAL_SHELL_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
+const LOCAL_SHELL_SENSITIVE_ENV_KEYS = [
+    'OPENAI_API_KEY',
+    'GITHUB_TOKEN',
+    'INPUT_OPENAI-API-KEY',
+    'INPUT_GITHUB-TOKEN'
+];
 const getLocalShellBinary = () => {
     if (process.env.SHELL) {
         return process.env.SHELL;
@@ -8994,10 +9000,15 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
     runLocalShellCommand = async (command, timeoutMs, maxOutputLength) => {
         const shell = getLocalShellBinary();
         const maxBuffer = Math.max(1_024 * 1_024, Math.min(LOCAL_SHELL_MAX_BUFFER_BYTES, Math.max(maxOutputLength * 8, 1_024 * 1_024)));
+        const sanitizedEnv = { ...process.env };
+        for (const key of LOCAL_SHELL_SENSITIVE_ENV_KEYS) {
+            delete sanitizedEnv[key];
+        }
         try {
             const { stdout, stderr } = await new Promise((resolve, reject) => {
                 (0,external_child_process_.exec)(command, {
                     cwd: process.cwd(),
+                    env: sanitizedEnv,
                     timeout: timeoutMs,
                     maxBuffer,
                     ...(shell ? { shell } : {})
@@ -9057,7 +9068,7 @@ var core = __nccwpck_require__(1078);
 // EXTERNAL MODULE: ./node_modules/.pnpm/@actions+github@5.1.1/node_modules/@actions/github/lib/github.js
 var github = __nccwpck_require__(3695);
 // EXTERNAL MODULE: ./lib/commands/bootstrap.js + 4 modules
-var bootstrap = __nccwpck_require__(5544);
+var bootstrap = __nccwpck_require__(6830);
 // EXTERNAL MODULE: ./lib/commands/registry.js
 var commands_registry = __nccwpck_require__(953);
 // EXTERNAL MODULE: ./lib/commands/parser.js
@@ -9892,7 +9903,11 @@ const handleConversation = async (heavyBot, options, prompts) => {
     const cleanedReply = reply.replace(/^\s*@user[，,：:\s]*/i, '').trimStart();
     const authorLogin = comment.user?.login ?? '';
     const mention = authorLogin ? `@${authorLogin} ` : '';
-    await commenter.reviewCommentReply(pullNumber, topLevelComment, `${mention}${cleanedReply}`);
+    const quotedQuestion = comment.body
+        .split('\n')
+        .map((l) => `> ${l}`)
+        .join('\n');
+    await commenter.reviewCommentReply(pullNumber, topLevelComment, `${quotedQuestion}\n\n${mention}${cleanedReply}`);
     (0,core.info)(`conversation: replied on PR #${pullNumber} thread (top-level comment ${topLevelComment.id})`);
 };
 
@@ -9962,7 +9977,7 @@ async function handleCommentEvent(deps) {
 
 /***/ }),
 
-/***/ 5544:
+/***/ 6830:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
 "use strict";
@@ -10040,205 +10055,8 @@ const helpHandler = {
     }
 };
 
-// EXTERNAL MODULE: ./node_modules/.pnpm/p-limit@4.0.0/node_modules/p-limit/index.js + 1 modules
-var p_limit = __nccwpck_require__(9272);
-// EXTERNAL MODULE: ./lib/octokit.js
-var octokit = __nccwpck_require__(2247);
-;// CONCATENATED MODULE: ./lib/github/review-thread.js
-
-
-
-// ─── GraphQL documents ───────────────────────────────────────────────────────
-const GET_REVIEW_THREADS = `
-  query GetReviewThreads(
-    $owner: String!
-    $repo: String!
-    $number: Int!
-    $after: String
-  ) {
-    repository(owner: $owner, name: $repo) {
-      pullRequest(number: $number) {
-        reviewThreads(first: 100, after: $after) {
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-          nodes {
-            id
-            isResolved
-            path
-            line
-            comments(first: 1) {
-              nodes {
-                author {
-                  login
-                }
-                body
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-`;
-const RESOLVE_THREAD = `
-  mutation ResolveThread($threadId: ID!) {
-    resolveReviewThread(input: { threadId: $threadId }) {
-      thread {
-        isResolved
-      }
-    }
-  }
-`;
-// ─── Bot identity ─────────────────────────────────────────────────────────────
-let cachedBotLogin = null;
-async function getBotLogin(options) {
-    if (cachedBotLogin !== null)
-        return cachedBotLogin;
-    void options;
-    // Explicit override for custom GitHub App: installation tokens cannot call
-    // GET /user, so auto-detection would wrongly fall back to 'github-actions'.
-    const explicitLogin = (0,core.getInput)('bot_github_login');
-    if (explicitLogin) {
-        cachedBotLogin = explicitLogin;
-        return cachedBotLogin;
-    }
-    try {
-        const { data } = await octokit/* octokit.users.getAuthenticated */.K.users.getAuthenticated();
-        cachedBotLogin = data.login;
-    }
-    catch (e) {
-        (0,core.warning)(`getBotLogin: failed to get authenticated user – ${String(e)}`);
-        // Default GITHUB_TOKEN (integration token) lacks read:user scope.
-        // GraphQL returns the login WITHOUT the "[bot]" suffix, so use 'github-actions'
-        // (not 'github-actions[bot]') to match the author field in reviewThread queries.
-        cachedBotLogin = 'github-actions';
-    }
-    return cachedBotLogin;
-}
-/** Visible for testing only */
-function _resetBotLoginCache() {
-    cachedBotLogin = null;
-}
-/**
- * Normalize a GitHub login for bot identity comparison.
- *
- * GitHub is inconsistent about the `[bot]` suffix on bot accounts:
- *   - REST (`getAuthenticated`, comment.user.login) → `github-actions[bot]`
- *   - GraphQL (reviewThread author.login)           → `github-actions`
- * Stripping the suffix (and lowercasing) lets the two representations match.
- */
-function normalizeLogin(login) {
-    return login.replace(/\[bot\]$/i, '').toLowerCase();
-}
-// ─── Query ────────────────────────────────────────────────────────────────────
-async function fetchUnresolvedBotThreads(params, botLogin) {
-    const results = [];
-    let cursor = null;
-    do {
-        const data = await octokit/* octokit.graphql */.K.graphql(GET_REVIEW_THREADS, {
-            owner: params.owner,
-            repo: params.repo,
-            number: params.prNumber,
-            after: cursor ?? undefined
-        });
-        const page = data.repository.pullRequest.reviewThreads;
-        const normalizedBot = normalizeLogin(botLogin);
-        for (const node of page.nodes) {
-            const firstComment = node.comments.nodes[0];
-            const authorLogin = firstComment?.author?.login ?? null;
-            if (!node.isResolved &&
-                authorLogin !== null &&
-                normalizeLogin(authorLogin) === normalizedBot) {
-                results.push({
-                    id: node.id,
-                    isResolved: node.isResolved,
-                    firstCommentAuthorLogin: authorLogin,
-                    path: node.path,
-                    line: node.line ?? null,
-                    firstCommentBody: firstComment?.body ?? null
-                });
-            }
-        }
-        cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
-    } while (cursor !== null);
-    return results;
-}
-function isPermissionError(e) {
-    return String(e).includes('not accessible by integration');
-}
-/** 网络/超时类错误（与权限、node-not-found 区分，便于给出不同提示） */
-function isNetworkError(e) {
-    return /ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|network|timed? ?out/i.test(String(e));
-}
-/**
- * 测试用：识别注入的假 thread ID（`PRRT_debug_inject_<kind>_<n>`），
- * 返回对应类型的模拟错误，不实际发起 GraphQL 请求。
- *
- * 真实运行时 thread ID 不会带此前缀，函数返回 null，走正常 GraphQL 流程。
- */
-function simulateDebugError(threadId) {
-    if (!threadId.startsWith('PRRT_debug_inject_'))
-        return null;
-    if (threadId.includes('_permission_')) {
-        return new Error("Resource not accessible by integration (mutation 'resolveReviewThread')");
-    }
-    if (threadId.includes('_network_')) {
-        // TODO: Maybe gitlab in the future, or other network errors, but for now just simulate a connection reset.
-        return new Error('request to https://api.github.com/graphql failed, reason: read ECONNRESET');
-    }
-    // 默认：node not found（无效的 global id）
-    return new Error('Request failed due to following response errors:\n' +
-        ` - Could not resolve to a node with the global id of '${threadId}'`);
-}
-function threadLabel(t) {
-    if (t.path) {
-        const loc = t.line != null ? `${t.path}:${t.line}` : t.path;
-        if (t.firstCommentBody) {
-            const snippet = t.firstCommentBody.trim().replace(/\s+/g, ' ').slice(0, 60);
-            const ellipsis = snippet.length === 60 ? '…' : '';
-            return `${loc} – "${snippet}${ellipsis}"`;
-        }
-        return loc;
-    }
-    return t.id;
-}
-async function batchResolve(threads) {
-    const limit = (0,p_limit/* default */.Z)(6);
-    let ok = 0;
-    const errors = [];
-    const failedItems = [];
-    await Promise.allSettled(threads.map(t => limit(async () => {
-        try {
-            const simulated = simulateDebugError(t.id);
-            if (simulated)
-                throw simulated;
-            await octokit/* octokit.graphql */.K.graphql(RESOLVE_THREAD, { threadId: t.id });
-            ok++;
-        }
-        catch (e) {
-            const err = e instanceof Error ? e : new Error(String(e));
-            errors.push(err);
-            failedItems.push({ thread: t, error: err });
-        }
-    })));
-    const permissionFailed = failedItems.filter(({ error }) => isPermissionError(error));
-    const otherFailed = failedItems.filter(({ error }) => !isPermissionError(error));
-    if (permissionFailed.length > 0) {
-        (0,core.warning)('batchResolve: token lacks permission to resolve review threads ' +
-            '("Resource not accessible by integration"). ' +
-            'Set the `resolve_token` input to a classic PAT with repo scope.');
-    }
-    if (otherFailed.length > 0) {
-        const lines = otherFailed
-            .map(({ thread, error }) => `  • ${threadLabel(thread)}: ${error.message}`)
-            .join('\n');
-        (0,core.warning)(`batchResolve: failed to resolve ${otherFailed.length}/${threads.length} thread(s):\n${lines}`);
-    }
-    return { ok, failed: errors.length, errors, failedItems };
-}
-
+// EXTERNAL MODULE: ./lib/github/review-thread.js
+var review_thread = __nccwpck_require__(2688);
 ;// CONCATENATED MODULE: ./lib/commands/handlers/resolve.js
 
 
@@ -10252,8 +10070,8 @@ const resolveHandler = {
     execute
 };
 async function execute(ctx) {
-    const botLogin = await getBotLogin(ctx.options);
-    const threads = await fetchUnresolvedBotThreads({ owner: ctx.owner, repo: ctx.repo, prNumber: ctx.prNumber }, botLogin);
+    const botLogin = await (0,review_thread/* getBotLogin */.ZY)(ctx.options);
+    const threads = await (0,review_thread/* fetchUnresolvedBotThreads */.J9)({ owner: ctx.owner, repo: ctx.repo, prNumber: ctx.prNumber }, botLogin);
     if (threads.length === 0) {
         return { message: 'ℹ️ 没有找到待解决的 CodeSentinel 审查意见' };
     }
@@ -10274,7 +10092,7 @@ async function execute(ctx) {
     //     })
     //   }
     // }
-    const { ok, failed, failedItems } = await batchResolve(threads);
+    const { ok, failed, failedItems } = await (0,review_thread/* batchResolve */.zO)(threads);
     return { message: formatResult(ok, failed, threads.length, failedItems) };
 }
 // ─── Formatting ───────────────────────────────────────────────────────────────
@@ -10285,7 +10103,7 @@ function formatResult(ok, failed, total, failedItems) {
     }
     const errDetail = failedItems.length > 0
         ? `\n\n失败详情：\n${failedItems
-            .map(({ thread, error }) => `- ${errorTag(error)} \`${threadLabel(thread)}\`：${flattenError(error.message)}`)
+            .map(({ thread, error }) => `- ${errorTag(error)} \`${(0,review_thread/* threadLabel */.J1)(thread)}\`：${flattenError(error.message)}`)
             .join('\n')}${permissionHint(failedItems)}`
         : '';
     if (ok === 0) {
@@ -10300,15 +10118,15 @@ function formatResult(ok, failed, total, failedItems) {
 }
 /** 给每条失败打上分类标签，方便用户一眼区分错误类型 */
 function errorTag(error) {
-    if (isPermissionError(error))
+    if ((0,review_thread/* isPermissionError */.nS)(error))
         return '🔒 权限不足';
-    if (isNetworkError(error))
+    if ((0,review_thread/* isNetworkError */.eE)(error))
         return '🌐 网络错误';
     return '⚠️ 其他错误';
 }
 /** 存在权限错误时，追加可操作提示 */
 function permissionHint(failedItems) {
-    if (!failedItems.some(({ error }) => isPermissionError(error)))
+    if (!failedItems.some(({ error }) => (0,review_thread/* isPermissionError */.nS)(error)))
         return '';
     return ('\n\n💡 存在权限不足导致的失败：当前 token 无法解决审查线程，' +
         '请将 `resolve_token` 输入配置为具有 repo 权限的 classic PAT，或手动解决。');
@@ -10320,7 +10138,34 @@ function flattenError(message) {
 
 // EXTERNAL MODULE: ./lib/review-state.js
 var review_state = __nccwpck_require__(3337);
+// EXTERNAL MODULE: ./lib/commenter.js
+var lib_commenter = __nccwpck_require__(4558);
+;// CONCATENATED MODULE: ./lib/review-commit-ids.js
+
+async function isHeadAlreadyReviewed(prNumber, headSha) {
+    const commenter = new lib_commenter/* Commenter */.Es();
+    const comment = await commenter.findCommentWithTag(lib_commenter/* SUMMARIZE_TAG */.Rp, prNumber);
+    if (comment == null)
+        return false;
+    const reviewedIds = commenter.getReviewedCommitIds(comment.body);
+    return reviewedIds.includes(headSha);
+}
+async function clearReviewedCommitIds(prNumber) {
+    const commenter = new lib_commenter/* Commenter */.Es();
+    const comment = await commenter.findCommentWithTag(lib_commenter/* SUMMARIZE_TAG */.Rp, prNumber);
+    if (comment == null)
+        return;
+    const start = comment.body.indexOf(lib_commenter/* COMMIT_ID_START_TAG */.pt);
+    const end = comment.body.indexOf(lib_commenter/* COMMIT_ID_END_TAG */.kY);
+    if (start === -1 || end === -1)
+        return;
+    const newBody = comment.body.substring(0, start) +
+        comment.body.substring(end + lib_commenter/* COMMIT_ID_END_TAG.length */.kY.length);
+    await commenter.comment(newBody.trim(), lib_commenter/* SUMMARIZE_TAG */.Rp, 'replace');
+}
+
 ;// CONCATENATED MODULE: ./lib/commands/handlers/stubs.js
+
 
 
 function notImplemented(name) {
@@ -10341,6 +10186,17 @@ const reviewStub = {
     async execute(ctx) {
         if (ctx.triggerReview == null)
             return await notImplemented('review')(ctx);
+        const state = await (0,review_state/* getReviewState */.Zr)(ctx.prNumber);
+        if (state !== 'paused') {
+            return {
+                message: `<details>
+✅ Review finished.
+
+> **Note:** CodeSentinel is an incremental review system and does not re-review already reviewed commits. This command is applicable only when automatic reviews are paused.
+
+</details>`
+            };
+        }
         await ctx.triggerReview('incremental');
         return { message: '增量审查已完成' };
     }
@@ -10354,8 +10210,14 @@ const fullReviewStub = {
     async execute(ctx) {
         if (ctx.triggerReview == null)
             return await notImplemented('full review')(ctx);
+        const alreadyReviewed = await isHeadAlreadyReviewed(ctx.prNumber, ctx.headSha);
+        if (alreadyReviewed) {
+            return {
+                message: `✅ Full review finished.\n\n> **Note:** The current HEAD (\`${ctx.headSha.slice(0, 7)}\`) has already been reviewed. No new changes detected since the last review.`
+            };
+        }
         await ctx.triggerReview('full');
-        return { message: '全量审查已完成' };
+        return { message: '✅ Full review finished.' };
     }
 };
 const summaryStub = {
@@ -10379,6 +10241,7 @@ const pauseStub = {
     minPermission: 'write',
     async execute(ctx) {
         await (0,review_state/* setReviewState */.DU)(ctx.prNumber, 'paused');
+        await clearReviewedCommitIds(ctx.prNumber);
         return {
             message: `已暂停当前 PR 的自动审查。使用 \`${constants/* PRIMARY_BOT_MENTION */.a} resume\` 恢复。`
         };
@@ -10485,7 +10348,7 @@ var core = __nccwpck_require__(1078);
 // EXTERNAL MODULE: ./node_modules/.pnpm/@actions+github@5.1.1/node_modules/@actions/github/lib/github.js
 var github = __nccwpck_require__(3695);
 // EXTERNAL MODULE: ./lib/commands/bootstrap.js + 4 modules
-var bootstrap = __nccwpck_require__(5544);
+var bootstrap = __nccwpck_require__(6830);
 // EXTERNAL MODULE: ./lib/commands/registry.js
 var commands_registry = __nccwpck_require__(953);
 // EXTERNAL MODULE: ./lib/commands/parser.js
@@ -10919,10 +10782,12 @@ function getRegistry() {
 /* harmony export */   "Rs": () => (/* binding */ COMMENT_TAG),
 /* harmony export */   "Zb": () => (/* binding */ SHORT_SUMMARY_END_TAG),
 /* harmony export */   "aD": () => (/* binding */ COMMENT_REPLY_TAG),
+/* harmony export */   "kY": () => (/* binding */ COMMIT_ID_END_TAG),
 /* harmony export */   "oi": () => (/* binding */ RAW_SUMMARY_START_TAG),
+/* harmony export */   "pt": () => (/* binding */ COMMIT_ID_START_TAG),
 /* harmony export */   "rV": () => (/* binding */ RAW_SUMMARY_END_TAG)
 /* harmony export */ });
-/* unused harmony exports COMMENT_GREETING, IN_PROGRESS_START_TAG, IN_PROGRESS_END_TAG, DESCRIPTION_START_TAG, DESCRIPTION_END_TAG, COMMIT_ID_START_TAG, COMMIT_ID_END_TAG */
+/* unused harmony exports COMMENT_GREETING, IN_PROGRESS_START_TAG, IN_PROGRESS_END_TAG, DESCRIPTION_START_TAG, DESCRIPTION_END_TAG */
 /* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(1078);
 /* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__nccwpck_require__.n(_actions_core__WEBPACK_IMPORTED_MODULE_0__);
 /* harmony import */ var _actions_github__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(3695);
@@ -11173,7 +11038,7 @@ ${COMMENT_TAG}`;
      * @param commitId - 提交的 commit SHA
      * @param statusMsg - 审查状态消息（包含处理统计信息）
      */
-    async submitReview(pullNumber, commitId, statusMsg) {
+    async submitReview(pullNumber, commitId, statusMsg, threadStatusMap) {
         const body = `${COMMENT_GREETING}
 
 ${statusMsg}
@@ -11183,12 +11048,22 @@ ${statusMsg}
             (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`Skipping empty review for PR #${pullNumber} — no review comments to submit`);
             return;
         }
-        // 删除同一位置的旧 bot 评论，避免重复评论
+        // 去重：跳过同位置已有未 resolved bot 评论的新评论，避免重复
+        const commentsToSubmit = [];
         for (const comment of this.reviewCommentsBuffer) {
-            const comments = await this.getCommentsAtRange(pullNumber, comment.path, comment.startLine, comment.endLine);
-            for (const c of comments) {
-                if (c.body.includes(COMMENT_TAG)) {
-                    (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`Deleting review comment for ${comment.path}:${comment.startLine}-${comment.endLine}: ${comment.message}`);
+            const existingComments = await this.getCommentsAtRange(pullNumber, comment.path, comment.startLine, comment.endLine);
+            const existingBotComments = existingComments.filter(c => c.body.includes(COMMENT_TAG));
+            if (existingBotComments.length > 0) {
+                // 检查该位置是否已 resolved
+                const key = `${comment.path}:${comment.endLine}`;
+                const isResolved = threadStatusMap?.get(key);
+                if (isResolved !== true) {
+                    (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`[submit-dedup] skipping comment for ${comment.path}:${comment.startLine}-${comment.endLine} — existing unresolved bot comment found`);
+                    continue;
+                }
+                // 已 resolved 的旧评论：删除后重新发布
+                for (const c of existingBotComments) {
+                    (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`Deleting resolved review comment for ${comment.path}:${comment.startLine}-${comment.endLine}`);
                     try {
                         await _octokit__WEBPACK_IMPORTED_MODULE_2__/* .octokit.pulls.deleteReviewComment */ .K.pulls.deleteReviewComment({
                             owner: repo.owner,
@@ -11202,6 +11077,11 @@ ${statusMsg}
                     }
                 }
             }
+            commentsToSubmit.push(comment);
+        }
+        if (commentsToSubmit.length === 0) {
+            (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`[submit-dedup] all ${this.reviewCommentsBuffer.length} comment(s) skipped — already covered by existing bot comments`);
+            return;
         }
         // 清理已有的 PENDING 审查
         await this.deletePendingReview(pullNumber);
@@ -11230,9 +11110,9 @@ ${statusMsg}
                 pull_number: pullNumber,
                 // eslint-disable-next-line camelcase
                 commit_id: commitId,
-                comments: this.reviewCommentsBuffer.map(comment => generateCommentData(comment))
+                comments: commentsToSubmit.map(comment => generateCommentData(comment))
             });
-            (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`Submitting review for PR #${pullNumber}, total comments: ${this.reviewCommentsBuffer.length}, review id: ${review.data.id}`);
+            (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`Submitting review for PR #${pullNumber}, total comments: ${commentsToSubmit.length}, review id: ${review.data.id}`);
             // 正式提交审查（从 PENDING 变为 COMMENT）
             await _octokit__WEBPACK_IMPORTED_MODULE_2__/* .octokit.pulls.submitReview */ .K.pulls.submitReview({
                 owner: repo.owner,
@@ -11250,7 +11130,7 @@ ${statusMsg}
             (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Failed to create review: ${e}. Falling back to individual comments.`);
             await this.deletePendingReview(pullNumber);
             let commentCounter = 0;
-            for (const comment of this.reviewCommentsBuffer) {
+            for (const comment of commentsToSubmit) {
                 (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`Creating new review comment for ${comment.path}:${comment.startLine}-${comment.endLine}: ${comment.message}`);
                 const commentData = {
                     owner: repo.owner,
@@ -11268,7 +11148,7 @@ ${statusMsg}
                     (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`Failed to create review comment: ${ee}`);
                 }
                 commentCounter++;
-                (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`Comment ${commentCounter}/${this.reviewCommentsBuffer.length} posted`);
+                (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`Comment ${commentCounter}/${commentsToSubmit.length} posted`);
             }
         }
     }
@@ -11355,8 +11235,12 @@ ${COMMENT_REPLY_TAG}
     /**
      * 获取指定行号范围内的所有评论对话链
      * 用于在代码审查时提供已有评论上下文
+     *
+     * @param threadStatusMap 可选的线程状态 map（path:line → isResolved），
+     *   由 fetchThreadStatusMap() 生成。传入后每条链头部会加上
+     *   [OPEN] 或 [RESOLVED] 标签，让 AI 知道是否应跳过 / reopen。
      */
-    async getCommentChainsWithinRange(pullNumber, path, startLine, endLine, tag = '') {
+    async getCommentChainsWithinRange(pullNumber, path, startLine, endLine, tag = '', threadStatusMap) {
         const existingComments = await this.getCommentsWithinRange(pullNumber, path, startLine, endLine);
         // 找出所有顶层评论（没有 in_reply_to_id 的评论）
         const topLevelComments = [];
@@ -11372,7 +11256,21 @@ ${COMMENT_REPLY_TAG}
             const chain = await this.composeCommentChain(existingComments, topLevelComment);
             if (chain && chain.includes(tag)) {
                 chainNum += 1;
-                allChains += `Conversation Chain ${chainNum}:
+                // 从 threadStatusMap 推断该评论所在行是否已 resolved
+                let statusLabel = '';
+                if (threadStatusMap != null) {
+                    const commentLine = topLevelComment.line ?? topLevelComment.original_line ?? startLine;
+                    const key = `${path}:${commentLine}`;
+                    const isResolved = threadStatusMap.get(key);
+                    // 只在明确知道状态时加标签；未命中 map 的保持无标签（兼容旧行为）
+                    if (isResolved === true) {
+                        statusLabel = ' [RESOLVED]';
+                    }
+                    else if (isResolved === false) {
+                        statusLabel = ' [OPEN]';
+                    }
+                }
+                allChains += `Conversation Chain ${chainNum}${statusLabel}:
 ${chain}
 ---
 `;
@@ -11615,6 +11513,9 @@ ${chain}
         if (start === -1 || end === -1) {
             return `${commentBody}\n${COMMIT_ID_START_TAG}\n<!-- ${commitId} -->\n${COMMIT_ID_END_TAG}`;
         }
+        if (this.getReviewedCommitIds(commentBody).includes(commitId)) {
+            return commentBody;
+        }
         const ids = commentBody.substring(start + COMMIT_ID_START_TAG.length, end);
         return `${commentBody.substring(0, start + COMMIT_ID_START_TAG.length)}${ids}<!-- ${commitId} -->\n${commentBody.substring(end)}`;
     }
@@ -11717,6 +11618,244 @@ const BOT_MENTIONS = ['@ai-reviewer', '@codesentinel'];
  * 取 BOT_MENTIONS 的第一个，保证与触发别名同源。
  */
 const PRIMARY_BOT_MENTION = BOT_MENTIONS[0];
+
+
+/***/ }),
+
+/***/ 2688:
+/***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
+
+"use strict";
+/* harmony export */ __nccwpck_require__.d(__webpack_exports__, {
+/* harmony export */   "J1": () => (/* binding */ threadLabel),
+/* harmony export */   "J9": () => (/* binding */ fetchUnresolvedBotThreads),
+/* harmony export */   "Rn": () => (/* binding */ fetchThreadStatusMap),
+/* harmony export */   "ZY": () => (/* binding */ getBotLogin),
+/* harmony export */   "eE": () => (/* binding */ isNetworkError),
+/* harmony export */   "nS": () => (/* binding */ isPermissionError),
+/* harmony export */   "zO": () => (/* binding */ batchResolve)
+/* harmony export */ });
+/* unused harmony export _resetBotLoginCache */
+/* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(1078);
+/* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__nccwpck_require__.n(_actions_core__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var p_limit__WEBPACK_IMPORTED_MODULE_2__ = __nccwpck_require__(9272);
+/* harmony import */ var _octokit__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(2247);
+
+
+
+// ─── GraphQL documents ───────────────────────────────────────────────────────
+const GET_REVIEW_THREADS = `
+  query GetReviewThreads(
+    $owner: String!
+    $repo: String!
+    $number: Int!
+    $after: String
+  ) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $number) {
+        reviewThreads(first: 100, after: $after) {
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+          nodes {
+            id
+            isResolved
+            path
+            line
+            comments(first: 1) {
+              nodes {
+                author {
+                  login
+                }
+                body
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+const RESOLVE_THREAD = `
+  mutation ResolveThread($threadId: ID!) {
+    resolveReviewThread(input: { threadId: $threadId }) {
+      thread {
+        isResolved
+      }
+    }
+  }
+`;
+// ─── Bot identity ─────────────────────────────────────────────────────────────
+let cachedBotLogin = null;
+async function getBotLogin(options) {
+    if (cachedBotLogin !== null)
+        return cachedBotLogin;
+    void options;
+    // Explicit override for custom GitHub App: installation tokens cannot call
+    // GET /user, so auto-detection would wrongly fall back to 'github-actions'.
+    const explicitLogin = (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('bot_github_login');
+    if (explicitLogin) {
+        cachedBotLogin = explicitLogin;
+        return cachedBotLogin;
+    }
+    try {
+        const { data } = await _octokit__WEBPACK_IMPORTED_MODULE_1__/* .octokit.users.getAuthenticated */ .K.users.getAuthenticated();
+        cachedBotLogin = data.login;
+    }
+    catch (e) {
+        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`getBotLogin: failed to get authenticated user – ${String(e)}`);
+        // Default GITHUB_TOKEN (integration token) lacks read:user scope.
+        // GraphQL returns the login WITHOUT the "[bot]" suffix, so use 'github-actions'
+        // (not 'github-actions[bot]') to match the author field in reviewThread queries.
+        cachedBotLogin = 'github-actions';
+    }
+    return cachedBotLogin;
+}
+/** Visible for testing only */
+function _resetBotLoginCache() {
+    cachedBotLogin = null;
+}
+/**
+ * Normalize a GitHub login for bot identity comparison.
+ *
+ * GitHub is inconsistent about the `[bot]` suffix on bot accounts:
+ *   - REST (`getAuthenticated`, comment.user.login) → `github-actions[bot]`
+ *   - GraphQL (reviewThread author.login)           → `github-actions`
+ * Stripping the suffix (and lowercasing) lets the two representations match.
+ */
+function normalizeLogin(login) {
+    return login.replace(/\[bot\]$/i, '').toLowerCase();
+}
+async function fetchThreadStatusMap(params) {
+    const map = new Map();
+    let cursor = null;
+    do {
+        const data = await _octokit__WEBPACK_IMPORTED_MODULE_1__/* .octokit.graphql */ .K.graphql(GET_REVIEW_THREADS, {
+            owner: params.owner,
+            repo: params.repo,
+            number: params.prNumber,
+            after: cursor ?? undefined
+        });
+        const page = data.repository.pullRequest.reviewThreads;
+        for (const node of page.nodes) {
+            if (node.path != null && node.line != null) {
+                const key = `${node.path}:${node.line}`;
+                // If any thread at this location is unresolved, mark as unresolved
+                if (!map.has(key) || !node.isResolved) {
+                    map.set(key, node.isResolved);
+                }
+            }
+        }
+        cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+    } while (cursor !== null);
+    return map;
+}
+async function fetchUnresolvedBotThreads(params, botLogin) {
+    const results = [];
+    let cursor = null;
+    do {
+        const data = await _octokit__WEBPACK_IMPORTED_MODULE_1__/* .octokit.graphql */ .K.graphql(GET_REVIEW_THREADS, {
+            owner: params.owner,
+            repo: params.repo,
+            number: params.prNumber,
+            after: cursor ?? undefined
+        });
+        const page = data.repository.pullRequest.reviewThreads;
+        const normalizedBot = normalizeLogin(botLogin);
+        for (const node of page.nodes) {
+            const firstComment = node.comments.nodes[0];
+            const authorLogin = firstComment?.author?.login ?? null;
+            if (!node.isResolved &&
+                authorLogin !== null &&
+                normalizeLogin(authorLogin) === normalizedBot) {
+                results.push({
+                    id: node.id,
+                    isResolved: node.isResolved,
+                    firstCommentAuthorLogin: authorLogin,
+                    path: node.path,
+                    line: node.line ?? null,
+                    firstCommentBody: firstComment?.body ?? null
+                });
+            }
+        }
+        cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+    } while (cursor !== null);
+    return results;
+}
+function isPermissionError(e) {
+    return String(e).includes('not accessible by integration');
+}
+/** 网络/超时类错误（与权限、node-not-found 区分，便于给出不同提示） */
+function isNetworkError(e) {
+    return /ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|network|timed? ?out/i.test(String(e));
+}
+/**
+ * 测试用：识别注入的假 thread ID（`PRRT_debug_inject_<kind>_<n>`），
+ * 返回对应类型的模拟错误，不实际发起 GraphQL 请求。
+ *
+ * 真实运行时 thread ID 不会带此前缀，函数返回 null，走正常 GraphQL 流程。
+ */
+function simulateDebugError(threadId) {
+    if (!threadId.startsWith('PRRT_debug_inject_'))
+        return null;
+    if (threadId.includes('_permission_')) {
+        return new Error("Resource not accessible by integration (mutation 'resolveReviewThread')");
+    }
+    if (threadId.includes('_network_')) {
+        // TODO: Maybe gitlab in the future, or other network errors, but for now just simulate a connection reset.
+        return new Error('request to https://api.github.com/graphql failed, reason: read ECONNRESET');
+    }
+    // 默认：node not found（无效的 global id）
+    return new Error('Request failed due to following response errors:\n' +
+        ` - Could not resolve to a node with the global id of '${threadId}'`);
+}
+function threadLabel(t) {
+    if (t.path) {
+        const loc = t.line != null ? `${t.path}:${t.line}` : t.path;
+        if (t.firstCommentBody) {
+            const snippet = t.firstCommentBody.trim().replace(/\s+/g, ' ').slice(0, 60);
+            const ellipsis = snippet.length === 60 ? '…' : '';
+            return `${loc} – "${snippet}${ellipsis}"`;
+        }
+        return loc;
+    }
+    return t.id;
+}
+async function batchResolve(threads) {
+    const limit = (0,p_limit__WEBPACK_IMPORTED_MODULE_2__/* ["default"] */ .Z)(6);
+    let ok = 0;
+    const errors = [];
+    const failedItems = [];
+    await Promise.allSettled(threads.map(t => limit(async () => {
+        try {
+            const simulated = simulateDebugError(t.id);
+            if (simulated)
+                throw simulated;
+            await _octokit__WEBPACK_IMPORTED_MODULE_1__/* .octokit.graphql */ .K.graphql(RESOLVE_THREAD, { threadId: t.id });
+            ok++;
+        }
+        catch (e) {
+            const err = e instanceof Error ? e : new Error(String(e));
+            errors.push(err);
+            failedItems.push({ thread: t, error: err });
+        }
+    })));
+    const permissionFailed = failedItems.filter(({ error }) => isPermissionError(error));
+    const otherFailed = failedItems.filter(({ error }) => !isPermissionError(error));
+    if (permissionFailed.length > 0) {
+        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)('batchResolve: token lacks permission to resolve review threads ' +
+            '("Resource not accessible by integration"). ' +
+            'Set the `resolve_token` input to a classic PAT with repo scope.');
+    }
+    if (otherFailed.length > 0) {
+        const lines = otherFailed
+            .map(({ thread, error }) => `  • ${threadLabel(thread)}: ${error.message}`)
+            .join('\n');
+        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`batchResolve: failed to resolve ${otherFailed.length}/${threads.length} thread(s):\n${lines}`);
+    }
+    return { ok, failed: errors.length, errors, failedItems };
+}
 
 
 /***/ }),
@@ -14565,6 +14704,19 @@ Rules:
 
 This collapses long diffs by default and keeps PR comments visually clean.
 
+- **Existing comment chains (MANDATORY)** — Comment chains in the \`---comment_chains---\` section
+  may carry a status label: \`[OPEN]\` or \`[RESOLVED]\`.
+  - \`[OPEN]\`: The issue has not been resolved yet.
+    - If the same issue **still exists** in the new hunk: do NOT create a new comment — the open
+      thread already captures it. Respond with \`LGTM!\` for that line range.
+    - If the issue has been **fixed**: respond with \`LGTM!\` and note that the fix addresses the
+      concern raised in the existing thread.
+  - \`[RESOLVED]\`: The user marked the thread as resolved.
+    - If the same issue **still exists** in the new hunk (regression or unchanged): write a new
+      comment explaining that the previously-resolved concern has resurfaced.
+    - If the issue is genuinely gone: respond with \`LGTM!\`.
+  - No label (legacy / status unavailable): treat as \`[OPEN]\` — avoid duplicating the comment
+    if the issue appears identical.
 - Do NOT provide general feedback, summaries, explanations of changes, or praises
   for making good additions. Do NOT suggest adding validation, comments, documentation,
   or error handling that was not explicitly part of the changes.
@@ -16890,7 +17042,12 @@ async function installViaNpm(spec) {
         };
     }
     // 3) 跑 npm install
-    (0,core.info)(`lint/installer: installing ${spec.package}@${spec.version} → ${root}`);
+    // version 缺省时不带 `@<range>`，npm 安装 latest。真实 Action 运行里 version 总会
+    // 由 action.yml 的 *_version default 注入；缺省仅出现在未经 Action 的直接调用。
+    const installTarget = spec.version
+        ? `${spec.package}@${spec.version}`
+        : spec.package;
+    (0,core.info)(`lint/installer: installing ${installTarget} → ${root}`);
     const result = await runCommand({
         command: 'npm',
         args: [
@@ -16900,7 +17057,7 @@ async function installViaNpm(spec) {
             '--no-audit',
             '--no-fund',
             '--silent',
-            `${spec.package}@${spec.version}`
+            installTarget
         ],
         cwd: root,
         timeoutMs: INSTALL_TIMEOUT_MS
@@ -16919,11 +17076,11 @@ async function installViaNpm(spec) {
             ?.substring(0, 200) ?? '';
         return {
             ok: false,
-            reason: `npm install ${spec.package}@${spec.version} failed (exit=${result.exitCode}): ${stderrSnippet}`
+            reason: `npm install ${installTarget} failed (exit=${result.exitCode}): ${stderrSnippet}`
         };
     }
     if (!(0,external_fs_.existsSync)(binPath)) {
-        (0,core.warning)(`lint/installer: ${spec.package}@${spec.version} installed but bin not at ${binPath}`);
+        (0,core.warning)(`lint/installer: ${installTarget} installed but bin not at ${binPath}`);
         return {
             ok: false,
             reason: `package installed but bin not at ${binPath} (unexpected layout)`
@@ -17158,7 +17315,9 @@ function classifyCategory(ruleId) {
     if (PERFORMANCE_RULE_KEYWORDS.some(p => r.includes(p)))
         return 'performance';
     // ESLint 内置 stylistic rules
-    if (r.startsWith('@stylistic/') || r.includes('indent') || r.includes('quotes')) {
+    if (r.startsWith('@stylistic/') ||
+        r.includes('indent') ||
+        r.includes('quotes')) {
         return 'style';
     }
     return 'quality';
@@ -17181,13 +17340,13 @@ class EslintAdapter {
     defaultEnabled = true;
     /**
      * 多策略：声明 ESLint 用 npm 装到沙箱目录
-     * （待审查项目无需把 eslint 写入 devDependencies）
+     * （待审查项目无需把 eslint 写入 devDependencies）。
+     * 不含 version：默认版本由 action.yml 的 `eslint_version` default 提供（见 detect）。
      */
     installSpec = {
         kind: 'npm',
         package: 'eslint',
-        binName: 'eslint',
-        version: '^9.15.0'
+        binName: 'eslint'
     };
     /** detect() 成功后填充：ESLint 版本 */
     resolvedVersion = '';
@@ -17215,7 +17374,10 @@ class EslintAdapter {
             timeoutMs: 10_000
         });
         if (versionResult.spawnError || versionResult.exitCode !== 0) {
-            const stderrSnippet = versionResult.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 120) ?? '';
+            const stderrSnippet = versionResult.stderr
+                .split('\n')
+                .find(l => l.trim().length > 0)
+                ?.substring(0, 120) ?? '';
             return {
                 available: false,
                 reason: `bundled ESLint --version failed: exit=${versionResult.exitCode}; stderr="${stderrSnippet}"`
@@ -17241,7 +17403,12 @@ class EslintAdapter {
             return [];
         // 始终使用项目自带的 eslint config（早期支持的 useProjectConfig=false 已移除，
         // 因 ESLint 9 不内置规则集，关掉项目配置会让扫描必败）
-        const args = ['--format', 'json', '--no-error-on-unmatched-pattern', ...files];
+        const args = [
+            '--format',
+            'json',
+            '--no-error-on-unmatched-pattern',
+            ...files
+        ];
         (0,core.info)(`lint/eslint: scanning ${files.length} files via ${this.resolvedBinPath}`);
         const result = await runCommand({
             command: this.resolvedBinPath,
@@ -17381,12 +17548,14 @@ class BiomeAdapter {
         '.cts'
     ];
     defaultEnabled = true;
-    /** Biome 完全零配置可用（内置 recommended 规则集），无需项目侧任何文件 */
+    /**
+     * Biome 完全零配置可用（内置 recommended 规则集），无需项目侧任何文件。
+     * 不含 version：默认版本由 action.yml 的 `biome_version` default 提供（见 detect）。
+     */
     installSpec = {
         kind: 'npm',
         package: '@biomejs/biome',
-        binName: 'biome',
-        version: '^2.3.0'
+        binName: 'biome'
     };
     resolvedVersion = '';
     resolvedBinPath = '';
@@ -17411,7 +17580,10 @@ class BiomeAdapter {
             timeoutMs: 10_000
         });
         if (versionResult.spawnError || versionResult.exitCode !== 0) {
-            const stderrSnippet = versionResult.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 120) ?? '';
+            const stderrSnippet = versionResult.stderr
+                .split('\n')
+                .find(l => l.trim().length > 0)
+                ?.substring(0, 120) ?? '';
             return {
                 available: false,
                 reason: `bundled Biome --version failed: exit=${versionResult.exitCode}; stderr="${stderrSnippet}"`
@@ -17429,12 +17601,7 @@ class BiomeAdapter {
         // --max-diagnostics=999 防止默认 20 条上限把发现截断
         const result = await runCommand({
             command: this.resolvedBinPath,
-            args: [
-                'check',
-                '--reporter=github',
-                '--max-diagnostics=999',
-                ...files
-            ],
+            args: ['check', '--reporter=github', '--max-diagnostics=999', ...files],
             cwd: repoRoot
         });
         if (result.spawnError) {
@@ -17534,12 +17701,14 @@ class PrettierAdapter {
         '.md'
     ];
     defaultEnabled = false; // 默认关闭：风格类问题信噪比较低
-    /** Prettier 自带默认格式规则，无需项目配置即可工作 */
+    /**
+     * Prettier 自带默认格式规则，无需项目配置即可工作。
+     * 不含 version：默认版本由 action.yml 的 `prettier_version` default 提供（见 detect）。
+     */
     installSpec = {
         kind: 'npm',
         package: 'prettier',
-        binName: 'prettier',
-        version: '^3.0.0'
+        binName: 'prettier'
     };
     resolvedVersion = '';
     resolvedBinPath = '';
@@ -17562,7 +17731,10 @@ class PrettierAdapter {
             timeoutMs: 10_000
         });
         if (versionResult.spawnError || versionResult.exitCode !== 0) {
-            const stderrSnippet = versionResult.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 120) ?? '';
+            const stderrSnippet = versionResult.stderr
+                .split('\n')
+                .find(l => l.trim().length > 0)
+                ?.substring(0, 120) ?? '';
             return {
                 available: false,
                 reason: `bundled Prettier --version failed: exit=${versionResult.exitCode}; stderr="${stderrSnippet}"`
@@ -18164,11 +18336,13 @@ class TscAdapter {
      * 没装 typescript / 没 tsconfig.json 时会优雅降级（detect 返回 unavailable）。
      */
     defaultEnabled = true;
+    /**
+     * 不含 version：默认版本由 action.yml 的 `tsc_version` default 提供（见 detect）。
+     */
     installSpec = {
         kind: 'npm',
         package: 'typescript',
-        binName: 'tsc',
-        version: '^5.6.0'
+        binName: 'tsc'
     };
     resolvedVersion = '';
     resolvedBinPath = '';
@@ -18193,7 +18367,10 @@ class TscAdapter {
             timeoutMs: 10_000
         });
         if (versionResult.spawnError || versionResult.exitCode !== 0) {
-            const stderrSnippet = versionResult.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 120) ?? '';
+            const stderrSnippet = versionResult.stderr
+                .split('\n')
+                .find(l => l.trim().length > 0)
+                ?.substring(0, 120) ?? '';
             return {
                 available: false,
                 reason: `bundled tsc --version failed: exit=${versionResult.exitCode}; stderr="${stderrSnippet}"`
@@ -19240,6 +19417,8 @@ function ensureFixSuggestionHeaders(commentBody) {
 var review_state = __nccwpck_require__(3337);
 // EXTERNAL MODULE: ./lib/tokenizer.js
 var tokenizer = __nccwpck_require__(7525);
+// EXTERNAL MODULE: ./lib/github/review-thread.js
+var review_thread = __nccwpck_require__(2688);
 ;// CONCATENATED MODULE: ./lib/review.js
 /**
  * review.ts - 核心代码审查模块
@@ -19258,6 +19437,7 @@ var tokenizer = __nccwpck_require__(7525);
 
 
 // eslint-disable-next-line camelcase
+
 
 
 
@@ -19391,8 +19571,13 @@ const codeReview = async (lightBot, heavyBot, options, prompts, runOptions = {})
         (0,core.warning)('Skipped: files data is missing');
         return;
     }
-    // 取两个 diff 的交集：既是整体变更的一部分，又包含新增内容的文件
-    const files = targetBranchFiles.filter(targetBranchFile => incrementalFiles.some(incrementalFile => incrementalFile.filename === targetBranchFile.filename));
+    // 增量审查：使用 incrementalFiles 的 patch（仅包含新增变更的 hunk）
+    // 全量审查（首次或 full mode）：incremental 与 targetBranch 相同，直接使用
+    // 关键：必须用 incrementalFiles 的 patch 送入 AI，否则 AI 会看到已审查过的旧变更
+    const isFirstOrFullReview = highestReviewedCommitId === review_context.payload.pull_request.base.sha;
+    const files = isFirstOrFullReview
+        ? targetBranchFiles.filter(targetBranchFile => incrementalFiles.some(incrementalFile => incrementalFile.filename === targetBranchFile.filename))
+        : incrementalFiles.filter(incrementalFile => targetBranchFiles.some(targetBranchFile => targetBranchFile.filename === incrementalFile.filename));
     if (files.length === 0) {
         (0,core.warning)('Skipped: files is null');
         return;
@@ -19760,6 +19945,50 @@ ${summariesFailed.length > 0
         // 待并行审查全部完成后统一去重 / 排序 / 截断，再发布行级评论 + PR 顶部汇总。
         // 注意: doReview 并行执行，但 JS 单线程下 Array.push 是安全的。
         const findings = [];
+        // PR 级别的线程状态 map（path:line → isResolved）
+        // 一次性拉取，复用于所有文件的评论链注入，让 AI 感知 [OPEN]/[RESOLVED] 状态
+        let threadStatusMap = new Map();
+        if (review_context.payload.pull_request != null) {
+            try {
+                threadStatusMap = await (0,review_thread/* fetchThreadStatusMap */.Rn)({
+                    owner: review_repo.owner,
+                    repo: review_repo.repo,
+                    prNumber: review_context.payload.pull_request.number
+                });
+                (0,core.info)(`thread-status: fetched ${threadStatusMap.size} thread locations`);
+            }
+            catch (e) {
+                (0,core.warning)(`thread-status: failed to fetch, comment chains will not have [OPEN]/[RESOLVED] labels: ${String(e)}`);
+            }
+        }
+        // full review 去重：构建已有未 resolved 的 bot review comment 位置索引
+        // 用于跳过已有评论覆盖的 patch，避免重复调用大模型
+        const existingBotCommentRanges = new Map();
+        if (reviewMode === 'full' && review_context.payload.pull_request != null) {
+            try {
+                const allReviewComments = await commenter.listReviewComments(review_context.payload.pull_request.number);
+                for (const c of allReviewComments) {
+                    if (!c.body?.includes(lib_commenter/* COMMENT_TAG */.Rs))
+                        continue;
+                    const key = `${c.path}:${c.line}`;
+                    const isResolved = threadStatusMap.get(key);
+                    if (isResolved === true)
+                        continue;
+                    const range = {
+                        startLine: c.start_line ?? c.line,
+                        endLine: c.line
+                    };
+                    const ranges = existingBotCommentRanges.get(c.path) ?? [];
+                    ranges.push(range);
+                    existingBotCommentRanges.set(c.path, ranges);
+                }
+                const totalComments = [...existingBotCommentRanges.values()].reduce((s, a) => s + a.length, 0);
+                (0,core.info)(`full-review-dedup: indexed ${totalComments} existing bot comment(s) across ${existingBotCommentRanges.size} file(s)`);
+            }
+            catch (e) {
+                (0,core.warning)(`full-review-dedup: failed to build index, will not skip any patches: ${String(e)}`);
+            }
+        }
         /**
          * 对单个文件执行代码审查
          *
@@ -19815,10 +20044,21 @@ ${summariesFailed.length > 0
             }
             // 逐个 patch 打包到提示词中
             let patchesPacked = 0;
+            let patchesSkippedByDedup = 0;
             for (const [startLine, endLine, patch] of patches) {
                 if (review_context.payload.pull_request == null) {
                     (0,core.warning)('No pull request found, skipping.');
                     continue;
+                }
+                // full review 去重：跳过已有未 resolved bot 评论覆盖的 patch
+                if (existingBotCommentRanges.has(filename)) {
+                    const ranges = existingBotCommentRanges.get(filename);
+                    const isCovered = ranges.some(r => r.startLine <= startLine && r.endLine >= endLine);
+                    if (isCovered) {
+                        (0,core.info)(`[full-review-dedup] skipping patch ${filename}:${startLine}-${endLine} — already covered by existing bot comment`);
+                        patchesSkippedByDedup += 1;
+                        continue;
+                    }
                 }
                 // 检查是否已达到可打包的 patch 上限
                 if (patchesPacked >= patchesToPack) {
@@ -19832,7 +20072,7 @@ ${summariesFailed.length > 0
                 // 获取该 patch 行号范围内已有的评论对话链（提供额外上下文）
                 let commentChain = '';
                 try {
-                    const allChains = await commenter.getCommentChainsWithinRange(review_context.payload.pull_request.number, filename, startLine, endLine, lib_commenter/* COMMENT_REPLY_TAG */.aD);
+                    const allChains = await commenter.getCommentChainsWithinRange(review_context.payload.pull_request.number, filename, startLine, endLine, lib_commenter/* COMMENT_REPLY_TAG */.aD, threadStatusMap);
                     if (allChains.length > 0) {
                         (0,core.info)(`Found comment chains: ${allChains} for ${filename}`);
                         commentChain = allChains;
@@ -19927,9 +20167,7 @@ ${commentChain}
                             // 块自动加标头。
                             commentWithChain = ensureFixSuggestionHeaders(commentWithChain);
                             (0,core.info)(`[analysis_chain] ${filename}: comment line ${review.startLine}-${review.endLine}, hasChain=${shouldAttachAnalysisChain}, finalLen=${commentWithChain.length}`);
-                            // 将审查评论加入缓冲区
-                            await commenter.bufferReviewComment(filename, review.startLine, review.endLine, commentWithChain);
-                            // 收集为 Finding（不立即 buffer），统一在审查完成后做噪音控制。
+                            // 收集为 Finding，统一在审查完成后做噪音控制再 buffer。
                             // 严重级别以警示框徽标的形式直接置于每条行级评论顶部（取代 PR 顶部汇总评论）。
                             const severity = classifyFindingSeverity(review.comment);
                             findings.push({
@@ -19949,6 +20187,9 @@ ${commentChain}
                     (0,core.warning)(`Failed to review: ${e}, skipping. backtrace: ${e.stack}`);
                     reviewsFailed.push(`${filename} (${e})`);
                 }
+            }
+            else if (patchesSkippedByDedup > 0 && patchesPacked === 0) {
+                reviewsSkipped.push(`${filename} (all patches already reviewed)`);
             }
             else {
                 reviewsSkipped.push(`${filename} (diff too large)`);
@@ -19995,7 +20236,7 @@ ${reviewsFailed.length > 0
             : ''}
 ${reviewsSkipped.length > 0
             ? `<details>
-<summary>Files skipped from review due to trivial changes (${reviewsSkipped.length})</summary>
+<summary>Files skipped from review (${reviewsSkipped.length})</summary>
 
 * ${reviewsSkipped.join('\n* ')}
 
@@ -20034,7 +20275,7 @@ ${reviewsSkipped.length > 0
         // 将最新的 head commit SHA 添加到已审查列表
         summarizeComment += `\n${commenter.addReviewedCommitId(existingCommitIdsBlock, review_context.payload.pull_request.head.sha)}`;
         // 批量提交所有缓冲的审查评论（严重级别已内嵌在每条评论顶部，不再单独发汇总评论）
-        await commenter.submitReview(review_context.payload.pull_request.number, commits[commits.length - 1].sha, statusMsg);
+        await commenter.submitReview(review_context.payload.pull_request.number, commits[commits.length - 1].sha, statusMsg, threadStatusMap);
     }
     // summary-only 等跳过审查阶段的场景：保留既有的已审查 commit 记录，
     // 否则 replace 摘要评论会清空增量审查标记，导致下次自动审查从 base 重审

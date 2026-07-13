@@ -21,6 +21,7 @@ import {type AnalysisStep, type Bot} from './bot'
 import {
   Commenter,
   COMMENT_REPLY_TAG,
+  COMMENT_TAG,
   RAW_SUMMARY_END_TAG,
   RAW_SUMMARY_START_TAG,
   SHORT_SUMMARY_END_TAG,
@@ -57,6 +58,7 @@ import {ensureFixSuggestionHeaders} from './fix-suggestion-header'
 import {getRepoFileTree} from './repo-tree'
 import {getReviewStateFromBody} from './review-state'
 import {getTokenCount} from './tokenizer'
+import {fetchThreadStatusMap, type ThreadStatusMap} from './github/review-thread'
 
 // eslint-disable-next-line camelcase
 const context = github_context
@@ -231,12 +233,24 @@ export const codeReview = async (
     return
   }
 
-  // 取两个 diff 的交集：既是整体变更的一部分，又包含新增内容的文件
-  const files = targetBranchFiles.filter(targetBranchFile =>
-    incrementalFiles.some(
-      incrementalFile => incrementalFile.filename === targetBranchFile.filename
-    )
-  )
+  // 增量审查：使用 incrementalFiles 的 patch（仅包含新增变更的 hunk）
+  // 全量审查（首次或 full mode）：incremental 与 targetBranch 相同，直接使用
+  // 关键：必须用 incrementalFiles 的 patch 送入 AI，否则 AI 会看到已审查过的旧变更
+  const isFirstOrFullReview =
+    highestReviewedCommitId === context.payload.pull_request.base.sha
+  const files = isFirstOrFullReview
+    ? targetBranchFiles.filter(targetBranchFile =>
+        incrementalFiles.some(
+          incrementalFile =>
+            incrementalFile.filename === targetBranchFile.filename
+        )
+      )
+    : incrementalFiles.filter(incrementalFile =>
+        targetBranchFiles.some(
+          targetBranchFile =>
+            targetBranchFile.filename === incrementalFile.filename
+        )
+      )
 
   if (files.length === 0) {
     warning('Skipped: files is null')
@@ -722,6 +736,50 @@ ${
     // 注意: doReview 并行执行，但 JS 单线程下 Array.push 是安全的。
     const findings: Finding[] = []
 
+    // PR 级别的线程状态 map（path:line → isResolved）
+    // 一次性拉取，复用于所有文件的评论链注入，让 AI 感知 [OPEN]/[RESOLVED] 状态
+    let threadStatusMap: ThreadStatusMap = new Map()
+    if (context.payload.pull_request != null) {
+      try {
+        threadStatusMap = await fetchThreadStatusMap({
+          owner: repo.owner,
+          repo: repo.repo,
+          prNumber: context.payload.pull_request.number
+        })
+        info(`thread-status: fetched ${threadStatusMap.size} thread locations`)
+      } catch (e) {
+        warning(`thread-status: failed to fetch, comment chains will not have [OPEN]/[RESOLVED] labels: ${String(e)}`)
+      }
+    }
+
+    // full review 去重：构建已有未 resolved 的 bot review comment 位置索引
+    // 用于跳过已有评论覆盖的 patch，避免重复调用大模型
+    const existingBotCommentRanges: Map<string, Array<{startLine: number, endLine: number}>> = new Map()
+    if (reviewMode === 'full' && context.payload.pull_request != null) {
+      try {
+        const allReviewComments = await commenter.listReviewComments(
+          context.payload.pull_request.number
+        )
+        for (const c of allReviewComments) {
+          if (!c.body?.includes(COMMENT_TAG)) continue
+          const key = `${c.path}:${c.line}`
+          const isResolved = threadStatusMap.get(key)
+          if (isResolved === true) continue
+          const range = {
+            startLine: c.start_line ?? c.line,
+            endLine: c.line
+          }
+          const ranges = existingBotCommentRanges.get(c.path) ?? []
+          ranges.push(range)
+          existingBotCommentRanges.set(c.path, ranges)
+        }
+        const totalComments = [...existingBotCommentRanges.values()].reduce((s, a) => s + a.length, 0)
+        info(`full-review-dedup: indexed ${totalComments} existing bot comment(s) across ${existingBotCommentRanges.size} file(s)`)
+      } catch (e) {
+        warning(`full-review-dedup: failed to build index, will not skip any patches: ${String(e)}`)
+      }
+    }
+
     /**
      * 对单个文件执行代码审查
      *
@@ -795,10 +853,23 @@ ${
 
       // 逐个 patch 打包到提示词中
       let patchesPacked = 0
+      let patchesSkippedByDedup = 0
       for (const [startLine, endLine, patch] of patches) {
         if (context.payload.pull_request == null) {
           warning('No pull request found, skipping.')
           continue
+        }
+        // full review 去重：跳过已有未 resolved bot 评论覆盖的 patch
+        if (existingBotCommentRanges.has(filename)) {
+          const ranges = existingBotCommentRanges.get(filename)!
+          const isCovered = ranges.some(r =>
+            r.startLine <= startLine && r.endLine >= endLine
+          )
+          if (isCovered) {
+            info(`[full-review-dedup] skipping patch ${filename}:${startLine}-${endLine} — already covered by existing bot comment`)
+            patchesSkippedByDedup += 1
+            continue
+          }
         }
         // 检查是否已达到可打包的 patch 上限
         if (patchesPacked >= patchesToPack) {
@@ -820,7 +891,8 @@ ${
             filename,
             startLine,
             endLine,
-            COMMENT_REPLY_TAG
+            COMMENT_REPLY_TAG,
+            threadStatusMap
           )
 
           if (allChains.length > 0) {
@@ -956,14 +1028,7 @@ ${commentChain}
               info(
                 `[analysis_chain] ${filename}: comment line ${review.startLine}-${review.endLine}, hasChain=${shouldAttachAnalysisChain}, finalLen=${commentWithChain.length}`
               )
-              // 将审查评论加入缓冲区
-              await commenter.bufferReviewComment(
-                filename,
-                review.startLine,
-                review.endLine,
-                commentWithChain
-              )
-              // 收集为 Finding（不立即 buffer），统一在审查完成后做噪音控制。
+              // 收集为 Finding，统一在审查完成后做噪音控制再 buffer。
               // 严重级别以警示框徽标的形式直接置于每条行级评论顶部（取代 PR 顶部汇总评论）。
               const severity = classifyFindingSeverity(review.comment)
               findings.push({
@@ -985,6 +1050,8 @@ ${commentChain}
           )
           reviewsFailed.push(`${filename} (${e as string})`)
         }
+      } else if (patchesSkippedByDedup > 0 && patchesPacked === 0) {
+        reviewsSkipped.push(`${filename} (all patches already reviewed)`)
       } else {
         reviewsSkipped.push(`${filename} (diff too large)`)
       }
@@ -1047,9 +1114,7 @@ ${
 ${
   reviewsSkipped.length > 0
     ? `<details>
-<summary>Files skipped from review due to trivial changes (${
-        reviewsSkipped.length
-      })</summary>
+<summary>Files skipped from review (${reviewsSkipped.length})</summary>
 
 * ${reviewsSkipped.join('\n* ')}
 
@@ -1098,7 +1163,8 @@ ${
     await commenter.submitReview(
       context.payload.pull_request.number,
       commits[commits.length - 1].sha,
-      statusMsg
+      statusMsg,
+      threadStatusMap
     )
   }
 

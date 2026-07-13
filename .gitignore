@@ -127,3 +127,10 @@ bin/act
 settings.local.json
 event.json
 **/todo
+
+# Playwright MCP
+.playwright-mcp/
+
+# Visualizer build output
+tools/review-visualizer/dist/
+tools/review-visualizer/node_modules/

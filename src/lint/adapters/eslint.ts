@@ -100,7 +100,11 @@ function classifyCategory(ruleId: string): LintResult['category'] {
   if (SECURITY_RULE_PREFIXES.some(p => r.startsWith(p))) return 'security'
   if (PERFORMANCE_RULE_KEYWORDS.some(p => r.includes(p))) return 'performance'
   // ESLint 内置 stylistic rules
-  if (r.startsWith('@stylistic/') || r.includes('indent') || r.includes('quotes')) {
+  if (
+    r.startsWith('@stylistic/') ||
+    r.includes('indent') ||
+    r.includes('quotes')
+  ) {
     return 'style'
   }
   return 'quality'
@@ -125,13 +129,13 @@ export class EslintAdapter implements ToolAdapter {
 
   /**
    * 多策略：声明 ESLint 用 npm 装到沙箱目录
-   * （待审查项目无需把 eslint 写入 devDependencies）
+   * （待审查项目无需把 eslint 写入 devDependencies）。
+   * 不含 version：默认版本由 action.yml 的 `eslint_version` default 提供（见 detect）。
    */
   readonly installSpec: InstallSpec = {
     kind: 'npm',
     package: 'eslint',
-    binName: 'eslint',
-    version: '^9.15.0'
+    binName: 'eslint'
   }
 
   /** detect() 成功后填充：ESLint 版本 */
@@ -167,7 +171,10 @@ export class EslintAdapter implements ToolAdapter {
     })
     if (versionResult.spawnError || versionResult.exitCode !== 0) {
       const stderrSnippet =
-        versionResult.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 120) ?? ''
+        versionResult.stderr
+          .split('\n')
+          .find(l => l.trim().length > 0)
+          ?.substring(0, 120) ?? ''
       return {
         available: false,
         reason: `bundled ESLint --version failed: exit=${versionResult.exitCode}; stderr="${stderrSnippet}"`
@@ -199,7 +206,12 @@ export class EslintAdapter implements ToolAdapter {
 
     // 始终使用项目自带的 eslint config（早期支持的 useProjectConfig=false 已移除，
     // 因 ESLint 9 不内置规则集，关掉项目配置会让扫描必败）
-    const args = ['--format', 'json', '--no-error-on-unmatched-pattern', ...files]
+    const args = [
+      '--format',
+      'json',
+      '--no-error-on-unmatched-pattern',
+      ...files
+    ]
 
     info(
       `lint/eslint: scanning ${files.length} files via ${this.resolvedBinPath}`
@@ -218,7 +230,12 @@ export class EslintAdapter implements ToolAdapter {
     // ESLint 在发现问题时返回 1，发现错误时返回 2，但 stdout 仍是合法 JSON
     const parsed = parseJsonSafe<EslintFileResult[]>(result.stdout, 'eslint')
     if (parsed == null) {
-      info(`lint/eslint: no parseable output (stderr: ${result.stderr.substring(0, 200)})`)
+      info(
+        `lint/eslint: no parseable output (stderr: ${result.stderr.substring(
+          0,
+          200
+        )})`
+      )
       return []
     }
 

@@ -121,7 +121,12 @@ async function installViaNpm(spec: NpmInstallSpec): Promise<InstallResult> {
   }
 
   // 3) 跑 npm install
-  info(`lint/installer: installing ${spec.package}@${spec.version} → ${root}`)
+  // version 缺省时不带 `@<range>`，npm 安装 latest。真实 Action 运行里 version 总会
+  // 由 action.yml 的 *_version default 注入；缺省仅出现在未经 Action 的直接调用。
+  const installTarget = spec.version
+    ? `${spec.package}@${spec.version}`
+    : spec.package
+  info(`lint/installer: installing ${installTarget} → ${root}`)
   const result = await runCommand({
     command: 'npm',
     args: [
@@ -131,7 +136,7 @@ async function installViaNpm(spec: NpmInstallSpec): Promise<InstallResult> {
       '--no-audit',
       '--no-fund',
       '--silent',
-      `${spec.package}@${spec.version}`
+      installTarget
     ],
     cwd: root,
     timeoutMs: INSTALL_TIMEOUT_MS
@@ -152,12 +157,12 @@ async function installViaNpm(spec: NpmInstallSpec): Promise<InstallResult> {
         ?.substring(0, 200) ?? ''
     return {
       ok: false,
-      reason: `npm install ${spec.package}@${spec.version} failed (exit=${result.exitCode}): ${stderrSnippet}`
+      reason: `npm install ${installTarget} failed (exit=${result.exitCode}): ${stderrSnippet}`
     }
   }
   if (!existsSync(binPath)) {
     warning(
-      `lint/installer: ${spec.package}@${spec.version} installed but bin not at ${binPath}`
+      `lint/installer: ${installTarget} installed but bin not at ${binPath}`
     )
     return {
       ok: false,

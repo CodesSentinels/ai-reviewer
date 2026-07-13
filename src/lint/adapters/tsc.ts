@@ -72,11 +72,13 @@ export class TscAdapter implements ToolAdapter {
    */
   readonly defaultEnabled = true
 
+  /**
+   * 不含 version：默认版本由 action.yml 的 `tsc_version` default 提供（见 detect）。
+   */
   readonly installSpec: InstallSpec = {
     kind: 'npm',
     package: 'typescript',
-    binName: 'tsc',
-    version: '^5.6.0'
+    binName: 'tsc'
   }
 
   private resolvedVersion = ''
@@ -95,7 +97,9 @@ export class TscAdapter implements ToolAdapter {
     if (!install.ok) {
       return {
         available: false,
-        reason: `bundled TypeScript install failed: ${install.reason ?? 'unknown'}`
+        reason: `bundled TypeScript install failed: ${
+          install.reason ?? 'unknown'
+        }`
       }
     }
     this.resolvedBinPath = install.binPath as string
@@ -109,7 +113,10 @@ export class TscAdapter implements ToolAdapter {
     })
     if (versionResult.spawnError || versionResult.exitCode !== 0) {
       const stderrSnippet =
-        versionResult.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 120) ?? ''
+        versionResult.stderr
+          .split('\n')
+          .find(l => l.trim().length > 0)
+          ?.substring(0, 120) ?? ''
       return {
         available: false,
         reason: `bundled tsc --version failed: exit=${versionResult.exitCode}; stderr="${stderrSnippet}"`
@@ -127,7 +134,9 @@ export class TscAdapter implements ToolAdapter {
           'no tsconfig.json found in repo (looked for tsconfig.json, tsconfig.base.json, tsconfig.app.json)'
       }
     }
-    info(`lint/tsc: bundled bin=${this.resolvedBinPath}, project tsconfig=${tsconfig}`)
+    info(
+      `lint/tsc: bundled bin=${this.resolvedBinPath}, project tsconfig=${tsconfig}`
+    )
 
     this.resolvedVersion = version
     return {available: true, version}
@@ -178,7 +187,9 @@ export class TscAdapter implements ToolAdapter {
         category: 'quality'
       })
     }
-    info(`lint/tsc: ${findings.length} type-check finding(s) before changed-line filter`)
+    info(
+      `lint/tsc: ${findings.length} type-check finding(s) before changed-line filter`
+    )
     return findings
   }
 }
