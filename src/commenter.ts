@@ -315,7 +315,12 @@ ${COMMENT_TAG}`
    * @param commitId - 提交的 commit SHA
    * @param statusMsg - 审查状态消息（包含处理统计信息）
    */
-  async submitReview(pullNumber: number, commitId: string, statusMsg: string) {
+  async submitReview(
+    pullNumber: number,
+    commitId: string,
+    statusMsg: string,
+    threadStatusMap?: Map<string, boolean>
+  ) {
     const body = `${COMMENT_GREETING}
 
 ${statusMsg}
@@ -329,18 +334,32 @@ ${statusMsg}
       return
     }
 
-    // 删除同一位置的旧 bot 评论，避免重复评论
+    // 去重：跳过同位置已有未 resolved bot 评论的新评论，避免重复
+    const commentsToSubmit: typeof this.reviewCommentsBuffer = []
     for (const comment of this.reviewCommentsBuffer) {
-      const comments = await this.getCommentsAtRange(
+      const existingComments = await this.getCommentsAtRange(
         pullNumber,
         comment.path,
         comment.startLine,
         comment.endLine
       )
-      for (const c of comments) {
-        if (c.body.includes(COMMENT_TAG)) {
+      const existingBotComments = existingComments.filter(c =>
+        c.body.includes(COMMENT_TAG)
+      )
+      if (existingBotComments.length > 0) {
+        // 检查该位置是否已 resolved
+        const key = `${comment.path}:${comment.endLine}`
+        const isResolved = threadStatusMap?.get(key)
+        if (isResolved !== true) {
           info(
-            `Deleting review comment for ${comment.path}:${comment.startLine}-${comment.endLine}: ${comment.message}`
+            `[submit-dedup] skipping comment for ${comment.path}:${comment.startLine}-${comment.endLine} — existing unresolved bot comment found`
+          )
+          continue
+        }
+        // 已 resolved 的旧评论：删除后重新发布
+        for (const c of existingBotComments) {
+          info(
+            `Deleting resolved review comment for ${comment.path}:${comment.startLine}-${comment.endLine}`
           )
           try {
             await octokit.pulls.deleteReviewComment({
@@ -354,6 +373,14 @@ ${statusMsg}
           }
         }
       }
+      commentsToSubmit.push(comment)
+    }
+
+    if (commentsToSubmit.length === 0) {
+      info(
+        `[submit-dedup] all ${this.reviewCommentsBuffer.length} comment(s) skipped — already covered by existing bot comments`
+      )
+      return
     }
 
     // 清理已有的 PENDING 审查
@@ -387,13 +414,13 @@ ${statusMsg}
         pull_number: pullNumber,
         // eslint-disable-next-line camelcase
         commit_id: commitId,
-        comments: this.reviewCommentsBuffer.map(comment =>
+        comments: commentsToSubmit.map(comment =>
           generateCommentData(comment)
         )
       })
 
       info(
-        `Submitting review for PR #${pullNumber}, total comments: ${this.reviewCommentsBuffer.length}, review id: ${review.data.id}`
+        `Submitting review for PR #${pullNumber}, total comments: ${commentsToSubmit.length}, review id: ${review.data.id}`
       )
 
       // 正式提交审查（从 PENDING 变为 COMMENT）
@@ -414,7 +441,7 @@ ${statusMsg}
       )
       await this.deletePendingReview(pullNumber)
       let commentCounter = 0
-      for (const comment of this.reviewCommentsBuffer) {
+      for (const comment of commentsToSubmit) {
         info(
           `Creating new review comment for ${comment.path}:${comment.startLine}-${comment.endLine}: ${comment.message}`
         )
@@ -436,7 +463,7 @@ ${statusMsg}
 
         commentCounter++
         info(
-          `Comment ${commentCounter}/${this.reviewCommentsBuffer.length} posted`
+          `Comment ${commentCounter}/${commentsToSubmit.length} posted`
         )
       }
     }

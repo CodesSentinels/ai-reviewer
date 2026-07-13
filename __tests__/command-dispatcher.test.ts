@@ -264,9 +264,15 @@ describe('dispatcher — 命令执行', () => {
     }
   })
 
-  test('PR 作者豁免可以跑 review（即使是 read 权限）', async () => {
+  test('PR 作者豁免可以跑 review（即使是 read 权限，但需 paused 状态）', async () => {
     octokitState.getCollaboratorPermissionLevel.mockResolvedValue({
       data: {permission: 'read'}
+    })
+    // PR body 中包含 paused 状态标记
+    octokitState.getPull.mockResolvedValue({
+      data: {
+        body: '<!-- codesentinel-review-state:start -->\nstate: paused\n<!-- codesentinel-review-state:end -->'
+      }
     })
     const triggerReview: any = jest.fn().mockResolvedValue(undefined as never)
     // 让 alice 成为 PR 作者
@@ -282,6 +288,20 @@ describe('dispatcher — 命令执行', () => {
       expect(r.ok).toBe(true)
     }
     expect(triggerReview).toHaveBeenCalledWith('incremental')
+  })
+
+  test('review 命令在非 paused 状态下返回提示信息', async () => {
+    const triggerReview: any = jest.fn().mockResolvedValue(undefined as never)
+    setEvent(
+      'issue_comment',
+      buildIssueCommentPayload('@ai-reviewer review')
+    )
+    const r = await dispatchCommentEvent({options: stubOptions, triggerReview})
+    expect(r.kind).toBe('executed')
+    if (r.kind === 'executed') {
+      expect(r.ok).toBe(true)
+    }
+    expect(triggerReview).not.toHaveBeenCalled()
   })
 
   test('full review 命令触发全量审查', async () => {
