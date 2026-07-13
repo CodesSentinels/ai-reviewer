@@ -10,6 +10,7 @@
  */
 import type {CommandHandler, CommandContext, CommandResult} from '../types'
 import {getReviewState, setReviewState} from '../../review-state'
+import {clearReviewedCommitIds, isHeadAlreadyReviewed} from '../../review-commit-ids'
 import {PRIMARY_BOT_MENTION} from '../../constants'
 
 function notImplemented(name: string): CommandHandler['execute'] {
@@ -30,6 +31,17 @@ export const reviewStub: CommandHandler = {
   minPermission: 'write',
   async execute(ctx: CommandContext): Promise<CommandResult> {
     if (ctx.triggerReview == null) return await notImplemented('review')(ctx)
+    const state = await getReviewState(ctx.prNumber)
+    if (state !== 'paused') {
+      return {
+        message: `<details>
+✅ Review finished.
+
+> **Note:** CodeSentinel is an incremental review system and does not re-review already reviewed commits. This command is applicable only when automatic reviews are paused.
+
+</details>`
+      }
+    }
     await ctx.triggerReview('incremental')
     return {message: '增量审查已完成'}
   }
@@ -44,8 +56,17 @@ export const fullReviewStub: CommandHandler = {
   async execute(ctx: CommandContext): Promise<CommandResult> {
     if (ctx.triggerReview == null)
       return await notImplemented('full review')(ctx)
+    const alreadyReviewed = await isHeadAlreadyReviewed(
+      ctx.prNumber,
+      ctx.headSha
+    )
+    if (alreadyReviewed) {
+      return {
+        message: `✅ Full review finished.\n\n> **Note:** The current HEAD (\`${ctx.headSha.slice(0, 7)}\`) has already been reviewed. No new changes detected since the last review.`
+      }
+    }
     await ctx.triggerReview('full')
-    return {message: '全量审查已完成'}
+    return {message: '✅ Full review finished.'}
   }
 }
 
@@ -70,6 +91,7 @@ export const pauseStub: CommandHandler = {
   minPermission: 'write',
   async execute(ctx: CommandContext): Promise<CommandResult> {
     await setReviewState(ctx.prNumber, 'paused')
+    await clearReviewedCommitIds(ctx.prNumber)
     return {
       message: `已暂停当前 PR 的自动审查。使用 \`${PRIMARY_BOT_MENTION} resume\` 恢复。`
     }

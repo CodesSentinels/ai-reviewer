@@ -56,6 +56,39 @@ export function buildHelpMessage(commands: CommandHandler[]): string {
   return lines.join('\n')
 }
 
+/**
+ * 构造"未知命令"回复消息，列出所有支持的命令。
+ * 参考 coderabbitai 格式: @user, I didn't recognize `xxx` as a valid command.
+ */
+export function buildUnknownCommandMessage(
+  invalidCmd: string,
+  actorLogin: string,
+  commands: CommandHandler[]
+): string {
+  const lines: string[] = []
+  lines.push(
+    `@${actorLogin} , I didn't recognize \`${invalidCmd}\` as a valid command. Here are the commands I support:`
+  )
+  lines.push('')
+
+  const ordered = [...commands].sort((a, b) => {
+    if (a.name === 'help') return 1
+    if (b.name === 'help') return -1
+    return 0
+  })
+
+  for (const c of ordered) {
+    const usage = c.usage ?? `${PRIMARY_BOT_MENTION} ${c.name}`
+    lines.push(`- \`${usage}\` — ${c.description}`)
+  }
+
+  lines.push('')
+  lines.push(
+    `Let me know which one you'd like to run, or feel free to ask me a question directly!`
+  )
+  return lines.join('\n')
+}
+
 export const helpHandler: CommandHandler = {
   name: 'help',
   description: '显示所有支持的命令及用法',
