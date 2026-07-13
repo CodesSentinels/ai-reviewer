@@ -377,6 +377,30 @@ describe('dispatcher — 命令执行', () => {
     expect(triggerReview).toHaveBeenCalledWith('full')
   })
 
+  test('full review 命令：HEAD 已审查 → 不再重复触发', async () => {
+    const triggerReview: any = jest.fn().mockResolvedValue(undefined as never)
+    // dispatcher 会查 PR 拿到 headSha
+    octokitState.getPull.mockResolvedValue({
+      data: {body: 'PR body', head: {sha: 'head-sha'}, base: {sha: 'base-sha'}}
+    })
+    // 摘要评论已把 head-sha 记入已审查 commit 区块
+    octokitState.listComments.mockResolvedValue({
+      data: [
+        {
+          id: 555,
+          body: `<!-- This is an auto-generated comment: summarize by AI Reviewer -->\n<!-- commit_ids_reviewed_start -->\n<!-- head-sha -->\n<!-- commit_ids_reviewed_end -->`
+        }
+      ]
+    })
+    setEvent(
+      'issue_comment',
+      buildIssueCommentPayload('@ai-reviewer full review')
+    )
+    const r = await dispatchCommentEvent({options: stubOptions, triggerReview})
+    expect(r).toEqual({kind: 'executed', command: 'full review', ok: true})
+    expect(triggerReview).not.toHaveBeenCalled()
+  })
+
   test('summary 命令触发摘要重生成', async () => {
     const triggerReview: any = jest.fn().mockResolvedValue(undefined as never)
     setEvent('issue_comment', buildIssueCommentPayload('@ai-reviewer summary'))
