@@ -9067,14 +9067,14 @@ __nccwpck_require__.d(__webpack_exports__, {
 var core = __nccwpck_require__(1078);
 // EXTERNAL MODULE: ./node_modules/.pnpm/@actions+github@5.1.1/node_modules/@actions/github/lib/github.js
 var github = __nccwpck_require__(3695);
-// EXTERNAL MODULE: ./lib/commands/bootstrap.js + 4 modules
-var bootstrap = __nccwpck_require__(6830);
+// EXTERNAL MODULE: ./lib/commands/bootstrap.js + 3 modules
+var bootstrap = __nccwpck_require__(6053);
+// EXTERNAL MODULE: ./lib/octokit.js
+var octokit = __nccwpck_require__(2247);
 // EXTERNAL MODULE: ./lib/commands/registry.js
 var commands_registry = __nccwpck_require__(953);
 // EXTERNAL MODULE: ./lib/commands/parser.js
 var parser = __nccwpck_require__(5964);
-// EXTERNAL MODULE: ./lib/octokit.js
-var octokit = __nccwpck_require__(2247);
 ;// CONCATENATED MODULE: ./lib/commands/types.js
 /** 权限等级的比较用数值 */
 const PERMISSION_RANK = {
@@ -9252,6 +9252,16 @@ class Reply {
     async ack(message) {
         const body = this.wrap(`⏳ ${message}`);
         try {
+            if (this.ctx.eventName === 'pull_request_review_comment') {
+                const res = await octokit/* octokit.pulls.createReplyForReviewComment */.K.pulls.createReplyForReviewComment({
+                    owner: this.ctx.owner,
+                    repo: this.ctx.repo,
+                    pull_number: this.ctx.issueNumber,
+                    comment_id: this.ctx.originalCommentId,
+                    body
+                });
+                return res.data.id;
+            }
             const res = await octokit/* octokit.issues.createComment */.K.issues.createComment({
                 owner: this.ctx.owner,
                 repo: this.ctx.repo,
@@ -9304,6 +9314,22 @@ class Reply {
                 (0,core.warning)(`reply.publish update failed, falling back to create: ${String(e)}`);
             }
         }
+        // 行级评论场景：回复到同一 review thread
+        if (this.ctx.eventName === 'pull_request_review_comment') {
+            try {
+                await octokit/* octokit.pulls.createReplyForReviewComment */.K.pulls.createReplyForReviewComment({
+                    owner: this.ctx.owner,
+                    repo: this.ctx.repo,
+                    pull_number: this.ctx.issueNumber,
+                    comment_id: this.ctx.originalCommentId,
+                    body
+                });
+                return;
+            }
+            catch (e) {
+                (0,core.warning)(`reply.publish review thread reply failed, falling back to issue comment: ${String(e)}`);
+            }
+        }
         try {
             await octokit/* octokit.issues.createComment */.K.issues.createComment({
                 owner: this.ctx.owner,
@@ -9348,6 +9374,10 @@ async function hasBeenProcessed(owner, repo, issueNumber, originalCommentId, com
     }
 }
 
+// EXTERNAL MODULE: ./lib/commands/reaction.js
+var reaction = __nccwpck_require__(3126);
+// EXTERNAL MODULE: ./lib/commands/handlers/help.js
+var help = __nccwpck_require__(660);
 ;// CONCATENATED MODULE: ./lib/commands/dispatcher.js
 /**
  * commands/dispatcher.ts - 命令调度主流程
@@ -9375,6 +9405,9 @@ async function hasBeenProcessed(owner, repo, issueNumber, originalCommentId, com
  */
 
 // eslint-disable-next-line camelcase
+
+
+
 
 
 
@@ -9420,8 +9453,21 @@ async function dispatchCommentEvent(deps) {
         }
         prNumber = payload.issue.number;
         comment = payload.comment;
-        // issue_comment 的 payload 没有 head/base SHA，需由 handler 自行查
         prAuthor = payload.issue.user?.login ?? '';
+        // issue_comment 的 payload 没有 head/base SHA，主动查一次 PR 补齐，
+        // 否则 full review 等命令的 headSha 为空、去重逻辑（isHeadAlreadyReviewed）永远失效
+        try {
+            const pr = await octokit/* octokit.pulls.get */.K.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber
+            });
+            headSha = pr.data.head?.sha ?? '';
+            baseSha = pr.data.base?.sha ?? '';
+        }
+        catch (e) {
+            (0,core.warning)(`command dispatcher: failed to fetch head/base sha for PR #${prNumber}: ${String(e)}`);
+        }
     }
     else {
         // [pull_request_review_comment 分支] 代码 diff 上的行级评论。
@@ -9478,11 +9524,28 @@ async function dispatchCommentEvent(deps) {
         repo: repoName,
         issueNumber: prNumber,
         originalCommentId: comment.id,
-        commandName: cmdNameForReply
+        commandName: cmdNameForReply,
+        eventName
     });
-    // [解析错误] 命令名识别成功但参数非法等（如 INVALID_ARGS），直接回帖报错并结束。
+    // [解析错误] 处理命令解析阶段的错误。
     if (outcome.error) {
-        await reply.error(outcome.error.code, outcome.error.detail);
+        if (outcome.error.code === 'UNKNOWN_COMMAND') {
+            // 未识别的命令：先打 ACK reaction，再回复支持的命令列表
+            await (0,reaction/* addAckReaction */.G)({
+                owner,
+                repo: repoName,
+                commentId: comment.id,
+                eventName,
+                rawReaction: deps.options.commandAckReaction
+            });
+            const cmds = registry.listCommands();
+            const invalidCmd = outcome.error.detail ?? 'unknown';
+            const msg = (0,help/* buildUnknownCommandMessage */.s8)(invalidCmd, actorLogin, cmds);
+            await reply.success(msg);
+        }
+        else {
+            await reply.error(outcome.error.code, outcome.error.detail);
+        }
         return {
             kind: 'executed',
             command: cmdNameForReply,
@@ -9977,7 +10040,7 @@ async function handleCommentEvent(deps) {
 
 /***/ }),
 
-/***/ 6830:
+/***/ 6053:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
 "use strict";
@@ -9989,74 +10052,12 @@ __nccwpck_require__.d(__webpack_exports__, {
 
 // UNUSED EXPORTS: _resetBootstrap
 
-// EXTERNAL MODULE: ./node_modules/.pnpm/@actions+core@1.11.1/node_modules/@actions/core/lib/core.js
-var core = __nccwpck_require__(1078);
-// EXTERNAL MODULE: ./lib/commands/registry.js
-var registry = __nccwpck_require__(953);
-// EXTERNAL MODULE: ./lib/constants.js
-var constants = __nccwpck_require__(2098);
-;// CONCATENATED MODULE: ./lib/commands/handlers/help.js
-/**
- * commands/handlers/help.ts - help 命令的参考实现（成员 A 交付）
- *
- * 功能:
- * - 自动聚合 registry 中已注册的所有命令
- * - 按注册顺序输出命令名、描述、用法
- * - 提供 buildHelpMessage() 纯函数，便于单测
- */
-
-
-
-/**
- * 纯函数：根据命令列表生成 help Markdown。
- * 提取出来便于单元测试（不依赖 registry 单例）。
- */
-function buildHelpMessage(commands) {
-    const lines = [];
-    lines.push('## 支持的命令');
-    lines.push('');
-    lines.push('| 命令 | 描述 | 最低权限 |');
-    lines.push('| :--- | :--- | :------- |');
-    // help 自身也要出现在列表里，但排在最后
-    const ordered = [...commands].sort((a, b) => {
-        if (a.name === 'help')
-            return 1;
-        if (b.name === 'help')
-            return -1;
-        return 0;
-    });
-    for (const c of ordered) {
-        const perm = c.minPermission ?? 'write';
-        const usage = c.usage ?? `${constants/* PRIMARY_BOT_MENTION */.a} ${c.name}`;
-        lines.push(`| \`${usage}\` | ${c.description} | \`${perm}\` |`);
-    }
-    if (ordered.some(c => (c.aliases?.length ?? 0) > 0)) {
-        lines.push('');
-        lines.push('### 别名');
-        for (const c of ordered) {
-            if (c.aliases && c.aliases.length > 0) {
-                lines.push(`- \`${c.name}\` → ${c.aliases.map(a => `\`${a}\``).join(', ')}`);
-            }
-        }
-    }
-    lines.push('');
-    lines.push(`> ${(0,core.getInput)('bot_icon') || '🤖'} Bot 同时支持 ${constants/* BOT_MENTIONS.map */.T.map(m => `\`${m}\``).join(' 与 ')} 共 ${constants/* BOT_MENTIONS.length */.T.length} 个 mention。`);
-    return lines.join('\n');
-}
-const helpHandler = {
-    name: 'help',
-    description: '显示所有支持的命令及用法',
-    usage: `${constants/* PRIMARY_BOT_MENTION */.a} help`,
-    needsAck: false,
-    minPermission: 'read',
-    async execute(_ctx) {
-        const cmds = (0,registry/* getRegistry */.J)().listCommands();
-        return { message: buildHelpMessage(cmds) };
-    }
-};
-
+// EXTERNAL MODULE: ./lib/commands/handlers/help.js
+var help = __nccwpck_require__(660);
 // EXTERNAL MODULE: ./lib/github/review-thread.js
 var review_thread = __nccwpck_require__(2688);
+// EXTERNAL MODULE: ./lib/constants.js
+var constants = __nccwpck_require__(2098);
 ;// CONCATENATED MODULE: ./lib/commands/handlers/resolve.js
 
 
@@ -10298,6 +10299,8 @@ const ALL_STUBS = [
     configurationStub
 ];
 
+// EXTERNAL MODULE: ./lib/commands/registry.js
+var registry = __nccwpck_require__(953);
 ;// CONCATENATED MODULE: ./lib/commands/bootstrap.js
 /**
  * commands/bootstrap.ts - 命令框架启动注册
@@ -10317,7 +10320,7 @@ function bootstrapCommands() {
     if (bootstrapped)
         return;
     const reg = (0,registry/* getRegistry */.J)();
-    reg.register(helpHandler);
+    reg.register(help/* helpHandler */.uP);
     reg.register(resolveHandler);
     for (const h of ALL_STUBS) {
         reg.register(h);
@@ -10333,104 +10336,21 @@ function _resetBootstrap() {
 
 /***/ }),
 
-/***/ 6360:
+/***/ 7753:
 /***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
 
 "use strict";
-
-// EXPORTS
-__nccwpck_require__.d(__webpack_exports__, {
-  "G": () => (/* binding */ tryEarlyReaction)
-});
-
-// EXTERNAL MODULE: ./node_modules/.pnpm/@actions+core@1.11.1/node_modules/@actions/core/lib/core.js
-var core = __nccwpck_require__(1078);
-// EXTERNAL MODULE: ./node_modules/.pnpm/@actions+github@5.1.1/node_modules/@actions/github/lib/github.js
-var github = __nccwpck_require__(3695);
-// EXTERNAL MODULE: ./lib/commands/bootstrap.js + 4 modules
-var bootstrap = __nccwpck_require__(6830);
-// EXTERNAL MODULE: ./lib/commands/registry.js
-var commands_registry = __nccwpck_require__(953);
-// EXTERNAL MODULE: ./lib/commands/parser.js
-var parser = __nccwpck_require__(5964);
-// EXTERNAL MODULE: ./lib/octokit.js
-var octokit = __nccwpck_require__(2247);
-;// CONCATENATED MODULE: ./lib/commands/reaction.js
-/**
- * commands/reaction.ts - 命令 ACK 表情反应
- *
- * 当 dispatcher 识别到 `@bot <cmd>` 时，会在用户原评论上打一个表情反应
- * （默认 👀），以在正文回复之前先给一个可见的 "收到" 信号。
- *
- * 设计要点：
- * - content 值来自 action input `command_ack_reaction`，通过 options 透传
- * - 空字符串 / 'off' / 'none' 视为禁用
- * - 非法值会被丢弃并给 warning，不阻塞命令执行
- * - issue_comment 与 pull_request_review_comment 走不同 endpoint
- * - 任何失败都只打 warning，不让命令主流程受影响
- */
-
-
-const VALID_REACTIONS = [
-    '+1',
-    '-1',
-    'laugh',
-    'confused',
-    'heart',
-    'hooray',
-    'rocket',
-    'eyes'
-];
-/**
- * 把 raw 配置归一化为合法的 ReactionContent；不合法或禁用时返回 null。
- */
-function normalizeReaction(raw) {
-    if (raw == null)
-        return null;
-    const trimmed = raw.trim().toLowerCase();
-    if (trimmed === '' || trimmed === 'off' || trimmed === 'none' || trimmed === 'false') {
-        return null;
-    }
-    if (VALID_REACTIONS.includes(trimmed)) {
-        return trimmed;
-    }
-    (0,core.warning)(`command_ack_reaction "${raw}" is not a valid GitHub reaction ` +
-        `(expected one of ${VALID_REACTIONS.join(', ')}); ACK reaction will be skipped.`);
-    return null;
-}
-/**
- * 在触发命令的用户评论上加表情反应。失败只 warning，不抛错。
- */
-async function addAckReaction(params) {
-    const content = normalizeReaction(params.rawReaction);
-    if (content == null) {
-        return;
-    }
-    try {
-        if (params.eventName === 'pull_request_review_comment') {
-            await octokit/* octokit.reactions.createForPullRequestReviewComment */.K.reactions.createForPullRequestReviewComment({
-                owner: params.owner,
-                repo: params.repo,
-                comment_id: params.commentId,
-                content
-            });
-        }
-        else {
-            await octokit/* octokit.reactions.createForIssueComment */.K.reactions.createForIssueComment({
-                owner: params.owner,
-                repo: params.repo,
-                comment_id: params.commentId,
-                content
-            });
-        }
-        (0,core.info)(`ack reaction "${content}" added on ${params.eventName} commentId=${params.commentId}`);
-    }
-    catch (e) {
-        (0,core.warning)(`addAckReaction failed (content=${content}, commentId=${params.commentId}): ${String(e)}`);
-    }
-}
-
-;// CONCATENATED MODULE: ./lib/commands/early-reaction.js
+/* harmony export */ __nccwpck_require__.d(__webpack_exports__, {
+/* harmony export */   "G": () => (/* binding */ tryEarlyReaction)
+/* harmony export */ });
+/* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(1078);
+/* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__nccwpck_require__.n(_actions_core__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var _actions_github__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(3695);
+/* harmony import */ var _actions_github__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__nccwpck_require__.n(_actions_github__WEBPACK_IMPORTED_MODULE_1__);
+/* harmony import */ var _bootstrap__WEBPACK_IMPORTED_MODULE_2__ = __nccwpck_require__(6053);
+/* harmony import */ var _registry__WEBPACK_IMPORTED_MODULE_3__ = __nccwpck_require__(953);
+/* harmony import */ var _parser__WEBPACK_IMPORTED_MODULE_4__ = __nccwpck_require__(5964);
+/* harmony import */ var _reaction__WEBPACK_IMPORTED_MODULE_5__ = __nccwpck_require__(3126);
 /**
  * commands/early-reaction.ts - 评论事件的提前 ACK 表情
  *
@@ -10452,7 +10372,7 @@ async function addAckReaction(params) {
 
 
 // eslint-disable-next-line camelcase
-const context = github.context;
+const context = _actions_github__WEBPACK_IMPORTED_MODULE_1__.context;
 /**
  * 尝试在 Bot 初始化前尽快给用户评论打 ACK 表情。
  * 失败或非命令场景下静默返回，不影响后续流程。
@@ -10483,29 +10403,127 @@ async function tryEarlyReaction(rawReaction) {
         const actorIsBot = comment.user?.type === 'Bot' || /\[bot\]$/i.test(comment.user?.login ?? '');
         if (actorIsBot)
             return;
-        (0,bootstrap/* bootstrapCommands */.K)();
-        const registry = (0,commands_registry/* getRegistry */.J)();
-        const outcome = (0,parser/* parse */.Qc)(comment.body, {
+        (0,_bootstrap__WEBPACK_IMPORTED_MODULE_2__/* .bootstrapCommands */ .K)();
+        const registry = (0,_registry__WEBPACK_IMPORTED_MODULE_3__/* .getRegistry */ .J)();
+        const outcome = (0,_parser__WEBPACK_IMPORTED_MODULE_4__/* .parse */ .Qc)(comment.body, {
             registeredCommands: registry.getRegisteredNames(),
-            botMentions: parser/* DEFAULT_BOT_MENTIONS */.gC
+            botMentions: _parser__WEBPACK_IMPORTED_MODULE_4__/* .DEFAULT_BOT_MENTIONS */ .gC
         });
         if (outcome.kind !== 'command')
             return;
         const owner = context.repo.owner;
         const repo = context.repo.repo;
-        await addAckReaction({
+        await (0,_reaction__WEBPACK_IMPORTED_MODULE_5__/* .addAckReaction */ .G)({
             owner,
             repo,
             commentId: comment.id,
             eventName,
             rawReaction
         });
-        (0,core.info)(`early ack reaction sent for commentId=${comment.id}`);
+        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`early ack reaction sent for commentId=${comment.id}`);
     }
     catch (e) {
-        (0,core.info)(`early ack reaction skipped: ${String(e)}`);
+        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`early ack reaction skipped: ${String(e)}`);
     }
 }
+
+
+/***/ }),
+
+/***/ 660:
+/***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
+
+"use strict";
+/* harmony export */ __nccwpck_require__.d(__webpack_exports__, {
+/* harmony export */   "s8": () => (/* binding */ buildUnknownCommandMessage),
+/* harmony export */   "uP": () => (/* binding */ helpHandler)
+/* harmony export */ });
+/* unused harmony export buildHelpMessage */
+/* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(1078);
+/* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__nccwpck_require__.n(_actions_core__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var _registry__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(953);
+/* harmony import */ var _constants__WEBPACK_IMPORTED_MODULE_2__ = __nccwpck_require__(2098);
+/**
+ * commands/handlers/help.ts - help 命令的参考实现（成员 A 交付）
+ *
+ * 功能:
+ * - 自动聚合 registry 中已注册的所有命令
+ * - 按注册顺序输出命令名、描述、用法
+ * - 提供 buildHelpMessage() 纯函数，便于单测
+ */
+
+
+
+/**
+ * 纯函数：根据命令列表生成 help Markdown。
+ * 提取出来便于单元测试（不依赖 registry 单例）。
+ */
+function buildHelpMessage(commands) {
+    const lines = [];
+    lines.push('## 支持的命令');
+    lines.push('');
+    lines.push('| 命令 | 描述 | 最低权限 |');
+    lines.push('| :--- | :--- | :------- |');
+    // help 自身也要出现在列表里，但排在最后
+    const ordered = [...commands].sort((a, b) => {
+        if (a.name === 'help')
+            return 1;
+        if (b.name === 'help')
+            return -1;
+        return 0;
+    });
+    for (const c of ordered) {
+        const perm = c.minPermission ?? 'write';
+        const usage = c.usage ?? `${_constants__WEBPACK_IMPORTED_MODULE_2__/* .PRIMARY_BOT_MENTION */ .a} ${c.name}`;
+        lines.push(`| \`${usage}\` | ${c.description} | \`${perm}\` |`);
+    }
+    if (ordered.some(c => (c.aliases?.length ?? 0) > 0)) {
+        lines.push('');
+        lines.push('### 别名');
+        for (const c of ordered) {
+            if (c.aliases && c.aliases.length > 0) {
+                lines.push(`- \`${c.name}\` → ${c.aliases.map(a => `\`${a}\``).join(', ')}`);
+            }
+        }
+    }
+    lines.push('');
+    lines.push(`> ${(0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput)('bot_icon') || '🤖'} Bot 同时支持 ${_constants__WEBPACK_IMPORTED_MODULE_2__/* .BOT_MENTIONS.map */ .T.map(m => `\`${m}\``).join(' 与 ')} 共 ${_constants__WEBPACK_IMPORTED_MODULE_2__/* .BOT_MENTIONS.length */ .T.length} 个 mention。`);
+    return lines.join('\n');
+}
+/**
+ * 构造"未知命令"回复消息，列出所有支持的命令。
+ * 参考 coderabbitai 格式: @user, I didn't recognize `xxx` as a valid command.
+ */
+function buildUnknownCommandMessage(invalidCmd, actorLogin, commands) {
+    const lines = [];
+    lines.push(`@${actorLogin} , I didn't recognize \`${invalidCmd}\` as a valid command. Here are the commands I support:`);
+    lines.push('');
+    const ordered = [...commands].sort((a, b) => {
+        if (a.name === 'help')
+            return 1;
+        if (b.name === 'help')
+            return -1;
+        return 0;
+    });
+    for (const c of ordered) {
+        const usage = c.usage ?? `${_constants__WEBPACK_IMPORTED_MODULE_2__/* .PRIMARY_BOT_MENTION */ .a} ${c.name}`;
+        lines.push(`- \`${usage}\` — ${c.description}`);
+    }
+    lines.push('');
+    lines.push(`Let me know which one you'd like to run, or feel free to ask me a question directly!`);
+    return lines.join('\n');
+}
+const helpHandler = {
+    name: 'help',
+    description: '显示所有支持的命令及用法',
+    usage: `${_constants__WEBPACK_IMPORTED_MODULE_2__/* .PRIMARY_BOT_MENTION */ .a} help`,
+    needsAck: false,
+    minPermission: 'read',
+    async execute(_ctx) {
+        const cmds = (0,_registry__WEBPACK_IMPORTED_MODULE_1__/* .getRegistry */ .J)().listCommands();
+        return { message: buildHelpMessage(cmds) };
+    }
+};
 
 
 /***/ }),
@@ -10606,7 +10624,15 @@ function parse(body, opts) {
     // 5. 尝试匹配命令名（最长前缀匹配，最多看前 3 个 token）
     const matched = matchCommandName(tokens, opts.registeredCommands);
     if (!matched) {
-        // 未命中命令但有 @bot → 交给对话 fallback
+        // 未命中已注册命令。判断是"无效命令"还是"自然语言对话"：
+        // - 首 token 纯 ASCII 字母（看起来像命令名）→ UNKNOWN_COMMAND
+        // - 否则（含 CJK、标点开头等自然语言）→ conversation fallback
+        if (looksLikeCommandAttempt(tokens[0])) {
+            return {
+                kind: 'command',
+                error: { code: 'UNKNOWN_COMMAND', detail: firstLine }
+            };
+        }
         return { kind: 'conversation' };
     }
     const { name, consumed } = matched;
@@ -10698,8 +10724,104 @@ function matchCommandName(tokens, registered) {
     }
     return null;
 }
+/**
+ * 判断 token 是否"看起来像一条命令"。
+ * 纯 ASCII 字母（允许连字符）→ 极可能是用户尝试输入命令名；
+ * 含中文、日文、韩文等非 ASCII 字符 → 自然语言对话。
+ */
+function looksLikeCommandAttempt(token) {
+    return /^[A-Za-z][A-Za-z0-9_-]*$/.test(token);
+}
 function truncate(s, n) {
     return s.length > n ? `${s.slice(0, n)}...` : s;
+}
+
+
+/***/ }),
+
+/***/ 3126:
+/***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
+
+"use strict";
+/* harmony export */ __nccwpck_require__.d(__webpack_exports__, {
+/* harmony export */   "G": () => (/* binding */ addAckReaction)
+/* harmony export */ });
+/* unused harmony export normalizeReaction */
+/* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(1078);
+/* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__nccwpck_require__.n(_actions_core__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var _octokit__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(2247);
+/**
+ * commands/reaction.ts - 命令 ACK 表情反应
+ *
+ * 当 dispatcher 识别到 `@bot <cmd>` 时，会在用户原评论上打一个表情反应
+ * （默认 👀），以在正文回复之前先给一个可见的 "收到" 信号。
+ *
+ * 设计要点：
+ * - content 值来自 action input `command_ack_reaction`，通过 options 透传
+ * - 空字符串 / 'off' / 'none' 视为禁用
+ * - 非法值会被丢弃并给 warning，不阻塞命令执行
+ * - issue_comment 与 pull_request_review_comment 走不同 endpoint
+ * - 任何失败都只打 warning，不让命令主流程受影响
+ */
+
+
+const VALID_REACTIONS = [
+    '+1',
+    '-1',
+    'laugh',
+    'confused',
+    'heart',
+    'hooray',
+    'rocket',
+    'eyes'
+];
+/**
+ * 把 raw 配置归一化为合法的 ReactionContent；不合法或禁用时返回 null。
+ */
+function normalizeReaction(raw) {
+    if (raw == null)
+        return null;
+    const trimmed = raw.trim().toLowerCase();
+    if (trimmed === '' || trimmed === 'off' || trimmed === 'none' || trimmed === 'false') {
+        return null;
+    }
+    if (VALID_REACTIONS.includes(trimmed)) {
+        return trimmed;
+    }
+    (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`command_ack_reaction "${raw}" is not a valid GitHub reaction ` +
+        `(expected one of ${VALID_REACTIONS.join(', ')}); ACK reaction will be skipped.`);
+    return null;
+}
+/**
+ * 在触发命令的用户评论上加表情反应。失败只 warning，不抛错。
+ */
+async function addAckReaction(params) {
+    const content = normalizeReaction(params.rawReaction);
+    if (content == null) {
+        return;
+    }
+    try {
+        if (params.eventName === 'pull_request_review_comment') {
+            await _octokit__WEBPACK_IMPORTED_MODULE_1__/* .octokit.reactions.createForPullRequestReviewComment */ .K.reactions.createForPullRequestReviewComment({
+                owner: params.owner,
+                repo: params.repo,
+                comment_id: params.commentId,
+                content
+            });
+        }
+        else {
+            await _octokit__WEBPACK_IMPORTED_MODULE_1__/* .octokit.reactions.createForIssueComment */ .K.reactions.createForIssueComment({
+                owner: params.owner,
+                repo: params.repo,
+                comment_id: params.commentId,
+                content
+            });
+        }
+        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.info)(`ack reaction "${content}" added on ${params.eventName} commentId=${params.commentId}`);
+    }
+    catch (e) {
+        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.warning)(`addAckReaction failed (content=${content}, commentId=${params.commentId}): ${String(e)}`);
+    }
 }
 
 
@@ -11998,7 +12120,7 @@ __nccwpck_require__.r(__webpack_exports__);
 /* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__nccwpck_require__.n(_actions_core__WEBPACK_IMPORTED_MODULE_0__);
 /* harmony import */ var _bot__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(1854);
 /* harmony import */ var _command_handler__WEBPACK_IMPORTED_MODULE_2__ = __nccwpck_require__(8280);
-/* harmony import */ var _commands_early_reaction__WEBPACK_IMPORTED_MODULE_3__ = __nccwpck_require__(6360);
+/* harmony import */ var _commands_early_reaction__WEBPACK_IMPORTED_MODULE_3__ = __nccwpck_require__(7753);
 /* harmony import */ var _options__WEBPACK_IMPORTED_MODULE_4__ = __nccwpck_require__(5341);
 /* harmony import */ var _prompts__WEBPACK_IMPORTED_MODULE_6__ = __nccwpck_require__(2379);
 /* harmony import */ var _review__WEBPACK_IMPORTED_MODULE_5__ = __nccwpck_require__(8726);
