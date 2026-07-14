@@ -25,6 +25,7 @@
 import {info, warning} from '@actions/core'
 // eslint-disable-next-line camelcase
 import {context as github_context} from '@actions/github'
+import {octokit} from '../octokit'
 import type {Options} from '../options'
 import {getRegistry} from './registry'
 import {parse, type ParserOptions, DEFAULT_BOT_MENTIONS} from './parser'
@@ -101,8 +102,24 @@ export async function dispatchCommentEvent(
     }
     prNumber = payload.issue.number
     comment = payload.comment
-    // issue_comment 的 payload 没有 head/base SHA，需由 handler 自行查
     prAuthor = payload.issue.user?.login ?? ''
+    // issue_comment 的 payload 没有 head/base SHA，主动查一次 PR 补齐，
+    // 否则 full review 等命令的 headSha 为空、去重逻辑（isHeadAlreadyReviewed）永远失效
+    try {
+      const pr = await octokit.pulls.get({
+        owner: context.repo.owner,
+        repo: context.repo.repo,
+        pull_number: prNumber
+      })
+      headSha = pr.data.head?.sha ?? ''
+      baseSha = pr.data.base?.sha ?? ''
+    } catch (e) {
+      warning(
+        `command dispatcher: failed to fetch head/base sha for PR #${prNumber}: ${String(
+          e
+        )}`
+      )
+    }
   } else {
     // [pull_request_review_comment 分支] 代码 diff 上的行级评论。
     // 缺少 pull_request 字段属于异常 payload，忽略。
