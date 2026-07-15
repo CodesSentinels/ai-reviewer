@@ -21,7 +21,7 @@ import type {ReviewCommandMode} from './commands/types'
 import type {Options} from './options'
 import type {Prompts} from './prompts'
 import {codeReview} from './review'
-import {handleConversation} from './conversation'
+import {handleConversation, handleIssueConversation} from './conversation'
 
 // eslint-disable-next-line camelcase
 const context = github_context
@@ -64,24 +64,27 @@ export async function handleCommentEvent(
   info(`commentEvent dispatcher outcome: ${JSON.stringify(outcome)}`)
 
   if (outcome.kind === 'fallback_conversation') {
+    // 行级评论与主评论区对话共用 heavyBot；仅在需要时构造。
+    const bots =
+      deps.heavyBot != null ? {heavyBot: deps.heavyBot} : deps.getReviewBots?.()
+    if (bots == null) {
+      info(
+        'commentEvent: conversation fallback skipped (OpenAI bot unavailable)'
+      )
+      return
+    }
+
     if (context.eventName === 'pull_request_review_comment') {
-      const bots =
-        deps.heavyBot != null
-          ? {heavyBot: deps.heavyBot}
-          : deps.getReviewBots?.()
-      if (bots == null) {
-        info(
-          'commentEvent: conversation fallback skipped (OpenAI bot unavailable)'
-        )
-        return
-      }
-      // 对话式追问（成员 D · 2.3）仅支持 pull_request_review_comment。
-      // handleConversation 已取代旧的 handleReviewComment（含意图识别 / 轮次上限 /
-      // 上下文截断），两者都会向 thread 回帖，**不可同时调用**，否则重复回复 + 双倍 LLM 开销。
+      // 行级评论对话式追问（含意图识别 / 轮次上限 / 上下文截断）。
+      // handleConversation 与 handleIssueConversation 都会回帖，按事件类型二选一，
+      // **不可同时调用**，否则重复回复 + 双倍 LLM 开销。
       await handleConversation(bots.heavyBot, deps.options, deps.prompts)
+    } else if (context.eventName === 'issue_comment') {
+      // PR 主评论区对话式追问（整个 PR 上下文 + 幂等去重 + 无关问题婉拒）。
+      await handleIssueConversation(bots.heavyBot, deps.options, deps.prompts)
     } else {
       info(
-        'commentEvent: conversation fallback skipped (issue_comment 对话暂不支持)'
+        `commentEvent: conversation fallback skipped (unsupported event ${context.eventName})`
       )
     }
   }
