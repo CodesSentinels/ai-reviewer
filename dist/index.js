@@ -9734,6 +9734,19 @@ const MAX_CHAIN_CHARS = 12_000;
 /** 对话历史截断时的分隔符（与 Commenter.composeCommentChain 对齐） */
 const CHAIN_SEPARATOR = '\n---\n';
 /**
+ * 主评论区（issue_comment）对话回复的幂等标签前缀。
+ *
+ * 主评论区是扁平结构（无内嵌 thread），无法像行级评论那样靠 in_reply_to 归位。
+ * 我们给每条 bot 回复写入 `${PREFIX}:${触发评论 id} -->`，回复前扫描是否已存在同一
+ * 触发评论 id 的标签 —— 命中即跳过，避免 Action 重投递/重试时对同一条提问重复回帖。
+ * 这也是「连续快速提问」场景下每条回复能稳定对应到各自问题、且不丢不重的关键。
+ */
+const CONV_REPLY_TAG_PREFIX = '<!-- codesentinel-conv-reply';
+/** 组装主评论区对话回复的幂等标签 */
+function buildIssueConvReplyTag(originalCommentId) {
+    return `${CONV_REPLY_TAG_PREFIX}:${originalCommentId} -->`;
+}
+/**
  * 追问意图识别：判断一条评论是否应触发 bot 对话回复。
  *
  * 触发条件：**评论必须显式 @ 了机器人**（首轮与续轮一致），
@@ -9973,6 +9986,199 @@ const handleConversation = async (heavyBot, options, prompts) => {
     await commenter.reviewCommentReply(pullNumber, topLevelComment, `${quotedQuestion}\n\n${mention}${cleanedReply}`);
     (0,core.info)(`conversation: replied on PR #${pullNumber} thread (top-level comment ${topLevelComment.id})`);
 };
+/**
+ * 把主评论区的 issue comment 列表组装为对话链字符串。
+ *
+ * 与 Commenter.composeCommentChain（行级）对齐：`login: body`，`\n---\n` 分隔。
+ * 主评论区是扁平结构，这里按时间顺序（列表接口本身已按 created_at 升序返回）
+ * 截止到「当前触发评论」为止，过滤掉空 body，避免把当前评论之后的内容也纳入历史。
+ *
+ * 纯函数，便于单测。
+ */
+function composeIssueCommentChain(comments, currentCommentId) {
+    const chain = [];
+    for (const c of comments) {
+        const body = c.body ?? '';
+        if (body.trim().length > 0) {
+            chain.push(`${c.user?.login ?? 'unknown'}: ${body}`);
+        }
+        // 截止到当前触发评论（含），忽略其后的评论
+        if (c.id === currentCommentId) {
+            break;
+        }
+    }
+    return chain.join(CHAIN_SEPARATOR);
+}
+/**
+ * 主评论区（issue_comment）对话式追问主入口。
+ *
+ * 仅处理 PR 主评论区的 issue_comment 事件（非代码行级）。由 command-handler.ts 在
+ * 命令解析判定为 "fallback_conversation" 且事件为 issue_comment 时调用。
+ *
+ * 与行级对话（handleConversation）的差异：
+ *   - 上下文是**整个 PR**（title/description/summary/整体 diff），而非单文件 diff hunk
+ *   - 主评论区扁平无 thread → 用隐藏幂等标签防止连续提问时重复回帖
+ *   - 无关问题由模型判定并友好婉拒（见 prompts.commentIssue）
+ *
+ * @param heavyBot - 重量级模型，用于生成高质量回复
+ * @param options  - 全局配置
+ * @param prompts  - 提示词模板
+ */
+const handleIssueConversation = async (heavyBot, options, prompts) => {
+    const commenter = new lib_commenter/* Commenter */.Es();
+    const inputs = new lib_inputs/* Inputs */.k();
+    const repo = conversation_context.repo;
+    // ===== 1. 事件与 payload 校验 =====
+    if (conversation_context.eventName !== 'issue_comment') {
+        (0,core.info)(`issue-conversation: skip non issue_comment event (${conversation_context.eventName})`);
+        return;
+    }
+    const payload = conversation_context.payload;
+    if (!payload || payload.action !== 'created') {
+        (0,core.info)('issue-conversation: skip (missing payload or action != created)');
+        return;
+    }
+    // 只处理 PR 上的评论（GitHub 中 PR 复用 issue 模型）
+    if (!payload.issue?.pull_request) {
+        (0,core.info)('issue-conversation: skip (issue_comment on non-PR issue)');
+        return;
+    }
+    const comment = payload.comment;
+    if (comment == null || typeof comment.body !== 'string') {
+        (0,core.warning)('issue-conversation: skip (missing comment body)');
+        return;
+    }
+    // ===== 2. 过滤 bot 自身评论 =====
+    const authorIsBot = comment.user?.type === 'Bot' ||
+        /\[bot\]$/i.test(comment.user?.login ?? '') ||
+        comment.body.includes(lib_commenter/* COMMENT_TAG */.Rs) ||
+        comment.body.includes(lib_commenter/* COMMENT_REPLY_TAG */.aD);
+    if (authorIsBot) {
+        (0,core.info)('issue-conversation: skip (comment from bot itself)');
+        return;
+    }
+    // ===== 3. 追问意图识别（必须 @bot） =====
+    if (!isFollowUpQuestion({
+        commentBody: comment.body,
+        authorIsBot: false
+    })) {
+        (0,core.info)('issue-conversation: not a follow-up question (no @mention), skip');
+        return;
+    }
+    const pullNumber = payload.issue.number;
+    // ===== 4. 幂等去重（连续提问不丢/不重复的关键） =====
+    const allComments = await commenter.listComments(pullNumber);
+    const replyTag = buildIssueConvReplyTag(comment.id);
+    const alreadyReplied = allComments.some((c) => typeof c.body === 'string' && c.body.includes(replyTag));
+    if (alreadyReplied) {
+        (0,core.info)(`issue-conversation: skip duplicate reply for comment ${comment.id}`);
+        return;
+    }
+    // ===== 5. 对话历史收集 + 轮次上限 =====
+    const rawChain = composeIssueCommentChain(allComments, comment.id);
+    const turns = countBotTurns(rawChain);
+    if (turns >= MAX_CONVERSATION_TURNS) {
+        (0,core.info)(`issue-conversation: turn limit reached (${turns}/${MAX_CONVERSATION_TURNS})`);
+        await postIssueReply(commenter, pullNumber, comment, `本话题的自动对话轮次已达上限（${MAX_CONVERSATION_TURNS} 轮）。如需继续深入，请新开一条评论或联系人工 reviewer。`);
+        return;
+    }
+    // ===== 6. 上下文组装（PR 级） =====
+    inputs.title = payload.pull_request?.title ?? payload.issue.title ?? '';
+    const prBody = payload.pull_request?.body ?? payload.issue.body;
+    if (prBody) {
+        inputs.description = commenter.getDescription(prBody);
+    }
+    inputs.comment = `${comment.user?.login ?? 'unknown'}: ${comment.body}`;
+    inputs.commentChain = truncateConversationChain(rawChain);
+    // ===== 7. 拉取整个 PR 的 diff（可选，受 token 预算约束） =====
+    let prDiff = '';
+    try {
+        const pr = await octokit/* octokit.pulls.get */.K.pulls.get({
+            owner: repo.owner,
+            repo: repo.repo,
+            // eslint-disable-next-line camelcase
+            pull_number: pullNumber
+        });
+        const diffAll = await octokit/* octokit.repos.compareCommits */.K.repos.compareCommits({
+            owner: repo.owner,
+            repo: repo.repo,
+            base: pr.data.base.sha,
+            head: pr.data.head.sha
+        });
+        prDiff = (diffAll.data?.files ?? [])
+            .map(f => (f.patch ? `--- ${f.filename}\n${f.patch}` : ''))
+            .filter(s => s.length > 0)
+            .join('\n\n');
+    }
+    catch (e) {
+        (0,core.warning)(`issue-conversation: failed to get PR diff: ${e}, continue without it`);
+    }
+    // ===== 8. Token 预算内打包上下文 =====
+    let tokens = (0,tokenizer/* getTokenCount */.V)(prompts.renderCommentIssue(inputs));
+    if (tokens > options.heavyTokenLimits.requestTokens) {
+        // 对话链可能过长，进一步压缩后重试一次
+        inputs.commentChain = truncateConversationChain(rawChain, Math.floor(MAX_CHAIN_CHARS / 2));
+        tokens = (0,tokenizer/* getTokenCount */.V)(prompts.renderCommentIssue(inputs));
+    }
+    if (tokens > options.heavyTokenLimits.requestTokens) {
+        await postIssueReply(commenter, pullNumber, comment, '无法回复该评论：关联的上下文过大，超出了模型的 token 限制。');
+        return;
+    }
+    // 预算允许时补充整个 PR diff
+    if (prDiff.length > 0) {
+        const fileDiffCount = prompts.commentIssue.split('$file_diff').length - 1;
+        const prDiffTokens = (0,tokenizer/* getTokenCount */.V)(prDiff);
+        if (fileDiffCount > 0 &&
+            tokens + prDiffTokens * fileDiffCount <=
+                options.heavyTokenLimits.requestTokens) {
+            tokens += prDiffTokens * fileDiffCount;
+            inputs.fileDiff = prDiff;
+        }
+    }
+    // 预算允许时补充 PR 精简摘要
+    const summary = await commenter.findCommentWithTag(lib_commenter/* SUMMARIZE_TAG */.Rp, pullNumber);
+    if (summary) {
+        const shortSummary = commenter.getShortSummary(summary.body);
+        const shortSummaryTokens = (0,tokenizer/* getTokenCount */.V)(shortSummary);
+        if (tokens + shortSummaryTokens <= options.heavyTokenLimits.requestTokens) {
+            tokens += shortSummaryTokens;
+            inputs.shortSummary = shortSummary;
+        }
+    }
+    // ===== 9. LLM 对话推理 + 发布回复 =====
+    const [reply] = await heavyBot.chat(prompts.renderCommentIssue(inputs), {});
+    if (!reply) {
+        (0,core.warning)('issue-conversation: empty reply from model, skip posting');
+        return;
+    }
+    const cleanedReply = reply.replace(/^\s*@user[，,：:\s]*/i, '').trimStart();
+    await postIssueReply(commenter, pullNumber, comment, cleanedReply);
+    (0,core.info)(`issue-conversation: replied on PR #${pullNumber} main thread`);
+};
+/**
+ * 在 PR 主评论区发布一条美观的对话回复：
+ *   头部图标 + 引用用户原问题 + @提及 + 答案正文 + 隐藏幂等标签。
+ *
+ * 幂等标签使回复能稳定对应到触发它的提问（连续提问场景下不丢不重）。
+ */
+async function postIssueReply(commenter, pullNumber, comment, body) {
+    const authorLogin = comment.user?.login ?? '';
+    const mention = authorLogin ? `@${authorLogin} ` : '';
+    const quotedQuestion = comment.body
+        .split('\n')
+        .map((l) => `> ${l}`)
+        .join('\n');
+    const message = `${lib_commenter/* COMMENT_GREETING */.pK}
+
+${quotedQuestion}
+
+${mention}${body}
+
+${lib_commenter/* COMMENT_REPLY_TAG */.aD}
+${buildIssueConvReplyTag(comment.id)}
+`;
+    await commenter.create(message, pullNumber);
+}
 
 ;// CONCATENATED MODULE: ./lib/command-handler.js
 /**
@@ -10018,21 +10224,24 @@ async function handleCommentEvent(deps) {
     });
     (0,core.info)(`commentEvent dispatcher outcome: ${JSON.stringify(outcome)}`);
     if (outcome.kind === 'fallback_conversation') {
+        // 行级评论与主评论区对话共用 heavyBot；仅在需要时构造。
+        const bots = deps.heavyBot != null ? { heavyBot: deps.heavyBot } : deps.getReviewBots?.();
+        if (bots == null) {
+            (0,core.info)('commentEvent: conversation fallback skipped (OpenAI bot unavailable)');
+            return;
+        }
         if (command_handler_context.eventName === 'pull_request_review_comment') {
-            const bots = deps.heavyBot != null
-                ? { heavyBot: deps.heavyBot }
-                : deps.getReviewBots?.();
-            if (bots == null) {
-                (0,core.info)('commentEvent: conversation fallback skipped (OpenAI bot unavailable)');
-                return;
-            }
-            // 对话式追问（成员 D · 2.3）仅支持 pull_request_review_comment。
-            // handleConversation 已取代旧的 handleReviewComment（含意图识别 / 轮次上限 /
-            // 上下文截断），两者都会向 thread 回帖，**不可同时调用**，否则重复回复 + 双倍 LLM 开销。
+            // 行级评论对话式追问（含意图识别 / 轮次上限 / 上下文截断）。
+            // handleConversation 与 handleIssueConversation 都会回帖，按事件类型二选一，
+            // **不可同时调用**，否则重复回复 + 双倍 LLM 开销。
             await handleConversation(bots.heavyBot, deps.options, deps.prompts);
         }
+        else if (command_handler_context.eventName === 'issue_comment') {
+            // PR 主评论区对话式追问（整个 PR 上下文 + 幂等去重 + 无关问题婉拒）。
+            await handleIssueConversation(bots.heavyBot, deps.options, deps.prompts);
+        }
         else {
-            (0,core.info)('commentEvent: conversation fallback skipped (issue_comment 对话暂不支持)');
+            (0,core.info)(`commentEvent: conversation fallback skipped (unsupported event ${command_handler_context.eventName})`);
         }
     }
 }
@@ -10906,10 +11115,11 @@ function getRegistry() {
 /* harmony export */   "aD": () => (/* binding */ COMMENT_REPLY_TAG),
 /* harmony export */   "kY": () => (/* binding */ COMMIT_ID_END_TAG),
 /* harmony export */   "oi": () => (/* binding */ RAW_SUMMARY_START_TAG),
+/* harmony export */   "pK": () => (/* binding */ COMMENT_GREETING),
 /* harmony export */   "pt": () => (/* binding */ COMMIT_ID_START_TAG),
 /* harmony export */   "rV": () => (/* binding */ RAW_SUMMARY_END_TAG)
 /* harmony export */ });
-/* unused harmony exports COMMENT_GREETING, IN_PROGRESS_START_TAG, IN_PROGRESS_END_TAG, DESCRIPTION_START_TAG, DESCRIPTION_END_TAG */
+/* unused harmony exports IN_PROGRESS_START_TAG, IN_PROGRESS_END_TAG, DESCRIPTION_START_TAG, DESCRIPTION_END_TAG */
 /* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(1078);
 /* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__nccwpck_require__.n(_actions_core__WEBPACK_IMPORTED_MODULE_0__);
 /* harmony import */ var _actions_github__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(3695);
@@ -15043,6 +15253,76 @@ $comment
 If the comment asks about API behavior, library usage, or best practices,
 use web search to find and reference current documentation.
 `;
+    /**
+     * 回复 PR 主评论区（issue_comment）追问的提示词
+     *
+     * 与 `comment`（行级评论）的区别：上下文是**整个 PR**（标题/描述/摘要/整体 diff +
+     * 主评论区对话链），而非单个文件的 diff hunk。并且新增「无关问题友好婉拒」策略。
+     */
+    commentIssue = `A comment was made in the main conversation (not on a specific
+code line) of a GitHub Pull Request. I would like you to reply to it.
+
+## GitHub PR Title
+
+\`$title\`
+
+## Description
+
+\`\`\`
+$description
+\`\`\`
+
+## Summary generated by the AI bot
+
+\`\`\`
+$short_summary
+\`\`\`
+
+## PR diff
+
+\`\`\`diff
+$file_diff
+\`\`\`
+
+## Instructions
+
+You are a code-review assistant for THIS pull request. Reply directly to the
+new comment (instead of suggesting a reply) and your reply will be posted as-is.
+
+### Relevance gate (IMPORTANT)
+
+First decide whether the new comment is relevant to this PR, its code changes,
+the surrounding codebase, or software engineering in general.
+
+- **Relevant** → answer normally: be accurate, concise, and professional. Ground
+  your answer in the PR context above; use web search to verify library/API
+  usage or best practices when helpful, and cite official docs.
+- **Not relevant** (e.g. chit-chat, personal requests, general trivia, writing a
+  poem, or anything unrelated to this PR / codebase / software engineering) →
+  do NOT try to answer it. Instead, politely and briefly decline in a friendly
+  tone, and in one sentence steer the user back to questions about this PR or its
+  code. Keep the decline short (2-3 sentences max). Do not be preachy or robotic.
+
+Do NOT start your reply with an @mention, a username, or a greeting (such as
+"@user" or "Hi") — the bot prepends the correct @mention of the actual commenter
+automatically. Just provide the reply content directly.
+
+## Comment format
+
+\`user: comment\`
+
+## Comment chain (including the new comment)
+
+\`\`\`
+$comment_chain
+\`\`\`
+
+## The comment/request that you need to directly reply to
+
+\`\`\`
+$comment
+\`\`\`
+`;
     constructor(summarize = '', summarizeReleaseNotes = '') {
         this.summarize = summarize;
         this.summarizeReleaseNotes = summarizeReleaseNotes;
@@ -15081,6 +15361,10 @@ use web search to find and reference current documentation.
     /** 渲染回复评论提示词 */
     renderComment(inputs) {
         return inputs.render(this.comment);
+    }
+    /** 渲染 PR 主评论区（issue_comment）追问回复提示词 */
+    renderCommentIssue(inputs) {
+        return inputs.render(this.commentIssue);
     }
     /**
      * 仅当文件存在工具发现时拼入的"静态分析工具结果"区块。
