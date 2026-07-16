@@ -6,7 +6,7 @@
  *
  * 只做三件事：
  *   1. 校验事件 + payload
- *   2. 解析评论是否含 @bot 命令
+ *   2. 解析评论是否 @bot（命令或对话式追问皆可）
  *   3. 是 → 打表情；不是 → 跳过
  *
  * 不做 Bot 初始化、权限查询、幂等检查等重操作。
@@ -65,7 +65,10 @@ export async function tryEarlyReaction(
       botMentions: DEFAULT_BOT_MENTIONS
     })
 
-    if (outcome.kind !== 'command') return
+    // 命令（@bot <cmd>）与对话式追问（@bot <自然语言>）都先打 ACK 表情：
+    // 二者都会触发后续 bot 回帖，提前给用户一个"已收到"的可见信号。
+    // 'none' 分支（未 @bot / 非触发）不打表情，避免打扰真人之间的普通讨论。
+    if (outcome.kind !== 'command' && outcome.kind !== 'conversation') return
 
     const owner = context.repo.owner
     const repo = context.repo.repo
