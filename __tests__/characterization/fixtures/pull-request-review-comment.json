@@ -1,0 +1,12 @@
+{
+  "eventName": "pull_request_review_comment",
+  "action": "created",
+  "repo": {"owner": "octo", "repo": "demo"},
+  "pull_request": {"number": 42},
+  "comment": {
+    "id": 9002,
+    "node_id": "PRRC_kwDOtopcomment0002",
+    "body": "@ai-reviewer 这里为什么这样写？",
+    "user": {"login": "someone"}
+  }
+}

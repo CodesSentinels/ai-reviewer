@@ -179,4 +179,14 @@ process
   })
 
 // 启动主流程
-await run()
+// 注：故意不用顶层 `await run()` —— 顶层 await 在当前 ts-jest（CommonJS 转译）下无法编译，
+// 导致 main.ts 完全无法被测试文件 import。run() 内部已自行 catch 所有异常并调用
+// setFailed，不会向外抛出；文件末尾也没有后续语句依赖 run() 完成，因此改为立即执行的
+// async 函数对 Action 运行时行为没有任何可观察影响（进程仍会等待未完成的 Promise 才退出）。
+void (async (): Promise<void> => {
+  try {
+    await run()
+  } catch (e: any) {
+    warning(`Unhandled error in run(): ${e}`)
+  }
+})()
