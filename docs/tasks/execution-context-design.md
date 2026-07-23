@@ -626,6 +626,8 @@ Mock 脚手架复用仓库已有约定（与 `__tests__/command-dispatcher.test.
 
 **阶段三合计：约 9h（约 1 个工作日）**
 
+**本任务总计（阶段零~三）：约 71h（约 9 个工作日，单人串行估算）**
+
 ### 9.4 阶段四（后续排期，不计入本任务工时）
 
 - `review.ts` 40 处直接引用的逐函数替换（第 6.3 节第二步，建议拆 3~4 个独立 PR）
@@ -636,6 +638,7 @@ Mock 脚手架复用仓库已有约定（与 `__tests__/command-dispatcher.test.
 
 ## 10. 验收标准
 
+- [ ] 阶段零特征化测试（`review.characterization.test.ts`/`main.characterization.test.ts`）在改造前（T1 之前）建立基线并全绿；T1~T8 完成后原样重跑，断言与基线一致——如需改写断言必须在 PR 描述中说明具体原因，不能静默修改
 - [ ] `ExecutionContext`/`ActorInfo`/`CommentRef`/`EventKind` 类型定义完成，字段覆盖 ARCH-002 要求的全部六项（平台、项目、PR/MR 编号、事件类型、actor、SHA、评论/note/thread ID）
 - [ ] `createGitHubExecutionContext()` 对现有 4 类 GitHub 事件（PR 开启/更新/重开、顶层评论、行级评论）均能正确构造，且不改变 `action.yml`/Action inputs 行为
 - [ ] `createGitLabExecutionContext(payload)` 对 MR Hook（open/reopen/update）和 Note Hook（create，含顶层与 discussion 回复）均能正确构造，并有对应 fixture 测试
@@ -678,6 +681,15 @@ src/
     dispatcher.ts                   ← 修改
     early-reaction.ts               ← 修改
 __tests__/
+  characterization/                        ← 新增目录（阶段零，改造前基线，先于其余测试落地）
+    review.characterization.test.ts        ← 新增
+    main.characterization.test.ts          ← 新增
+    fixtures/
+      pr-opened.json                       ← 新增
+      pr-synchronize.json                  ← 新增
+      pr-reopened.json                     ← 新增
+      issue-comment.json                   ← 新增
+      pull-request-review-comment.json     ← 新增
   execution-context.test.ts         ← 新增
   github-execution-context.test.ts  ← 新增
   gitlab-execution-context.test.ts  ← 新增
