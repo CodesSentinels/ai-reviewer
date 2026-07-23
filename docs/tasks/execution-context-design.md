@@ -509,7 +509,9 @@ sequenceDiagram
 1. **第一步（本任务交付）**：`codeReview()` 函数签名新增 `execCtx: ExecutionContext` 首参数；函数体内部**新增**局部变量 `const owner = execCtx.projectPath.split('/')[0]` 等，**保留**原有 `context`/`repo` 模块级引用不删除，两者并存，靠单元测试（见第 9 节）保证两套来源在同一次运行中取值一致。这一步保证 `main.ts` 可以立即传入 `ExecutionContext`，不阻塞入口层改造。
 2. **第二步（后续任务，不在本任务工时内）**：逐函数把 40 处 `context.xxx` 替换为 `execCtx.xxx`，最终删除模块级 `const context = github_context`。建议按函数拆成 3~4 个独立小 PR（如"SHA/增量判断相关"“diff 获取相关”“评论发布前置检查相关”各一个 PR），每个 PR 独立跑现有测试套件，降低单次改动面。
 
-> 该分阶段安排会体现在第 9 节任务列表中，作为「阶段二（后续排期）」单独列出，不计入本任务的验收范围，但设计文档需要先讲清楚，避免后来者重新纠结怎么切。
+> 该分阶段安排会体现在第 9 节任务列表中，作为「阶段四（后续排期）」单独列出，不计入本任务的验收范围，但设计文档需要先讲清楚，避免后来者重新纠结怎么切。
+
+> **补充（2026-07-23 复核）**：实扫确认 `review.ts` 和 `main.ts` 当前**没有任何单元测试**（`__tests__/` 27 个文件里无一直接覆盖这两个文件），是本次改造范围内耦合最深、又完全没有安全网的两个文件。因此在 T1~T8 开始前新增「阶段零：改造前特征化测试」（见 9.0），先用真实历史事件 fixture 把当前行为钉死成断言基线，改造完成后原样重跑同一批断言（即 9.2 节 `U5` 的数据来源），作为"GitHub 现有功能没有被破坏"的可验证证据，而不是仅凭 review 判断。
 
 ---
 
@@ -570,6 +572,23 @@ stateDiagram-v2
 
 ## 9. 任务拆分
 
+### 9.0 阶段零：改造前特征化测试（新增，2026-07-23）
+
+**目的**：`review.ts`（40 处引用，本次改造风险最高的文件）和 `main.ts`（事件分发入口）当前**零单元测试覆盖**。在 T1 开始改代码之前，先用真实历史 GitHub 事件 fixture 跑通**未改造**的现有代码，把当前行为（哪些 mock 被调用、调用参数是什么、分发到哪条路径）钉死成断言基线——这批断言在 T1~T8 完成后原样重跑，作为"没有破坏 GitHub 现有功能"的客观证据，对齐 TODO 文档 `GH-016`/`TEST-016` 的验收要求。
+
+Mock 脚手架复用仓库已有约定（与 `__tests__/command-dispatcher.test.ts` 一致）：`jest.mock('@actions/core', ...)` 桩掉 `getInput`/`warning` 等、`jest.mock('@actions/github', () => ({context: mockContext}))` 控制事件 payload、`jest.mock('../src/octokit', ...)` 桩掉所有 GitHub API 调用、新增对 `../src/bot` 的工厂 mock（避免真实 OpenAI 调用，参考 `conversation.test.ts` 里对 `commenter`/`tokenizer` 的工厂 mock 写法）。
+
+| # | 任务 | 依赖 | 预估工时 |
+|:---|:---|:---|:---:|
+| C1 | 建 `__tests__/characterization/` 目录 + mock 脚手架（复用 `command-dispatcher.test.ts` 的 `@actions/core`/`@actions/github`/`../src/octokit` mock 模式，新增 `../src/bot` 工厂 mock）+ 5 个 fixture（`pr-opened`/`pr-synchronize`/`pr-reopened`/`issue-comment`/`pull-request-review-comment`） | 无 | 3h |
+| C2 | `review.characterization.test.ts`：针对 `pull_request` 的 opened/synchronize/reopened 三种事件，跑通未改造的 `codeReview()`，断言 commenter 相关 mock（`createComment`/`updatePull` 等）被调用的参数快照 | C1 | 5h |
+| C3 | `main.characterization.test.ts`：针对 5 类 `GITHUB_EVENT_NAME`（`pull_request`/`pull_request_target`/`issue_comment`/`pull_request_review_comment`/未知事件），跑通未改造的 `run()`，断言分发到 `codeReview`/`handleCommentEvent` 的路径与未知事件的降级（`warning` + 提前返回，不调用模型）行为 | C1 | 3h |
+| C4 | 在**当前未改造代码**上运行 C2/C3 确认全绿，作为改造前基线；提交时单独成一个 commit，方便后续 diff 对比 | C2, C3 | 1h |
+
+**阶段零合计：约 12h（约 1.5 个工作日）**
+
+> C2/C3 产出的断言集是 9.2 节 `U5`（`review.ts` 双轨并存一致性测试）的直接数据来源，不是重复工作：`U5` = 在 T7 完成后原样重跑 C2/C3 的 fixture，断言结果与阶段零记录的基线一致。如果某条断言确实需要因为本次改造而改写（例如错误信息文案变化），必须在 PR 描述里显式说明原因，不能静默修改断言了事。
+
 ### 9.1 阶段一：代码开发（本任务范围）
 
 | # | 任务 | 依赖 | 预估工时 |
@@ -593,7 +612,7 @@ stateDiagram-v2
 | U2 | `createGitLabExecutionContext()`：MR open/reopen/update(HEAD变化)/update(仅元数据) + Note create(top-level)/create(discussion reply)/非 create 动作/未知 object_kind，共 ≥8 用例 | 4h |
 | U3 | `ExecutionContextError` 的三种 reason 分类断言 | 1h |
 | U4 | `command-handler.ts`/`dispatcher.ts` 消费 `execCtx` 后的既有测试套件回归（确保迁移不改变现有行为，对齐 TODO `TEST-001` GitHub payload → ExecutionContext fixtures） | 3h |
-| U5 | `review.ts` 双轨并存断言：同一次运行中 `execCtx.headSha === context.payload.pull_request.head.sha` 等一致性测试，防止过渡期两套数据源漂移 | 2h |
+| U5 | `review.ts` 双轨并存断言：复用 9.0 节 `C2`/`C3` 的 fixture 与 mock 脚手架原样重跑，断言结果与阶段零记录的基线一致（含 `execCtx.headSha === context.payload.pull_request.head.sha` 等取值一致性），防止过渡期两套数据源漂移 | 2h |
 
 **阶段二合计：约 14h（约 2 个工作日）**
 
