@@ -10,36 +10,40 @@
  *   3. 是 → 打表情；不是 → 跳过
  *
  * 不做 Bot 初始化、权限查询、幂等检查等重操作。
+ *
+ * ARCH-005：不再直接 import `@actions/github`，事件坐标通过调用方传入的
+ * ExecutionContext 获取；`issue.pull_request` 存在性等尚未纳入 ExecutionContext
+ * 归一化字段的深层 payload 判断，过渡期通过 execCtx.raw 兜底读取。
  */
 import {info} from '@actions/core'
-// eslint-disable-next-line camelcase
-import {context as github_context} from '@actions/github'
 import {bootstrapCommands} from './bootstrap'
 import {getRegistry} from './registry'
 import {parse, DEFAULT_BOT_MENTIONS} from './parser'
 import {addAckReaction} from './reaction'
 import type {CommandEventName} from './types'
-
-// eslint-disable-next-line camelcase
-const context = github_context
+import type {ExecutionContext} from '../platform/execution-context'
 
 /**
  * 尝试在 Bot 初始化前尽快给用户评论打 ACK 表情。
  * 失败或非命令场景下静默返回，不影响后续流程。
  */
 export async function tryEarlyReaction(
+  execCtx: ExecutionContext,
   rawReaction: string | undefined
 ): Promise<void> {
   try {
-    const eventName = context.eventName as CommandEventName
     if (
-      eventName !== 'issue_comment' &&
-      eventName !== 'pull_request_review_comment'
+      execCtx.eventKind !== 'comment_created' &&
+      execCtx.eventKind !== 'review_comment_created'
     ) {
       return
     }
+    const eventName: CommandEventName =
+      execCtx.eventKind === 'review_comment_created'
+        ? 'pull_request_review_comment'
+        : 'issue_comment'
 
-    const payload = context.payload
+    const payload = execCtx.raw as any
     if (!payload || payload.action !== 'created') return
 
     let comment: any
@@ -70,8 +74,7 @@ export async function tryEarlyReaction(
     // 'none' 分支（未 @bot / 非触发）不打表情，避免打扰真人之间的普通讨论。
     if (outcome.kind !== 'command' && outcome.kind !== 'conversation') return
 
-    const owner = context.repo.owner
-    const repo = context.repo.repo
+    const [owner, repo] = execCtx.projectPath.split('/')
 
     await addAckReaction({
       owner,

@@ -120,6 +120,27 @@ function makeBot(response = 'ok'): any {
   }
 }
 
+/**
+ * codeReview() 的 execCtx 首参（T7，2026-07-23 新增）。review.ts 内部仍是
+ * 双轨过渡态——除 enableDependencyAnalysis 分支（本文件测试全部关闭）外，
+ * 现有 40 处调用点继续读取模块级 context/repo，不读取本参数，因此这里的
+ * 字段取值不影响下方任何既有断言，只需满足类型签名。
+ */
+function makeExecCtx(overrides: Partial<Record<string, any>> = {}): any {
+  return {
+    platform: 'github',
+    projectPath: 'octo/demo',
+    projectId: 'octo/demo',
+    changeRequestId: 42,
+    eventKind: 'pr_opened',
+    actor: {login: 'someone', isBot: false},
+    baseSha: 'base-sha-0001',
+    headSha: 'head-sha-0001',
+    raw: {},
+    ...overrides
+  }
+}
+
 function makePullRequestPayload(overrides: Record<string, any> = {}): any {
   return {
     number: 42,
@@ -147,7 +168,7 @@ describe('codeReview() — 改造前控制流行为基线', () => {
     mockContext.eventName = 'push'
     mockContext.payload = {}
 
-    await codeReview(makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
+    await codeReview(makeExecCtx(), makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
 
     expect(octokitState.compareCommits).not.toHaveBeenCalled()
     expect(commenterState.comment).not.toHaveBeenCalled()
@@ -157,7 +178,7 @@ describe('codeReview() — 改造前控制流行为基线', () => {
     mockContext.eventName = 'pull_request'
     mockContext.payload = {}
 
-    await codeReview(makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
+    await codeReview(makeExecCtx(), makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
 
     expect(octokitState.compareCommits).not.toHaveBeenCalled()
     expect(commenterState.comment).not.toHaveBeenCalled()
@@ -170,7 +191,7 @@ describe('codeReview() — 改造前控制流行为基线', () => {
       })
     }
 
-    await codeReview(makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
+    await codeReview(makeExecCtx(), makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
 
     expect(octokitState.compareCommits).not.toHaveBeenCalled()
     expect(commenterState.comment).not.toHaveBeenCalled()
@@ -182,7 +203,7 @@ describe('codeReview() — 改造前控制流行为基线', () => {
     }
     commenterState.getDescription.mockReturnValue(`Description. ${IGNORE_KEYWORD}`)
 
-    await codeReview(makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
+    await codeReview(makeExecCtx(), makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
 
     expect(octokitState.compareCommits).not.toHaveBeenCalled()
   })
@@ -191,7 +212,7 @@ describe('codeReview() — 改造前控制流行为基线', () => {
     mockContext.payload = {pull_request: makePullRequestPayload()}
     octokitState.compareCommits.mockResolvedValue({data: {files: [], commits: []}})
 
-    await codeReview(makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
+    await codeReview(makeExecCtx(), makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
 
     expect(octokitState.compareCommits).toHaveBeenCalled()
     expect(commenterState.comment).not.toHaveBeenCalled()
@@ -209,7 +230,7 @@ describe('codeReview() — 改造前控制流行为基线', () => {
       data: {type: 'file', content: Buffer.from('line1\nline2\nline3').toString('base64')}
     })
 
-    await codeReview(makeBot('[TRIAGE]: APPROVED\nAdds a comment line.'), makeBot(), makeOptions(), new Prompts('', ''))
+    await codeReview(makeExecCtx(), makeBot('[TRIAGE]: APPROVED\nAdds a comment line.'), makeBot(), makeOptions(), new Prompts('', ''))
 
     // 首次审查：两次 compareCommits 的 base 均为 PR base sha（不存在历史 reviewed commit）
     expect(octokitState.compareCommits).toHaveBeenCalledTimes(2)
@@ -249,7 +270,7 @@ describe('codeReview() — 改造前控制流行为基线', () => {
     commenterState.getHighestReviewedCommitId.mockReturnValue('old-sha')
     octokitState.compareCommits.mockResolvedValue({data: {files: [], commits: []}})
 
-    await codeReview(makeBot(), makeBot(), makeOptions(), new Prompts('', ''), {mode: 'full'})
+    await codeReview(makeExecCtx(), makeBot(), makeBot(), makeOptions(), new Prompts('', ''), {mode: 'full'})
 
     const firstCallArgs = octokitState.compareCommits.mock.calls[0][0] as any
     expect(firstCallArgs.base).toBe('base-sha-0001') // 不是 'old-sha'
@@ -263,7 +284,7 @@ describe('codeReview() — 改造前控制流行为基线', () => {
     commenterState.getHighestReviewedCommitId.mockReturnValue('head-sha-0001')
     octokitState.compareCommits.mockResolvedValue({data: {files: [], commits: []}})
 
-    await codeReview(makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
+    await codeReview(makeExecCtx(), makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
 
     const incrementalCallArgs = octokitState.compareCommits.mock.calls[0][0] as any
     expect(incrementalCallArgs.base).toBe('head-sha-0001') // 从上次审查的 commit 起，不是 base sha

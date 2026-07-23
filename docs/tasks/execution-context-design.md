@@ -502,6 +502,15 @@ sequenceDiagram
 
 > 改造原则：本任务只做"**把事件坐标从全局读取改成参数传递**"，**不改变**任何一个文件里调用 GitHub REST/GraphQL API 的方式——那些调用继续走现有 `octokit.ts`，直到 `IGitPlatform`（ARCH-016+）任务把它们收敛到 adapter 层。两件事分开做，避免这次改造范围失控。
 
+#### 6.2.1 实际完成状态（2026-07-23，T1~T8 落地后回填）
+
+实施过程中发现两个文件的风险评估需要上调，实际采用与 `review.ts` 相同的"签名透传、内部延后"策略，而非本表原计划的完整迁移：
+
+- **`src/commands/dispatcher.ts`**：`command-dispatcher.test.ts` 对本文件有覆盖全部主流程分支的 8+ 用例，且其内部 `context.payload`/`context.eventName` 解析与命令框架的 `Reply`/`addAckReaction` GitHub 专有 API 深度耦合（哪个 REST endpoint、`CommandEventName` 字符串等）。强行一次性替换有较高回归风险，且这部分耦合本就属于 `IGitPlatform`（ARCH-016+）范围而不是纯粹的"坐标读取"。改为：`DispatcherDeps` 新增可选 `execCtx?: ExecutionContext` 字段，仅透传写入构造出的 `CommandContext.execCtx`，文件内部 47 处 `context.*` 读取保持不变。完整迁移与 `review.ts` 一并列入阶段四。
+- **`src/commenter.ts`**：`new Commenter()` 在 `review.ts`/`conversation.ts`（×2）/`review-commit-ids.ts`（×2）共 5 处直接实例化，内部 42 处 `context.`/`repo.owner`/`repo.repo` 引用，且本任务的 T1~T8 没有任何调用点实际需要它改变签名（main.ts 不直接接触 Commenter）。评估后判定"没有必要现在动"比"强行加 execCtx 参数"风险回报比更好，本任务未改动此文件一行代码，完整迁移同样列入阶段四。
+
+以下文件按原计划完成**完整迁移**（不再直接 `import {context} from '@actions/github'`）：`main.ts`、`commands/types.ts`、`command-handler.ts`、`commands/early-reaction.ts`、`review-state.ts`、`repo-tree.ts`、`dependency-analyzer.ts`、`conversation.ts`。`review.ts`/`commands/dispatcher.ts` 按 6.3 节策略仅完成签名/透传层面的接入，`commenter.ts` 未改动。
+
 ### 6.3 `review.ts` 迁移方案（40 处，风险最高，单列子任务）
 
 `review.ts` 头部 `const context = github_context` 后接 `const repo = context.repo`，随后审查引擎的几乎每个内部函数（`codeReview`、增量 SHA 判断、diff 获取、评论发布前置检查等）都直接引用这两个模块级常量。直接一次性替换 40 处调用有较高回归风险（该文件是全仓库单文件测试覆盖面最大、耦合最深的核心审查引擎，[[member_b_resolve]] 记忆中也把它列为高风险文件）。采用**签名改造 + 内部零散替换两步走**：
@@ -631,6 +640,8 @@ Mock 脚手架复用仓库已有约定（与 `__tests__/command-dispatcher.test.
 ### 9.4 阶段四（后续排期，不计入本任务工时）
 
 - `review.ts` 40 处直接引用的逐函数替换（第 6.3 节第二步，建议拆 3~4 个独立 PR）
+- `commands/dispatcher.ts` 47 处直接引用的逐处替换（2026-07-23 实施中新识别，见 6.2.1；有 `command-dispatcher.test.ts` 全流程覆盖作安全网，风险低于 `review.ts` 但仍建议独立 PR，不与 `review.ts` 合并改动）
+- `commenter.ts` 42 处直接引用的迁移（2026-07-23 实施中新识别，见 6.2.1；5 处 `new Commenter()` 调用点需同步梳理，建议先补齐单元测试再动）
 - `ARCH-023` 架构测试：用 lint 规则/dependency-cruiser 强制共享业务层禁止 `import ... from '@actions/github'`
 - `EVENT-001`~`EVENT-005`：GitLab trigger CLI 真正读取 `TRIGGER_PAYLOAD` 文件并调用本任务交付的 `createGitLabExecutionContext`
 
@@ -638,14 +649,14 @@ Mock 脚手架复用仓库已有约定（与 `__tests__/command-dispatcher.test.
 
 ## 10. 验收标准
 
-- [ ] 阶段零特征化测试（`review.characterization.test.ts`/`main.characterization.test.ts`）在改造前（T1 之前）建立基线并全绿；T1~T8 完成后原样重跑，断言与基线一致——如需改写断言必须在 PR 描述中说明具体原因，不能静默修改
-- [ ] `ExecutionContext`/`ActorInfo`/`CommentRef`/`EventKind` 类型定义完成，字段覆盖 ARCH-002 要求的全部六项（平台、项目、PR/MR 编号、事件类型、actor、SHA、评论/note/thread ID）
-- [ ] `createGitHubExecutionContext()` 对现有 4 类 GitHub 事件（PR 开启/更新/重开、顶层评论、行级评论）均能正确构造，且不改变 `action.yml`/Action inputs 行为
-- [ ] `createGitLabExecutionContext(payload)` 对 MR Hook（open/reopen/update）和 Note Hook（create，含顶层与 discussion 回复）均能正确构造，并有对应 fixture 测试
-- [ ] `main.ts`、`command-handler.ts`、`commands/dispatcher.ts`、`commands/early-reaction.ts`、`review-state.ts`、`repo-tree.ts`、`dependency-analyzer.ts`、`conversation.ts`、`commenter.ts` 九个文件不再直接 `import {context} from '@actions/github'` 或读取 `process.env.GITHUB_EVENT_NAME`（`review.ts` 除外，见阶段四）
-- [ ] payload 缺失/格式错误/未知事件三种场景均有对应 `ExecutionContextError.reason` 分类，`main.ts` 能区分"正常跳过"与"fail closed"
-- [ ] 单元测试 + 集成测试全部通过，`npm test` 全量回归无新增失败
-- [ ] `GitHub-only`（不提供任何 GitLab 配置）场景下现有全部功能测试通过，无回归（对齐 TODO `GH-016`/`TEST-016`）
+- [x] 阶段零特征化测试（`review.characterization.test.ts`/`main.characterization.test.ts`）在改造前（T1 之前）建立基线并全绿；T1~T8 完成后重跑：14 条基线断言保持一致，另有 2 处因签名变化（`codeReview`/`run` 新增 `execCtx` 首参）需要更新调用方式、1 处因 fail-closed 消息文案变化更新断言文案——均在 commit message/设计文档中显式记录原因，未静默修改
+- [x] `ExecutionContext`/`ActorInfo`/`CommentRef`/`EventKind` 类型定义完成，字段覆盖 ARCH-002 要求的全部六项（平台、项目、PR/MR 编号、事件类型、actor、SHA、评论/note/thread ID）
+- [x] `createGitHubExecutionContext()` 对现有 4 类 GitHub 事件（PR 开启/更新/重开、顶层评论、行级评论）均能正确构造，且不改变 `action.yml`/Action inputs 行为（已通过特征化测试验证真实调用路径；覆盖全部触发/边界场景的专项单元测试 `U1` 属于阶段二，尚未编写）
+- [ ] `createGitLabExecutionContext(payload)` 对 MR Hook（open/reopen/update）和 Note Hook（create，含顶层与 discussion 回复）均能正确构造，并有对应 fixture 测试（阶段二 `U2`，尚未开始）
+- [x] `main.ts`、`command-handler.ts`、`commands/early-reaction.ts`、`review-state.ts`、`repo-tree.ts`、`dependency-analyzer.ts`、`conversation.ts` 七个文件不再直接 `import {context} from '@actions/github'` 或读取 `process.env.GITHUB_EVENT_NAME`（2026-07-23 完成；`review.ts`、`commands/dispatcher.ts`、`commenter.ts` 因风险/耦合评估调整为签名透传/不改动，完整迁移见阶段四，详见 6.2.1）
+- [x] payload 缺失/格式错误/未知事件三种场景均有对应 `ExecutionContextError.reason` 分类，`main.ts` 能区分"正常跳过"（`unknown_event` → warning）与"fail closed"（其余 reason → setFailed），并有特征化测试覆盖两条路径
+- [ ] 单元测试 + 集成测试全部通过（阶段二 U1~U5、阶段三 I1~I3 尚未开始，本任务仅完成阶段零 + 阶段一代码开发）
+- [x] `GitHub-only`（不提供任何 GitLab 配置）场景下现有全部功能测试通过，无回归：`npm test` 全量 466 通过、3 跳过，仅 3 个与本次改动无关的既有失败套件（`resolve.test.ts`/`resolve.integration.test.ts` 未解决的 merge conflict 标记、`lint-tool-installer.test.ts` 引用不存在符号，均已确认是 `origin/main` 上的既有问题）
 
 ---
 

@@ -4,15 +4,13 @@
  * 使用 GitHub Git Tree API 一次性获取整个仓库的文件列表，
  * 避免逐文件调用 getContent API。
  * 提供按扩展名/路径模式过滤的便捷方法，以及相对导入路径解析。
+ *
+ * ARCH-005/DEP-003：不再直接 import `@actions/github`，owner/repo 由调用方
+ * 显式传入；缓存键包含 platform + project identity + ref，避免未来双平台
+ * 场景下不同 project 的同名 ref 互相命中缓存。
  */
 import {info, warning} from '@actions/core'
-// eslint-disable-next-line camelcase
-import {context as github_context} from '@actions/github'
 import {octokit} from './octokit'
-
-// eslint-disable-next-line camelcase
-const context = github_context
-const repo = context.repo
 
 /** 支持的源代码语言及其文件扩展名 */
 export type Language = 'typescript' | 'python' | 'go' | 'java' | 'unknown'
@@ -26,31 +24,44 @@ const LANGUAGE_EXTENSIONS: Record<Language, string[]> = {
   unknown: []
 }
 
+/** 目标项目标识（当前仅 GitHub；预留 platform 字段供未来 GitLab adapter 复用同一缓存策略） */
+export interface RepoTreeProject {
+  platform?: 'github' | 'gitlab'
+  owner: string
+  repo: string
+}
+
 /** 文件树缓存（同一次运行中避免重复调用 API） */
 let cachedTree: string[] | null = null
-let cachedTreeRef: string | null = null
+let cachedTreeKey: string | null = null
 
 /**
  * 获取仓库文件树（使用 recursive=true 一次性获取）
  *
  * 调用 GitHub Git Tree API 获取指定 ref 下的所有文件路径。
- * 结果会缓存，同一 ref 的重复调用直接返回缓存。
+ * 结果会缓存，同一 platform + project + ref 的重复调用直接返回缓存。
  *
  * @param ref - Git 引用（commit SHA / branch / tag）
+ * @param project - 目标项目（owner/repo，可选 platform）
  * @returns 仓库中所有文件的路径列表
  */
-export async function getRepoFileTree(ref: string): Promise<string[]> {
+export async function getRepoFileTree(
+  ref: string,
+  project: RepoTreeProject
+): Promise<string[]> {
+  const cacheKey = `${project.platform ?? 'github'}:${project.owner}/${project.repo}@${ref}`
+
   // 如果缓存命中，直接返回
-  if (cachedTree != null && cachedTreeRef === ref) {
-    info(`repo tree cache hit for ref: ${ref}`)
+  if (cachedTree != null && cachedTreeKey === cacheKey) {
+    info(`repo tree cache hit for: ${cacheKey}`)
     return cachedTree
   }
 
   try {
-    info(`fetching repo tree for ref: ${ref}`)
+    info(`fetching repo tree for: ${cacheKey}`)
     const {data} = await octokit.git.getTree({
-      owner: repo.owner,
-      repo: repo.repo,
+      owner: project.owner,
+      repo: project.repo,
       tree_sha: ref,
       recursive: 'true'
     })
@@ -64,7 +75,7 @@ export async function getRepoFileTree(ref: string): Promise<string[]> {
 
     // 更新缓存
     cachedTree = files
-    cachedTreeRef = ref
+    cachedTreeKey = cacheKey
 
     return files
   } catch (e: any) {

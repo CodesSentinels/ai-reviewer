@@ -17,9 +17,8 @@
  * I/O 编排集中在 handleConversation 中，复用既有 Commenter / Bot / Prompts。
  */
 import {info, warning} from '@actions/core'
-// eslint-disable-next-line camelcase
-import {context as github_context} from '@actions/github'
 import {type Bot} from './bot'
+import type {ExecutionContext} from './platform/execution-context'
 import {
   Commenter,
   COMMENT_GREETING,
@@ -33,9 +32,6 @@ import {octokit} from './octokit'
 import {type Options} from './options'
 import {type Prompts} from './prompts'
 import {getTokenCount} from './tokenizer'
-
-// eslint-disable-next-line camelcase
-const context = github_context
 
 /** 默认的 bot mention 别名（小写匹配，与命令解析器保持一致）。共享自 constants。 */
 export {BOT_MENTIONS}
@@ -181,25 +177,27 @@ export function truncateConversationChain(
  * 仅处理 pull_request_review_comment 事件（代码行级评论中的追问）。
  * 由 command-handler.ts 在命令解析判定为 "fallback_conversation" 时调用。
  *
+ * @param execCtx  - 平台无关执行上下文（ARCH-005：取代直接 import @actions/github）
  * @param heavyBot - 重量级模型，用于生成高质量回复
  * @param options  - 全局配置
  * @param prompts  - 提示词模板
  */
 export const handleConversation = async (
+  execCtx: ExecutionContext,
   heavyBot: Bot,
   options: Options,
   prompts: Prompts
 ): Promise<void> => {
   const commenter: Commenter = new Commenter()
   const inputs: Inputs = new Inputs()
-  const repo = context.repo
+  const [repoOwner, repoName] = execCtx.projectPath.split('/')
 
   // ===== 1. 事件与 payload 校验 =====
-  if (context.eventName !== 'pull_request_review_comment') {
-    info(`conversation: skip non review_comment event (${context.eventName})`)
+  if (execCtx.eventKind !== 'review_comment_created') {
+    info(`conversation: skip non review_comment event (${execCtx.eventKind})`)
     return
   }
-  const payload = context.payload
+  const payload = execCtx.raw as any
   if (!payload || payload.action !== 'created') {
     info('conversation: skip (missing payload or action != created)')
     return
@@ -278,8 +276,8 @@ export const handleConversation = async (
   let fileDiff = ''
   try {
     const diffAll = await octokit.repos.compareCommits({
-      owner: repo.owner,
-      repo: repo.repo,
+      owner: repoOwner,
+      repo: repoName,
       base: payload.pull_request.base.sha,
       head: payload.pull_request.head.sha
     })
@@ -414,25 +412,27 @@ export function composeIssueCommentChain(
  *   - 主评论区扁平无 thread → 用隐藏幂等标签防止连续提问时重复回帖
  *   - 无关问题由模型判定并友好婉拒（见 prompts.commentIssue）
  *
+ * @param execCtx  - 平台无关执行上下文（ARCH-005：取代直接 import @actions/github）
  * @param heavyBot - 重量级模型，用于生成高质量回复
  * @param options  - 全局配置
  * @param prompts  - 提示词模板
  */
 export const handleIssueConversation = async (
+  execCtx: ExecutionContext,
   heavyBot: Bot,
   options: Options,
   prompts: Prompts
 ): Promise<void> => {
   const commenter: Commenter = new Commenter()
   const inputs: Inputs = new Inputs()
-  const repo = context.repo
+  const [repoOwner, repoName] = execCtx.projectPath.split('/')
 
   // ===== 1. 事件与 payload 校验 =====
-  if (context.eventName !== 'issue_comment') {
-    info(`issue-conversation: skip non issue_comment event (${context.eventName})`)
+  if (execCtx.eventKind !== 'comment_created') {
+    info(`issue-conversation: skip non issue_comment event (${execCtx.eventKind})`)
     return
   }
-  const payload = context.payload
+  const payload = execCtx.raw as any
   if (!payload || payload.action !== 'created') {
     info('issue-conversation: skip (missing payload or action != created)')
     return
@@ -514,14 +514,14 @@ export const handleIssueConversation = async (
   let prDiff = ''
   try {
     const pr = await octokit.pulls.get({
-      owner: repo.owner,
-      repo: repo.repo,
+      owner: repoOwner,
+      repo: repoName,
       // eslint-disable-next-line camelcase
       pull_number: pullNumber
     })
     const diffAll = await octokit.repos.compareCommits({
-      owner: repo.owner,
-      repo: repo.repo,
+      owner: repoOwner,
+      repo: repoName,
       base: pr.data.base.sha,
       head: pr.data.head.sha
     })

@@ -20,12 +20,19 @@ jest.mock('@actions/core', () => ({
   warning: jest.fn()
 }))
 
-const mockContext: any = {
-  eventName: 'issue_comment',
-  payload: {},
-  repo: {owner: 'octo', repo: 'demo'}
+// conversation.ts 已改为消费调用方传入的 ExecutionContext（ARCH-005），
+// 不再直接 import @actions/github；测试改为直接构造 execCtx 对象。
+const mockExecCtx: any = {
+  platform: 'github',
+  eventKind: 'comment_created',
+  projectPath: 'octo/demo',
+  projectId: 'octo/demo',
+  changeRequestId: 42,
+  actor: {login: 'alice', isBot: false},
+  baseSha: '',
+  headSha: '',
+  raw: {}
 }
-jest.mock('@actions/github', () => ({context: mockContext}))
 
 const octokitState: Record<string, any> = {
   getPull: jest.fn(),
@@ -80,8 +87,8 @@ function makeBot(reply = '这是模型给出的回答'): any {
 }
 
 function setPayload(commentBody: string, overrides: any = {}) {
-  mockContext.eventName = 'issue_comment'
-  mockContext.payload = {
+  mockExecCtx.eventKind = 'comment_created'
+  mockExecCtx.raw = {
     action: 'created',
     issue: {
       number: 42,
@@ -154,7 +161,7 @@ describe('handleIssueConversation — 编排', () => {
     setPayload('@ai-reviewer 这个改动为啥这样写', {
       issue: {number: 42, title: 't'} // 无 pull_request 字段
     })
-    await handleIssueConversation(makeBot(), stubOptions, stubPrompts)
+    await handleIssueConversation(mockExecCtx, makeBot(), stubOptions, stubPrompts)
     expect(commenterState.create).not.toHaveBeenCalled()
   })
 
@@ -166,13 +173,13 @@ describe('handleIssueConversation — 编排', () => {
         user: {login: 'ai-reviewer[bot]', type: 'Bot'}
       }
     })
-    await handleIssueConversation(makeBot(), stubOptions, stubPrompts)
+    await handleIssueConversation(mockExecCtx, makeBot(), stubOptions, stubPrompts)
     expect(commenterState.create).not.toHaveBeenCalled()
   })
 
   test('未 @bot → 跳过', async () => {
     setPayload('这是一条普通评论，没有提及机器人')
-    await handleIssueConversation(makeBot(), stubOptions, stubPrompts)
+    await handleIssueConversation(mockExecCtx, makeBot(), stubOptions, stubPrompts)
     expect(commenterState.create).not.toHaveBeenCalled()
   })
 
@@ -182,7 +189,7 @@ describe('handleIssueConversation — 编排', () => {
       {id: 3001, body: `已回复 ${buildIssueConvReplyTag(2001)}`}
     ])
     const bot = makeBot()
-    await handleIssueConversation(bot, stubOptions, stubPrompts)
+    await handleIssueConversation(mockExecCtx, bot, stubOptions, stubPrompts)
     expect(bot.chat).not.toHaveBeenCalled()
     expect(commenterState.create).not.toHaveBeenCalled()
   })
@@ -202,7 +209,7 @@ describe('handleIssueConversation — 编排', () => {
     } as any)
     commenterState.listComments.mockResolvedValue(history)
     const bot = makeBot()
-    await handleIssueConversation(bot, stubOptions, stubPrompts)
+    await handleIssueConversation(mockExecCtx, bot, stubOptions, stubPrompts)
     expect(bot.chat).not.toHaveBeenCalled()
     expect(commenterState.create).toHaveBeenCalledTimes(1)
     expect(commenterState.create.mock.calls[0][0]).toContain('上限')
@@ -214,7 +221,7 @@ describe('handleIssueConversation — 编排', () => {
       {id: 2001, body: '@ai-reviewer 这个改动为什么这样写？', user: {login: 'alice'}}
     ])
     const bot = makeBot('因为需要修复连续提问丢失的问题。')
-    await handleIssueConversation(bot, stubOptions, stubPrompts)
+    await handleIssueConversation(mockExecCtx, bot, stubOptions, stubPrompts)
 
     expect(bot.chat).toHaveBeenCalledTimes(1)
     expect(commenterState.create).toHaveBeenCalledTimes(1)
@@ -237,7 +244,7 @@ describe('handleIssueConversation — 编排', () => {
       {id: 2001, body: '@ai-reviewer 解释一下', user: {login: 'alice'}}
     ])
     const bot = makeBot('@user 这里是解释。')
-    await handleIssueConversation(bot, stubOptions, stubPrompts)
+    await handleIssueConversation(mockExecCtx, bot, stubOptions, stubPrompts)
     const [body] = commenterState.create.mock.calls[0]
     expect(body).toContain('@alice 这里是解释。')
     expect(body).not.toContain('@user')

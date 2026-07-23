@@ -12,6 +12,7 @@ import {
   getBooleanInput,
   getInput,
   getMultilineInput,
+  info,
   setFailed,
   warning
 } from '@actions/core'
@@ -19,6 +20,11 @@ import {Bot} from './bot'
 import {handleCommentEvent} from './command-handler'
 import {tryEarlyReaction} from './commands/early-reaction'
 import {OpenAIOptions, Options} from './options'
+import {
+  type ExecutionContext,
+  ExecutionContextError
+} from './platform/execution-context'
+import {createGitHubExecutionContext} from './platform/github-execution-context'
 import {Prompts} from './prompts'
 import {codeReview} from './review'
 
@@ -120,12 +126,40 @@ async function run(): Promise<void> {
   // 打印所有配置项，方便调试
   options.print()
 
+  // ==================== 构造平台无关执行上下文（ARCH-001~003） ====================
+  // GitHub-only：不读取任何 GitLab 配置也能正常构造和运行（GH-016）。
+  let execCtx: ExecutionContext
+  try {
+    execCtx = createGitHubExecutionContext()
+  } catch (e) {
+    if (e instanceof ExecutionContextError && e.reason === 'unknown_event') {
+      // 非致命：不支持的事件类型直接跳过，不调用模型（与改造前行为一致）
+      warning(`Skipped: ${e.message}`)
+      return
+    }
+    // 致命：payload 缺失/格式错误 → fail closed（ARCH-006），不得继续执行审查
+    if (e instanceof ExecutionContextError) {
+      setFailed(`Failed to build ExecutionContext: ${e.message}`)
+    } else if (e instanceof Error) {
+      setFailed(
+        `Failed to build ExecutionContext: ${e.message}, backtrace: ${e.stack}`
+      )
+    } else {
+      setFailed(`Failed to build ExecutionContext: ${e}`)
+    }
+    return
+  }
+
+  info(
+    `GitHub event: ${process.env.GITHUB_EVENT_NAME} → eventKind: ${execCtx.eventKind}`
+  )
+
   // 评论事件：在 Bot 初始化前尽快给用户评论打 ACK 表情
   if (
-    process.env.GITHUB_EVENT_NAME === 'issue_comment' ||
-    process.env.GITHUB_EVENT_NAME === 'pull_request_review_comment'
+    execCtx.eventKind === 'comment_created' ||
+    execCtx.eventKind === 'review_comment_created'
   ) {
-    await tryEarlyReaction(options.commandAckReaction)
+    await tryEarlyReaction(execCtx, options.commandAckReaction)
   }
 
   // 构建提示词模板对象，包含用户自定义的摘要和发布说明提示词
@@ -135,30 +169,36 @@ async function run(): Promise<void> {
   )
 
   try {
-    // 根据 GitHub 事件类型分发处理逻辑
-    console.log(`GitHub event: ${process.env.GITHUB_EVENT_NAME}`)
+    // 根据归一化事件类型分发处理逻辑
     if (
-      process.env.GITHUB_EVENT_NAME === 'pull_request' ||
-      process.env.GITHUB_EVENT_NAME === 'pull_request_target'
+      execCtx.eventKind === 'pr_opened' ||
+      execCtx.eventKind === 'pr_synchronize' ||
+      execCtx.eventKind === 'pr_reopened'
     ) {
       const bots = createBots(options)
       if (bots == null) return
 
       // PR 事件：执行完整的代码审查流程（摘要 + 逐文件审查）
-      await codeReview(bots.lightBot, bots.heavyBot, options, prompts)
+      await codeReview(execCtx, bots.lightBot, bots.heavyBot, options, prompts)
     } else if (
-      process.env.GITHUB_EVENT_NAME === 'pull_request_review_comment' ||
-      process.env.GITHUB_EVENT_NAME === 'issue_comment'
+      execCtx.eventKind === 'comment_created' ||
+      execCtx.eventKind === 'review_comment_created'
     ) {
       // 评论事件（顶层 issue_comment 或 review comment）
       // 先走命令调度，未命中命令时再透传给既有的对话式追问
       await handleCommentEvent({
+        execCtx,
         options,
         prompts,
         getReviewBots: () => createBots(options)
       })
     } else {
-      warning('Skipped: this action only works on push events or pull_request')
+      // metadata_updated（title/label/assignee 等元数据更新）或 unknown：
+      // 不调用模型。当前 GitHub workflow 的 `types:` 触发器已过滤掉非
+      // opened/synchronize/reopened 的 pull_request action，这里是防御性兜底。
+      info(
+        `Skipped: eventKind ${execCtx.eventKind} does not trigger model calls`
+      )
     }
   } catch (e: any) {
     if (e instanceof Error) {
