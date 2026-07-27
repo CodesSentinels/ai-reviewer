@@ -6,7 +6,7 @@ sidebar_position: 8
 
 # GitLab Trigger CLI 设计文档（EVENT-001 ~ EVENT-005）
 
-> **状态**：🚧 设计阶段（尚未开始代码开发）
+> **状态**：✅ 阶段一~三已完成（代码开发 + 单元测试 + 集成测试），见 PR #67；阶段四未开始
 > **优先级**：P0 —— GitHub↔GitLab 双平台兼容工作流 A 的第二个子任务（A5 的前半部分）
 > **依赖**：#62 / PR #63 交付的 `createGitLabExecutionContext()`（当前只存在于 `feat/execution-context` 分支，尚未合并 `main`）
 > **范围**：仅 `EVENT-001`~`EVENT-005`（CLI 入口 + payload 解析 + 结构校验 + 无关事件快速退出 + 日志脱敏）
@@ -331,6 +331,21 @@ __tests__/
 
 **本任务总计（阶段一~三）：约 24.5h（约 3 个工作日，单人估算）**
 
+### 8.5 实际完成状态（2026-07-27）
+
+阶段一~三已全部交付，见 PR #67（stacked on `feat/execution-context`）：
+
+| 阶段 | 交付文件 | 备注 |
+|:---|:---|:---|
+| 阶段一 G1-G4 | `src/gitlab-trigger-redact.ts`、`src/gitlab-trigger-validation.ts`、`src/gitlab-trigger.ts`、9 个 fixture JSON | 与第 7 节文件结构清单一致 |
+| 阶段二 U1 | `__tests__/gitlab-trigger-validation.test.ts`（12 用例，超过 ≥8 门槛） | 覆盖清单里列的全部场景 |
+| 阶段二 U2 | `__tests__/gitlab-trigger-redact.test.ts`（6 用例，超过 ≥5 门槛） | 覆盖清单里列的全部 4 种 token 形态 + 多重同现 + 无敏感内容 |
+| 阶段二 U3 / 阶段三 I1 | `__tests__/gitlab-trigger.test.ts`（8 用例） | 只 mock `fs.readFileSync`，`validateTriggerPayload`/`createGitLabExecutionContext`/`redact` 均为真实实现，兼顾 U3（分支覆盖）与 I1（真实 fixture 全流程）两个目标 |
+| 阶段三 I2 | 同上（文件读取失败路径注入 `glpat-` 字符串，断言输出不含明文） | 另一个 redact() 调用点（ExecutionContextError catch 分支）不接收动态 payload 内容，无泄漏面，未单独测 |
+| 阶段三 I3 | 已用 `grep` 确认零 GitHub 侧代码 import 新文件；`npm test` 556 passed/3 skipped 无新增失败 | — |
+
+**与文档建议的一处命名偏差**：第 7 节建议 CLI 集成测试命名为 `gitlab-trigger.characterization.test.ts`（呼应"新代码但用 fixture 驱动"的思路），实际交付为 `gitlab-trigger.test.ts`。内容和覆盖范围一致，仅文件名不同，如需对齐可后续重命名。
+
 ### 8.4 阶段四（后续排期，不计入本任务工时）
 
 - `EVENT-006`~`EVENT-021`：MR/Note Hook 具体业务规则（fork 拒绝、幂等键、命令触发、对话上下文）
@@ -342,12 +357,12 @@ __tests__/
 
 ## 9. 验收标准
 
-- [ ] CLI 能从本地文件路径正确读取并解析 `TRIGGER_PAYLOAD`（EVENT-001/002）
-- [ ] `validateTriggerPayload()` 对 project id / MR iid / source-target project id / note 必需字段的缺失均能正确识别并返回结构化原因（EVENT-003）
-- [ ] 无关事件（未知 `object_kind`、非 `merge_request`/`note`）触发 CLI 快速成功退出，不产生非零退出码，不调用任何模型/API（EVENT-004）
-- [ ] 所有错误路径的日志经过 `redact()` 处理，故意注入的 token 样式字符串不会明文出现在任何输出中（EVENT-005）
-- [ ] CLI 源文件不 import `@actions/core`/`@actions/github`（GitLab-only 独立运行前提，对齐 ARCH-015）
-- [ ] `npm test` 全量回归无新增失败，`GitHub-only` 场景不受影响
+- [x] CLI 能从本地文件路径正确读取并解析 `TRIGGER_PAYLOAD`（EVENT-001/002）
+- [x] `validateTriggerPayload()` 对 project id / MR iid / source-target project id / note 必需字段的缺失均能正确识别并返回结构化原因（EVENT-003）
+- [x] 无关事件（未知 `object_kind`、非 `merge_request`/`note`）触发 CLI 快速成功退出，不产生非零退出码，不调用任何模型/API（EVENT-004）
+- [x] 所有错误路径的日志经过 `redact()` 处理，故意注入的 token 样式字符串不会明文出现在任何输出中（EVENT-005）
+- [x] CLI 源文件不 import `@actions/core`/`@actions/github`（GitLab-only 独立运行前提，对齐 ARCH-015）
+- [x] `npm test` 全量回归无新增失败，`GitHub-only` 场景不受影响
 
 ---
 
