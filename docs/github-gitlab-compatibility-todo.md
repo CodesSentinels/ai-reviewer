@@ -60,12 +60,14 @@
 
 ### 4.1 ExecutionContext
 
-- [ ] `ARCH-001` 定义平台无关 `ExecutionContext`。
-- [ ] `ARCH-002` 上下文至少包含：平台、项目/仓库、PR/MR 编号、事件类型、actor、base/head SHA、评论/note/thread ID。
-- [ ] `ARCH-003` 实现 `GitHubExecutionContext`，兼容现有 GitHub payload 和环境变量。
-- [ ] `ARCH-004` 实现 `GitLabExecutionContext`，支持 MR Hook 和 Note Hook payload。
-- [ ] `ARCH-005` 消除共享业务层对 `GITHUB_EVENT_NAME`、GitHub context 和 GitLab 原始 payload 字段的直接读取。
-- [ ] `ARCH-006` payload 缺失、格式错误或事件未知时 fail closed。
+> **状态**：✅ 已完成（Issue #62，PR #63，`feat/execution-context` 分支）。`main.ts`、`command-handler.ts`、`commands/early-reaction.ts`、`review-state.ts`、`repo-tree.ts`、`dependency-analyzer.ts`、`conversation.ts` 已迁移。`review.ts`、`commands/dispatcher.ts`、`commenter.ts` 仅做了 `execCtx` 签名透传，内部仍保留对 `context`/`repo` 的读取（评估后判定风险过高未随本阶段一并迁移），延后到阶段四处理。
+
+- [x] `ARCH-001` 定义平台无关 `ExecutionContext`。
+- [x] `ARCH-002` 上下文至少包含：平台、项目/仓库、PR/MR 编号、事件类型、actor、base/head SHA、评论/note/thread ID。
+- [x] `ARCH-003` 实现 `GitHubExecutionContext`，兼容现有 GitHub payload 和环境变量。
+- [x] `ARCH-004` 实现 `GitLabExecutionContext`，支持 MR Hook 和 Note Hook payload。
+- [x] `ARCH-005` 消除共享业务层对 `GITHUB_EVENT_NAME`、GitHub context 和 GitLab 原始 payload 字段的直接读取（`review.ts`/`dispatcher.ts`/`commenter.ts` 内部仍有残留读取，见上方状态说明，完全消除延后到阶段四）。
+- [x] `ARCH-006` payload 缺失、格式错误或事件未知时 fail closed。
 
 ### 4.2 ConfigProvider
 
@@ -170,11 +172,13 @@
 
 ### 6.1 CLI 入口
 
-- [ ] `EVENT-001` 新增 GitLab trigger CLI 源入口。
-- [ ] `EVENT-002` CLI 从 file-type `TRIGGER_PAYLOAD` 路径读取原始 payload。
-- [ ] `EVENT-003` CLI 校验 project ID、事件类型、source/target project、MR IID 和 HEAD SHA。
-- [ ] `EVENT-004` 无关事件快速成功退出，不调用模型、不写评论。
-- [ ] `EVENT-005` 所有错误日志脱敏，不输出完整 payload 或 Token。
+> **状态**：✅ 已完成（PR #67，`feat/gitlab-trigger-cli` 分支，stacked on `feat/execution-context`；设计文档见 `docs/tasks/gitlab-trigger-cli-design.md`）。交付 `src/gitlab-trigger.ts`、`src/gitlab-trigger-validation.ts`、`src/gitlab-trigger-redact.ts` + 9 个 fixture + 对应单元/集成测试。成功路径目前只打印摘要日志，不调用模型、不写 GitLab note/discussion——真正的审查动作需要 `GLAPI-*`（第 7 章），不在本任务范围。`EVENT-006`~`EVENT-021`（MR/Note Hook 具体业务规则）未开始。
+
+- [x] `EVENT-001` 新增 GitLab trigger CLI 源入口。
+- [x] `EVENT-002` CLI 从 file-type `TRIGGER_PAYLOAD` 路径读取原始 payload。
+- [x] `EVENT-003` CLI 校验 project ID、事件类型、source/target project、MR IID 和 HEAD SHA。
+- [x] `EVENT-004` 无关事件快速成功退出，不调用模型、不写评论。
+- [x] `EVENT-005` 所有错误日志脱敏，不输出完整 payload 或 Token。
 
 ### 6.2 MR Hook
 
