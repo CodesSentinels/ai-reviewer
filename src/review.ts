@@ -52,6 +52,7 @@ import {
 import {Inputs} from './inputs'
 import {octokit} from './octokit'
 import {type Options} from './options'
+import {type ExecutionContext} from './platform/execution-context'
 import {type Prompts} from './prompts'
 import {mergeReviewsByTopic, type Review} from './review-dedup'
 import {ensureFixSuggestionHeaders} from './fix-suggestion-header'
@@ -79,12 +80,19 @@ export interface CodeReviewRunOptions {
 /**
  * 代码审查主函数
  *
+ * @param execCtx - 平台无关执行上下文（ARCH-005/ARCH-007 过渡期：本函数内部
+ *   仍以模块级 `context`/`repo`（`@actions/github`）为唯一数据源，尚未逐处
+ *   替换为 execCtx——40+ 处调用点的完整迁移列入阶段四后续排期，见
+ *   docs/tasks/execution-context-design.md 第 6.3 节。当前只接收该参数，
+ *   保证 main.ts/command-handler.ts 可以在入口层完成 ExecutionContext 改造，
+ *   不阻塞双平台兼容的入口层工作。
  * @param lightBot - 轻量模型 Bot（用于文件摘要和变更分类）
  * @param heavyBot - 重量模型 Bot（用于深度代码审查和最终摘要）
  * @param options - 全局配置选项
  * @param prompts - 提示词模板
  */
 export const codeReview = async (
+  execCtx: ExecutionContext,
   lightBot: Bot,
   heavyBot: Bot,
   options: Options,
@@ -429,15 +437,19 @@ ${hunks.oldHunk}
     try {
       info('Phase 0: starting cross-file dependency analysis')
       // 获取仓库文件树（1 次 API 调用，结果缓存）
-      const repoFiles = await getRepoFileTree(
-        context.payload.pull_request.head.sha
-      )
+      const repoFiles = await getRepoFileTree(execCtx.headSha || context.payload.pull_request.head.sha, {
+        platform: execCtx.platform,
+        owner: repo.owner,
+        repo: repo.repo
+      })
       // 分析依赖关系：解析导入、提取被修改的导出符号、搜索引用
       dependencyContext = await analyzeDependencies(
         filesAndChanges,
         repoFiles,
         options,
         githubConcurrencyLimit,
+        {owner: repo.owner, repo: repo.repo},
+        execCtx.headSha || context.payload.pull_request.head.sha,
         patchScans
       )
       info('Phase 0: dependency analysis completed')

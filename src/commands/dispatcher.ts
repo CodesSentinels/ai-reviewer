@@ -42,6 +42,7 @@ import type {
   ErrorCode,
   ParsedCommand
 } from './types'
+import type {ExecutionContext} from '../platform/execution-context'
 
 // eslint-disable-next-line camelcase
 const context = github_context
@@ -53,6 +54,13 @@ export type DispatchOutcome =
   | {kind: 'executed'; command: string; ok: boolean; error?: ErrorCode}
 
 export interface DispatcherDeps {
+  /**
+   * 可选（过渡期，ARCH-005 dual-track）：本文件内部事件坐标解析仍读取
+   * `@actions/github` context，尚未消费 execCtx——只作为透传字段写入
+   * CommandContext 供 handler 使用。完整迁移（消除本文件内的直接 context
+   * 依赖）列入阶段四后续排期，见 docs/tasks/execution-context-design.md 第 6.2 节。
+   */
+  execCtx?: ExecutionContext
   options: Options
   /** 可选: 覆盖默认 bot mention 列表 */
   botMentions?: string[]
@@ -295,6 +303,7 @@ export async function dispatchCommentEvent(
     command: parsed,
     eventName,
     action: 'created',
+    execCtx: deps.execCtx,
     owner,
     repo: repoName,
     prNumber,

@@ -1,0 +1,32 @@
+{
+  "object_kind": "merge_request",
+  "event_type": "merge_request",
+  "user": {"username": "alice", "name": "Alice"},
+  "project": {
+    "id": 42,
+    "path_with_namespace": "octo/demo",
+    "web_url": "https://gitlab.example.com/octo/demo"
+  },
+  "object_attributes": {
+    "id": 9001,
+    "iid": 7,
+    "title": "Add characterization fixtures (renamed)",
+    "source_branch": "feat/fixtures",
+    "target_branch": "main",
+    "source_project_id": 42,
+    "target_project_id": 42,
+    "state": "opened",
+    "action": "update",
+    "last_commit": {"id": "head-sha-0001"}
+  },
+  "changes": {
+    "title": {
+      "previous": "Add characterization fixtures",
+      "current": "Add characterization fixtures (renamed)"
+    },
+    "labels": {
+      "previous": [],
+      "current": [{"title": "needs-review"}]
+    }
+  }
+}

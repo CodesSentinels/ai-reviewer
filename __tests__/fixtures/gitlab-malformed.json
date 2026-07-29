@@ -1,0 +1,13 @@
+{
+  "object_kind": "merge_request",
+  "event_type": "merge_request",
+  "user": {"username": "alice"},
+  "project": {
+    "id": 42,
+    "path_with_namespace": "octo/demo"
+  },
+  "object_attributes": {
+    "id": 9003,
+    "title": "Missing iid and source/target project ids"
+  }
+}

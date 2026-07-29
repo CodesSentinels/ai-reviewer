@@ -14,24 +14,19 @@
  * 支持语言：TypeScript/JavaScript、Python、Go、Java
  */
 import {info, warning} from '@actions/core'
-// eslint-disable-next-line camelcase
-import {context as github_context} from '@actions/github'
 import pLimit from 'p-limit'
 import {scanPatch, type PatchScanMap} from './changed-lines'
 import {octokit} from './octokit'
 import {type Options} from './options'
 import {
   type Language,
+  type RepoTreeProject,
   detectLanguage,
   filterByExtension,
   getExtensionsForLanguage,
   resolveImportPath,
   sortByProximity
 } from './repo-tree'
-
-// eslint-disable-next-line camelcase
-const context = github_context
-const repo = context.repo
 
 // ==================== 数据结构定义 ====================
 
@@ -1096,6 +1091,8 @@ export async function analyzeDependencies(
   repoFiles: string[],
   options: Options,
   githubConcurrencyLimit: ReturnType<typeof pLimit>,
+  project: RepoTreeProject,
+  headSha: string,
   patchScans?: PatchScanMap
 ): Promise<DependencyContext> {
   const fileAnalyses = new Map<string, FileDependencyInfo>()
@@ -1205,14 +1202,13 @@ export async function analyzeDependencies(
   const prCandidates = filesAndChanges
     .map(([f]) => f)
     .filter(f => !allModifiedSymbols.has(f))
-  const headSha = context.payload.pull_request?.head?.sha ?? ''
 
   const prFetchPromises = prCandidates.map(f =>
     githubConcurrencyLimit(async () => {
       try {
         const response = await octokit.repos.getContent({
-          owner: repo.owner,
-          repo: repo.repo,
+          owner: project.owner,
+          repo: project.repo,
           path: f,
           ref: headSha
         })
@@ -1298,8 +1294,8 @@ export async function analyzeDependencies(
     githubConcurrencyLimit(async () => {
       try {
         const response = await octokit.repos.getContent({
-          owner: repo.owner,
-          repo: repo.repo,
+          owner: project.owner,
+          repo: project.repo,
           path: f,
           ref: headSha
         })

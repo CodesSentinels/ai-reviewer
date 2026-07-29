@@ -1,0 +1,12 @@
+{
+  "object_kind": "pipeline",
+  "event_type": "pipeline",
+  "project": {
+    "id": 42,
+    "path_with_namespace": "octo/demo"
+  },
+  "object_attributes": {
+    "id": 12345,
+    "status": "success"
+  }
+}

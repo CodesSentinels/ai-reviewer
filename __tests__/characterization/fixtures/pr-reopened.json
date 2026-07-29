@@ -1,0 +1,13 @@
+{
+  "eventName": "pull_request",
+  "action": "reopened",
+  "repo": {"owner": "octo", "repo": "demo"},
+  "pull_request": {
+    "number": 42,
+    "title": "Add characterization test fixtures",
+    "body": "This PR adds baseline fixtures.",
+    "html_url": "https://github.com/octo/demo/pull/42",
+    "base": {"sha": "base-sha-0001"},
+    "head": {"sha": "head-sha-0001"}
+  }
+}

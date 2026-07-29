@@ -1,8 +1,4 @@
-import {context as githubContext} from '@actions/github'
 import {octokit} from './octokit'
-
-const context = githubContext
-const repo = context.repo
 
 export type ReviewState = 'active' | 'paused'
 
@@ -37,27 +33,33 @@ ${REVIEW_STATE_END_TAG}`
   return [body.trimEnd(), stateBlock].filter(Boolean).join('\n\n')
 }
 
-export async function getReviewState(pullNumber: number): Promise<ReviewState> {
+export async function getReviewState(
+  owner: string,
+  repo: string,
+  pullNumber: number
+): Promise<ReviewState> {
   const pr = await octokit.pulls.get({
-    owner: repo.owner,
-    repo: repo.repo,
+    owner,
+    repo,
     pull_number: pullNumber
   })
   return getReviewStateFromBody(pr.data.body ?? '')
 }
 
 export async function setReviewState(
+  owner: string,
+  repo: string,
   pullNumber: number,
   state: ReviewState
 ): Promise<void> {
   const pr = await octokit.pulls.get({
-    owner: repo.owner,
-    repo: repo.repo,
+    owner,
+    repo,
     pull_number: pullNumber
   })
   await octokit.pulls.update({
-    owner: repo.owner,
-    repo: repo.repo,
+    owner,
+    repo,
     pull_number: pullNumber,
     body: writeReviewStateToBody(pr.data.body ?? '', state)
   })

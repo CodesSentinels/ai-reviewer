@@ -31,7 +31,7 @@ export const reviewStub: CommandHandler = {
   minPermission: 'write',
   async execute(ctx: CommandContext): Promise<CommandResult> {
     if (ctx.triggerReview == null) return await notImplemented('review')(ctx)
-    const state = await getReviewState(ctx.prNumber)
+    const state = await getReviewState(ctx.owner, ctx.repo, ctx.prNumber)
     if (state !== 'paused') {
       return {
         message: `<details>
@@ -90,7 +90,7 @@ export const pauseStub: CommandHandler = {
   needsAck: false,
   minPermission: 'write',
   async execute(ctx: CommandContext): Promise<CommandResult> {
-    await setReviewState(ctx.prNumber, 'paused')
+    await setReviewState(ctx.owner, ctx.repo, ctx.prNumber, 'paused')
     await clearReviewedCommitIds(ctx.prNumber)
     return {
       message: `已暂停当前 PR 的自动审查。使用 \`${PRIMARY_BOT_MENTION} resume\` 恢复。`
@@ -105,7 +105,7 @@ export const resumeStub: CommandHandler = {
   needsAck: false,
   minPermission: 'write',
   async execute(ctx: CommandContext): Promise<CommandResult> {
-    await setReviewState(ctx.prNumber, 'active')
+    await setReviewState(ctx.owner, ctx.repo, ctx.prNumber, 'active')
     return {message: '已恢复当前 PR 的自动审查。'}
   }
 }
@@ -117,7 +117,7 @@ export const configurationStub: CommandHandler = {
   needsAck: false,
   minPermission: 'read',
   async execute(ctx: CommandContext): Promise<CommandResult> {
-    const state = await getReviewState(ctx.prNumber)
+    const state = await getReviewState(ctx.owner, ctx.repo, ctx.prNumber)
     const o = ctx.options
     const message = `## 当前审查配置
 
