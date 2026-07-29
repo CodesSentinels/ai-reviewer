@@ -133,6 +133,14 @@
 - [ ] `DEP-007` 保持 `enable_dependency_analysis` 和 `max_dependency_files` 在两个平台的配置语义一致。
 - [ ] `DEP-008` 同一 repository tree、changed files 和 diff fixture 在两平台产生一致的依赖候选、路径解析、优先级排序和截断结果。
 
+### 4.6 Entry Orchestrator
+
+> **已知缺口**：GitHub Issue [#68](https://github.com/CodesSentinels/ai-reviewer/issues/68)（open，未修复）——`main.ts`（GitHub 入口）和 `gitlab-trigger.ts`（GitLab 入口）目前各自独立实现"读取配置 → 构造 ExecutionContext → 事件分发 → 调用共享核心 → 错误处理"这一整套运行时编排逻辑。`ExecutionContext`（4.1）只解决了"读取事件数据"层面的重复，编排层本身没有被抽象。已确认的重复点：两个入口处理 `ExecutionContextError` 的控制流（`unknown_event` → 优雅跳过；其余 → fail closed）逐字对应，只是日志 API 不同（`main.ts:131-151` vs `gitlab-trigger.ts`）；`main.ts:173-202` 的 `eventKind → codeReview/handleCommentEvent/skip` 分发逻辑也未被抽出为平台无关函数。一旦 `GLAPI-*`（第 7 章）和 `ConfigProvider`（4.2）落地，`gitlab-trigger.ts` 需要实现等价分发逻辑，如果不先抽出共享编排层，大概率会直接复制 `main.ts` 的 `run()` 改事件名了事，两份实现开始分叉。
+
+- [ ] `ARCH-025` 抽取平台无关的运行时编排函数（配置读取 → 构造 ExecutionContext → 事件分发 → 调用共享审查/命令核心 → 统一错误处理），供 `main.ts` 和 `gitlab-trigger.ts` 复用，不各自重复实现。
+- [ ] `ARCH-026` 统一 `ExecutionContextError` 的处理策略（`unknown_event` → 跳过不算失败；其余 → fail closed）为单一函数/模块，两平台入口调用同一实现，日志走 Logger 抽象（4.3），不允许分别用不同日志 API 各写一份分支逻辑。
+- [ ] `ARCH-027` 将 `pr_opened/pr_synchronize/pr_reopened → codeReview`、`comment_created/review_comment_created → handleCommentEvent`、其余 → skip 的事件分发逻辑从 `main.ts` 的 `run()` 中抽出为平台无关函数，供 GitLab 入口复用。
+
 ---
 
 ## 5. GitHub 功能兼容开发
