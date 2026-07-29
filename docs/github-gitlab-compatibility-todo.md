@@ -60,7 +60,7 @@
 
 ### 4.1 ExecutionContext
 
-> **状态**：✅ 已完成（Issue #62，PR #63，`feat/execution-context` 分支）。`main.ts`、`command-handler.ts`、`commands/early-reaction.ts`、`review-state.ts`、`repo-tree.ts`、`dependency-analyzer.ts`、`conversation.ts` 已迁移。`review.ts`、`commands/dispatcher.ts`、`commenter.ts` 仅做了 `execCtx` 签名透传，内部仍保留对 `context`/`repo` 的读取（评估后判定风险过高未随本阶段一并迁移），延后到阶段四处理。
+> **状态**：✅ 代码已完成（GitHub Issue [#62](https://github.com/CodesSentinels/ai-reviewer/issues/62) 跟踪，PR [#63](https://github.com/CodesSentinels/ai-reviewer/pull/63) 承载实现，`feat/execution-context` 分支；PR 本身尚未合并 main，Issue #62 状态仍为 open）。`main.ts`、`command-handler.ts`、`commands/early-reaction.ts`、`review-state.ts`、`repo-tree.ts`、`dependency-analyzer.ts`、`conversation.ts` 已迁移。`review.ts`、`commands/dispatcher.ts`、`commenter.ts` 仅做了 `execCtx` 签名透传，内部仍保留对 `context`/`repo` 的读取（评估后判定风险过高未随本阶段一并迁移），延后到阶段四处理。
 
 - [x] `ARCH-001` 定义平台无关 `ExecutionContext`。
 - [x] `ARCH-002` 上下文至少包含：平台、项目/仓库、PR/MR 编号、事件类型、actor、base/head SHA、评论/note/thread ID。
@@ -172,7 +172,7 @@
 
 ### 6.1 CLI 入口
 
-> **状态**：✅ 已完成（PR #67，`feat/gitlab-trigger-cli` 分支，stacked on `feat/execution-context`；设计文档见 `docs/tasks/gitlab-trigger-cli-design.md`）。交付 `src/gitlab-trigger.ts`、`src/gitlab-trigger-validation.ts`、`src/gitlab-trigger-redact.ts` + 9 个 fixture + 对应单元/集成测试。成功路径目前只打印摘要日志，不调用模型、不写 GitLab note/discussion——真正的审查动作需要 `GLAPI-*`（第 7 章），不在本任务范围。`EVENT-006`~`EVENT-021`（MR/Note Hook 具体业务规则）未开始。
+> **状态**：✅ 代码已完成（GitHub Issue [#64](https://github.com/CodesSentinels/ai-reviewer/issues/64) 跟踪；PR [#65](https://github.com/CodesSentinels/ai-reviewer/pull/65) 已合并进 `feat/execution-context` 分支（非 main）；后续以 PR [#67](https://github.com/CodesSentinels/ai-reviewer/pull/67) 延续，`feat/gitlab-trigger-cli` 分支，stacked on `feat/execution-context`，尚未合并 main，Issue #64 状态仍为 open；设计文档见 `docs/tasks/gitlab-trigger-cli-design.md`）。交付 `src/gitlab-trigger.ts`、`src/gitlab-trigger-validation.ts`、`src/gitlab-trigger-redact.ts` + 9 个 fixture + 对应单元/集成测试。成功路径目前只打印摘要日志，不调用模型、不写 GitLab note/discussion——真正的审查动作需要 `GLAPI-*`（第 7 章），不在本任务范围。`EVENT-006`~`EVENT-021`（MR/Note Hook 具体业务规则）未开始。
 
 - [x] `EVENT-001` 新增 GitLab trigger CLI 源入口。
 - [x] `EVENT-002` CLI 从 file-type `TRIGGER_PAYLOAD` 路径读取原始 payload。
@@ -192,6 +192,8 @@
 - [ ] `EVENT-013` MR 自动审查幂等键使用 `gitlab:{project_id}:{mr_iid}:head:{head_sha}`，并与 summary note 中的 reviewed SHA marker 一起判断；不得依赖未明确进入 `TRIGGER_PAYLOAD` 的 Webhook Header。
 
 ### 6.3 Note Hook
+
+> **已知缺口**：GitHub Issue [#66](https://github.com/CodesSentinels/ai-reviewer/issues/66)（open，未修复）——`createGitLabExecutionContext()` 的 `buildFromNoteHook()` 把"note action ≠ create（正常编辑/删除）"和"payload 真正缺字段"混用同一个 `missing_required_field` 原因，导致 CLI 对编辑/删除事件 fail closed（非零退出）而非优雅跳过。修复需要拆分出独立的可忽略事件原因，随 `EVENT-016`/`EVENT-017` 一并解决。
 
 - [ ] `EVENT-014` 支持 MR 顶层 note 命令。
 - [ ] `EVENT-015` 支持 discussion note/reply 命令和对话上下文。
