@@ -27,13 +27,12 @@ jobs:
           SYNC_BRANCH: ${{ github.event.inputs.branch || 'develop' }}
         run: |
           git remote add gitlab https://oauth2:${GITLAB_TOKEN}@gitlab.com/CodesSentinels/ai-reviewer.git
-          # 不用 --force：GitLab 侧分支可能存在 GitHub 这边没有的提交（团队成员
-          # 直接在 GitLab 上开发）。force-push 会静默丢弃那些提交。改为普通 push——
-          # 如果 GitLab 侧已经领先/分叉，这一步会失败并让 job 报红，倒逼人工先把
-          # GitLab 的提交合并回 GitHub，而不是被单向镜像悄悄覆盖掉。
+          # 恢复 --force：团队内部约定之后不再直接在 GitLab 上做任何代码改动，
+          # GitHub 是唯一真相源，GitLab 只是单向镜像目标。之前去掉 --force 是
+          # 因为当时 GitLab 侧确实存在独立提交（团队成员直接在 GitLab 开发），
+          # 那个前提已经不再成立，所以不需要再用"普通 push 失败以防覆盖"的
+          # 保护措施。
           #
-          # 触发分支改为 develop（原为 main）：main 两边已分叉，暂不处理，
-          # 避免这个自动化 job 在下次 main push 时又报红/或误操作。develop
-          # 目前两边一致，一路保持普通 push 即可安全维持同步。
+          # 触发分支改为 develop（原为 main）：main 两边已分叉，暂不处理。
           # workflow_dispatch 的 branch 输入仍可用于手动同步其他分支。
-          git push gitlab "HEAD:refs/heads/${SYNC_BRANCH}"
+          git push gitlab "HEAD:refs/heads/${SYNC_BRANCH}" --force
