@@ -3,7 +3,13 @@ name: Sync to GitLab
 on:
   push:
     branches:
-      - main
+      - develop
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to sync to GitLab (must exist with the same name on both remotes)'
+        required: true
+        default: 'develop'
 
 jobs:
   sync:
@@ -13,10 +19,21 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event.inputs.branch || 'develop' }}
 
       - name: Push to GitLab
         env:
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          SYNC_BRANCH: ${{ github.event.inputs.branch || 'develop' }}
         run: |
           git remote add gitlab https://oauth2:${GITLAB_TOKEN}@gitlab.com/CodesSentinels/ai-reviewer.git
-          git push gitlab main --force
+          # 不用 --force：GitLab 侧分支可能存在 GitHub 这边没有的提交（团队成员
+          # 直接在 GitLab 上开发）。force-push 会静默丢弃那些提交。改为普通 push——
+          # 如果 GitLab 侧已经领先/分叉，这一步会失败并让 job 报红，倒逼人工先把
+          # GitLab 的提交合并回 GitHub，而不是被单向镜像悄悄覆盖掉。
+          #
+          # 触发分支改为 develop（原为 main）：main 两边已分叉，暂不处理，
+          # 避免这个自动化 job 在下次 main push 时又报红/或误操作。develop
+          # 目前两边一致，一路保持普通 push 即可安全维持同步。
+          # workflow_dispatch 的 branch 输入仍可用于手动同步其他分支。
+          git push gitlab "HEAD:refs/heads/${SYNC_BRANCH}"
