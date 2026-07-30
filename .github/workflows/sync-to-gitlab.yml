@@ -19,4 +19,8 @@ jobs:
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
         run: |
           git remote add gitlab https://oauth2:${GITLAB_TOKEN}@gitlab.com/CodesSentinels/ai-reviewer.git
-          git push gitlab main --force
+          # 不用 --force：GitLab main 上可能存在 GitHub 这边没有的提交（团队成员
+          # 直接在 GitLab 上开发）。force-push 会静默丢弃那些提交。改为普通 push——
+          # 如果 GitLab main 已经领先/分叉，这一步会失败并让 job 报红，倒逼人工先
+          # 把 GitLab 的提交合并回 GitHub main，而不是被单向镜像悄悄覆盖掉。
+          git push gitlab main
