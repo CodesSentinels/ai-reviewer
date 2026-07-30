@@ -19,6 +19,7 @@ import {createGitLabExecutionContext} from './platform/gitlab-execution-context'
 import {ExecutionContextError} from './platform/execution-context'
 import {validateTriggerPayload} from './gitlab-trigger-validation'
 import {redact} from './gitlab-trigger-redact'
+import {checkForkMergeRequest} from './gitlab-mr-hook-rules'
 
 export async function run(): Promise<void> {
   const payloadPath = process.env.TRIGGER_PAYLOAD
@@ -54,10 +55,20 @@ export async function run(): Promise<void> {
     return
   }
   if (validation.sourceTargetMismatch) {
-    // EVENT-003 只做结构校验 + 记录；是否拒绝 fork MR 是 EVENT-010，不在本任务实现
-    console.log(
-      'Note: source_project_id != target_project_id (fork MR) — rejection logic is EVENT-010, not yet implemented'
+    // EVENT-010：fork MR 是需要人工关注的安全边界，fail closed 而非优雅跳过
+    // （区别于 unknown_event 的 exit 0 语义）——见 docs/tasks/gitlab-mr-hook-design.md 第 3.2 节。
+    const attrs = (parsed as Record<string, any>).object_attributes
+    const forkCheck = checkForkMergeRequest(
+      attrs.source_project_id,
+      attrs.target_project_id
     )
+    console.error(
+      `Rejected: fork MR not supported (MVP) — ${redact(
+        forkCheck.reason ?? ''
+      )}`
+    )
+    process.exitCode = 1
+    return
   }
 
   let execCtx

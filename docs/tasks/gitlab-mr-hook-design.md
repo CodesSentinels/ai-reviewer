@@ -6,7 +6,7 @@ sidebar_position: 9
 
 # GitLab MR Hook 业务规则设计文档（EVENT-006 ~ EVENT-013）
 
-> **状态**：设计中，尚未开发
+> **状态**：✅ 已完成（代码开发 + 单元测试），见 `feat/gitlab-mr-hook-rules` 分支
 > **优先级**：P1 —— GitHub↔GitLab 双平台兼容工作流 A 的延续任务
 > **依赖**：`createGitLabExecutionContext()`（#62 / PR #63，`feat/execution-context` 分支，尚未合并 main）、`gitlab-trigger.ts`/`gitlab-trigger-validation.ts`（#64 / PR #67，`feat/gitlab-trigger-cli` 分支，尚未合并 main）
 > **跟踪 Issue**：[#69](https://github.com/CodesSentinels/ai-reviewer/issues/69)
@@ -178,11 +178,11 @@ export function buildMrIdempotencyKey(
 
 ## 5. 验收标准
 
-- [ ] `EVENT-006~009` 的映射行为有显式测试覆盖，包含此前未覆盖的边界场景
-- [ ] fork MR 被 `gitlab-trigger.ts` 真正拒绝（非零退出），不再只是打日志
-- [ ] 同项目 MR 的字段处理路径与 fork MR 检测逻辑无关，测试固化
-- [ ] `isHeadStale()`/`buildMrIdempotencyKey()` 均为纯函数，不发起网络调用，单元测试覆盖率 100% 分支
-- [ ] `npm test` 全量回归无新增失败
+- [x] `EVENT-006~009` 的映射行为有显式测试覆盖，包含此前未覆盖的边界场景
+- [x] fork MR 被 `gitlab-trigger.ts` 真正拒绝（非零退出），不再只是打日志
+- [x] 同项目 MR 的字段处理路径与 fork MR 检测逻辑无关，测试固化
+- [x] `isHeadStale()`/`buildMrIdempotencyKey()` 均为纯函数，不发起网络调用，单元测试覆盖率 100% 分支
+- [x] `npm test` 全量回归无新增失败
 
 ---
 
