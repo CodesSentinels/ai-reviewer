@@ -1,0 +1,86 @@
+name: Sync branch (GitHub <-> GitLab, bidirectional)
+
+# 双向同步指定分支（如 develop）：在 Actions runner 内完成 fetch 双方 + 冲突
+# 检测 + 合并 + 双向 push，整个过程不经过本地机器（本地对 gitlab.com 的 push
+# 会被网络策略拦截，fetch/API 不受影响，但为了流程一致性这里统一放到 CI 里做）。
+#
+# 安全原则：
+# - 两个方向都不用 --force。分叉时普通 push 会直接失败，不会静默覆盖任何一边。
+# - 有真实冲突时不自动合并、不 push 任何东西，只报告冲突文件，交给人工在本地解决。
+# - 每次运行都先用 `git merge-tree`（无副作用的 dry-run）判断是否会冲突，
+#   干净才会真正执行合并和推送。
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: '要同步的分支名（GitHub/GitLab 两边分支名必须一致）'
+        required: true
+        default: 'develop'
+
+permissions:
+  contents: write
+
+env:
+  SYNC_BRANCH: ${{ github.event.inputs.branch }}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout GitHub branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.branch }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch GitLab branch
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+        run: |
+          git remote add gitlab "https://oauth2:${GITLAB_TOKEN}@gitlab.com/CodesSentinels/ai-reviewer.git"
+          git fetch gitlab "${SYNC_BRANCH}"
+
+      - name: Check for conflicts (dry run, no side effects)
+        id: check
+        run: |
+          set +e
+          git merge-tree --write-tree HEAD "gitlab/${SYNC_BRANCH}" > /tmp/merge_tree_output.txt 2>&1
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          cat /tmp/merge_tree_output.txt
+
+      - name: Report divergence summary
+        run: |
+          {
+            echo "### GitLab 独有提交（GitHub 没有的）"
+            git log --oneline "HEAD..gitlab/${SYNC_BRANCH}" --reverse | sed 's/^/- /' || true
+            echo "### GitHub 独有提交（GitLab 没有的）"
+            git log --oneline "gitlab/${SYNC_BRANCH}..HEAD" --reverse | sed 's/^/- /' || true
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Merge and push both directions (only if clean)
+        if: steps.check.outputs.exit_code == '0'
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+        run: |
+          git merge "gitlab/${SYNC_BRANCH}" --no-edit -m "sync: merge gitlab/${SYNC_BRANCH} into ${SYNC_BRANCH} (automated, no conflicts)"
+          git push origin "HEAD:refs/heads/${SYNC_BRANCH}"
+          git push gitlab "HEAD:refs/heads/${SYNC_BRANCH}"
+          echo "✅ 双向同步完成，两边 ${SYNC_BRANCH} 现在指向同一个 commit：$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report conflict (no merge, no push)
+        if: steps.check.outputs.exit_code != '0'
+        run: |
+          echo "::error::检测到真实冲突，本次不做任何合并/推送。请在本地手动解决：git fetch gitlab ${SYNC_BRANCH} && git merge gitlab/${SYNC_BRANCH}，解决冲突后再手动 push 两边。"
+          {
+            echo "### ⚠️ 检测到冲突，未做任何合并/推送"
+            echo '```'
+            cat /tmp/merge_tree_output.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
