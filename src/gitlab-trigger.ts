@@ -64,8 +64,13 @@ export async function run(): Promise<void> {
   try {
     execCtx = createGitLabExecutionContext(parsed)
   } catch (e) {
-    if (e instanceof ExecutionContextError && e.reason === 'unknown_event') {
-      // EVENT-004：无关事件快速成功退出
+    if (
+      e instanceof ExecutionContextError &&
+      (e.reason === 'unknown_event' || e.reason === 'ignorable_event')
+    ) {
+      // EVENT-004：完全不认识的事件（unknown_event）；EVENT-016/017：认识但
+      // 业务上不需要处理的事件，如 note 编辑/删除、system note（ignorable_event，
+      // 修复 Issue #66）。两者都优雅跳过，不应 fail closed。
       console.log(`Skipped: ${e.message}`)
       return
     }

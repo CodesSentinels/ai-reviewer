@@ -1,0 +1,22 @@
+{
+  "object_kind": "note",
+  "event_type": "note",
+  "user": {"username": "alice", "name": "Alice"},
+  "project_id": 42,
+  "project": {
+    "id": 42,
+    "path_with_namespace": "octo/demo"
+  },
+  "object_attributes": {
+    "id": 5003,
+    "note": "changed the description",
+    "noteable_type": "MergeRequest",
+    "action": "create",
+    "system": true
+  },
+  "merge_request": {
+    "iid": 7,
+    "title": "Add characterization fixtures",
+    "diff_head_sha": "head-sha-0001"
+  }
+}

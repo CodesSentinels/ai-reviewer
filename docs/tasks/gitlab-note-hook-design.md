@@ -6,7 +6,7 @@ sidebar_position: 10
 
 # GitLab Note Hook 业务规则设计文档（EVENT-014 ~ EVENT-021）
 
-> **状态**：设计中，尚未开发
+> **状态**：⚠️ 代码开发 + 单元测试已完成（见 `feat/gitlab-note-hook-rules` 分支），但第 7 节的 `linfei0211` 分工对齐**尚未完成**——本任务在协作确认之前就已开工，见第 7 节说明，PR review 时需要标注
 > **优先级**：P1 —— GitHub↔GitLab 双平台兼容工作流 A 的延续任务
 > **依赖**：`createGitLabExecutionContext()`（#62 / PR #63）、`gitlab-trigger.ts`（#64 / PR #67）
 > **跟踪 Issue**：[#70](https://github.com/CodesSentinels/ai-reviewer/issues/70)（同时修复 [#66](https://github.com/CodesSentinels/ai-reviewer/issues/66)）
@@ -214,12 +214,12 @@ export function buildNoteIdempotencyKey(
 
 ## 5. 验收标准
 
-- [ ] Issue #66 复现场景（编辑/删除 note）改为 exit 0 优雅跳过
-- [ ] system note、非 MR note 同样优雅跳过，有 fixture 覆盖
-- [ ] `isSelfNote()` 有单元测试，且明确标注 PAT 用户名来源是临时环境变量方案
-- [ ] `buildNoteIdempotencyKey()` 输出格式与 TODO 文档一致
-- [ ] `commands/parser.ts` 复用性有结论（能直接复用 或 记录了需要解耦的 GitHub 专属假设）
-- [ ] `npm test` 全量回归无新增失败
+- [x] Issue #66 复现场景（编辑/删除 note）改为 exit 0 优雅跳过
+- [x] system note、非 MR note 同样优雅跳过，有 fixture 覆盖
+- [x] `isSelfNote()` 有单元测试，且明确标注 PAT 用户名来源是临时环境变量方案
+- [x] `buildNoteIdempotencyKey()` 输出格式与 TODO 文档一致
+- [x] `commands/parser.ts` 复用性有结论（能直接复用 或 记录了需要解耦的 GitHub 专属假设）
+- [x] `npm test` 全量回归无新增失败
 - [ ] 与 `linfei0211` 的分工已确认并记录
 
 ---
@@ -236,4 +236,9 @@ export function buildNoteIdempotencyKey(
 
 ## 7. 与 linfei0211 的分工（协调结果占位）
 
-> 待补充：本任务开发前需要先和 `linfei0211` 确认谁负责 `ignorable_event` 的代码修改、谁负责测试覆盖，并把结论写回这里。
+> ⚠️ **未完成**：本任务的代码开发（`ignorable_event` reason 拆分 + `buildFromNoteHook()` 重构 + 全部测试）已经在**未与 `linfei0211` 对齐分工**的情况下完成——按用户指示直接开工，跳过了本节要求的协调步骤。这不代表分工已确认，只代表实现已就绪可供协调后参考。
+>
+> 待办：PR 提交前仍需要和 `linfei0211` 确认：
+> 1. 这份实现是否与 `linfei0211` 已经在做/计划做的工作重复；
+> 2. 谁负责代码 review、谁负责后续 `STATE-005`/`ConfigProvider` 的对接；
+> 3. 确认后把结论更新回本节，再合并 PR。
