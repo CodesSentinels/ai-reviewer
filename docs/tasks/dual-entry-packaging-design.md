@@ -6,7 +6,7 @@ sidebar_position: 11
 
 # 双入口打包设计文档（BUILD-001 ~ BUILD-010）
 
-> **状态**：设计中，尚未开发
+> **状态**：✅ 已完成（BUILD-001~010），见 `feat/dual-entry-packaging` 分支
 > **优先级**：P1 —— GitHub↔GitLab 双平台兼容工作流 A 的延续任务，是后续 `.gitlab-ci.yml`（第12章 `CI-*`）落地的前提
 > **依赖**：`src/gitlab-trigger.ts`（#64 / PR #67，已存在）
 > **跟踪 Issue**：[#71](https://github.com/CodesSentinels/ai-reviewer/issues/71)
@@ -132,11 +132,11 @@ node dist/gitlab-trigger/index.js  # GitLab 侧：预期因缺 TRIGGER_PAYLOAD �
 
 ## 5. 验收标准
 
-- [ ] `npm run package` 生成 `dist/index.js` 和 `dist/gitlab-trigger/index.js`，两者内容互不干扰
-- [ ] `node dist/index.js`/`node dist/gitlab-trigger/index.js` 冒烟测试均能加载执行到已知错误分支，不是模块加载错误
-- [ ] GitLab bundle 不携带不必要的 `tiktoken_bg.wasm` 等资产（除非确认需要）
-- [ ] 两个 bundle 产物中都能找到构建时记录的 source commit SHA
-- [ ] `npm run all` 全量跑通，无新增失败
+- [x] `npm run package` 生成 `dist/index.js` 和 `dist/gitlab-trigger/index.js`，两者内容互不干扰
+- [x] `node dist/index.js`/`node dist/gitlab-trigger/index.js` 冒烟测试均能加载执行到已知错误分支，不是模块加载错误
+- [x] GitLab bundle 不携带不必要的 `tiktoken_bg.wasm` 等资产（除非确认需要）
+- [x] 两个 bundle 产物中都能找到构建时记录的 source commit SHA
+- [x] `npm run all` 全量跑通，无新增失败
 
 ---
 
@@ -144,6 +144,6 @@ node dist/gitlab-trigger/index.js  # GitLab 侧：预期因缺 TRIGGER_PAYLOAD �
 
 | 风险/问题 | 说明 | 处理方式 |
 |:---|:---|:---|
-| `ncc build ... -o dist/gitlab-trigger` 是否会清空 `dist/` 父目录 | 未实测，只是基于 `ncc` 一般行为的假设 | 实现阶段必须用真实构建验证，写进 B3 任务 |
-| 冒烟测试的"成功"判定标准 | 两个入口在无真实事件环境下本来就非零退出 | 断言 stderr 内容而非 exit code，具体文本在实现时定 |
-| `BUILD-010` 的 SHA 写入格式 | 独立文件 vs bundle 内常量，两种都可行 | 实现时择一，需要和后续 `CI-013` 的消费方式一起定 |
+| `ncc build ... -o dist/gitlab-trigger` 是否会清空 `dist/` 父目录 | ✅ 已实测排除：`ncc build` 只写自己的输出文件（`index.js`/`licenses.txt`），不会清空/删除目标目录里的其他内容，两个方向互相 rebuild 多次验证过，互不影响 | 已解决，无需进一步处理 |
+| 冒烟测试的"成功"判定标准 | 两个入口在无真实事件环境下本来就非零退出 | ✅ 已解决：`scripts/smoke-test.sh` 断言输出文本——GitHub 侧包含 `GITHUB_ACTION`（Octokit action-auth 因缺少该环境变量抛出的错误），GitLab 侧包含 `TRIGGER_PAYLOAD is not set`；同时排除 `Cannot find module`/`SyntaxError` 等真正的 bundle 加载失败信号 |
+| `BUILD-010` 的 SHA 写入格式 | 独立文件 vs bundle 内常量，两种都可行 | ✅ 已解决：选择独立文件，`dist/SOURCE_SHA`/`dist/gitlab-trigger/SOURCE_SHA`，构建时写入 `git rev-parse HEAD` |

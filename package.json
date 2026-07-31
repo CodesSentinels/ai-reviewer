@@ -6,14 +6,17 @@
   "main": "lib/main.js",
   "scripts": {
     "build": "cp node_modules/@dqbd/tiktoken/tiktoken_bg.wasm dist/tiktoken_bg.wasm && tsc",
-    "package": "ncc build --license licenses.txt",
+    "package:github": "ncc build lib/main.js -o dist --license licenses.txt && git rev-parse HEAD > dist/SOURCE_SHA",
+    "package:gitlab": "ncc build lib/gitlab-trigger.js -o dist/gitlab-trigger --license licenses.txt && git rev-parse HEAD > dist/gitlab-trigger/SOURCE_SHA",
+    "package": "npm run package:github && npm run package:gitlab",
+    "smoke": "bash scripts/smoke-test.sh",
     "act": "npm run build && npm run package && ./bin/act pull_request_target -e event.json --secret-file .secrets",
     "act-local": "npm run build && npm run package && ./bin/act pull_request_target -e event.json --secret-file .secrets",
     "format": "prettier --write '**/*.ts'",
     "format-check": "prettier --check '**/*.ts'",
     "lint": "eslint src/**/*.ts",
     "test": "jest",
-    "all": "npm run build && npm run format && npm run lint && npm run package && npm test"
+    "all": "npm run build && npm run format && npm run lint && npm run package && npm run smoke && npm test"
   },
   "repository": {
     "type": "git",
