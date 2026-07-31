@@ -8,9 +8,11 @@
  * ARCH-005/DEP-003：不再直接 import `@actions/github`，owner/repo 由调用方
  * 显式传入；缓存键包含 platform + project identity + ref，避免未来双平台
  * 场景下不同 project 的同名 ref 互相命中缓存。
+ *
+ * DEP-005：不 import `@actions/core` 和 Octokit，日志通过 Logger 抽象，
+ * tree API 通过 TreeFetcher 注入。
  */
-import {info, warning} from '@actions/core'
-import {octokit} from './octokit'
+import {getLogger} from './platform/logger'
 
 /** 支持的源代码语言及其文件扩展名 */
 export type Language = 'typescript' | 'python' | 'go' | 'java' | 'unknown'
@@ -31,47 +33,62 @@ export interface RepoTreeProject {
   repo: string
 }
 
+/**
+ * 平台无关的仓库文件树获取接口（DEP-005）。
+ * GitHub adapter 调用 Git Tree API，GitLab adapter 调用 Repository Tree API。
+ */
+export interface TreeFetcher {
+  getTree(
+    // eslint-disable-next-line no-unused-vars
+    owner: string,
+    // eslint-disable-next-line no-unused-vars
+    repo: string,
+    // eslint-disable-next-line no-unused-vars
+    treeSha: string
+  ): Promise<Array<{type?: string; path?: string}>>
+}
+
 /** 文件树缓存（同一次运行中避免重复调用 API） */
 let cachedTree: string[] | null = null
 let cachedTreeKey: string | null = null
 
 /**
- * 获取仓库文件树（使用 recursive=true 一次性获取）
+ * 获取仓库文件树
  *
- * 调用 GitHub Git Tree API 获取指定 ref 下的所有文件路径。
+ * 通过注入的 TreeFetcher 获取指定 ref 下的所有文件路径。
  * 结果会缓存，同一 platform + project + ref 的重复调用直接返回缓存。
  *
  * @param ref - Git 引用（commit SHA / branch / tag）
  * @param project - 目标项目（owner/repo，可选 platform）
+ * @param fetcher - 平台相关的 tree 获取实现
  * @returns 仓库中所有文件的路径列表
  */
 export async function getRepoFileTree(
   ref: string,
-  project: RepoTreeProject
+  project: RepoTreeProject,
+  fetcher: TreeFetcher
 ): Promise<string[]> {
-  const cacheKey = `${project.platform ?? 'github'}:${project.owner}/${project.repo}@${ref}`
+  const logger = getLogger()
+  const cacheKey = `${project.platform ?? 'github'}:${project.owner}/${
+    project.repo
+  }@${ref}`
 
   // 如果缓存命中，直接返回
   if (cachedTree != null && cachedTreeKey === cacheKey) {
-    info(`repo tree cache hit for: ${cacheKey}`)
+    logger.info(`repo tree cache hit for: ${cacheKey}`)
     return cachedTree
   }
 
   try {
-    info(`fetching repo tree for: ${cacheKey}`)
-    const {data} = await octokit.git.getTree({
-      owner: project.owner,
-      repo: project.repo,
-      tree_sha: ref,
-      recursive: 'true'
-    })
+    logger.info(`fetching repo tree for: ${cacheKey}`)
+    const tree = await fetcher.getTree(project.owner, project.repo, ref)
 
     // 仅保留 blob 类型（文件），排除 tree 类型（目录）
-    const files = data.tree
+    const files = tree
       .filter(item => item.type === 'blob' && item.path != null)
       .map(item => item.path as string)
 
-    info(`repo tree fetched: ${files.length} files`)
+    logger.info(`repo tree fetched: ${files.length} files`)
 
     // 更新缓存
     cachedTree = files
@@ -79,7 +96,7 @@ export async function getRepoFileTree(
 
     return files
   } catch (e: any) {
-    warning(`failed to fetch repo tree: ${e.message}`)
+    logger.warning(`failed to fetch repo tree: ${e.message}`)
     return []
   }
 }
@@ -186,7 +203,7 @@ function resolveRelativePath(
   const dir = importingFile.substring(0, importingFile.lastIndexOf('/'))
 
   // 将相对路径拼接为绝对路径
-  const parts = (dir ? dir + '/' + importPath : importPath).split('/')
+  const parts = (dir ? `${dir}/${importPath}` : importPath).split('/')
   const resolved: string[] = []
   for (const part of parts) {
     if (part === '.') continue
@@ -212,7 +229,18 @@ function tryResolveWithExtensions(
   }
 
   // 尝试补全扩展名
-  const extensions = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.vue', '.py', '.go', '.java']
+  const extensions = [
+    '.ts',
+    '.tsx',
+    '.js',
+    '.jsx',
+    '.mjs',
+    '.cjs',
+    '.vue',
+    '.py',
+    '.go',
+    '.java'
+  ]
   for (const ext of extensions) {
     if (repoFilesSet.has(basePath + ext)) {
       return basePath + ext
@@ -220,7 +248,14 @@ function tryResolveWithExtensions(
   }
 
   // 尝试 index 文件
-  const indexExtensions = ['/index.ts', '/index.tsx', '/index.js', '/index.jsx', '/index.vue', '/__init__.py']
+  const indexExtensions = [
+    '/index.ts',
+    '/index.tsx',
+    '/index.js',
+    '/index.jsx',
+    '/index.vue',
+    '/__init__.py'
+  ]
   for (const idx of indexExtensions) {
     if (repoFilesSet.has(basePath + idx)) {
       return basePath + idx

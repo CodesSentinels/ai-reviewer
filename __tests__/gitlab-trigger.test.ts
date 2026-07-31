@@ -10,7 +10,14 @@
  * 并断言之，与 c9672be 提交信息中记录的已知缺口一致：这属于 EVENT-016/017
  * （Issue #66），本任务范围不修复，只需如实反映现状。
  */
-import {describe, expect, test, jest, beforeEach, afterEach} from '@jest/globals'
+import {
+  describe,
+  expect,
+  test,
+  jest,
+  beforeEach,
+  afterEach
+} from '@jest/globals'
 
 import mrOpen from './fixtures/gitlab-mr-hook-open.json'
 import mrFork from './fixtures/gitlab-mr-hook-fork.json'
@@ -31,6 +38,7 @@ async function runTrigger(): Promise<void> {
 
 describe('gitlab-trigger.ts run()', () => {
   let logSpy: jest.SpiedFunction<typeof console.log>
+  let warnSpy: jest.SpiedFunction<typeof console.warn>
   let errorSpy: jest.SpiedFunction<typeof console.error>
 
   beforeEach(() => {
@@ -38,11 +46,13 @@ describe('gitlab-trigger.ts run()', () => {
     delete process.env.TRIGGER_PAYLOAD
     process.exitCode = undefined
     logSpy = jest.spyOn(console, 'log').mockImplementation(() => {})
+    warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {})
     errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {})
   })
 
   afterEach(() => {
     logSpy.mockRestore()
+    warnSpy.mockRestore()
     errorSpy.mockRestore()
     process.exitCode = undefined
   })
@@ -50,7 +60,7 @@ describe('gitlab-trigger.ts run()', () => {
   test('TRIGGER_PAYLOAD 未设置 → 报错退出，不读文件', async () => {
     await runTrigger()
 
-    expect(errorSpy).toHaveBeenCalledWith('TRIGGER_PAYLOAD is not set')
+    expect(errorSpy).toHaveBeenCalledWith('[ERROR] TRIGGER_PAYLOAD is not set')
     expect(process.exitCode).toBe(1)
     expect(fsState.readFileSync).not.toHaveBeenCalled()
   })
@@ -77,7 +87,7 @@ describe('gitlab-trigger.ts run()', () => {
     await runTrigger()
 
     expect(errorSpy).toHaveBeenCalledWith(
-      'TRIGGER_PAYLOAD content is not valid JSON'
+      '[ERROR] TRIGGER_PAYLOAD content is not valid JSON'
     )
     expect(process.exitCode).toBe(1)
   })
@@ -103,8 +113,11 @@ describe('gitlab-trigger.ts run()', () => {
 
     expect(errorSpy).not.toHaveBeenCalled()
     expect(process.exitCode).toBeUndefined()
-    expect(logSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Skipped: Unsupported GitLab object_kind: pipeline')
+    // GitLabLogger.warning → console.warn（带 [WARNING] 前缀）
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Skipped: Unsupported GitLab object_kind: pipeline'
+      )
     )
   })
 
@@ -115,7 +128,7 @@ describe('gitlab-trigger.ts run()', () => {
     await runTrigger()
 
     expect(errorSpy).toHaveBeenCalledWith(
-      'TRIGGER_PAYLOAD failed validation: missing object_attributes.iid'
+      '[ERROR] TRIGGER_PAYLOAD failed validation: missing object_attributes.iid'
     )
     expect(process.exitCode).toBe(1)
   })
@@ -131,10 +144,7 @@ describe('gitlab-trigger.ts run()', () => {
       1,
       expect.stringContaining('fork MR')
     )
-    expect(logSpy).toHaveBeenNthCalledWith(
-      2,
-      expect.stringContaining('mr=8')
-    )
+    expect(logSpy).toHaveBeenNthCalledWith(2, expect.stringContaining('mr=8'))
   })
 
   test('已知缺口：note action != create 时 fail closed 退出码 1（非优雅跳过，Issue #66 待修）', async () => {
@@ -147,5 +157,17 @@ describe('gitlab-trigger.ts run()', () => {
     const message = errorSpy.mock.calls[0][0] as string
     expect(message).toContain('Failed to build ExecutionContext')
     expect(message).toContain('not a create action')
+  })
+
+  test('ARCH-015: gitlab-trigger.ts 不 import orchestrator / @actions/core / @actions/github', () => {
+    const fs = require('fs')
+    const path = require('path')
+    const source = fs.readFileSync(
+      path.resolve(__dirname, '../src/gitlab-trigger.ts'),
+      'utf8'
+    )
+    expect(source).not.toContain("from './platform/orchestrator'")
+    expect(source).not.toContain("from '@actions/core'")
+    expect(source).not.toContain("from '@actions/github'")
   })
 })

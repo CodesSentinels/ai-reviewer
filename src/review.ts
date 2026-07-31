@@ -32,6 +32,7 @@ import {buildPatchScans} from './changed-lines'
 import {PRIMARY_BOT_MENTION} from './constants'
 import {
   analyzeDependencies,
+  type FileContentFetcher,
   formatCrossFileContext,
   formatDependencySummary,
   type DependencyContext
@@ -56,7 +57,7 @@ import {type ExecutionContext} from './platform/execution-context'
 import {type Prompts} from './prompts'
 import {mergeReviewsByTopic, type Review} from './review-dedup'
 import {ensureFixSuggestionHeaders} from './fix-suggestion-header'
-import {getRepoFileTree} from './repo-tree'
+import {getRepoFileTree, type TreeFetcher} from './repo-tree'
 import {getReviewStateFromBody} from './review-state'
 import {getTokenCount} from './tokenizer'
 import {
@@ -66,6 +67,36 @@ import {
 
 // eslint-disable-next-line camelcase
 const context = github_context
+
+/** GitHub 平台的 TreeFetcher 实现（DEP-005） */
+const githubTreeFetcher: TreeFetcher = {
+  async getTree(owner, repo, treeSha) {
+    const {data} = await octokit.git.getTree({
+      owner,
+      repo,
+      // eslint-disable-next-line camelcase
+      tree_sha: treeSha,
+      recursive: 'true'
+    })
+    return data.tree
+  }
+}
+
+/** GitHub 平台的 FileContentFetcher 实现（DEP-006） */
+const githubContentFetcher: FileContentFetcher = {
+  async getContent(owner, repo, path, ref) {
+    try {
+      const response = await octokit.repos.getContent({owner, repo, path, ref})
+      const data = response.data as {content?: string; encoding?: string}
+      if (data.content && data.encoding === 'base64') {
+        return Buffer.from(data.content, 'base64').toString()
+      }
+      return null
+    } catch {
+      return null
+    }
+  }
+}
 
 /** 跨文件上下文注入的 token 上限 */
 const MAX_CROSS_FILE_CONTEXT_TOKENS = 1500
@@ -127,8 +158,10 @@ export const codeReview = async (
       const pr = await octokit.pulls.get({
         owner: repo.owner,
         repo: repo.repo,
+        // eslint-disable-next-line camelcase
         pull_number: issueNumber
       })
+      // eslint-disable-next-line camelcase
       ;(context.payload as any).pull_request = pr.data
     }
   }
@@ -446,7 +479,8 @@ ${hunks.oldHunk}
           platform: execCtx.platform,
           owner: repo.owner,
           repo: repo.repo
-        }
+        },
+        githubTreeFetcher
       )
       // 分析依赖关系：解析导入、提取被修改的导出符号、搜索引用
       dependencyContext = await analyzeDependencies(
@@ -456,6 +490,7 @@ ${hunks.oldHunk}
         githubConcurrencyLimit,
         {owner: repo.owner, repo: repo.repo},
         execCtx.headSha || context.payload.pull_request.head.sha,
+        githubContentFetcher,
         patchScans
       )
       info('Phase 0: dependency analysis completed')
