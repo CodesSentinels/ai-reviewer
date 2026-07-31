@@ -21,7 +21,7 @@ import {type Bot} from './bot'
 import type {ExecutionContext} from './platform/execution-context'
 import {
   Commenter,
-  COMMENT_GREETING,
+  getCommentGreeting,
   COMMENT_REPLY_TAG,
   COMMENT_TAG,
   SUMMARIZE_TAG
@@ -429,7 +429,9 @@ export const handleIssueConversation = async (
 
   // ===== 1. 事件与 payload 校验 =====
   if (execCtx.eventKind !== 'comment_created') {
-    info(`issue-conversation: skip non issue_comment event (${execCtx.eventKind})`)
+    info(
+      `issue-conversation: skip non issue_comment event (${execCtx.eventKind})`
+    )
     return
   }
   const payload = execCtx.raw as any
@@ -479,9 +481,7 @@ export const handleIssueConversation = async (
     (c: any) => typeof c.body === 'string' && c.body.includes(replyTag)
   )
   if (alreadyReplied) {
-    info(
-      `issue-conversation: skip duplicate reply for comment ${comment.id}`
-    )
+    info(`issue-conversation: skip duplicate reply for comment ${comment.id}`)
     return
   }
 
@@ -609,7 +609,7 @@ async function postIssueReply(
     .split('\n')
     .map((l: string) => `> ${l}`)
     .join('\n')
-  const message = `${COMMENT_GREETING}
+  const message = `${getCommentGreeting()}
 
 ${quotedQuestion}
 

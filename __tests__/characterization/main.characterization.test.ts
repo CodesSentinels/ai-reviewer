@@ -28,7 +28,7 @@ import pullRequestReviewCommentFixture from './fixtures/pull-request-review-comm
 // --- mocks（复用 __tests__/command-dispatcher.test.ts 的既有约定） ---
 
 const coreState = {
-  getInput: jest.fn().mockReturnValue(''),
+  getInput: jest.fn<(name: string) => string>().mockReturnValue(''),
   getBooleanInput: jest.fn().mockReturnValue(false),
   getMultilineInput: jest.fn().mockReturnValue([]),
   info: jest.fn(),
@@ -37,7 +37,7 @@ const coreState = {
   setFailed: jest.fn()
 }
 jest.mock('@actions/core', () => ({
-  getInput: (...a: any[]) => coreState.getInput(...a),
+  getInput: (...a: any[]) => coreState.getInput(...(a as [string])),
   getBooleanInput: (...a: any[]) => coreState.getBooleanInput(...a),
   getMultilineInput: (...a: any[]) => coreState.getMultilineInput(...a),
   info: (...a: any[]) => coreState.info(...a),
@@ -59,24 +59,42 @@ jest.mock('@actions/github', () => ({context: mockContext}))
 // main.ts 是 `new Bot(...)`（非 type-only），必须 mock 掉，否则会因缺少
 // OPENAI_API_KEY 在 createBots() 内部抛错，导致 codeReview 分支永远走不到。
 const botInstance = {chat: jest.fn()}
+// CFG-005: main.ts 现在 import initBotGreeting from commenter，必须 mock 掉
+// 以避免 commenter → octokit → GITHUB_TOKEN 的级联初始化错误。
+jest.mock('../../src/commenter', () => ({
+  initBotGreeting: jest.fn(),
+  getCommentGreeting: () => '🤖 AI Reviewer'
+}))
+
 jest.mock('../../src/bot', () => ({
   Bot: jest.fn().mockImplementation(() => botInstance),
   // 不关心构造参数，返回值形状对本测试无意义（Bot 本身也被整体 mock 掉了）
   OpenAIOptions: jest.fn()
 }))
 
-const reviewState = {codeReview: jest.fn<(...a: any[]) => Promise<void>>().mockResolvedValue(undefined)}
-jest.mock('../../src/review', () => ({codeReview: (...a: any[]) => reviewState.codeReview(...a)}))
+const reviewState = {
+  codeReview: jest
+    .fn<(...a: any[]) => Promise<void>>()
+    .mockResolvedValue(undefined)
+}
+jest.mock('../../src/review', () => ({
+  codeReview: (...a: any[]) => reviewState.codeReview(...a)
+}))
 
 const commandHandlerState = {
-  handleCommentEvent: jest.fn<(...a: any[]) => Promise<void>>().mockResolvedValue(undefined)
+  handleCommentEvent: jest
+    .fn<(...a: any[]) => Promise<void>>()
+    .mockResolvedValue(undefined)
 }
 jest.mock('../../src/command-handler', () => ({
-  handleCommentEvent: (...a: any[]) => commandHandlerState.handleCommentEvent(...a)
+  handleCommentEvent: (...a: any[]) =>
+    commandHandlerState.handleCommentEvent(...a)
 }))
 
 const earlyReactionState = {
-  tryEarlyReaction: jest.fn<(...a: any[]) => Promise<void>>().mockResolvedValue(undefined)
+  tryEarlyReaction: jest
+    .fn<(...a: any[]) => Promise<void>>()
+    .mockResolvedValue(undefined)
 }
 jest.mock('../../src/commands/early-reaction', () => ({
   tryEarlyReaction: (...a: any[]) => earlyReactionState.tryEarlyReaction(...a)
@@ -94,7 +112,21 @@ const PAYLOAD_BY_EVENT: Record<string, any> = {
 describe('main.ts run() — 改造前事件分发行为基线', () => {
   beforeEach(() => {
     jest.clearAllMocks()
-    coreState.getInput.mockReturnValue('')
+    // 数值字段必须返回有效字符串，否则 validateIntStr/validateFloatStr 会 fail closed
+    const numericDefaults: Record<string, string> = {
+      max_files: '150',
+      max_review_comments: '20',
+      openai_retries: '5',
+      openai_timeout_ms: '360000',
+      openai_concurrency_limit: '4',
+      github_concurrency_limit: '4',
+      openai_model_temperature: '0.0',
+      max_dependency_files: '50',
+      debug_resolve_inject_failures: '0'
+    }
+    coreState.getInput.mockImplementation(
+      (name: string) => numericDefaults[name] ?? ''
+    )
     coreState.getBooleanInput.mockReturnValue(false)
     coreState.getMultilineInput.mockReturnValue([])
     reviewState.codeReview.mockResolvedValue(undefined)
@@ -120,7 +152,8 @@ describe('main.ts run() — 改造前事件分发行为基线', () => {
     expect(commandHandlerState.handleCommentEvent).not.toHaveBeenCalled()
     expect(earlyReactionState.tryEarlyReaction).not.toHaveBeenCalled()
 
-    const [execCtx, lightBot, heavyBot] = reviewState.codeReview.mock.calls[0] as any[]
+    const [execCtx, lightBot, heavyBot] = reviewState.codeReview.mock
+      .calls[0] as any[]
     expect(execCtx.eventKind).toBe('pr_opened')
     expect(execCtx.changeRequestId).toBe(42)
     expect(lightBot).toBe(botInstance)
@@ -167,6 +200,56 @@ describe('main.ts run() — 改造前事件分发行为基线', () => {
     expect(coreState.warning).toHaveBeenCalledWith(
       expect.stringContaining('Unsupported GitHub event: push')
     )
+  })
+
+  test('ConfigError（非法配置）→ setFailed，不调用模型（ARCH-010 fail closed）', async () => {
+    // 覆盖 max_files 为非法值，触发 validateIntStr → ConfigError
+    coreState.getInput.mockImplementation((name: string) => {
+      if (name === 'max_files') return 'abc'
+      const nd: Record<string, string> = {
+        max_review_comments: '20',
+        openai_retries: '5',
+        openai_timeout_ms: '360000',
+        openai_concurrency_limit: '4',
+        github_concurrency_limit: '4',
+        openai_model_temperature: '0.0',
+        max_dependency_files: '50',
+        debug_resolve_inject_failures: '0'
+      }
+      return nd[name] ?? ''
+    })
+    await runMain('pull_request')
+
+    expect(reviewState.codeReview).not.toHaveBeenCalled()
+    expect(commandHandlerState.handleCommentEvent).not.toHaveBeenCalled()
+    expect(coreState.setFailed).toHaveBeenCalledTimes(1)
+    expect(coreState.setFailed.mock.calls[0][0]).toContain(
+      'Configuration error'
+    )
+    expect(coreState.setFailed.mock.calls[0][0]).toContain('max_files')
+  })
+
+  test('空字符串数值配置 → setFailed，不变成 NaN 静默通过（ARCH-010）', async () => {
+    // 覆盖 max_files 为空字符串，触发 validateIntStr → ConfigError（而非 NaN）
+    coreState.getInput.mockImplementation((name: string) => {
+      if (name === 'max_files') return ''
+      const nd: Record<string, string> = {
+        max_review_comments: '20',
+        openai_retries: '5',
+        openai_timeout_ms: '360000',
+        openai_concurrency_limit: '4',
+        github_concurrency_limit: '4',
+        openai_model_temperature: '0.0',
+        max_dependency_files: '50',
+        debug_resolve_inject_failures: '0'
+      }
+      return nd[name] ?? ''
+    })
+    await runMain('pull_request')
+
+    expect(reviewState.codeReview).not.toHaveBeenCalled()
+    expect(coreState.setFailed).toHaveBeenCalledTimes(1)
+    expect(coreState.setFailed.mock.calls[0][0]).toContain('max_files')
   })
 
   test('pull_request 事件但 payload 缺少 pull_request 字段 → fail closed（setFailed，不调用模型）', async () => {

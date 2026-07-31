@@ -71,6 +71,9 @@ export class Options {
   commandAckReaction: string // 命令识别后在用户评论上打的表情（空/off/none 表示禁用）
   maxReviewComments: number // 单次审查最多发布的行级评论数，按严重级别截断（0 表示不限制）
   debugResolveInjectFailures: number // 测试用：向 batchResolve 注入 N 个假 thread ID
+  botIcon: string // Bot 评论前缀图标
+  botName: string // Bot 显示名称
+  botLogin: string // 平台专有的 bot 登录标识
 
   constructor(
     debug: boolean,
@@ -100,7 +103,10 @@ export class Options {
     semgrepConfig = 'p/default',
     commandAckReaction = 'eyes',
     maxReviewComments = '20',
-    debugResolveInjectFailures = '0'
+    debugResolveInjectFailures = '0',
+    botIcon = '🤖',
+    botName = 'AI Reviewer',
+    botLogin = ''
   ) {
     this.debug = debug
     this.disableReview = disableReview
@@ -132,6 +138,9 @@ export class Options {
     this.commandAckReaction = commandAckReaction
     this.maxReviewComments = parseInt(maxReviewComments)
     this.debugResolveInjectFailures = parseInt(debugResolveInjectFailures) || 0
+    this.botIcon = botIcon
+    this.botName = botName
+    this.botLogin = botLogin
   }
 
   /** 打印所有配置项到日志，方便调试 */

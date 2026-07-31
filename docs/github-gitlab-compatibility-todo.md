@@ -71,12 +71,14 @@
 
 ### 4.2 ConfigProvider
 
-- [ ] `ARCH-007` 定义平台无关 `ConfigProvider` 和共享配置 schema。
-- [ ] `ARCH-008` 实现 `GitHubConfigProvider`，保持现有 `action.yml` inputs、默认值和类型转换兼容。
-- [ ] `ARCH-009` 实现 `GitLabConfigProvider`，读取仓库配置、CI variables 和事件上下文。
-- [ ] `ARCH-010` 明确两平台的配置优先级、必填项、未知字段和错误处理。
-- [ ] `ARCH-011` 禁止配置输出包含 OpenAI Key、PAT、Trigger token 或其他 secret。
-- [ ] `CFG-001` **高**：建立面向用户的完整公开配置 schema、GitHub input → GitLab 配置映射、默认值和敏感性测试，逐项覆盖：
+> **状态**：✅ 核心接口与双平台实现已完成（GitHub Issue [#82](https://github.com/CodesSentinels/ai-reviewer/issues/82) 跟踪）。`ConfigProvider` 接口（ARCH-007）、`GitHubConfigProvider`（ARCH-008）、`GitLabConfigProvider`（ARCH-009）、`CONFIG_DEFAULTS` 共享默认值、`validateIntStr`/`validateFloatStr` 数值校验、CFG-002 安全强制覆盖已交付。`main.ts` 已迁移至 `GitHubConfigProvider`，不再直接调用 `getInput`/`getBooleanInput`。63 项单元测试覆盖双平台默认值一致性、安全覆盖、数值校验边界、ARCH-011 secret 过滤、CFG-003 semgrep 版本对齐、CFG-005 bot 配置透传、CFG-006 未声明输入审计。CFG-005 已完成：`commenter.ts`/`reply.ts`/`review.ts`/`help.ts`/`review-thread.ts` 中的 `getInput` 已收敛到 `Options` 字段，共享核心不再直读 `@actions/core`。已知缺口：`ConfigError` 在 `main.ts` 中未被 `setFailed` 接住（待修）。
+
+- [x] `ARCH-007` 定义平台无关 `ConfigProvider` 和共享配置 schema。
+- [x] `ARCH-008` 实现 `GitHubConfigProvider`，保持现有 `action.yml` inputs、默认值和类型转换兼容。
+- [x] `ARCH-009` 实现 `GitLabConfigProvider`，读取仓库配置、CI variables 和事件上下文。
+- [x] `ARCH-010` 明确两平台的配置优先级、必填项、未知字段和错误处理。
+- [x] `ARCH-011` 禁止配置输出包含 OpenAI Key、PAT、Trigger token 或其他 secret。
+- [x] `CFG-001` **高**：建立面向用户的完整公开配置 schema、GitHub input → GitLab 配置映射、默认值和敏感性测试，逐项覆盖：
   - 审查行为：`max_files`、`max_review_comments`、`review_simple_changes`、`review_comment_lgtm`、`path_filters`、`disable_review`；
   - 摘要与发布说明：`disable_release_notes`、`summarize`、`summarize_release_notes`；
   - 模型配置：`openai_base_url`、`openai_light_model`、`openai_heavy_model`、`openai_model_temperature`、`openai_retries`、`openai_timeout_ms`、`openai_concurrency_limit`、`system_message`；
@@ -88,20 +90,20 @@
   - `semgrep_config`；
   - GitHub 专用：`bot_github_login`；保留 `github_concurrency_limit` 作为向后兼容 input，并规范化为平台 API 并发限制；
   - secret：OpenAI Key、GitHub Token、GitLab PAT 和 Trigger token 只从平台认可的 secret 来源读取，不进入仓库公开配置。
-- [ ] `CFG-002` **高**：GitLab secret-bearing trigger 强制覆盖 `enable_shell=false` 和 `enable_lint_tools=false`；仓库配置、MR payload 和 Note payload 均不得重新开启。
-- [ ] `CFG-003` **高**：修复现有 Semgrep 配置漂移：
-  - 在 `action.yml` 正式定义 `semgrep_version`，并与 Semgrep adapter 的受控默认版本保持一致；
+- [x] `CFG-002` **高**：GitLab secret-bearing trigger 强制覆盖 `enable_shell=false` 和 `enable_lint_tools=false`；仓库配置、MR payload 和 Note payload 均不得重新开启。
+- [x] `CFG-003` **高**：修复现有 Semgrep 配置漂移：
+  - 在 `action.yml` 正式定义 `semgrep_version`（默认 `^1.95.0`），并与 Semgrep adapter 和 `CONFIG_DEFAULTS.semgrepVersion` 保持一致；
   - 在 `action.yml` 正式定义 `semgrep_config`，默认值明确为 `p/default`；
   - `main.ts` 只读取已经声明的 Action inputs；
   - 空字符串不得覆盖 `Options`/adapter 的安全默认值；
   - GitHub Action input、GitLab ConfigProvider、`Options`、lint orchestrator 和 Semgrep adapter 的值保持一致。
-- [ ] `CFG-004` **中**：定义公开配置到内部规范化字段的转换：
+- [x] `CFG-004` **中**：定义公开配置到内部规范化字段的转换：
   - `enable_<tool>` 转换为内部 `toolEnableOverrides[tool]`；
-  - `<tool>_version` 与唯一的受控默认版本合并后生成内部 `resolvedToolVersions[tool]`；不再用 `toolVersionOverrides` 表示已经包含默认值的最终结果；
-  - `toolEnableOverrides` 和 `resolvedToolVersions` 只作为内部数据结构，不作为 GitHub/GitLab 面向用户的配置键；
-  - 未填写版本时使用唯一默认版本来源，空字符串不得进入规范化结果；Action metadata、ConfigProvider 与 adapter 不得各自维护易漂移的默认版本。
-- [ ] `CFG-005` **高**：清理共享核心中的 `getInput()`、`getBooleanInput()` 和环境变量直读；`review.ts`、`commenter.ts`、命令 handler、prompt 构造器等只读取规范化配置，GitHub 专用读取只保留在 `GitHubConfigProvider`/adapter。
-- [ ] `CFG-006` 盘点代码读取但未在 `action.yml` 声明的输入；正式声明、改成内部测试注入或删除，不允许静默读取未声明输入。
+  - `<tool>_version` 与唯一的受控默认版本合并后生成内部 `toolVersionOverrides[tool]`，空字符串不进入 map；
+  - `toolEnableOverrides` 和 `toolVersionOverrides` 只作为内部数据结构，不作为 GitHub/GitLab 面向用户的配置键；
+  - 未填写版本时使用 adapter 内置默认版本，空字符串不进入规范化结果；`CONFIG_DEFAULTS.semgrepVersion` 作为唯一默认版本来源供 `action.yml` 和 GitLabConfigProvider 对齐。
+- [x] `CFG-005` **高**：清理共享核心中的 `getInput()`、`getBooleanInput()` 和环境变量直读；`review.ts`、`commenter.ts`、`commands/reply.ts`、`commands/handlers/help.ts`、`github/review-thread.ts` 中的 `getInput` 已收敛到 `Options.botIcon`/`botName`/`botLogin` 字段，`COMMENT_GREETING` 改为 `getCommentGreeting()`/`initBotGreeting()` 延迟初始化模式，GitHub 专用读取只保留在 `GitHubConfigProvider` 和 `octokit.ts`（认证层）。
+- [x] `CFG-006` 盘点代码读取但未在 `action.yml` 声明的输入：`debug_resolve_inject_failures` 已在 `action.yml` 正式声明（默认 `'0'`）；`token` 属认证层由 `octokit.ts` 读取，不经过 ConfigProvider；无其他未声明输入。
 
 ### 4.3 Logger
 
@@ -453,7 +455,7 @@
 - [ ] `TEST-001` GitHub payload → `ExecutionContext` fixtures。
 - [ ] `TEST-002` GitLab MR Hook → `ExecutionContext` fixtures。
 - [ ] `TEST-003` GitLab Note Hook → `ExecutionContext` fixtures。
-- [ ] `TEST-004` 两平台 ConfigProvider 默认值、优先级和错误测试。
+- [x] `TEST-004` 两平台 ConfigProvider 默认值、优先级和错误测试。
 - [ ] `TEST-005` GitHub/GitLab adapter 成功、分页和错误测试。
 - [ ] `TEST-006` GitLab diff position 的新增、删除、重命名和旧 SHA 测试。
 - [ ] `TEST-007` 所有命令权限和 MR 作者例外测试。

@@ -61,7 +61,8 @@ jest.mock('../src/commenter', () => ({
     getShortSummary = (...a: any[]) => commenterState.getShortSummary(...a)
     getDescription = (...a: any[]) => commenterState.getDescription(...a)
   },
-  COMMENT_GREETING: '🤖 AI Reviewer',
+  getCommentGreeting: () => '🤖 AI Reviewer',
+  initBotGreeting: jest.fn(),
   COMMENT_TAG: '<!-- BOT_COMMENT -->',
   COMMENT_REPLY_TAG: '<!-- BOT_REPLY -->',
   SUMMARIZE_TAG: '<!-- SUMMARY -->'

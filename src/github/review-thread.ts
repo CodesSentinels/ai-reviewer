@@ -1,4 +1,4 @@
-import {getInput, warning} from '@actions/core'
+import {warning} from '@actions/core'
 import pLimit from 'p-limit'
 import {octokit} from '../octokit'
 import type {Options} from '../options'
@@ -38,7 +38,6 @@ interface GetReviewThreadsResponse {
     }
   }
 }
-
 
 // ─── GraphQL documents ───────────────────────────────────────────────────────
 
@@ -97,7 +96,7 @@ export async function getBotLogin(options: Options): Promise<string> {
 
   // Explicit override for custom GitHub App: installation tokens cannot call
   // GET /user, so auto-detection would wrongly fall back to 'github-actions'.
-  const explicitLogin = getInput('bot_github_login')
+  const explicitLogin = options.botLogin
   if (explicitLogin) {
     cachedBotLogin = explicitLogin
     return cachedBotLogin
@@ -149,9 +148,11 @@ function normalizeLogin(login: string): string {
  */
 export type ThreadStatusMap = Map<string, boolean>
 
-export async function fetchThreadStatusMap(
-  params: {owner: string; repo: string; prNumber: number}
-): Promise<ThreadStatusMap> {
+export async function fetchThreadStatusMap(params: {
+  owner: string
+  repo: string
+  prNumber: number
+}): Promise<ThreadStatusMap> {
   const map: ThreadStatusMap = new Map()
   let cursor: string | null = null
 
@@ -166,8 +167,7 @@ export async function fetchThreadStatusMap(
       }
     )
 
-    const page =
-      data.repository.pullRequest.reviewThreads
+    const page = data.repository.pullRequest.reviewThreads
 
     for (const node of page.nodes) {
       if (node.path != null && node.line != null) {
@@ -287,7 +287,10 @@ export function threadLabel(t: ReviewThread): string {
   if (t.path) {
     const loc = t.line != null ? `${t.path}:${t.line}` : t.path
     if (t.firstCommentBody) {
-      const snippet = t.firstCommentBody.trim().replace(/\s+/g, ' ').slice(0, 60)
+      const snippet = t.firstCommentBody
+        .trim()
+        .replace(/\s+/g, ' ')
+        .slice(0, 60)
       const ellipsis = snippet.length === 60 ? '…' : ''
       return `${loc} – "${snippet}${ellipsis}"`
     }
@@ -321,7 +324,9 @@ export async function batchResolve(
     )
   )
 
-  const permissionFailed = failedItems.filter(({error}) => isPermissionError(error))
+  const permissionFailed = failedItems.filter(({error}) =>
+    isPermissionError(error)
+  )
   const otherFailed = failedItems.filter(({error}) => !isPermissionError(error))
 
   if (permissionFailed.length > 0) {

@@ -130,6 +130,8 @@ const commenterState = {
 }
 jest.mock('../src/commenter', () => ({
   Commenter: jest.fn().mockImplementation(() => commenterState),
+  getCommentGreeting: () => '🤖 AI Reviewer',
+  initBotGreeting: jest.fn(),
   COMMENT_TAG: '<!-- bot-comment -->',
   COMMENT_REPLY_TAG: '<!-- bot-reply -->',
   RAW_SUMMARY_START_TAG: '<!-- raw-summary-start -->',

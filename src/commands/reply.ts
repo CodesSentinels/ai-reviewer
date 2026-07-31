@@ -12,12 +12,10 @@
  * - success/error 若收到 ackId 则 updateComment，否则 createComment
  * - error 文案带错误码，便于日志与用户排查
  */
-import {getInput, info, warning} from '@actions/core'
+import {info, warning} from '@actions/core'
 import {octokit} from '../octokit'
+import {getCommentGreeting} from '../commenter'
 import type {ErrorCode, Reply as IReply} from './types'
-
-/** Bot 问候图标 + 可配置名称（与 commenter.ts 对齐，但避免循环依赖） */
-const GREETING = `${getInput('bot_icon') || '🤖'} ${getInput('bot_name') || 'AI Reviewer'}`
 
 /** 命令回复评论的幂等标签前缀 */
 export const CMD_REPLY_TAG_PREFIX = '<!-- codesentinel-cmd-reply'
@@ -44,10 +42,7 @@ export function buildCmdReplyTag(
 }
 
 /** 错误码 → 用户可读文案 */
-export function formatErrorMessage(
-  code: ErrorCode,
-  detail?: string
-): string {
+export function formatErrorMessage(code: ErrorCode, detail?: string): string {
   const base = ERROR_MESSAGES[code] ?? '命令执行出错'
   return detail ? `${base}\n\n详情: ${detail}` : base
 }
@@ -57,18 +52,14 @@ const ERROR_MESSAGES: Record<ErrorCode, string> = {
     '❓ **未知命令**。发送 `@ai-reviewer help` 查看支持的命令列表。',
   INVALID_ARGS:
     '⚠️ **参数不合法**。命令参数仅接受字母、数字以及 `._-/:=` 字符。',
-  FORBIDDEN:
-    '🚫 **权限不足**。执行该命令需要仓库 `write` 及以上权限。',
+  FORBIDDEN: '🚫 **权限不足**。执行该命令需要仓库 `write` 及以上权限。',
   BOT_FORBIDDEN:
     '🚫 **Bot 权限不足**。请检查 workflow `permissions` 配置（pull-requests: write / contents: read）。',
-  NOT_IMPLEMENTED:
-    '🚧 **命令暂未实现**。该命令已在路线图中，等待实现。',
+  NOT_IMPLEMENTED: '🚧 **命令暂未实现**。该命令已在路线图中，等待实现。',
   RATE_LIMITED:
     '⏱️ **请求过于频繁**。同一用户在 60 秒内最多执行 10 条命令，请稍后再试。',
-  DUPLICATE:
-    'ℹ️ **命令已处理**（重复事件已去重）。',
-  INTERNAL:
-    '💥 **命令执行失败**。错误已记录，请联系维护者。'
+  DUPLICATE: 'ℹ️ **命令已处理**（重复事件已去重）。',
+  INTERNAL: '💥 **命令执行失败**。错误已记录，请联系维护者。'
 }
 
 /**
@@ -103,10 +94,7 @@ export class Reply implements IReply {
     }
   }
 
-  async success(
-    message: string,
-    ackId?: number | null
-  ): Promise<void> {
+  async success(message: string, ackId?: number | null): Promise<void> {
     const body = this.wrap(message)
     await this.publish(body, ackId)
   }
@@ -138,10 +126,7 @@ export class Reply implements IReply {
   }
 
   /** 新建或更新评论 */
-  private async publish(
-    body: string,
-    ackId?: number | null
-  ): Promise<void> {
+  private async publish(body: string, ackId?: number | null): Promise<void> {
     if (ackId != null) {
       try {
         await octokit.issues.updateComment({
@@ -152,7 +137,9 @@ export class Reply implements IReply {
         })
         return
       } catch (e) {
-        warning(`reply.publish update failed, falling back to create: ${String(e)}`)
+        warning(
+          `reply.publish update failed, falling back to create: ${String(e)}`
+        )
       }
     }
     // 行级评论场景：回复到同一 review thread
@@ -167,7 +154,11 @@ export class Reply implements IReply {
         })
         return
       } catch (e) {
-        warning(`reply.publish review thread reply failed, falling back to issue comment: ${String(e)}`)
+        warning(
+          `reply.publish review thread reply failed, falling back to issue comment: ${String(
+            e
+          )}`
+        )
       }
     }
     try {
@@ -187,7 +178,9 @@ export class Reply implements IReply {
       this.ctx.originalCommentId,
       this.ctx.commandName
     )
-    return `${tag}\n${GREETING} · \`${this.ctx.commandName}\`\n\n${message}`
+    return `${tag}\n${getCommentGreeting()} · \`${
+      this.ctx.commandName
+    }\`\n\n${message}`
   }
 }
 

@@ -8,23 +8,19 @@
  *    - pull_request / pull_request_target → 执行完整代码审查流程
  *    - pull_request_review_comment → 处理用户在审查评论中的回复
  */
-import {
-  getBooleanInput,
-  getInput,
-  getMultilineInput,
-  info,
-  setFailed,
-  warning
-} from '@actions/core'
+import {info, setFailed, warning} from '@actions/core'
 import {Bot} from './bot'
+import {initBotGreeting} from './commenter'
 import {handleCommentEvent} from './command-handler'
 import {tryEarlyReaction} from './commands/early-reaction'
-import {OpenAIOptions, Options} from './options'
+import {OpenAIOptions, type Options} from './options'
 import {
   type ExecutionContext,
   ExecutionContextError
 } from './platform/execution-context'
 import {createGitHubExecutionContext} from './platform/github-execution-context'
+import {ConfigError} from './platform/config-provider'
+import {GitHubConfigProvider} from './platform/github-config-provider'
 import {Prompts} from './prompts'
 import {codeReview} from './review'
 
@@ -71,60 +67,29 @@ function createBots(options: Options): {lightBot: Bot; heavyBot: Bot} | null {
 }
 
 async function run(): Promise<void> {
-  // 从 action.yml 中读取所有配置参数，构建 Options 配置对象
-  const options: Options = new Options(
-    getBooleanInput('debug'),
-    getBooleanInput('disable_review'),
-    getBooleanInput('disable_release_notes'),
-    getInput('max_files'),
-    getBooleanInput('review_simple_changes'),
-    getBooleanInput('review_comment_lgtm'),
-    getMultilineInput('path_filters'),
-    getInput('system_message'),
-    getInput('openai_light_model'),
-    getInput('openai_heavy_model'),
-    getInput('openai_model_temperature'),
-    getInput('openai_retries'),
-    getInput('openai_timeout_ms'),
-    getInput('openai_concurrency_limit'),
-    getInput('github_concurrency_limit'),
-    getInput('openai_base_url'),
-    getInput('language'),
-    getBooleanInput('enable_dependency_analysis'),
-    getInput('max_dependency_files'),
-    getBooleanInput('enable_web_search'),
-    getBooleanInput('enable_shell'),
-    getBooleanInput('enable_lint_tools'),
-    {
-      // 取代 .codesentinel.yaml：所有 lint 工具的开关都通过 Action 输入控制
-      eslint: getBooleanInput('enable_eslint'),
-      biome: getBooleanInput('enable_biome'),
-      tsc: getBooleanInput('enable_tsc'),
-      prettier: getBooleanInput('enable_prettier'),
-      semgrep: getBooleanInput('enable_semgrep')
-    },
-    // 工具版本覆盖：仅收集用户**显式填写**的值；空字符串视为"用默认版本"
-    Object.fromEntries(
-      (
-        [
-          ['eslint', 'eslint_version'],
-          ['biome', 'biome_version'],
-          ['tsc', 'tsc_version'],
-          ['prettier', 'prettier_version'],
-          ['semgrep', 'semgrep_version']
-        ] as const
-      )
-        .map(([toolName, inputName]) => [toolName, getInput(inputName).trim()])
-        .filter(([, v]) => v.length > 0)
-    ),
-    getInput('semgrep_config'),
-    getInput('command_ack_reaction'),
-    getInput('max_review_comments'),
-    getInput('debug_resolve_inject_failures')
-  )
+  // ==================== 通过 ConfigProvider 读取配置（ARCH-007/008） ====================
+  // ConfigError 必须 fail closed（ARCH-010）：配置校验失败时 Action 必须以失败状态退出，
+  // 不得静默跳过审查让用户误以为"通过"。
+  let options: Options
+  const configProvider = new GitHubConfigProvider()
+  try {
+    options = configProvider.getOptions()
 
-  // 打印所有配置项，方便调试
-  options.print()
+    // 初始化 bot 问候语（CFG-005：共享核心不再直读 getInput）
+    initBotGreeting(options.botIcon, options.botName)
+
+    // 打印所有非敏感配置（ARCH-011）
+    configProvider.print(info)
+  } catch (e) {
+    if (e instanceof ConfigError) {
+      setFailed(`Configuration error [${e.platform}:${e.field}]: ${e.message}`)
+    } else if (e instanceof Error) {
+      setFailed(`Failed to read configuration: ${e.message}`)
+    } else {
+      setFailed(`Failed to read configuration: ${e}`)
+    }
+    return
+  }
 
   // ==================== 构造平台无关执行上下文（ARCH-001~003） ====================
   // GitHub-only：不读取任何 GitLab 配置也能正常构造和运行（GH-016）。
@@ -163,9 +128,10 @@ async function run(): Promise<void> {
   }
 
   // 构建提示词模板对象，包含用户自定义的摘要和发布说明提示词
+  const promptConfig = configProvider.getPromptConfig()
   const prompts: Prompts = new Prompts(
-    getInput('summarize'),
-    getInput('summarize_release_notes')
+    promptConfig.summarize,
+    promptConfig.summarizeReleaseNotes
   )
 
   try {

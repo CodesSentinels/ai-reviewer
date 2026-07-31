@@ -12,7 +12,7 @@
  * 支持增量审查：通过在摘要评论中存储已审查的 commit ID，
  * 后续运行只审查新增的变更，避免重复审查。
  */
-import {error, getInput, info, warning} from '@actions/core'
+import {error, info, warning} from '@actions/core'
 import {execFileSync} from 'child_process'
 // eslint-disable-next-line camelcase
 import {context as github_context} from '@actions/github'
@@ -59,7 +59,10 @@ import {ensureFixSuggestionHeaders} from './fix-suggestion-header'
 import {getRepoFileTree} from './repo-tree'
 import {getReviewStateFromBody} from './review-state'
 import {getTokenCount} from './tokenizer'
-import {fetchThreadStatusMap, type ThreadStatusMap} from './github/review-thread'
+import {
+  fetchThreadStatusMap,
+  type ThreadStatusMap
+} from './github/review-thread'
 
 // eslint-disable-next-line camelcase
 const context = github_context
@@ -437,11 +440,14 @@ ${hunks.oldHunk}
     try {
       info('Phase 0: starting cross-file dependency analysis')
       // 获取仓库文件树（1 次 API 调用，结果缓存）
-      const repoFiles = await getRepoFileTree(execCtx.headSha || context.payload.pull_request.head.sha, {
-        platform: execCtx.platform,
-        owner: repo.owner,
-        repo: repo.repo
-      })
+      const repoFiles = await getRepoFileTree(
+        execCtx.headSha || context.payload.pull_request.head.sha,
+        {
+          platform: execCtx.platform,
+          owner: repo.owner,
+          repo: repo.repo
+        }
+      )
       // 分析依赖关系：解析导入、提取被修改的导出符号、搜索引用
       dependencyContext = await analyzeDependencies(
         filesAndChanges,
@@ -631,7 +637,7 @@ ${filename}: ${summary}
     info('summarize: nothing obtained from openai')
   }
 
-  const botName = getInput('bot_name') || 'AI Reviewer'
+  const botName = options.botName
 
   // 生成发布说明并写入 PR 描述
   if (options.disableReleaseNotes === false) {
@@ -760,13 +766,20 @@ ${
         })
         info(`thread-status: fetched ${threadStatusMap.size} thread locations`)
       } catch (e) {
-        warning(`thread-status: failed to fetch, comment chains will not have [OPEN]/[RESOLVED] labels: ${String(e)}`)
+        warning(
+          `thread-status: failed to fetch, comment chains will not have [OPEN]/[RESOLVED] labels: ${String(
+            e
+          )}`
+        )
       }
     }
 
     // full review 去重：构建已有未 resolved 的 bot review comment 位置索引
     // 用于跳过已有评论覆盖的 patch，避免重复调用大模型
-    const existingBotCommentRanges: Map<string, Array<{startLine: number, endLine: number}>> = new Map()
+    const existingBotCommentRanges: Map<
+      string,
+      Array<{startLine: number; endLine: number}>
+    > = new Map()
     if (reviewMode === 'full' && context.payload.pull_request != null) {
       try {
         const allReviewComments = await commenter.listReviewComments(
@@ -785,10 +798,19 @@ ${
           ranges.push(range)
           existingBotCommentRanges.set(c.path, ranges)
         }
-        const totalComments = [...existingBotCommentRanges.values()].reduce((s, a) => s + a.length, 0)
-        info(`full-review-dedup: indexed ${totalComments} existing bot comment(s) across ${existingBotCommentRanges.size} file(s)`)
+        const totalComments = [...existingBotCommentRanges.values()].reduce(
+          (s, a) => s + a.length,
+          0
+        )
+        info(
+          `full-review-dedup: indexed ${totalComments} existing bot comment(s) across ${existingBotCommentRanges.size} file(s)`
+        )
       } catch (e) {
-        warning(`full-review-dedup: failed to build index, will not skip any patches: ${String(e)}`)
+        warning(
+          `full-review-dedup: failed to build index, will not skip any patches: ${String(
+            e
+          )}`
+        )
       }
     }
 
@@ -874,11 +896,13 @@ ${
         // full review 去重：跳过已有未 resolved bot 评论覆盖的 patch
         if (existingBotCommentRanges.has(filename)) {
           const ranges = existingBotCommentRanges.get(filename)!
-          const isCovered = ranges.some(r =>
-            r.startLine <= startLine && r.endLine >= endLine
+          const isCovered = ranges.some(
+            r => r.startLine <= startLine && r.endLine >= endLine
           )
           if (isCovered) {
-            info(`[full-review-dedup] skipping patch ${filename}:${startLine}-${endLine} — already covered by existing bot comment`)
+            info(
+              `[full-review-dedup] skipping patch ${filename}:${startLine}-${endLine} — already covered by existing bot comment`
+            )
             patchesSkippedByDedup += 1
             continue
           }

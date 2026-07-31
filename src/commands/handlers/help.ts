@@ -6,7 +6,6 @@
  * - 按注册顺序输出命令名、描述、用法
  * - 提供 buildHelpMessage() 纯函数，便于单测
  */
-import {getInput} from '@actions/core'
 import type {CommandHandler, CommandResult, CommandContext} from '../types'
 import {getRegistry} from '../registry'
 import {BOT_MENTIONS, PRIMARY_BOT_MENTION} from '../../constants'
@@ -14,8 +13,12 @@ import {BOT_MENTIONS, PRIMARY_BOT_MENTION} from '../../constants'
 /**
  * 纯函数：根据命令列表生成 help Markdown。
  * 提取出来便于单元测试（不依赖 registry 单例）。
+ * @param botIcon 可选 bot 图标，用于底部提示（CFG-005）
  */
-export function buildHelpMessage(commands: CommandHandler[]): string {
+export function buildHelpMessage(
+  commands: CommandHandler[],
+  botIcon = '🤖'
+): string {
   const lines: string[] = []
   lines.push('## 支持的命令')
   lines.push('')
@@ -49,9 +52,9 @@ export function buildHelpMessage(commands: CommandHandler[]): string {
 
   lines.push('')
   lines.push(
-    `> ${getInput('bot_icon') || '🤖'} Bot 同时支持 ${BOT_MENTIONS.map(
-      m => `\`${m}\``
-    ).join(' 与 ')} 共 ${BOT_MENTIONS.length} 个 mention。`
+    `> ${botIcon} Bot 同时支持 ${BOT_MENTIONS.map(m => `\`${m}\``).join(
+      ' 与 '
+    )} 共 ${BOT_MENTIONS.length} 个 mention。`
   )
   return lines.join('\n')
 }
@@ -95,8 +98,8 @@ export const helpHandler: CommandHandler = {
   usage: `${PRIMARY_BOT_MENTION} help`,
   needsAck: false,
   minPermission: 'read',
-  async execute(_ctx: CommandContext): Promise<CommandResult> {
+  async execute(ctx: CommandContext): Promise<CommandResult> {
     const cmds = getRegistry().listCommands()
-    return {message: buildHelpMessage(cmds)}
+    return {message: buildHelpMessage(cmds, ctx.options.botIcon)}
   }
 }

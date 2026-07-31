@@ -12,7 +12,7 @@
  * 使用 HTML 注释标签（如 <!-- tag -->）作为唯一标识，
  * 实现评论的幂等性操作（查找并替换已有评论，而非重复创建）
  */
-import {getInput, info, warning} from '@actions/core'
+import {info, warning} from '@actions/core'
 // eslint-disable-next-line camelcase
 import {context as github_context} from '@actions/github'
 import {octokit} from './octokit'
@@ -24,8 +24,23 @@ const repo = context.repo
 // ==================== 标签常量 ====================
 // 这些 HTML 注释标签用于标识和定位 bot 生成的各类评论
 
-/** 评论顶部的问候语（包含 bot 图标 + 可配置名称） */
-export const COMMENT_GREETING = `${getInput('bot_icon') || '🤖'}   ${getInput('bot_name') || 'AI Reviewer'}`
+/**
+ * 评论顶部的问候语（包含 bot 图标 + 可配置名称）。
+ * 由 initBotGreeting() 初始化，避免模块级直读 @actions/core getInput（CFG-005）。
+ */
+let _commentGreeting = '🤖   AI Reviewer'
+
+/** 获取 bot 问候语，用于评论头部 */
+export function getCommentGreeting(): string {
+  return _commentGreeting
+}
+
+/**
+ * 初始化 bot 问候语。由 main.ts 在构建 Options 后调用一次。
+ */
+export function initBotGreeting(icon: string, name: string): void {
+  _commentGreeting = `${icon}   ${name}`
+}
 
 /** 标识 bot 自动生成的代码审查评论 */
 export const COMMENT_TAG =
@@ -112,7 +127,7 @@ export class Commenter {
     }
 
     // 组装评论正文：问候语 + 消息内容 + 标签
-    const body = `${COMMENT_GREETING}
+    const body = `${getCommentGreeting()}
 
 ${message}
 
@@ -249,7 +264,7 @@ ${tag}`
     endLine: number,
     message: string
   ) {
-    message = `${COMMENT_GREETING}
+    message = `${getCommentGreeting()}
 
 ${message}
 
@@ -321,7 +336,7 @@ ${COMMENT_TAG}`
     statusMsg: string,
     threadStatusMap?: Map<string, boolean>
   ) {
-    const body = `${COMMENT_GREETING}
+    const body = `${getCommentGreeting()}
 
 ${statusMsg}
 `
@@ -414,9 +429,7 @@ ${statusMsg}
         pull_number: pullNumber,
         // eslint-disable-next-line camelcase
         commit_id: commitId,
-        comments: commentsToSubmit.map(comment =>
-          generateCommentData(comment)
-        )
+        comments: commentsToSubmit.map(comment => generateCommentData(comment))
       })
 
       info(
@@ -462,9 +475,7 @@ ${statusMsg}
         }
 
         commentCounter++
-        info(
-          `Comment ${commentCounter}/${commentsToSubmit.length} posted`
-        )
+        info(`Comment ${commentCounter}/${commentsToSubmit.length} posted`)
       }
     }
   }
@@ -480,7 +491,7 @@ ${statusMsg}
     topLevelComment: any,
     message: string
   ) {
-    const reply = `${COMMENT_GREETING}
+    const reply = `${getCommentGreeting()}
 
 ${message}
 
