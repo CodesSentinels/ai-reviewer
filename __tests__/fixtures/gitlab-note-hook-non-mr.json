@@ -1,0 +1,21 @@
+{
+  "object_kind": "note",
+  "event_type": "note",
+  "user": {"username": "alice", "name": "Alice"},
+  "project_id": 42,
+  "project": {
+    "id": 42,
+    "path_with_namespace": "octo/demo"
+  },
+  "object_attributes": {
+    "id": 5004,
+    "note": "@ai-reviewer review",
+    "noteable_type": "Issue",
+    "action": "create"
+  },
+  "merge_request": {
+    "iid": 7,
+    "title": "Add characterization fixtures",
+    "diff_head_sha": "head-sha-0001"
+  }
+}

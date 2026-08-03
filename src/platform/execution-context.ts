@@ -81,7 +81,16 @@ export interface ExecutionContext {
   raw: unknown
 }
 
-/** payload 缺失、格式错误或事件未知时抛出（ARCH-006 fail-closed） */
+/**
+ * payload 缺失、格式错误或事件未知时抛出（ARCH-006 fail-closed）。
+ *
+ * `ignorable_event` 与 `unknown_event` 都应被调用方（gitlab-trigger.ts）当作
+ * 优雅跳过（exit 0）处理，区别在于语义：`unknown_event` 是"完全不认识的
+ * object_kind"，`ignorable_event` 是"认识这个事件类型，但结构合法且业务上
+ * 明确不需要处理"（如 note 编辑/删除、system note、非 MR note，见 EVENT-016/017、
+ * Issue #66）。拆分出独立 reason 是为了和真正的校验失败（`missing_required_field`，
+ * 仍应 fail closed）区分开。
+ */
 export class ExecutionContextError extends Error {
   constructor(
     message: string,
@@ -93,6 +102,7 @@ export class ExecutionContextError extends Error {
       | 'malformed_payload'
       | 'unknown_event'
       | 'missing_required_field'
+      | 'ignorable_event'
   ) {
     super(message)
     this.name = 'ExecutionContextError'

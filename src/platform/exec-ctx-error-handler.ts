@@ -19,7 +19,13 @@ export function handleExecCtxError(
   // eslint-disable-next-line no-unused-vars
   onFailed: (msg: string) => void
 ): 'skip' | 'fatal' {
-  if (e instanceof ExecutionContextError && e.reason === 'unknown_event') {
+  if (
+    e instanceof ExecutionContextError &&
+    (e.reason === 'unknown_event' || e.reason === 'ignorable_event')
+  ) {
+    // unknown_event：完全不认识的事件；ignorable_event：认识但业务上不需要处理
+    // 的事件（note 编辑/删除、system note、非 MR note，见 EVENT-016/017、Issue #66）。
+    // 两者都优雅跳过（skip），不应 fail closed。
     logger.warning(`Skipped: ${e.message}`)
     return 'skip'
   }

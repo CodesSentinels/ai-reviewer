@@ -25,6 +25,8 @@ import mrFork from './fixtures/gitlab-mr-hook-fork.json'
 import noteToplevel from './fixtures/gitlab-note-hook-toplevel.json'
 import noteDiscussion from './fixtures/gitlab-note-hook-discussion.json'
 import noteNonCreate from './fixtures/gitlab-note-hook-non-create.json'
+import noteSystem from './fixtures/gitlab-note-hook-system.json'
+import noteNonMr from './fixtures/gitlab-note-hook-non-mr.json'
 import unknownEvent from './fixtures/gitlab-unknown-event.json'
 import malformed from './fixtures/gitlab-malformed.json'
 
@@ -128,31 +130,54 @@ describe('I2: GitLab fixture 全字段完整性快照', () => {
       actor: {login: 'alice', isBot: false},
       baseSha: '',
       headSha: 'head-sha-0001',
-      comment: {kind: 'review_thread', id: 5002, threadId: 'abc123discussionid'},
+      comment: {
+        kind: 'review_thread',
+        id: 5002,
+        threadId: 'abc123discussionid'
+      },
       raw: noteDiscussion
     })
   })
 
   test.each([
-    {label: '未知 object_kind', fixture: unknownEvent, expectedReason: 'unknown_event'},
+    {
+      label: '未知 object_kind',
+      fixture: unknownEvent,
+      expectedReason: 'unknown_event'
+    },
     {
       label: '缺少 iid/source-target project',
       fixture: malformed,
       expectedReason: 'missing_required_field'
     },
     {
-      label: 'note action != create',
+      label: 'note action != create（EVENT-016/017，修复 Issue #66）',
       fixture: noteNonCreate,
-      expectedReason: 'missing_required_field'
+      expectedReason: 'ignorable_event'
+    },
+    {
+      label: 'note system=true（EVENT-017）',
+      fixture: noteSystem,
+      expectedReason: 'ignorable_event'
+    },
+    {
+      label: 'note noteable_type 非 MergeRequest（EVENT-017）',
+      fixture: noteNonMr,
+      expectedReason: 'ignorable_event'
     }
-  ] as const)('$label → 不产出 ExecutionContext，reason=$expectedReason', ({fixture, expectedReason}) => {
-    expect(() => createGitLabExecutionContext(fixture)).toThrow(ExecutionContextError)
-    try {
-      createGitLabExecutionContext(fixture)
-    } catch (e) {
-      expect((e as ExecutionContextError).reason).toBe(expectedReason)
+  ] as const)(
+    '$label → 不产出 ExecutionContext，reason=$expectedReason',
+    ({fixture, expectedReason}) => {
+      expect(() => createGitLabExecutionContext(fixture)).toThrow(
+        ExecutionContextError
+      )
+      try {
+        createGitLabExecutionContext(fixture)
+      } catch (e) {
+        expect((e as ExecutionContextError).reason).toBe(expectedReason)
+      }
     }
-  })
+  )
 
   test('全部 6 个成功场景的 ExecutionContext 都包含类型定义要求的全部必需字段', () => {
     const successfulFixtures = [

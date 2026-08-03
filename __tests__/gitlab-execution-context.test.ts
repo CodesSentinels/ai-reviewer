@@ -2,9 +2,11 @@
  * gitlab-execution-context.test.ts — createGitLabExecutionContext() 单元测试（U2）
  *
  * 覆盖 MR open/reopen/update(HEAD变化)/update(仅元数据) + Note
- * create(top-level)/create(discussion回复)/非 create 动作/未知 object_kind，
- * 复用 __tests__/fixtures/ 下的共享 GitLab payload 样例（阶段一 G4 产出）。
- * 参考 docs/tasks/execution-context-design.md 第 9.2 节 U2。
+ * create(top-level)/create(discussion回复)/非 create 动作/system note/非 MR
+ * note/未知 object_kind，复用 __tests__/fixtures/ 下的共享 GitLab payload 样例
+ * （阶段一 G4 产出，EVENT-016/017 补充了 system/non-mr 两个 fixture）。
+ * 参考 docs/tasks/execution-context-design.md 第 9.2 节 U2、
+ * docs/tasks/gitlab-note-hook-design.md 第 3.2 节（Issue #66 修复）。
  */
 import {describe, expect, test} from '@jest/globals'
 import {createGitLabExecutionContext} from '../src/platform/gitlab-execution-context'
@@ -17,6 +19,8 @@ import mrFork from './fixtures/gitlab-mr-hook-fork.json'
 import noteToplevel from './fixtures/gitlab-note-hook-toplevel.json'
 import noteDiscussion from './fixtures/gitlab-note-hook-discussion.json'
 import noteNonCreate from './fixtures/gitlab-note-hook-non-create.json'
+import noteSystem from './fixtures/gitlab-note-hook-system.json'
+import noteNonMr from './fixtures/gitlab-note-hook-non-mr.json'
 import unknownEvent from './fixtures/gitlab-unknown-event.json'
 import malformed from './fixtures/gitlab-malformed.json'
 
@@ -39,7 +43,9 @@ describe('createGitLabExecutionContext()', () => {
   })
 
   test('payload 非对象（字符串）→ ExecutionContextError(missing_payload)', () => {
-    const e = getThrownError(() => createGitLabExecutionContext('not-an-object'))
+    const e = getThrownError(() =>
+      createGitLabExecutionContext('not-an-object')
+    )
     expect(e).toBeInstanceOf(ExecutionContextError)
     expect((e as ExecutionContextError).reason).toBe('missing_payload')
   })
@@ -79,7 +85,10 @@ describe('createGitLabExecutionContext()', () => {
   test('MR reopen → eventKind=pr_reopened', () => {
     const reopenPayload = {
       ...mrOpen,
-      object_attributes: {...(mrOpen as any).object_attributes, action: 'reopen'}
+      object_attributes: {
+        ...(mrOpen as any).object_attributes,
+        action: 'reopen'
+      }
     }
     const execCtx = createGitLabExecutionContext(reopenPayload)
     expect(execCtx.eventKind).toBe('pr_reopened')
@@ -107,7 +116,11 @@ describe('createGitLabExecutionContext()', () => {
     expect(execCtx.headSha).toBe('head-sha-0001') // merge_request.diff_head_sha
     expect(execCtx.baseSha).toBe('')
     expect(execCtx.actor).toEqual({login: 'alice', isBot: false})
-    expect(execCtx.comment).toEqual({kind: 'top_level', id: 5001, threadId: undefined})
+    expect(execCtx.comment).toEqual({
+      kind: 'top_level',
+      id: 5001,
+      threadId: undefined
+    })
   })
 
   test('Note create（discussion 回复）→ eventKind=review_comment_created，comment.kind=review_thread', () => {
@@ -121,10 +134,22 @@ describe('createGitLabExecutionContext()', () => {
     })
   })
 
-  test('Note action != create → ExecutionContextError(missing_required_field)（已知缺口，见 issue #66：应优雅跳过而非 fail closed，本任务不修复）', () => {
+  test('Note action != create → ExecutionContextError(ignorable_event)（修复 Issue #66：编辑/删除评论应优雅跳过而非 fail closed）', () => {
     const e = getThrownError(() => createGitLabExecutionContext(noteNonCreate))
     expect(e).toBeInstanceOf(ExecutionContextError)
-    expect((e as ExecutionContextError).reason).toBe('missing_required_field')
+    expect((e as ExecutionContextError).reason).toBe('ignorable_event')
+  })
+
+  test('Note system=true（系统事件note，如"changed the description"）→ ExecutionContextError(ignorable_event)', () => {
+    const e = getThrownError(() => createGitLabExecutionContext(noteSystem))
+    expect(e).toBeInstanceOf(ExecutionContextError)
+    expect((e as ExecutionContextError).reason).toBe('ignorable_event')
+  })
+
+  test('Note noteable_type 不是 MergeRequest（如 Issue 上的评论）→ ExecutionContextError(ignorable_event)', () => {
+    const e = getThrownError(() => createGitLabExecutionContext(noteNonMr))
+    expect(e).toBeInstanceOf(ExecutionContextError)
+    expect((e as ExecutionContextError).reason).toBe('ignorable_event')
   })
 
   test('Note 缺少 merge_request.iid → ExecutionContextError(missing_required_field)', () => {
@@ -132,25 +157,16 @@ describe('createGitLabExecutionContext()', () => {
       object_kind: 'note',
       user: {username: 'alice'},
       project: {id: 42, path_with_namespace: 'octo/demo'},
-      object_attributes: {id: 5001, action: 'create', noteable_type: 'MergeRequest'}
+      object_attributes: {
+        id: 5001,
+        action: 'create',
+        noteable_type: 'MergeRequest'
+      }
       // merge_request 字段整个缺失
     }
     const e = getThrownError(() => createGitLabExecutionContext(payload))
     expect(e).toBeInstanceOf(ExecutionContextError)
     expect((e as ExecutionContextError).reason).toBe('missing_required_field')
-  })
-
-  test('Note noteable_type 不是 MergeRequest → ExecutionContextError(unknown_event)', () => {
-    const payload = {
-      object_kind: 'note',
-      user: {username: 'alice'},
-      project: {id: 42, path_with_namespace: 'octo/demo'},
-      object_attributes: {id: 5001, action: 'create', noteable_type: 'Issue'},
-      merge_request: {iid: 7}
-    }
-    const e = getThrownError(() => createGitLabExecutionContext(payload))
-    expect(e).toBeInstanceOf(ExecutionContextError)
-    expect((e as ExecutionContextError).reason).toBe('unknown_event')
   })
 
   test('isBot 恒为 false（GitLab MVP 用个人 PAT，无天然 bot 标记，见 EVENT-018）', () => {

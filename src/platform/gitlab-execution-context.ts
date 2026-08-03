@@ -8,8 +8,9 @@
  * 本文件的函数"，不需要重新设计字段映射。
  *
  * `isBot` 恒为 false：GitLab MVP 使用个人 PAT 身份评论，没有天然的 bot 账号标记；
- * 真正的自反馈过滤需要将 actor.login 与配置好的 PAT 用户名比较，属于 EVENT-018
- * （GitLab adapter 消费层任务），不在 ExecutionContext 构造阶段判断。
+ * 真正的自反馈过滤需要将 actor.login 与配置好的 PAT 用户名比较（EVENT-018，
+ * 见 `gitlab-note-hook-rules.ts` 的 `isSelfNote()`），故意不放进 ExecutionContext
+ * 构造阶段判断——构造阶段不应依赖外部配置输入（呼应 ARCH-002 的字段设计边界）。
  *
  * GitLab Webhook 字段映射依据 GitLab 官方 Webhook events 文档整理，尚未经真实
  * Webhook 验证（ai-reviewer-test 项目尚未接入），EVENT-002 对接真实环境时需要
@@ -81,18 +82,38 @@ function buildFromMergeRequestHook(p: Record<string, any>): ExecutionContext {
 function buildFromNoteHook(p: Record<string, any>): ExecutionContext {
   const attrs = p.object_attributes
   const mr = p.merge_request
-  if (attrs == null || mr == null || attrs.action !== 'create') {
+
+  // 结构缺失：真正的校验失败，fail closed（区别于下面的 ignorable_event）
+  if (attrs == null || mr == null) {
     throw new ExecutionContextError(
-      'note payload missing required fields or not a create action',
+      'note payload missing object_attributes/merge_request',
       'gitlab',
       'missing_required_field'
     )
   }
+
+  // 结构合法但业务上不需要处理：优雅跳过（EVENT-016/017，修复 Issue #66——
+  // 此前这三种情形跟"字段真正缺失"共用 missing_required_field，导致
+  // gitlab-trigger.ts 对编辑/删除评论等 fail closed 而非优雅跳过）
+  if (attrs.action !== 'create') {
+    throw new ExecutionContextError(
+      `note action is '${attrs.action}', not 'create' — ignorable`,
+      'gitlab',
+      'ignorable_event'
+    )
+  }
+  if (attrs.system === true) {
+    throw new ExecutionContextError(
+      'system note — ignorable',
+      'gitlab',
+      'ignorable_event'
+    )
+  }
   if (attrs.noteable_type !== 'MergeRequest') {
     throw new ExecutionContextError(
-      `Unsupported noteable_type: ${attrs.noteable_type}`,
+      `noteable_type '${attrs.noteable_type}' is not MergeRequest — ignorable`,
       'gitlab',
-      'unknown_event'
+      'ignorable_event'
     )
   }
   return {
