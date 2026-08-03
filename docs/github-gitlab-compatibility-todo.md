@@ -107,10 +107,12 @@
 
 ### 4.3 Logger
 
-- [ ] `ARCH-012` 定义平台无关 `Logger`。
-- [ ] `ARCH-013` GitHub logger 保留现有 Actions annotation 能力。
-- [ ] `ARCH-014` GitLab logger 输出脱敏的 job log，不依赖 `@actions/core`。
-- [ ] `ARCH-015` GitLab-only 启动不得初始化 `@actions/core` 或 `@actions/github`。
+> **状态**：✅ 代码已完成（GitHub Issue [#83](https://github.com/CodesSentinels/ai-reviewer/issues/83) 跟踪）。`src/platform/logger.ts`（接口 + singleton）、`src/platform/github-logger.ts`（GitHubLogger）、`src/platform/gitlab-logger.ts`（GitLabLogger）已交付。`__tests__/logger.test.ts` 10 项单元测试覆盖 singleton、委托、debug 环境变量门控和 ARCH-015 源码回归守卫。
+
+- [x] `ARCH-012` 定义平台无关 `Logger`。
+- [x] `ARCH-013` GitHub logger 保留现有 Actions annotation 能力。
+- [x] `ARCH-014` GitLab logger 输出脱敏的 job log，不依赖 `@actions/core`。
+- [x] `ARCH-015` GitLab-only 启动不得初始化 `@actions/core` 或 `@actions/github`。
 
 ### 4.4 Git 平台接口
 
@@ -130,18 +132,18 @@
 - [ ] `DEP-002` **高**：保持 `dependency-analyzer` + `repo-tree` 的跨文件依赖分析在两个平台语义一致。
 - [ ] `DEP-003` GitHub adapter 使用 Git Tree API 实现 repository tree，保留现有 recursive 行为；缓存键必须包含 `platform + project/repository identity + ref`，不得只按 ref 命中。
 - [ ] `DEP-004` GitLab tree 实现处理空仓库、subgroup 项目、超大仓库、截断响应、Unicode 路径和 API 部分失败；两平台均须区分“成功取得空树”“响应被截断/不完整”和“API 请求失败”，不得统一静默返回空数组。
-- [ ] `DEP-005` 重构 `repo-tree.ts`，移除对 `@actions/core`、`@actions/github` 和 Octokit 的直接依赖，只保留缓存、过滤、语言识别和 import path 解析。
-- [ ] `DEP-006` 重构 `dependency-analyzer.ts`，通过平台无关 repository tree/文件读取接口获取数据。
+- [x] `DEP-005` 重构 `repo-tree.ts`，移除对 `@actions/core`、`@actions/github` 和 Octokit 的直接依赖，只保留缓存、过滤、语言识别和 import path 解析。新增 `TreeFetcher` 接口注入，日志通过 `getLogger()`。GitHub Issue [#85](https://github.com/CodesSentinels/ai-reviewer/issues/85) 跟踪。
+- [x] `DEP-006` 重构 `dependency-analyzer.ts`，通过平台无关 repository tree/文件读取接口获取数据。新增 `FileContentFetcher` 接口注入，28 处日志替换为 `getLogger()`；`review.ts` 提供 GitHub 适配器。GitHub Issue [#85](https://github.com/CodesSentinels/ai-reviewer/issues/85) 跟踪。
 - [ ] `DEP-007` 保持 `enable_dependency_analysis` 和 `max_dependency_files` 在两个平台的配置语义一致。
 - [ ] `DEP-008` 同一 repository tree、changed files 和 diff fixture 在两平台产生一致的依赖候选、路径解析、优先级排序和截断结果。
 
 ### 4.6 Entry Orchestrator
 
-> **已知缺口**：GitHub Issue [#68](https://github.com/CodesSentinels/ai-reviewer/issues/68)（open，未修复）——`main.ts`（GitHub 入口）和 `gitlab-trigger.ts`（GitLab 入口）目前各自独立实现"读取配置 → 构造 ExecutionContext → 事件分发 → 调用共享核心 → 错误处理"这一整套运行时编排逻辑。`ExecutionContext`（4.1）只解决了"读取事件数据"层面的重复，编排层本身没有被抽象。已确认的重复点：两个入口处理 `ExecutionContextError` 的控制流（`unknown_event` → 优雅跳过；其余 → fail closed）逐字对应，只是日志 API 不同（`main.ts:131-151` vs `gitlab-trigger.ts`）；`main.ts:173-202` 的 `eventKind → codeReview/handleCommentEvent/skip` 分发逻辑也未被抽出为平台无关函数。一旦 `GLAPI-*`（第 7 章）和 `ConfigProvider`（4.2）落地，`gitlab-trigger.ts` 需要实现等价分发逻辑，如果不先抽出共享编排层，大概率会直接复制 `main.ts` 的 `run()` 改事件名了事，两份实现开始分叉。
+> **状态**：✅ 代码已完成（GitHub Issue [#84](https://github.com/CodesSentinels/ai-reviewer/issues/84) 跟踪，原缺口 Issue [#68](https://github.com/CodesSentinels/ai-reviewer/issues/68) 已修复）。`src/platform/orchestrator.ts`（`runOrchestrator` + `dispatchEvent`）和 `src/platform/exec-ctx-error-handler.ts`（`handleExecCtxError`）已交付。`main.ts` 重写为调用 `runOrchestrator`，`gitlab-trigger.ts` 直接引入 `exec-ctx-error-handler`（不经过 orchestrator，避免间接拉入 GitHub 依赖）。`__tests__/orchestrator.test.ts` 13 项单元测试 + `gitlab-trigger.test.ts` ARCH-015 回归守卫。
 
-- [ ] `ARCH-025` 抽取平台无关的运行时编排函数（配置读取 → 构造 ExecutionContext → 事件分发 → 调用共享审查/命令核心 → 统一错误处理），供 `main.ts` 和 `gitlab-trigger.ts` 复用，不各自重复实现。
-- [ ] `ARCH-026` 统一 `ExecutionContextError` 的处理策略（`unknown_event` → 跳过不算失败；其余 → fail closed）为单一函数/模块，两平台入口调用同一实现，日志走 Logger 抽象（4.3），不允许分别用不同日志 API 各写一份分支逻辑。
-- [ ] `ARCH-027` 将 `pr_opened/pr_synchronize/pr_reopened → codeReview`、`comment_created/review_comment_created → handleCommentEvent`、其余 → skip 的事件分发逻辑从 `main.ts` 的 `run()` 中抽出为平台无关函数，供 GitLab 入口复用。
+- [x] `ARCH-025` 抽取平台无关的运行时编排函数（配置读取 → 构造 ExecutionContext → 事件分发 → 调用共享审查/命令核心 → 统一错误处理），供 `main.ts` 和 `gitlab-trigger.ts` 复用，不各自重复实现。
+- [x] `ARCH-026` 统一 `ExecutionContextError` 的处理策略（`unknown_event` → 跳过不算失败；其余 → fail closed）为单一函数/模块，两平台入口调用同一实现，日志走 Logger 抽象（4.3），不允许分别用不同日志 API 各写一份分支逻辑。
+- [x] `ARCH-027` 将 `pr_opened/pr_synchronize/pr_reopened → codeReview`、`comment_created/review_comment_created → handleCommentEvent`、其余 → skip 的事件分发逻辑从 `main.ts` 的 `run()` 中抽出为平台无关函数，供 GitLab 入口复用。
 
 ---
 
