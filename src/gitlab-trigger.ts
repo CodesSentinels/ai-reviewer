@@ -18,6 +18,7 @@ import {setLogger} from './platform/logger'
 import {handleExecCtxError} from './platform/exec-ctx-error-handler'
 import {validateTriggerPayload} from './gitlab-trigger-validation'
 import {redact} from './gitlab-trigger-redact'
+import {checkForkMergeRequest} from './gitlab-mr-hook-rules'
 
 const logger = new GitLabLogger()
 
@@ -57,9 +58,20 @@ export async function run(): Promise<void> {
     return
   }
   if (validation.sourceTargetMismatch) {
-    logger.info(
-      'Note: source_project_id != target_project_id (fork MR) — rejection logic is EVENT-010, not yet implemented'
+    // EVENT-010：fork MR 是需要人工关注的安全边界，fail closed 而非优雅跳过
+    // （区别于 unknown_event 的 exit 0 语义）——见 docs/tasks/gitlab-mr-hook-design.md 第 3.2 节。
+    const attrs = (parsed as Record<string, any>).object_attributes
+    const forkCheck = checkForkMergeRequest(
+      attrs.source_project_id,
+      attrs.target_project_id
     )
+    logger.error(
+      `Rejected: fork MR not supported (MVP) — ${redact(
+        forkCheck.reason ?? ''
+      )}`
+    )
+    process.exitCode = 1
+    return
   }
 
   let execCtx

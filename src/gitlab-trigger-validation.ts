@@ -3,8 +3,9 @@
  *
  * `createGitLabExecutionContext` 已经校验了它需要的字段（object_attributes.iid、
  * project、noteable_type 等），但不读取/校验 source_project_id/target_project_id
- * ——这两个字段只用于 fork 检测（EVENT-010，本任务不实现拒绝逻辑）。本模块只负责
- * "这些字段存不存在、类型对不对"的结构性校验，不做业务判断。
+ * ——这两个字段只用于 fork 检测。本模块只负责"这些字段存不存在、类型对不对"的结构性
+ * 校验，不做业务判断；实际的 fork 拒绝逻辑（EVENT-010）在
+ * `gitlab-mr-hook-rules.ts` 的 `checkForkMergeRequest()` + `gitlab-trigger.ts` 里。
  *
  * 参考 docs/tasks/gitlab-trigger-cli-design.md 第 4 节。
  */
