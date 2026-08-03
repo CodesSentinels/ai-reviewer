@@ -1,8 +1,8 @@
 # GitHub / GitLab 双平台兼容开发 TODO List
 
-> 文档版本：v2.5
+> 文档版本：v2.6
 >
-> 修订日期：2026-07-22
+> 修订日期：2026-08-03
 >
 > 范围：仅记录需要修改代码、测试、构建脚本、GitHub workflow 或 `.gitlab-ci.yml`
 > 的开发任务
@@ -190,15 +190,18 @@
 
 ### 4.4 Git 平台接口
 
-> **状态**：接口定义、GitHub adapter、架构测试已完成（GitHub Issue
+> **状态**：接口定义、GitHub adapter、架构测试、遗留迁移已完成（GitHub Issue
 > [#86](https://github.com/CodesSentinels/ai-reviewer/issues/86) 跟踪）
 > 。`src/platform/git-platform.ts`（IGitPlatform 接口 + 共享类型 +
 > GitPlatformError）、`src/platform/github-platform.ts`（GitHubPlatform 实现，含
 > GraphQL review-thread 逻辑）已交付。`__tests__/git-platform.test.ts` 29 项单元
 > 测试覆盖全部 10 组方法 + 错误语义转换；`__tests__/arch-guard.test.ts` 7 项架构
 > 守卫测试。ARCH-018 已完成：9 个遗留文件全部迁移至 `getPlatform()` 调用，
-> LEGACY_ALLOWLIST 中不再有 octokit 引用项。剩余 15 个文件仍直接 import
-> `@actions/core`（Logger 迁移目标）或 `@actions/github`（ARCH-005 context 迁移目标）。
+> LEGACY_ALLOWLIST 中不再有 octokit 引用项。ESLint 配置已切换至
+> `@typescript-eslint/no-unused-vars`，项目 lint 0 error。
+> `batchResolve` P1 修复：`resolveThreads()` 返回 `{failed>0}` 不再被误计为成功，
+> 新增 5 条回归测试。剩余 15 个文件仍直接 import `@actions/core`（Logger 迁移目标）
+> 或 `@actions/github`（ARCH-005 context 迁移目标）。
 
 - [x] `ARCH-016` 定义 `IGitPlatform` 或等价接口。
 - [x] `ARCH-017` 接口覆盖项目、PR/MR、description 读取与条件更新、diff、文件内容
