@@ -39,11 +39,10 @@ export interface RepoTreeProject {
  */
 export interface TreeFetcher {
   getTree(
-    // eslint-disable-next-line no-unused-vars
     owner: string,
-    // eslint-disable-next-line no-unused-vars
+
     repo: string,
-    // eslint-disable-next-line no-unused-vars
+
     treeSha: string
   ): Promise<Array<{type?: string; path?: string}>>
 }

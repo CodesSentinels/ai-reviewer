@@ -18,9 +18,7 @@ import type {ExecutionContext} from '../platform/execution-context'
 export type ReviewCommandMode = 'incremental' | 'full' | 'summary'
 
 /** 支持的 GitHub 事件类型（命令框架范围内） */
-export type CommandEventName =
-  | 'issue_comment'
-  | 'pull_request_review_comment'
+export type CommandEventName = 'issue_comment' | 'pull_request_review_comment'
 
 /** 仓库协作者权限等级（与 GitHub API 返回对齐） */
 export type PermissionLevel =
@@ -132,11 +130,7 @@ export type ErrorCode =
 export interface Reply {
   ack(message: string): Promise<number | null>
   success(message: string, ackId?: number | null): Promise<void>
-  error(
-    code: ErrorCode,
-    detail?: string,
-    ackId?: number | null
-  ): Promise<void>
+  error(code: ErrorCode, detail?: string, ackId?: number | null): Promise<void>
   progress(message: string, ackId: number): Promise<void>
 }
 

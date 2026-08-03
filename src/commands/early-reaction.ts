@@ -58,7 +58,8 @@ export async function tryEarlyReaction(
     if (!comment || typeof comment.body !== 'string') return
 
     const actorIsBot =
-      comment.user?.type === 'Bot' || /\[bot\]$/i.test(comment.user?.login ?? '')
+      comment.user?.type === 'Bot' ||
+      /\[bot\]$/i.test(comment.user?.login ?? '')
     if (actorIsBot) return
 
     bootstrapCommands()

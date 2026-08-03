@@ -1,4 +1,4 @@
-import {octokit} from './octokit'
+import {getPlatform} from './platform/git-platform'
 
 export type ReviewState = 'active' | 'paused'
 
@@ -38,12 +38,9 @@ export async function getReviewState(
   repo: string,
   pullNumber: number
 ): Promise<ReviewState> {
-  const pr = await octokit.pulls.get({
-    owner,
-    repo,
-    pull_number: pullNumber
-  })
-  return getReviewStateFromBody(pr.data.body ?? '')
+  const platform = getPlatform()
+  const cr = await platform.getChangeRequest(owner, repo, pullNumber)
+  return getReviewStateFromBody(cr.body ?? '')
 }
 
 export async function setReviewState(
@@ -52,15 +49,12 @@ export async function setReviewState(
   pullNumber: number,
   state: ReviewState
 ): Promise<void> {
-  const pr = await octokit.pulls.get({
+  const platform = getPlatform()
+  const cr = await platform.getChangeRequest(owner, repo, pullNumber)
+  await platform.updateChangeRequestBody(
     owner,
     repo,
-    pull_number: pullNumber
-  })
-  await octokit.pulls.update({
-    owner,
-    repo,
-    pull_number: pullNumber,
-    body: writeReviewStateToBody(pr.data.body ?? '', state)
-  })
+    pullNumber,
+    writeReviewStateToBody(cr.body ?? '', state)
+  )
 }

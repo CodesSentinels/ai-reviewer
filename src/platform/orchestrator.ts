@@ -73,11 +73,11 @@ export interface OrchestratorDeps {
   configProvider: ConfigProvider
   createExecCtx: () => ExecutionContext
   logger: Logger
-  // eslint-disable-next-line no-unused-vars
+
   onFailed: (msg: string) => void
-  // eslint-disable-next-line no-unused-vars
+
   createBots: (options: Options) => {lightBot: Bot; heavyBot: Bot} | null
-  // eslint-disable-next-line no-unused-vars
+
   earlyReaction?: (execCtx: ExecutionContext, reaction: string) => Promise<void>
 }
 

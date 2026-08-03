@@ -16,7 +16,7 @@ import type {Logger} from './logger'
 export function handleExecCtxError(
   e: unknown,
   logger: Logger,
-  // eslint-disable-next-line no-unused-vars
+
   onFailed: (msg: string) => void
 ): 'skip' | 'fatal' {
   if (

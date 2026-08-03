@@ -10,7 +10,10 @@
  */
 import type {CommandHandler, CommandContext, CommandResult} from '../types'
 import {getReviewState, setReviewState} from '../../review-state'
-import {clearReviewedCommitIds, isHeadAlreadyReviewed} from '../../review-commit-ids'
+import {
+  clearReviewedCommitIds,
+  isHeadAlreadyReviewed
+} from '../../review-commit-ids'
 import {PRIMARY_BOT_MENTION} from '../../constants'
 
 function notImplemented(name: string): CommandHandler['execute'] {

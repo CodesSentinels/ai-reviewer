@@ -9,12 +9,12 @@
  * 5. 可选的 web search 工具支持（用于验证 API 用法）
  */
 
-import { info, setFailed, warning } from '@actions/core'
-import { exec as execCallback } from 'child_process'
-import OpenAI, { APIError } from 'openai'
+import {info, setFailed, warning} from '@actions/core'
+import {exec as execCallback} from 'child_process'
+import OpenAI, {APIError} from 'openai'
 import pRetry from 'p-retry'
-import { OpenAIOptions, Options } from './options'
-import { sanitizeModelOutput } from './sanitize-model-output'
+import {OpenAIOptions, Options} from './options'
+import {sanitizeModelOutput} from './sanitize-model-output'
 
 /**
  * 对话 ID 接口，用于维护多轮对话的上下文关系
@@ -70,7 +70,7 @@ interface ShellCallItem {
 interface ShellCallOutputContent {
   stdout: string
   stderr: string
-  outcome: { type: 'exit'; exit_code: number } | { type: 'timeout' }
+  outcome: {type: 'exit'; exit_code: number} | {type: 'timeout'}
 }
 
 interface ShellCallOutputItem {
@@ -126,21 +126,21 @@ const truncateShellStreams = (
   stdout: string,
   stderr: string,
   maxLength: number
-): { stdout: string; stderr: string } => {
+): {stdout: string; stderr: string} => {
   if (maxLength <= 0) {
-    return { stdout: '', stderr: '' }
+    return {stdout: '', stderr: ''}
   }
 
   const totalLength = stdout.length + stderr.length
   if (totalLength <= maxLength) {
-    return { stdout, stderr }
+    return {stdout, stderr}
   }
 
   if (stdout.length === 0) {
-    return { stdout, stderr: truncateText(stderr, maxLength) }
+    return {stdout, stderr: truncateText(stderr, maxLength)}
   }
   if (stderr.length === 0) {
-    return { stdout: truncateText(stdout, maxLength), stderr }
+    return {stdout: truncateText(stdout, maxLength), stderr}
   }
 
   let stdoutBudget = Math.max(
@@ -217,7 +217,10 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
    * @param ids - 对话上下文 ID（用于多轮对话）
    * @returns [响应文本, 新的对话 ID] 元组
    */
-  chat = async (message: string, ids: Ids): Promise<[string, Ids, AnalysisStep[]]> => {
+  chat = async (
+    message: string,
+    ids: Ids
+  ): Promise<[string, Ids, AnalysisStep[]]> => {
     let res: [string, Ids, AnalysisStep[]] = ['', {}, []]
     try {
       res = await this.chat_(message, ids)
@@ -430,7 +433,10 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
     const start = Date.now()
     try {
       const response = await pRetry(
-        () => this.client!.responses.create(params) as Promise<OpenAI.Responses.Response>,
+        () =>
+          this.client!.responses.create(
+            params
+          ) as Promise<OpenAI.Responses.Response>,
         {
           retries: this.options.openaiRetries
         }
@@ -462,7 +468,8 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
       step => step.type === 'shell' && step.callId === shellCall.call_id
     )
     if (existingStep) {
-      existingStep.commands = shellCall.action?.commands ?? existingStep.commands
+      existingStep.commands =
+        shellCall.action?.commands ?? existingStep.commands
       existingStep.status = shellCall.status ?? existingStep.status
       return existingStep
     }
@@ -538,7 +545,11 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
     for (const shellCall of shellCalls) {
       const step = this.ensureShellAnalysisStep(analysisSteps, shellCall)
       const shellOutput = await this.runLocalShellCall(shellCall)
-      this.attachShellOutput(analysisSteps, shellCall.call_id, shellOutput.output)
+      this.attachShellOutput(
+        analysisSteps,
+        shellCall.call_id,
+        shellOutput.output
+      )
       step.status = 'completed'
       shellOutputs.push(shellOutput as OpenAI.Responses.ResponseInputItem)
     }
@@ -631,25 +642,29 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
         stdout: string
         stderr: string
       }>((resolve, reject) => {
-        execCallback(command, {
-          cwd: process.cwd(),
-          env: sanitizedEnv,
-          timeout: timeoutMs,
-          maxBuffer,
-          ...(shell ? {shell} : {})
-        }, (error, stdout, stderr) => {
-          if (error != null) {
-            const enrichedError = error as NodeJS.ErrnoException & {
-              stdout?: string
-              stderr?: string
+        execCallback(
+          command,
+          {
+            cwd: process.cwd(),
+            env: sanitizedEnv,
+            timeout: timeoutMs,
+            maxBuffer,
+            ...(shell ? {shell} : {})
+          },
+          (error, stdout, stderr) => {
+            if (error != null) {
+              const enrichedError = error as NodeJS.ErrnoException & {
+                stdout?: string
+                stderr?: string
+              }
+              enrichedError.stdout = stdout
+              enrichedError.stderr = stderr
+              reject(enrichedError)
+              return
             }
-            enrichedError.stdout = stdout
-            enrichedError.stderr = stderr
-            reject(enrichedError)
-            return
+            resolve({stdout, stderr})
           }
-          resolve({stdout, stderr})
-        })
+        )
       })
       return {
         stdout,

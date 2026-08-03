@@ -13,6 +13,8 @@ import {OpenAIOptions, type Options} from './options'
 import {createGitHubExecutionContext} from './platform/github-execution-context'
 import {GitHubConfigProvider} from './platform/github-config-provider'
 import {GitHubLogger} from './platform/github-logger'
+import {setPlatform} from './platform/git-platform'
+import {GitHubPlatform} from './platform/github-platform'
 import {setLogger} from './platform/logger'
 import {runOrchestrator} from './platform/orchestrator'
 
@@ -57,8 +59,9 @@ function createBots(options: Options): {lightBot: Bot; heavyBot: Bot} | null {
 }
 
 async function run(): Promise<void> {
-  // 初始化 GitHub Logger（ARCH-013）
+  // 初始化 GitHub Logger（ARCH-013）+ Platform（ARCH-018）
   setLogger(new GitHubLogger())
+  setPlatform(new GitHubPlatform())
 
   await runOrchestrator({
     configProvider: new GitHubConfigProvider(),

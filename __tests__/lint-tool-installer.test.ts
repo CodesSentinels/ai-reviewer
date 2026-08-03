@@ -55,8 +55,15 @@ jest.mock('os', () => {
   }
 })
 
-import {ensureToolInstalled} from '../src/lint/tool-installer'
-import {type BinaryInstallSpec, type NpmInstallSpec} from '../src/lint/types'
+import {
+  ensureToolInstalled,
+  npmRangeToPipSpecifier
+} from '../src/lint/tool-installer'
+import {
+  type BinaryInstallSpec,
+  type NpmInstallSpec,
+  type PipInstallSpec
+} from '../src/lint/types'
 
 const npmSpec: NpmInstallSpec = {
   kind: 'npm',

@@ -66,7 +66,7 @@ export interface ConfigProvider {
    * ARCH-011：禁止输出 OpenAI Key、GitHub Token、GitLab PAT、Trigger token。
    * @param log - 日志输出函数，解耦 @actions/core 依赖
    */
-  // eslint-disable-next-line no-unused-vars
+
   print(log: (msg: string) => void): void
 }
 
@@ -77,9 +77,9 @@ export interface ConfigProvider {
 export class ConfigError extends Error {
   constructor(
     message: string,
-    // eslint-disable-next-line no-unused-vars
+
     public readonly platform: Platform,
-    // eslint-disable-next-line no-unused-vars
+
     public readonly field: string
   ) {
     super(message)

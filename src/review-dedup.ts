@@ -114,7 +114,7 @@ export function mergeReviewsByTopic(
   toolFindings: ToolFindingForDedup[]
 ): Review[] {
   // 仅在测试环境之外 require @actions/core，避免 jest 启动时直接拉起 GitHub runtime
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
+
   const {info} = require('@actions/core') as {info: (msg: string) => void}
 
   // Step 1: 为每条 review 计算其重叠的 ruleId 集合

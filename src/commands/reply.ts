@@ -12,9 +12,9 @@
  * - success/error 若收到 ackId 则 updateComment，否则 createComment
  * - error 文案带错误码，便于日志与用户排查
  */
-import {info, warning} from '@actions/core'
-import {octokit} from '../octokit'
 import {getCommentGreeting} from '../commenter'
+import {getPlatform} from '../platform/git-platform'
+import {getLogger} from '../platform/logger'
 import type {ErrorCode, Reply as IReply} from './types'
 
 /** 命令回复评论的幂等标签前缀 */
@@ -70,26 +70,27 @@ export class Reply implements IReply {
 
   async ack(message: string): Promise<number | null> {
     const body = this.wrap(`⏳ ${message}`)
+    const platform = getPlatform()
     try {
       if (this.ctx.eventName === 'pull_request_review_comment') {
-        const res = await octokit.pulls.createReplyForReviewComment({
-          owner: this.ctx.owner,
-          repo: this.ctx.repo,
-          pull_number: this.ctx.issueNumber,
-          comment_id: this.ctx.originalCommentId,
+        const res = await platform.replyToReviewComment(
+          this.ctx.owner,
+          this.ctx.repo,
+          this.ctx.issueNumber,
+          this.ctx.originalCommentId,
           body
-        })
-        return res.data.id
+        )
+        return res.id
       }
-      const res = await octokit.issues.createComment({
-        owner: this.ctx.owner,
-        repo: this.ctx.repo,
-        issue_number: this.ctx.issueNumber,
+      const res = await platform.createComment(
+        this.ctx.owner,
+        this.ctx.repo,
+        this.ctx.issueNumber,
         body
-      })
-      return res.data.id
+      )
+      return res.id
     } catch (e) {
-      warning(`reply.ack failed: ${String(e)}`)
+      getLogger().warning(`reply.ack failed: ${String(e)}`)
       return null
     }
   }
@@ -108,36 +109,33 @@ export class Reply implements IReply {
       `${formatErrorMessage(code, detail)}\n\n\`错误码: ${code}\``
     )
     await this.publish(body, ackId)
-    info(`command error [${code}] ${detail ?? ''}`)
+    getLogger().info(`command error [${code}] ${detail ?? ''}`)
   }
 
   async progress(message: string, ackId: number): Promise<void> {
     const body = this.wrap(`⏳ ${message}`)
     try {
-      await octokit.issues.updateComment({
-        owner: this.ctx.owner,
-        repo: this.ctx.repo,
-        comment_id: ackId,
+      await getPlatform().updateComment(
+        this.ctx.owner,
+        this.ctx.repo,
+        ackId,
         body
-      })
+      )
     } catch (e) {
-      warning(`reply.progress update failed: ${String(e)}`)
+      getLogger().warning(`reply.progress update failed: ${String(e)}`)
     }
   }
 
   /** 新建或更新评论 */
   private async publish(body: string, ackId?: number | null): Promise<void> {
+    const platform = getPlatform()
+    const logger = getLogger()
     if (ackId != null) {
       try {
-        await octokit.issues.updateComment({
-          owner: this.ctx.owner,
-          repo: this.ctx.repo,
-          comment_id: ackId,
-          body
-        })
+        await platform.updateComment(this.ctx.owner, this.ctx.repo, ackId, body)
         return
       } catch (e) {
-        warning(
+        logger.warning(
           `reply.publish update failed, falling back to create: ${String(e)}`
         )
       }
@@ -145,16 +143,16 @@ export class Reply implements IReply {
     // 行级评论场景：回复到同一 review thread
     if (this.ctx.eventName === 'pull_request_review_comment') {
       try {
-        await octokit.pulls.createReplyForReviewComment({
-          owner: this.ctx.owner,
-          repo: this.ctx.repo,
-          pull_number: this.ctx.issueNumber,
-          comment_id: this.ctx.originalCommentId,
+        await platform.replyToReviewComment(
+          this.ctx.owner,
+          this.ctx.repo,
+          this.ctx.issueNumber,
+          this.ctx.originalCommentId,
           body
-        })
+        )
         return
       } catch (e) {
-        warning(
+        logger.warning(
           `reply.publish review thread reply failed, falling back to issue comment: ${String(
             e
           )}`
@@ -162,14 +160,14 @@ export class Reply implements IReply {
       }
     }
     try {
-      await octokit.issues.createComment({
-        owner: this.ctx.owner,
-        repo: this.ctx.repo,
-        issue_number: this.ctx.issueNumber,
+      await platform.createComment(
+        this.ctx.owner,
+        this.ctx.repo,
+        this.ctx.issueNumber,
         body
-      })
+      )
     } catch (e) {
-      warning(`reply.publish create failed: ${String(e)}`)
+      logger.warning(`reply.publish create failed: ${String(e)}`)
     }
   }
 
@@ -197,21 +195,17 @@ export async function hasBeenProcessed(
 ): Promise<boolean> {
   const tag = buildCmdReplyTag(originalCommentId, commandName)
   try {
-    // 用 paginate 扫描（一期最多 100 条足够）
-    const res = await octokit.issues.listComments({
-      owner,
-      repo,
-      issue_number: issueNumber,
-      per_page: 100
-    })
-    for (const c of res.data) {
+    const comments = await getPlatform().listComments(owner, repo, issueNumber)
+    for (const c of comments) {
       if (typeof c.body === 'string' && c.body.includes(tag)) {
         return true
       }
     }
     return false
   } catch (e) {
-    warning(`hasBeenProcessed failed: ${String(e)} — treating as not processed`)
+    getLogger().warning(
+      `hasBeenProcessed failed: ${String(e)} — treating as not processed`
+    )
     return false
   }
 }

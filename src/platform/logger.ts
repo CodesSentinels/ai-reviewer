@@ -11,13 +11,12 @@
 
 /** 平台无关 Logger 接口 */
 export interface Logger {
-  // eslint-disable-next-line no-unused-vars
   info(msg: string): void
-  // eslint-disable-next-line no-unused-vars
+
   warning(msg: string): void
-  // eslint-disable-next-line no-unused-vars
+
   error(msg: string): void
-  // eslint-disable-next-line no-unused-vars
+
   debug(msg: string): void
 }
 

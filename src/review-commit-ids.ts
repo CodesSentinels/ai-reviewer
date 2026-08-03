@@ -16,9 +16,7 @@ export async function isHeadAlreadyReviewed(
   return reviewedIds.includes(headSha)
 }
 
-export async function clearReviewedCommitIds(
-  prNumber: number
-): Promise<void> {
+export async function clearReviewedCommitIds(prNumber: number): Promise<void> {
   const commenter = new Commenter()
   const comment = await commenter.findCommentWithTag(SUMMARIZE_TAG, prNumber)
   if (comment == null) return

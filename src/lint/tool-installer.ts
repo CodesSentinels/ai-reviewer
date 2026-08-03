@@ -20,7 +20,7 @@
 import {info, warning} from '@actions/core'
 import {existsSync, mkdirSync, writeFileSync} from 'fs'
 import {tmpdir} from 'os'
-import * as path from 'path'
+import {join} from 'path'
 import {
   type InstallSpec,
   type NpmInstallSpec,
@@ -34,7 +34,7 @@ import {runCommand} from './adapters/exec'
  * 用 getter 而非顶层常量，让测试可以 mock `os.tmpdir()`。
  */
 function getInstallRoot(): string {
-  return path.join(tmpdir(), 'ai-reviewer-lint-tools')
+  return join(tmpdir(), 'ai-reviewer-lint-tools')
 }
 
 /** 单次 npm install 的超时（5 分钟，足够覆盖慢镜像） */
@@ -80,7 +80,7 @@ export async function ensureToolInstalled(
  */
 async function installViaNpm(spec: NpmInstallSpec): Promise<InstallResult> {
   const root = getInstallRoot()
-  const binPath = path.join(root, 'node_modules', '.bin', spec.binName)
+  const binPath = join(root, 'node_modules', '.bin', spec.binName)
 
   // 1) 缓存命中：同一 runner job 内 ai-reviewer 多次调用、或多个 adapter
   //    碰巧依赖同一工具时直接返回
@@ -94,11 +94,11 @@ async function installViaNpm(spec: NpmInstallSpec): Promise<InstallResult> {
     if (!existsSync(root)) {
       mkdirSync(root, {recursive: true})
     }
-    const sandboxPkgJson = path.join(root, 'package.json')
+    const sandboxPkgJson = join(root, 'package.json')
     if (!existsSync(sandboxPkgJson)) {
       writeFileSync(
         sandboxPkgJson,
-        JSON.stringify(
+        `${JSON.stringify(
           {
             name: 'ai-reviewer-lint-tools',
             private: true,
@@ -108,7 +108,7 @@ async function installViaNpm(spec: NpmInstallSpec): Promise<InstallResult> {
           },
           null,
           2
-        ) + '\n'
+        )}\n`
       )
     }
   } catch (e) {
@@ -183,7 +183,7 @@ async function installViaNpm(spec: NpmInstallSpec): Promise<InstallResult> {
  *   - --target 让所有 Python 工具集中在沙箱里，与 npm 工具同款的缓存模型
  */
 function getPipInstallDir(): string {
-  return path.join(getInstallRoot(), 'python-tools')
+  return join(getInstallRoot(), 'python-tools')
 }
 
 /**
@@ -241,7 +241,7 @@ async function installViaPip(spec: PipInstallSpec): Promise<InstallResult> {
   const startedAt = Date.now()
   const root = getInstallRoot()
   const targetDir = getPipInstallDir()
-  const binPath = path.join(targetDir, 'bin', spec.binName)
+  const binPath = join(targetDir, 'bin', spec.binName)
 
   // 1) 缓存命中
   if (existsSync(binPath)) {

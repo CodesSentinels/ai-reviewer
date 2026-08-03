@@ -41,7 +41,7 @@
  */
 
 import {info, warning} from '@actions/core'
-import * as path from 'path'
+import {dirname} from 'path'
 import {ensureToolInstalled} from '../tool-installer'
 import {
   type InstallSpec,
@@ -88,7 +88,6 @@ interface SemgrepOutput {
     skipped?: Array<{path?: string; reason?: string}>
   }
 }
-
 
 export class SemgrepAdapter implements ToolAdapter {
   readonly name = 'semgrep'
@@ -205,8 +204,8 @@ export class SemgrepAdapter implements ToolAdapter {
     //   pythonPath = `<sandbox>/python-tools`  （注入 PYTHONPATH，import 找代码用）
     // 用 path.dirname 而不是正则剥离 —— 不依赖 binName 字面值是 'semgrep'，
     // 也兼容 Windows 路径分隔符
-    this.binDir = path.dirname(this.resolvedBinPath)
-    this.pythonPath = path.dirname(this.binDir)
+    this.binDir = dirname(this.resolvedBinPath)
+    this.pythonPath = dirname(this.binDir)
     info(
       `lint/semgrep[detect]: install ok — binPath=${this.resolvedBinPath}, pythonPath=${this.pythonPath}, binDir=${this.binDir}`
     )
@@ -224,7 +223,10 @@ export class SemgrepAdapter implements ToolAdapter {
     })
     if (versionResult.spawnError || versionResult.exitCode !== 0) {
       const stderrSnippet =
-        versionResult.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 120) ?? ''
+        versionResult.stderr
+          .split('\n')
+          .find(l => l.trim().length > 0)
+          ?.substring(0, 120) ?? ''
       warning(
         `lint/semgrep[detect]: --version failed exit=${versionResult.exitCode}, ` +
           `spawnError=${versionResult.spawnError}, stderr="${stderrSnippet}"`
@@ -287,16 +289,23 @@ export class SemgrepAdapter implements ToolAdapter {
 
     if (probe.spawnError || probe.timedOut || probe.exitCode !== 0) {
       const stderrSnippet =
-        probe.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 300) ?? ''
+        probe.stderr
+          .split('\n')
+          .find(l => l.trim().length > 0)
+          ?.substring(0, 300) ?? ''
       const stdoutSnippet =
-        probe.stdout.split('\n').find(l => l.trim().length > 0)?.substring(0, 200) ?? ''
+        probe.stdout
+          .split('\n')
+          .find(l => l.trim().length > 0)
+          ?.substring(0, 200) ?? ''
       warning(
         `lint/semgrep[probe]: --validate failed (exit=${probe.exitCode}, timedOut=${probe.timedOut}, ` +
           `elapsed=${elapsed}ms). Rule pack "${this.config}" may NOT be loaded. ` +
           `Common causes: (1) config name typo (2) cannot reach semgrep.dev to fetch ` +
           `the ruleset (3) invalid yaml in a custom config file. ` +
-          `stderr: "${stderrSnippet}"` +
-          (stdoutSnippet.length > 0 ? ` stdout: "${stdoutSnippet}"` : '')
+          `stderr: "${stderrSnippet}"${
+            stdoutSnippet.length > 0 ? ` stdout: "${stdoutSnippet}"` : ''
+          }`
       )
       return
     }
@@ -311,10 +320,11 @@ export class SemgrepAdapter implements ToolAdapter {
     const ruleCount = ruleCountMatch?.[1] ?? '?'
 
     info(
-      `lint/semgrep[probe]: ✅ "${this.config}" validates — ${ruleCount} rule(s) loaded in ${elapsed}ms` +
-        (ruleCount === '?'
-          ? ' (semgrep didn\'t print a rule count; exit=0 still proves config loaded)'
-          : '')
+      `lint/semgrep[probe]: ✅ "${this.config}" validates — ${ruleCount} rule(s) loaded in ${elapsed}ms${
+        ruleCount === '?'
+          ? " (semgrep didn't print a rule count; exit=0 still proves config loaded)"
+          : ''
+      }`
     )
 
     // 把 stderr 头几行也打出来 —— semgrep 在 validate 时偶尔会附带规则来源 / 警告
@@ -327,7 +337,9 @@ export class SemgrepAdapter implements ToolAdapter {
       .slice(0, 5)
       .map(l => l.substring(0, 200))
     if (stderrLines.length > 0) {
-      info(`lint/semgrep[probe]: validate stderr (first 5 non-empty lines): ${stderrLines.join(' | ')}`)
+      info(
+        `lint/semgrep[probe]: validate stderr (first 5 non-empty lines): ${stderrLines.join(' | ')}`
+      )
     }
   }
 
@@ -341,7 +353,9 @@ export class SemgrepAdapter implements ToolAdapter {
       return []
     }
     if (files.length === 0) {
-      info('lint/semgrep[scan]: targets is empty (no matching file extensions in changed set) — skip')
+      info(
+        'lint/semgrep[scan]: targets is empty (no matching file extensions in changed set) — skip'
+      )
       return []
     }
     const scanStart = Date.now()
@@ -375,12 +389,18 @@ export class SemgrepAdapter implements ToolAdapter {
 
     const elapsed = Date.now() - scanStart
     const stderrFirstLine =
-      result.stderr.split('\n').find(l => l.trim().length > 0)?.substring(0, 200) ?? ''
+      result.stderr
+        .split('\n')
+        .find(l => l.trim().length > 0)
+        ?.substring(0, 200) ?? ''
     info(
       `lint/semgrep[scan]: returned in ${elapsed}ms — exit=${result.exitCode}, ` +
         `timedOut=${result.timedOut}, spawnError=${result.spawnError}, ` +
-        `stdout_len=${result.stdout.length}, stderr_len=${result.stderr.length}` +
-        (stderrFirstLine.length > 0 ? `, stderr_first="${stderrFirstLine}"` : '')
+        `stdout_len=${result.stdout.length}, stderr_len=${result.stderr.length}${
+          stderrFirstLine.length > 0
+            ? `, stderr_first="${stderrFirstLine}"`
+            : ''
+        }`
     )
 
     if (result.spawnError) {
@@ -420,7 +440,10 @@ export class SemgrepAdapter implements ToolAdapter {
     const errCount = parsed.errors?.length ?? 0
     if (errCount > 0) {
       // semgrep 把"无法解析的文件 / 规则加载错误"放在 errors 数组里 —— 重要诊断信号
-      const firstErr = JSON.stringify(parsed.errors?.[0] ?? {}).substring(0, 300)
+      const firstErr = JSON.stringify(parsed.errors?.[0] ?? {}).substring(
+        0,
+        300
+      )
       warning(
         `lint/semgrep[scan]: ${errCount} semgrep-level error(s) reported (this is separate from "findings"); ` +
           `first: ${firstErr}`
@@ -506,7 +529,10 @@ export class SemgrepAdapter implements ToolAdapter {
       for (const f of findings) {
         const prefix = f.ruleId.split('.').slice(0, 2).join('.')
         findingPrefixes.set(prefix, (findingPrefixes.get(prefix) ?? 0) + 1)
-        findingSeverities.set(f.severity, (findingSeverities.get(f.severity) ?? 0) + 1)
+        findingSeverities.set(
+          f.severity,
+          (findingSeverities.get(f.severity) ?? 0) + 1
+        )
       }
       const fmtMap = (m: Map<string, number>): string =>
         [...m.entries()]
@@ -516,7 +542,9 @@ export class SemgrepAdapter implements ToolAdapter {
       info(
         `lint/semgrep[scan]: finding rule_id prefix breakdown = { ${fmtMap(findingPrefixes)} }`
       )
-      info(`lint/semgrep[scan]: finding severity breakdown = { ${fmtMap(findingSeverities)} }`)
+      info(
+        `lint/semgrep[scan]: finding severity breakdown = { ${fmtMap(findingSeverities)} }`
+      )
       info(
         `lint/semgrep[scan]: first 3 finding rule_ids: ${findings
           .slice(0, 3)
@@ -593,7 +621,8 @@ function formatVulnTags(metadata?: SemgrepResult['extra']['metadata']): string {
 /** 把 string | string[] | undefined 统一成 string[] */
 function toStringArray(v: unknown): string[] {
   if (typeof v === 'string') return [v]
-  if (Array.isArray(v)) return v.filter((x): x is string => typeof x === 'string')
+  if (Array.isArray(v))
+    return v.filter((x): x is string => typeof x === 'string')
   return []
 }
 

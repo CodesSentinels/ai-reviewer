@@ -1,6 +1,6 @@
-import {warning} from '@actions/core'
 import pLimit from 'p-limit'
-import {octokit} from '../octokit'
+import {getPlatform} from '../platform/git-platform'
+import {getLogger} from '../platform/logger'
 import type {Options} from '../options'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -13,77 +13,6 @@ export interface ReviewThread {
   line: number | null
   firstCommentBody: string | null
 }
-
-interface GetReviewThreadsResponse {
-  repository: {
-    pullRequest: {
-      reviewThreads: {
-        pageInfo: {
-          hasNextPage: boolean
-          endCursor: string | null
-        }
-        nodes: Array<{
-          id: string
-          isResolved: boolean
-          path: string
-          line: number | null
-          comments: {
-            nodes: Array<{
-              author: {login: string} | null
-              body: string
-            }>
-          }
-        }>
-      }
-    }
-  }
-}
-
-// ─── GraphQL documents ───────────────────────────────────────────────────────
-
-const GET_REVIEW_THREADS = `
-  query GetReviewThreads(
-    $owner: String!
-    $repo: String!
-    $number: Int!
-    $after: String
-  ) {
-    repository(owner: $owner, name: $repo) {
-      pullRequest(number: $number) {
-        reviewThreads(first: 100, after: $after) {
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-          nodes {
-            id
-            isResolved
-            path
-            line
-            comments(first: 1) {
-              nodes {
-                author {
-                  login
-                }
-                body
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-`
-
-const RESOLVE_THREAD = `
-  mutation ResolveThread($threadId: ID!) {
-    resolveReviewThread(input: { threadId: $threadId }) {
-      thread {
-        isResolved
-      }
-    }
-  }
-`
 
 // ─── Bot identity ─────────────────────────────────────────────────────────────
 
@@ -102,35 +31,13 @@ export async function getBotLogin(options: Options): Promise<string> {
     return cachedBotLogin
   }
 
-  try {
-    const {data} = await octokit.users.getAuthenticated()
-    cachedBotLogin = data.login
-  } catch (e) {
-    warning(`getBotLogin: failed to get authenticated user – ${String(e)}`)
-    // Default GITHUB_TOKEN (integration token) lacks read:user scope.
-    // GraphQL returns the login WITHOUT the "[bot]" suffix, so use 'github-actions'
-    // (not 'github-actions[bot]') to match the author field in reviewThread queries.
-    cachedBotLogin = 'github-actions'
-  }
-
+  cachedBotLogin = await getPlatform().getAuthenticatedLogin()
   return cachedBotLogin
 }
 
 /** Visible for testing only */
 export function _resetBotLoginCache(): void {
   cachedBotLogin = null
-}
-
-/**
- * Normalize a GitHub login for bot identity comparison.
- *
- * GitHub is inconsistent about the `[bot]` suffix on bot accounts:
- *   - REST (`getAuthenticated`, comment.user.login) → `github-actions[bot]`
- *   - GraphQL (reviewThread author.login)           → `github-actions`
- * Stripping the suffix (and lowercasing) lets the two representations match.
- */
-function normalizeLogin(login: string): string {
-  return login.replace(/\[bot\]$/i, '').toLowerCase()
 }
 
 // ─── Query ────────────────────────────────────────────────────────────────────
@@ -153,83 +60,31 @@ export async function fetchThreadStatusMap(params: {
   repo: string
   prNumber: number
 }): Promise<ThreadStatusMap> {
-  const map: ThreadStatusMap = new Map()
-  let cursor: string | null = null
-
-  do {
-    const data: GetReviewThreadsResponse = await octokit.graphql(
-      GET_REVIEW_THREADS,
-      {
-        owner: params.owner,
-        repo: params.repo,
-        number: params.prNumber,
-        after: cursor ?? undefined
-      }
-    )
-
-    const page = data.repository.pullRequest.reviewThreads
-
-    for (const node of page.nodes) {
-      if (node.path != null && node.line != null) {
-        const key = `${node.path}:${node.line}`
-        // If any thread at this location is unresolved, mark as unresolved
-        if (!map.has(key) || !node.isResolved) {
-          map.set(key, node.isResolved)
-        }
-      }
-    }
-
-    cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null
-  } while (cursor !== null)
-
-  return map
+  return getPlatform().fetchThreadStatusMap(
+    params.owner,
+    params.repo,
+    params.prNumber
+  )
 }
 
 export async function fetchUnresolvedBotThreads(
   params: {owner: string; repo: string; prNumber: number},
   botLogin: string
 ): Promise<ReviewThread[]> {
-  const results: ReviewThread[] = []
-  let cursor: string | null = null
-
-  do {
-    const data: GetReviewThreadsResponse = await octokit.graphql(
-      GET_REVIEW_THREADS,
-      {
-        owner: params.owner,
-        repo: params.repo,
-        number: params.prNumber,
-        after: cursor ?? undefined
-      }
-    )
-
-    const page: GetReviewThreadsResponse['repository']['pullRequest']['reviewThreads'] =
-      data.repository.pullRequest.reviewThreads
-
-    const normalizedBot = normalizeLogin(botLogin)
-    for (const node of page.nodes) {
-      const firstComment = node.comments.nodes[0]
-      const authorLogin = firstComment?.author?.login ?? null
-      if (
-        !node.isResolved &&
-        authorLogin !== null &&
-        normalizeLogin(authorLogin) === normalizedBot
-      ) {
-        results.push({
-          id: node.id,
-          isResolved: node.isResolved,
-          firstCommentAuthorLogin: authorLogin,
-          path: node.path,
-          line: node.line ?? null,
-          firstCommentBody: firstComment?.body ?? null
-        })
-      }
-    }
-
-    cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null
-  } while (cursor !== null)
-
-  return results
+  const threads = await getPlatform().fetchUnresolvedBotThreads(
+    params.owner,
+    params.repo,
+    params.prNumber,
+    botLogin
+  )
+  return threads.map(t => ({
+    id: t.id,
+    isResolved: t.isResolved,
+    firstCommentAuthorLogin: t.firstCommentAuthorLogin,
+    path: t.path,
+    line: t.line,
+    firstCommentBody: t.firstCommentBody
+  }))
 }
 
 // ─── Mutation ─────────────────────────────────────────────────────────────────
@@ -302,27 +157,53 @@ export function threadLabel(t: ReviewThread): string {
 export async function batchResolve(
   threads: ReviewThread[]
 ): Promise<BatchResolveResult> {
+  const logger = getLogger()
   const limit = pLimit(6)
   let ok = 0
   const errors: Error[] = []
   const failedItems: Array<{thread: ReviewThread; error: Error}> = []
 
-  await Promise.allSettled(
-    threads.map(t =>
-      limit(async () => {
-        try {
-          const simulated = simulateDebugError(t.id)
-          if (simulated) throw simulated
-          await octokit.graphql(RESOLVE_THREAD, {threadId: t.id})
-          ok++
-        } catch (e) {
-          const err = e instanceof Error ? e : new Error(String(e))
-          errors.push(err)
-          failedItems.push({thread: t, error: err})
-        }
-      })
+  // 先过滤掉 debug 注入的假 thread ID，模拟错误
+  const debugThreads: ReviewThread[] = []
+  const realThreads: ReviewThread[] = []
+  for (const t of threads) {
+    const simulated = simulateDebugError(t.id)
+    if (simulated) {
+      const err = simulated
+      errors.push(err)
+      failedItems.push({thread: t, error: err})
+      debugThreads.push(t)
+    } else {
+      realThreads.push(t)
+    }
+  }
+
+  // 批量 resolve 真实 thread
+  if (realThreads.length > 0) {
+    const platform = getPlatform()
+    await Promise.allSettled(
+      realThreads.map(t =>
+        limit(async () => {
+          try {
+            const result = await platform.resolveThreads([t.id])
+            if (result.failed > 0) {
+              // adapter 吞掉 GraphQL 异常并放进 errors 返回，不 throw
+              for (const err of result.errors) {
+                errors.push(err)
+                failedItems.push({thread: t, error: err})
+              }
+            } else {
+              ok++
+            }
+          } catch (e) {
+            const err = e instanceof Error ? e : new Error(String(e))
+            errors.push(err)
+            failedItems.push({thread: t, error: err})
+          }
+        })
+      )
     )
-  )
+  }
 
   const permissionFailed = failedItems.filter(({error}) =>
     isPermissionError(error)
@@ -330,7 +211,7 @@ export async function batchResolve(
   const otherFailed = failedItems.filter(({error}) => !isPermissionError(error))
 
   if (permissionFailed.length > 0) {
-    warning(
+    logger.warning(
       'batchResolve: token lacks permission to resolve review threads ' +
         '("Resource not accessible by integration"). ' +
         'Set the `resolve_token` input to a classic PAT with repo scope.'
@@ -341,7 +222,7 @@ export async function batchResolve(
     const lines = otherFailed
       .map(({thread, error}) => `  • ${threadLabel(thread)}: ${error.message}`)
       .join('\n')
-    warning(
+    logger.warning(
       `batchResolve: failed to resolve ${otherFailed.length}/${threads.length} thread(s):\n${lines}`
     )
   }

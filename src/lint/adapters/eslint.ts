@@ -13,7 +13,7 @@
 
 import {info} from '@actions/core'
 import {existsSync, readFileSync} from 'fs'
-import * as path from 'path'
+import {join} from 'path'
 import {ensureToolInstalled} from '../tool-installer'
 import {
   type InstallSpec,
@@ -53,10 +53,10 @@ const ESLINT_CONFIG_FILES = [
  */
 function findEslintConfig(repoRoot: string): string | null {
   for (const name of ESLINT_CONFIG_FILES) {
-    if (existsSync(path.join(repoRoot, name))) return name
+    if (existsSync(join(repoRoot, name))) return name
   }
   // package.json 内嵌 eslintConfig
-  const pkgPath = path.join(repoRoot, 'package.json')
+  const pkgPath = join(repoRoot, 'package.json')
   if (existsSync(pkgPath)) {
     try {
       const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as {

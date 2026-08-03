@@ -16,7 +16,6 @@
  * 设计原则：纯逻辑（意图识别 / 截断 / 轮次统计）抽成可独立单测的函数，
  * I/O 编排集中在 handleConversation 中，复用既有 Commenter / Bot / Prompts。
  */
-import {info, warning} from '@actions/core'
 import {type Bot} from './bot'
 import type {ExecutionContext} from './platform/execution-context'
 import {
@@ -28,8 +27,9 @@ import {
 } from './commenter'
 import {BOT_MENTIONS} from './constants'
 import {Inputs} from './inputs'
-import {octokit} from './octokit'
 import {type Options} from './options'
+import {getPlatform} from './platform/git-platform'
+import {getLogger} from './platform/logger'
 import {type Prompts} from './prompts'
 import {getTokenCount} from './tokenizer'
 
@@ -192,23 +192,27 @@ export const handleConversation = async (
   const inputs: Inputs = new Inputs()
   const [repoOwner, repoName] = execCtx.projectPath.split('/')
 
+  const logger = getLogger()
+
   // ===== 1. 事件与 payload 校验 =====
   if (execCtx.eventKind !== 'review_comment_created') {
-    info(`conversation: skip non review_comment event (${execCtx.eventKind})`)
+    logger.info(
+      `conversation: skip non review_comment event (${execCtx.eventKind})`
+    )
     return
   }
   const payload = execCtx.raw as any
   if (!payload || payload.action !== 'created') {
-    info('conversation: skip (missing payload or action != created)')
+    logger.info('conversation: skip (missing payload or action != created)')
     return
   }
   const comment = payload.comment
   if (comment == null || typeof comment.body !== 'string') {
-    warning('conversation: skip (missing comment body)')
+    logger.warning('conversation: skip (missing comment body)')
     return
   }
   if (payload.pull_request == null || payload.repository == null) {
-    warning('conversation: skip (missing pull_request/repository)')
+    logger.warning('conversation: skip (missing pull_request/repository)')
     return
   }
 
@@ -219,7 +223,7 @@ export const handleConversation = async (
     comment.body.includes(COMMENT_TAG) ||
     comment.body.includes(COMMENT_REPLY_TAG)
   if (authorIsBot) {
-    info('conversation: skip (comment from bot itself)')
+    logger.info('conversation: skip (comment from bot itself)')
     return
   }
 
@@ -240,7 +244,7 @@ export const handleConversation = async (
     comment
   )
   if (!topLevelComment) {
-    warning('conversation: cannot locate top-level comment, abort')
+    logger.warning('conversation: cannot locate top-level comment, abort')
     return
   }
 
@@ -251,14 +255,14 @@ export const handleConversation = async (
       authorIsBot: false
     })
   ) {
-    info('conversation: not a follow-up question (no @mention), skip')
+    logger.info('conversation: not a follow-up question (no @mention), skip')
     return
   }
 
   // ===== 5. 对话轮次上限控制 =====
   const turns = countBotTurns(rawChain)
   if (turns >= MAX_CONVERSATION_TURNS) {
-    info(
+    logger.info(
       `conversation: turn limit reached (${turns}/${MAX_CONVERSATION_TURNS})`
     )
     await commenter.reviewCommentReply(
@@ -275,18 +279,20 @@ export const handleConversation = async (
   // ===== 7. 关联代码行及扩展上下文（文件完整 diff） =====
   let fileDiff = ''
   try {
-    const diffAll = await octokit.repos.compareCommits({
-      owner: repoOwner,
-      repo: repoName,
-      base: payload.pull_request.base.sha,
-      head: payload.pull_request.head.sha
-    })
-    const file = diffAll.data?.files?.find(f => f.filename === comment.path)
+    const diffResult = await getPlatform().compareDiff(
+      repoOwner,
+      repoName,
+      payload.pull_request.base.sha,
+      payload.pull_request.head.sha
+    )
+    const file = diffResult.files.find(f => f.filename === comment.path)
     if (file?.patch) {
       fileDiff = file.patch
     }
   } catch (e) {
-    warning(`conversation: failed to get file diff: ${e}, continue without it`)
+    logger.warning(
+      `conversation: failed to get file diff: ${e}, continue without it`
+    )
   }
 
   // 评论本身没有 diff 片段时，退化为使用完整文件 diff
@@ -352,7 +358,7 @@ export const handleConversation = async (
   // ===== 9. LLM 对话推理 + 发布回复 =====
   const [reply] = await heavyBot.chat(prompts.renderComment(inputs), {})
   if (!reply) {
-    warning('conversation: empty reply from model, skip posting')
+    logger.warning('conversation: empty reply from model, skip posting')
     return
   }
   // 由我们用真实评论者用户名前缀回复（模型已被要求不要自行 @）。
@@ -369,7 +375,7 @@ export const handleConversation = async (
     topLevelComment,
     `${quotedQuestion}\n\n${mention}${cleanedReply}`
   )
-  info(
+  logger.info(
     `conversation: replied on PR #${pullNumber} thread (top-level comment ${topLevelComment.id})`
   )
 }
@@ -426,27 +432,30 @@ export const handleIssueConversation = async (
   const commenter: Commenter = new Commenter()
   const inputs: Inputs = new Inputs()
   const [repoOwner, repoName] = execCtx.projectPath.split('/')
+  const logger = getLogger()
 
   // ===== 1. 事件与 payload 校验 =====
   if (execCtx.eventKind !== 'comment_created') {
-    info(
+    logger.info(
       `issue-conversation: skip non issue_comment event (${execCtx.eventKind})`
     )
     return
   }
   const payload = execCtx.raw as any
   if (!payload || payload.action !== 'created') {
-    info('issue-conversation: skip (missing payload or action != created)')
+    logger.info(
+      'issue-conversation: skip (missing payload or action != created)'
+    )
     return
   }
   // 只处理 PR 上的评论（GitHub 中 PR 复用 issue 模型）
   if (!payload.issue?.pull_request) {
-    info('issue-conversation: skip (issue_comment on non-PR issue)')
+    logger.info('issue-conversation: skip (issue_comment on non-PR issue)')
     return
   }
   const comment = payload.comment
   if (comment == null || typeof comment.body !== 'string') {
-    warning('issue-conversation: skip (missing comment body)')
+    logger.warning('issue-conversation: skip (missing comment body)')
     return
   }
 
@@ -457,7 +466,7 @@ export const handleIssueConversation = async (
     comment.body.includes(COMMENT_TAG) ||
     comment.body.includes(COMMENT_REPLY_TAG)
   if (authorIsBot) {
-    info('issue-conversation: skip (comment from bot itself)')
+    logger.info('issue-conversation: skip (comment from bot itself)')
     return
   }
 
@@ -468,7 +477,9 @@ export const handleIssueConversation = async (
       authorIsBot: false
     })
   ) {
-    info('issue-conversation: not a follow-up question (no @mention), skip')
+    logger.info(
+      'issue-conversation: not a follow-up question (no @mention), skip'
+    )
     return
   }
 
@@ -481,7 +492,9 @@ export const handleIssueConversation = async (
     (c: any) => typeof c.body === 'string' && c.body.includes(replyTag)
   )
   if (alreadyReplied) {
-    info(`issue-conversation: skip duplicate reply for comment ${comment.id}`)
+    logger.info(
+      `issue-conversation: skip duplicate reply for comment ${comment.id}`
+    )
     return
   }
 
@@ -489,7 +502,7 @@ export const handleIssueConversation = async (
   const rawChain = composeIssueCommentChain(allComments, comment.id)
   const turns = countBotTurns(rawChain)
   if (turns >= MAX_CONVERSATION_TURNS) {
-    info(
+    logger.info(
       `issue-conversation: turn limit reached (${turns}/${MAX_CONVERSATION_TURNS})`
     )
     await postIssueReply(
@@ -513,24 +526,20 @@ export const handleIssueConversation = async (
   // ===== 7. 拉取整个 PR 的 diff（可选，受 token 预算约束） =====
   let prDiff = ''
   try {
-    const pr = await octokit.pulls.get({
-      owner: repoOwner,
-      repo: repoName,
-      // eslint-disable-next-line camelcase
-      pull_number: pullNumber
-    })
-    const diffAll = await octokit.repos.compareCommits({
-      owner: repoOwner,
-      repo: repoName,
-      base: pr.data.base.sha,
-      head: pr.data.head.sha
-    })
-    prDiff = (diffAll.data?.files ?? [])
+    const platform = getPlatform()
+    const cr = await platform.getChangeRequest(repoOwner, repoName, pullNumber)
+    const diffResult = await platform.compareDiff(
+      repoOwner,
+      repoName,
+      cr.baseSha,
+      cr.headSha
+    )
+    prDiff = diffResult.files
       .map(f => (f.patch ? `--- ${f.filename}\n${f.patch}` : ''))
       .filter(s => s.length > 0)
       .join('\n\n')
   } catch (e) {
-    warning(
+    logger.warning(
       `issue-conversation: failed to get PR diff: ${e}, continue without it`
     )
   }
@@ -583,12 +592,12 @@ export const handleIssueConversation = async (
   // ===== 9. LLM 对话推理 + 发布回复 =====
   const [reply] = await heavyBot.chat(prompts.renderCommentIssue(inputs), {})
   if (!reply) {
-    warning('issue-conversation: empty reply from model, skip posting')
+    logger.warning('issue-conversation: empty reply from model, skip posting')
     return
   }
   const cleanedReply = reply.replace(/^\s*@user[，,：:\s]*/i, '').trimStart()
   await postIssueReply(commenter, pullNumber, comment, cleanedReply)
-  info(`issue-conversation: replied on PR #${pullNumber} main thread`)
+  logger.info(`issue-conversation: replied on PR #${pullNumber} main thread`)
 }
 
 /**

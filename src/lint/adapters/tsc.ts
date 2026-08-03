@@ -24,7 +24,7 @@
 
 import {info} from '@actions/core'
 import {existsSync} from 'fs'
-import * as path from 'path'
+import {join} from 'path'
 import {ensureToolInstalled} from '../tool-installer'
 import {
   type InstallSpec,
@@ -50,7 +50,7 @@ const TSCONFIG_FILES = [
  */
 function findTsconfig(repoRoot: string): string | null {
   for (const name of TSCONFIG_FILES) {
-    if (existsSync(path.join(repoRoot, name))) return name
+    if (existsSync(join(repoRoot, name))) return name
   }
   return null
 }

@@ -59,6 +59,23 @@ jest.mock('@actions/github', () => ({context: mockContext}))
 // main.ts 是 `new Bot(...)`（非 type-only），必须 mock 掉，否则会因缺少
 // OPENAI_API_KEY 在 createBots() 内部抛错，导致 codeReview 分支永远走不到。
 const botInstance = {chat: jest.fn()}
+// ARCH-018: main.ts import GitHubPlatform → octokit → GITHUB_TOKEN，必须 mock
+jest.mock('../../src/platform/git-platform', () => ({
+  setPlatform: jest.fn(),
+  getPlatform: () => ({})
+}))
+jest.mock('../../src/platform/github-platform', () => ({
+  GitHubPlatform: jest.fn()
+}))
+jest.mock('../../src/platform/logger', () => ({
+  setLogger: jest.fn(),
+  getLogger: () => ({
+    info: jest.fn(),
+    warning: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn()
+  })
+}))
 // CFG-005: main.ts 现在 import initBotGreeting from commenter，必须 mock 掉
 // 以避免 commenter → octokit → GITHUB_TOKEN 的级联初始化错误。
 jest.mock('../../src/commenter', () => ({

@@ -17,7 +17,7 @@ import {
 } from './execution-context'
 
 // 键名必须与真实 GitHub 事件名一致（camelcase 规则对 Record key 逐行豁免）
-// eslint-disable-next-line no-unused-vars -- 函数类型签名里的形参名，base no-unused-vars 误判
+
 const EVENT_MAP: Record<string, (payload: any) => EventKind> = {
   // eslint-disable-next-line camelcase
   pull_request: mapPullRequestAction,

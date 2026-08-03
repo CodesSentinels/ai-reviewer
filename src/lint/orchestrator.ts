@@ -118,7 +118,9 @@ export async function runLintTools(
     const override = overrides[a.name]
     const enabled = override === undefined ? a.defaultEnabled : override
     const src =
-      override === undefined ? `default=${a.defaultEnabled}` : `override=${override}`
+      override === undefined
+        ? `default=${a.defaultEnabled}`
+        : `override=${override}`
     decisions.push(`${a.name}:${enabled ? 'on' : 'off'}(${src})`)
     if (enabled) enabledAdapters.push(a)
   }

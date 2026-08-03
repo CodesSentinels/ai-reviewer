@@ -30,21 +30,22 @@ const mockContext: any = {
 }
 jest.mock('@actions/github', () => ({context: mockContext}))
 
-const octokitState = {
-  compareCommits: jest.fn<(...a: any[]) => Promise<any>>(),
-  getContent: jest.fn<(...a: any[]) => Promise<any>>(),
-  pullsGet: jest.fn<(...a: any[]) => Promise<any>>()
+const platformState = {
+  compareDiff: jest.fn<(...a: any[]) => Promise<any>>(),
+  getFileContent: jest.fn<(...a: any[]) => Promise<any>>(),
+  getChangeRequest: jest.fn<(...a: any[]) => Promise<any>>(),
+  listRepositoryTree: jest.fn<(...a: any[]) => Promise<any>>()
 }
-jest.mock('../src/octokit', () => ({
-  octokit: {
-    repos: {
-      compareCommits: (...a: any[]) => octokitState.compareCommits(...a),
-      getContent: (...a: any[]) => octokitState.getContent(...a)
-    },
-    pulls: {
-      get: (...a: any[]) => octokitState.pullsGet(...a)
-    }
-  }
+jest.mock('../src/platform/git-platform', () => ({
+  getPlatform: () => platformState
+}))
+jest.mock('../src/platform/logger', () => ({
+  getLogger: () => ({
+    info: jest.fn(),
+    warning: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn()
+  })
 }))
 
 const commenterState = {
@@ -57,13 +58,25 @@ const commenterState = {
   getRawSummary: jest.fn().mockReturnValue(''),
   getShortSummary: jest.fn().mockReturnValue(''),
   addInProgressStatus: jest.fn().mockReturnValue('IN_PROGRESS'),
-  comment: jest.fn<(...a: any[]) => Promise<void>>().mockResolvedValue(undefined),
-  updateDescription: jest.fn<(...a: any[]) => Promise<void>>().mockResolvedValue(undefined),
-  submitReview: jest.fn<(...a: any[]) => Promise<void>>().mockResolvedValue(undefined),
-  addReviewedCommitId: jest.fn().mockReturnValue('<!-- reviewed-commit-ids -->'),
-  bufferReviewComment: jest.fn<(...a: any[]) => Promise<void>>().mockResolvedValue(undefined),
+  comment: jest
+    .fn<(...a: any[]) => Promise<void>>()
+    .mockResolvedValue(undefined),
+  updateDescription: jest
+    .fn<(...a: any[]) => Promise<void>>()
+    .mockResolvedValue(undefined),
+  submitReview: jest
+    .fn<(...a: any[]) => Promise<void>>()
+    .mockResolvedValue(undefined),
+  addReviewedCommitId: jest
+    .fn()
+    .mockReturnValue('<!-- reviewed-commit-ids -->'),
+  bufferReviewComment: jest
+    .fn<(...a: any[]) => Promise<void>>()
+    .mockResolvedValue(undefined),
   listReviewComments: jest.fn<() => Promise<any[]>>().mockResolvedValue([]),
-  getCommentChainsWithinRange: jest.fn<(...a: any[]) => Promise<string>>().mockResolvedValue('')
+  getCommentChainsWithinRange: jest
+    .fn<(...a: any[]) => Promise<string>>()
+    .mockResolvedValue('')
 }
 jest.mock('../src/commenter', () => ({
   Commenter: jest.fn().mockImplementation(() => commenterState),
@@ -79,11 +92,15 @@ jest.mock('../src/commenter', () => ({
 jest.mock('../src/tokenizer', () => ({getTokenCount: () => 0}))
 
 jest.mock('../src/github/review-thread', () => ({
-  fetchThreadStatusMap: jest.fn<() => Promise<Map<string, boolean>>>().mockResolvedValue(new Map())
+  fetchThreadStatusMap: jest
+    .fn<() => Promise<Map<string, boolean>>>()
+    .mockResolvedValue(new Map())
 }))
 
 const repoTreeState = {
-  getRepoFileTree: jest.fn<(...a: any[]) => Promise<string[]>>().mockResolvedValue([])
+  getRepoFileTree: jest
+    .fn<(...a: any[]) => Promise<string[]>>()
+    .mockResolvedValue([])
 }
 jest.mock('../src/repo-tree', () => ({
   getRepoFileTree: (...a: any[]) => repoTreeState.getRepoFileTree(...a)
@@ -95,7 +112,8 @@ const dependencyAnalyzerState = {
     .mockResolvedValue({fileAnalyses: new Map()})
 }
 jest.mock('../src/dependency-analyzer', () => ({
-  analyzeDependencies: (...a: any[]) => dependencyAnalyzerState.analyzeDependencies(...a),
+  analyzeDependencies: (...a: any[]) =>
+    dependencyAnalyzerState.analyzeDependencies(...a),
   formatCrossFileContext: jest.fn().mockReturnValue(''),
   formatDependencySummary: jest.fn().mockReturnValue('')
 }))
@@ -157,33 +175,38 @@ describe('review.ts 双轨一致性（execCtx vs context，Phase 0 依赖分析�
     process.env.GITHUB_EVENT_NAME = 'pull_request'
     mockContext.eventName = 'pull_request'
     mockContext.actor = 'someone'
-    mockContext.payload = {action: 'opened', pull_request: makePullRequestPayload()}
+    mockContext.payload = {
+      action: 'opened',
+      pull_request: makePullRequestPayload()
+    }
     mockContext.repo = {owner: 'octo', repo: 'demo'}
 
-    commenterState.getDescription.mockImplementation((body: string) => body ?? '')
+    commenterState.getDescription.mockImplementation(
+      (body: string) => body ?? ''
+    )
     commenterState.findCommentWithTag.mockResolvedValue(null)
     commenterState.getAllCommitIds.mockResolvedValue([])
     commenterState.addInProgressStatus.mockReturnValue('IN_PROGRESS')
-    commenterState.addReviewedCommitId.mockReturnValue('<!-- reviewed-commit-ids -->')
+    commenterState.addReviewedCommitId.mockReturnValue(
+      '<!-- reviewed-commit-ids -->'
+    )
 
-    octokitState.compareCommits.mockResolvedValue({
-      data: {
-        files: [
-          {
-            filename: 'src/foo.ts',
-            status: 'modified',
-            patch: '@@ -1,3 +1,4 @@\n line1\n line2\n+added line\n line3'
-          }
-        ],
-        commits: [{sha: 'head-sha-0001'}]
-      }
+    platformState.compareDiff.mockResolvedValue({
+      files: [
+        {
+          filename: 'src/foo.ts',
+          status: 'modified',
+          patch: '@@ -1,3 +1,4 @@\n line1\n line2\n+added line\n line3'
+        }
+      ],
+      commits: [{sha: 'head-sha-0001'}]
     })
-    octokitState.getContent.mockResolvedValue({
-      data: {type: 'file', content: Buffer.from('line1\nline2\nline3').toString('base64')}
-    })
+    platformState.getFileContent.mockResolvedValue('line1\nline2\nline3')
 
     repoTreeState.getRepoFileTree.mockResolvedValue([])
-    dependencyAnalyzerState.analyzeDependencies.mockResolvedValue({fileAnalyses: new Map()})
+    dependencyAnalyzerState.analyzeDependencies.mockResolvedValue({
+      fileAnalyses: new Map()
+    })
   })
 
   test('execCtx（真实工厂构造）与 context 对同一事件算出的 headSha 一致', () => {
@@ -192,7 +215,9 @@ describe('review.ts 双轨一致性（execCtx vs context，Phase 0 依赖分析�
     const execCtx = createGitHubExecutionContext()
     expect(execCtx.headSha).toBe(mockContext.payload.pull_request.head.sha)
     expect(execCtx.baseSha).toBe(mockContext.payload.pull_request.base.sha)
-    expect(execCtx.changeRequestId).toBe(mockContext.payload.pull_request.number)
+    expect(execCtx.changeRequestId).toBe(
+      mockContext.payload.pull_request.number
+    )
   })
 
   test('正常 PR 事件：getRepoFileTree/analyzeDependencies 收到的 ref/headSha 等于 execCtx.headSha 也等于 context.payload.pull_request.head.sha', async () => {
@@ -214,10 +239,13 @@ describe('review.ts 双轨一致性（execCtx vs context，Phase 0 依赖分析�
     expect(project).toEqual({platform: 'github', owner: 'octo', repo: 'demo'})
 
     expect(dependencyAnalyzerState.analyzeDependencies).toHaveBeenCalledTimes(1)
-    const depArgs = dependencyAnalyzerState.analyzeDependencies.mock.calls[0] as any[]
+    const depArgs = dependencyAnalyzerState.analyzeDependencies.mock
+      .calls[0] as any[]
     const headShaArgPosition = 5 // (filesAndChanges, repoFiles, options, concurrencyLimit, project, headSha, patchScans)
     expect(depArgs[headShaArgPosition]).toBe(execCtx.headSha)
-    expect(depArgs[headShaArgPosition]).toBe(mockContext.payload.pull_request.head.sha)
+    expect(depArgs[headShaArgPosition]).toBe(
+      mockContext.payload.pull_request.head.sha
+    )
   })
 
   test('execCtx.headSha 为空（评论触发场景）时，回退到 context.payload.pull_request.head.sha，不传出空字符串', async () => {
@@ -255,7 +283,8 @@ describe('review.ts 双轨一致性（execCtx vs context，Phase 0 依赖分析�
     expect(ref).toBe(mockContext.payload.pull_request.head.sha)
     expect(ref).not.toBe('')
 
-    const depArgs = dependencyAnalyzerState.analyzeDependencies.mock.calls[0] as any[]
+    const depArgs = dependencyAnalyzerState.analyzeDependencies.mock
+      .calls[0] as any[]
     expect(depArgs[5]).toBe('head-sha-0001')
   })
 })

@@ -94,9 +94,9 @@ export interface ExecutionContext {
 export class ExecutionContextError extends Error {
   constructor(
     message: string,
-    // eslint-disable-next-line no-unused-vars
+
     public readonly platform: Platform,
-    // eslint-disable-next-line no-unused-vars
+
     public readonly reason:
       | 'missing_payload'
       | 'malformed_payload'

@@ -22,15 +22,14 @@
  *   - dispatchCommentEvent(deps): 主入口，被 command-handler.ts 调用
  *   - DispatchOutcome: 用于测试的明确返回值
  */
-import {info, warning} from '@actions/core'
 // eslint-disable-next-line camelcase
 import {context as github_context} from '@actions/github'
-import {octokit} from '../octokit'
+import {getPlatform} from '../platform/git-platform'
+import {getLogger} from '../platform/logger'
 import type {Options} from '../options'
 import {getRegistry} from './registry'
 import {parse, type ParserOptions, DEFAULT_BOT_MENTIONS} from './parser'
-import {getPermission} from './permission'
-import {canExecute} from './permission'
+import {getPermission, canExecute} from './permission'
 import {checkRateLimit} from './rate-limit'
 import {hasBeenProcessed, Reply} from './reply'
 import {addAckReaction} from './reaction'
@@ -75,6 +74,7 @@ export interface DispatcherDeps {
 export async function dispatchCommentEvent(
   deps: DispatcherDeps
 ): Promise<DispatchOutcome> {
+  const logger = getLogger()
   // [事件白名单] 仅放行 issue_comment / pull_request_review_comment 两类带评论的事件；
   // 其余事件（push、pull_request、schedule 等）不携带用户评论，直接忽略，
   // 同时把 eventName 收窄为 CommandEventName 供后续分支安全使用。
@@ -114,15 +114,15 @@ export async function dispatchCommentEvent(
     // issue_comment 的 payload 没有 head/base SHA，主动查一次 PR 补齐，
     // 否则 full review 等命令的 headSha 为空、去重逻辑（isHeadAlreadyReviewed）永远失效
     try {
-      const pr = await octokit.pulls.get({
-        owner: context.repo.owner,
-        repo: context.repo.repo,
-        pull_number: prNumber
-      })
-      headSha = pr.data.head?.sha ?? ''
-      baseSha = pr.data.base?.sha ?? ''
+      const cr = await getPlatform().getChangeRequest(
+        context.repo.owner,
+        context.repo.repo,
+        prNumber
+      )
+      headSha = cr.headSha
+      baseSha = cr.baseSha
     } catch (e) {
-      warning(
+      logger.warning(
         `command dispatcher: failed to fetch head/base sha for PR #${prNumber}: ${String(
           e
         )}`
@@ -156,7 +156,7 @@ export async function dispatchCommentEvent(
     comment.user?.type === 'Bot' || /\[bot\]$/i.test(actorLogin)
   if (actorIsBot) {
     // 打印作者信息，便于排查"明明是人却被当成 bot"的情况
-    info(
+    logger.info(
       `command dispatcher: ignored comment from bot (login=${actorLogin}, type=${comment.user?.type})`
     )
     return {kind: 'ignored', reason: 'comment from bot'}
@@ -233,7 +233,7 @@ export async function dispatchCommentEvent(
     parsed.name
   )
   if (processed) {
-    info(
+    logger.info(
       `command dispatcher: skip duplicate commentId=${comment.id} cmd=${parsed.name}`
     )
     return {
@@ -337,7 +337,7 @@ export async function dispatchCommentEvent(
     const code = extractErrorCode(e)
     const detail = e instanceof Error ? e.message : String(e)
     await reply.error(code, detail, ackId)
-    warning(
+    logger.warning(
       `command handler failed: name=${parsed.name} code=${code} ${detail}`
     )
     return {

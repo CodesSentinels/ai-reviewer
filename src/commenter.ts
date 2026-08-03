@@ -12,10 +12,10 @@
  * 使用 HTML 注释标签（如 <!-- tag -->）作为唯一标识，
  * 实现评论的幂等性操作（查找并替换已有评论，而非重复创建）
  */
-import {info, warning} from '@actions/core'
 // eslint-disable-next-line camelcase
 import {context as github_context} from '@actions/github'
-import {octokit} from './octokit'
+import {getPlatform} from './platform/git-platform'
+import {getLogger} from './platform/logger'
 
 // eslint-disable-next-line camelcase
 const context = github_context
@@ -116,7 +116,7 @@ export class Commenter {
     } else if (context.payload.issue != null) {
       target = context.payload.issue.number
     } else {
-      warning(
+      getLogger().warning(
         'Skipped: context.payload.pull_request and context.payload.issue are both null'
       )
       return
@@ -138,7 +138,7 @@ ${tag}`
     } else if (mode === 'replace') {
       await this.replace(body, tag, target)
     } else {
-      warning(`Unknown mode: ${mode}, use "replace" instead`)
+      getLogger().warning(`Unknown mode: ${mode}, use "replace" instead`)
       await this.replace(body, tag, target)
     }
   }
@@ -208,19 +208,17 @@ ${tag}`
    * 将发布说明嵌入到 DESCRIPTION_START_TAG 和 DESCRIPTION_END_TAG 之间
    */
   async updateDescription(pullNumber: number, message: string) {
+    const platform = getPlatform()
     try {
-      // 获取 PR 的最新描述
-      const pr = await octokit.pulls.get({
-        owner: repo.owner,
-        repo: repo.repo,
-        // eslint-disable-next-line camelcase
-        pull_number: pullNumber
-      })
+      const cr = await platform.getChangeRequest(
+        repo.owner,
+        repo.repo,
+        pullNumber
+      )
       let body = ''
-      if (pr.data.body) {
-        body = pr.data.body
+      if (cr.body) {
+        body = cr.body
       }
-      // 移除已有的发布说明，保留用户原始描述
       const description = this.getDescription(body)
 
       const messageClean = this.removeContentWithinTags(
@@ -228,17 +226,15 @@ ${tag}`
         DESCRIPTION_START_TAG,
         DESCRIPTION_END_TAG
       )
-      // 在用户描述后追加发布说明（用标签包裹）
       const newDescription = `${description}\n${DESCRIPTION_START_TAG}\n${messageClean}\n${DESCRIPTION_END_TAG}`
-      await octokit.pulls.update({
-        owner: repo.owner,
-        repo: repo.repo,
-        // eslint-disable-next-line camelcase
-        pull_number: pullNumber,
-        body: newDescription
-      })
+      await platform.updateChangeRequestBody(
+        repo.owner,
+        repo.repo,
+        pullNumber,
+        newDescription
+      )
     } catch (e) {
-      warning(
+      getLogger().warning(
         `Failed to get PR: ${e}, skipping adding release notes to description.`
       )
     }
@@ -283,36 +279,9 @@ ${COMMENT_TAG}`
    */
   async deletePendingReview(pullNumber: number) {
     try {
-      const reviews = await octokit.pulls.listReviews({
-        owner: repo.owner,
-        repo: repo.repo,
-        // eslint-disable-next-line camelcase
-        pull_number: pullNumber
-      })
-
-      const pendingReview = reviews.data.find(
-        review => review.state === 'PENDING'
-      )
-
-      if (pendingReview) {
-        info(
-          `Deleting pending review for PR #${pullNumber} id: ${pendingReview.id}`
-        )
-        try {
-          await octokit.pulls.deletePendingReview({
-            owner: repo.owner,
-            repo: repo.repo,
-            // eslint-disable-next-line camelcase
-            pull_number: pullNumber,
-            // eslint-disable-next-line camelcase
-            review_id: pendingReview.id
-          })
-        } catch (e) {
-          warning(`Failed to delete pending review: ${e}`)
-        }
-      }
+      await getPlatform().deletePendingReview(repo.owner, repo.repo, pullNumber)
     } catch (e) {
-      warning(`Failed to list reviews: ${e}`)
+      getLogger().warning(`Failed to delete pending review: ${e}`)
     }
   }
 
@@ -341,9 +310,12 @@ ${COMMENT_TAG}`
 ${statusMsg}
 `
 
+    const platform = getPlatform()
+    const logger = getLogger()
+
     if (this.reviewCommentsBuffer.length === 0) {
       // 没有审查评论时，跳过空审查提交（GitHub API 不允许无评论的 COMMENT 审查）
-      info(
+      logger.info(
         `Skipping empty review for PR #${pullNumber} — no review comments to submit`
       )
       return
@@ -366,25 +338,20 @@ ${statusMsg}
         const key = `${comment.path}:${comment.endLine}`
         const isResolved = threadStatusMap?.get(key)
         if (isResolved !== true) {
-          info(
+          logger.info(
             `[submit-dedup] skipping comment for ${comment.path}:${comment.startLine}-${comment.endLine} — existing unresolved bot comment found`
           )
           continue
         }
         // 已 resolved 的旧评论：删除后重新发布
         for (const c of existingBotComments) {
-          info(
+          logger.info(
             `Deleting resolved review comment for ${comment.path}:${comment.startLine}-${comment.endLine}`
           )
           try {
-            await octokit.pulls.deleteReviewComment({
-              owner: repo.owner,
-              repo: repo.repo,
-              // eslint-disable-next-line camelcase
-              comment_id: c.id
-            })
+            await platform.deleteReviewComment(repo.owner, repo.repo, c.id)
           } catch (e) {
-            warning(`Failed to delete review comment: ${e}`)
+            logger.warning(`Failed to delete review comment: ${e}`)
           }
         }
       }
@@ -392,7 +359,7 @@ ${statusMsg}
     }
 
     if (commentsToSubmit.length === 0) {
-      info(
+      logger.info(
         `[submit-dedup] all ${this.reviewCommentsBuffer.length} comment(s) skipped — already covered by existing bot comments`
       )
       return
@@ -401,81 +368,59 @@ ${statusMsg}
     // 清理已有的 PENDING 审查
     await this.deletePendingReview(pullNumber)
 
-    // 生成单条评论的 API 数据格式
-    const generateCommentData = (comment: any) => {
-      const commentData: any = {
-        path: comment.path,
-        body: comment.message,
-        line: comment.endLine
-      }
-
-      // 如果是多行评论，添加起始行信息
-      if (comment.startLine !== comment.endLine) {
-        // eslint-disable-next-line camelcase
-        commentData.start_line = comment.startLine
-        // eslint-disable-next-line camelcase
-        commentData.start_side = 'RIGHT'
-      }
-
-      return commentData
-    }
+    // 生成 ReviewCommentDraft 格式
+    const toDraft = (comment: any) => ({
+      path: comment.path as string,
+      body: comment.message as string,
+      line: comment.endLine as number,
+      startLine:
+        comment.startLine !== comment.endLine
+          ? (comment.startLine as number)
+          : undefined,
+      startSide: comment.startLine !== comment.endLine ? 'RIGHT' : undefined
+    })
 
     try {
-      // 尝试一次性批量提交所有审查评论
-      const review = await octokit.pulls.createReview({
-        owner: repo.owner,
-        repo: repo.repo,
-        // eslint-disable-next-line camelcase
-        pull_number: pullNumber,
-        // eslint-disable-next-line camelcase
-        commit_id: commitId,
-        comments: commentsToSubmit.map(comment => generateCommentData(comment))
-      })
-
-      info(
-        `Submitting review for PR #${pullNumber}, total comments: ${commentsToSubmit.length}, review id: ${review.data.id}`
+      const submitted = await platform.submitReviewComments(
+        repo.owner,
+        repo.repo,
+        pullNumber,
+        commitId,
+        commentsToSubmit.map(toDraft),
+        body
       )
 
-      // 正式提交审查（从 PENDING 变为 COMMENT）
-      await octokit.pulls.submitReview({
-        owner: repo.owner,
-        repo: repo.repo,
-        // eslint-disable-next-line camelcase
-        pull_number: pullNumber,
-        // eslint-disable-next-line camelcase
-        review_id: review.data.id,
-        event: 'COMMENT',
-        body
-      })
+      logger.info(
+        `Submitting review for PR #${pullNumber}, total comments: ${submitted}`
+      )
     } catch (e) {
       // 批量提交失败时，降级为逐条提交
-      warning(
+      logger.warning(
         `Failed to create review: ${e}. Falling back to individual comments.`
       )
       await this.deletePendingReview(pullNumber)
       let commentCounter = 0
       for (const comment of commentsToSubmit) {
-        info(
+        logger.info(
           `Creating new review comment for ${comment.path}:${comment.startLine}-${comment.endLine}: ${comment.message}`
         )
-        const commentData: any = {
-          owner: repo.owner,
-          repo: repo.repo,
-          // eslint-disable-next-line camelcase
-          pull_number: pullNumber,
-          // eslint-disable-next-line camelcase
-          commit_id: commitId,
-          ...generateCommentData(comment)
-        }
 
         try {
-          await octokit.pulls.createReviewComment(commentData)
+          await platform.createReviewComment(
+            repo.owner,
+            repo.repo,
+            pullNumber,
+            commitId,
+            toDraft(comment)
+          )
         } catch (ee) {
-          warning(`Failed to create review comment: ${ee}`)
+          logger.warning(`Failed to create review comment: ${ee}`)
         }
 
         commentCounter++
-        info(`Comment ${commentCounter}/${commentsToSubmit.length} posted`)
+        logger.info(
+          `Comment ${commentCounter}/${commentsToSubmit.length} posted`
+        )
       }
     }
   }
@@ -491,6 +436,8 @@ ${statusMsg}
     topLevelComment: any,
     message: string
   ) {
+    const platform = getPlatform()
+    const logger = getLogger()
     const reply = `${getCommentGreeting()}
 
 ${message}
@@ -498,49 +445,42 @@ ${message}
 ${COMMENT_REPLY_TAG}
 `
     try {
-      // 在顶层评论下发布回复
-      await octokit.pulls.createReplyForReviewComment({
-        owner: repo.owner,
-        repo: repo.repo,
-        // eslint-disable-next-line camelcase
-        pull_number: pullNumber,
-        body: reply,
-        // eslint-disable-next-line camelcase
-        comment_id: topLevelComment.id
-      })
+      await platform.replyToReviewComment(
+        repo.owner,
+        repo.repo,
+        pullNumber,
+        topLevelComment.id,
+        reply
+      )
     } catch (error) {
-      warning(`Failed to reply to the top-level comment ${error}`)
+      logger.warning(`Failed to reply to the top-level comment ${error}`)
       try {
-        await octokit.pulls.createReplyForReviewComment({
-          owner: repo.owner,
-          repo: repo.repo,
-          // eslint-disable-next-line camelcase
-          pull_number: pullNumber,
-          body: `Could not post the reply to the top-level comment due to the following error: ${error}`,
-          // eslint-disable-next-line camelcase
-          comment_id: topLevelComment.id
-        })
+        await platform.replyToReviewComment(
+          repo.owner,
+          repo.repo,
+          pullNumber,
+          topLevelComment.id,
+          `Could not post the reply to the top-level comment due to the following error: ${error}`
+        )
       } catch (e) {
-        warning(`Failed to reply to the top-level comment ${e}`)
+        logger.warning(`Failed to reply to the top-level comment ${e}`)
       }
     }
     try {
-      // 将顶层评论的标签更新为回复标签，标识该链已有 bot 参与
       if (topLevelComment.body.includes(COMMENT_TAG)) {
         const newBody = topLevelComment.body.replace(
           COMMENT_TAG,
           COMMENT_REPLY_TAG
         )
-        await octokit.pulls.updateReviewComment({
-          owner: repo.owner,
-          repo: repo.repo,
-          // eslint-disable-next-line camelcase
-          comment_id: topLevelComment.id,
-          body: newBody
-        })
+        await platform.updateReviewComment(
+          repo.owner,
+          repo.repo,
+          topLevelComment.id,
+          newBody
+        )
       }
     } catch (error) {
-      warning(`Failed to update the top-level comment ${error}`)
+      logger.warning(`Failed to update the top-level comment ${error}`)
     }
   }
 
@@ -680,7 +620,7 @@ ${chain}
       )
       return {chain, topLevelComment}
     } catch (e) {
-      warning(`Failed to get conversation chain: ${e}`)
+      getLogger().warning(`Failed to get conversation chain: ${e}`)
       return {
         chain: '',
         topLevelComment: null
@@ -724,57 +664,70 @@ ${chain}
       return this.reviewCommentsCache[target]
     }
 
-    const allComments: any[] = []
-    let page = 1
     try {
-      for (;;) {
-        const {data: comments} = await octokit.pulls.listReviewComments({
-          owner: repo.owner,
-          repo: repo.repo,
-          // eslint-disable-next-line camelcase
-          pull_number: target,
-          page,
-          // eslint-disable-next-line camelcase
-          per_page: 100
-        })
-        allComments.push(...comments)
-        page++
-        if (!comments || comments.length < 100) {
-          break
-        }
-      }
-
-      this.reviewCommentsCache[target] = allComments
-      return allComments
+      const comments = await getPlatform().listReviewComments(
+        repo.owner,
+        repo.repo,
+        target
+      )
+      // 映射为旧 Octokit 格式以保持 getCommentsWithinRange 等消费者兼容
+      const mapped = comments.map(c => ({
+        id: c.id,
+        body: c.body,
+        path: c.path,
+        line: c.line,
+        // eslint-disable-next-line camelcase
+        start_line: c.startLine,
+        // eslint-disable-next-line camelcase
+        original_line: c.originalLine,
+        // eslint-disable-next-line camelcase
+        in_reply_to_id: c.in_reply_to_id,
+        user: {login: c.author},
+        // eslint-disable-next-line camelcase
+        node_id: c.nodeId,
+        // eslint-disable-next-line camelcase
+        created_at: c.createdAt
+      }))
+      this.reviewCommentsCache[target] = mapped
+      return mapped
     } catch (e) {
-      warning(`Failed to list review comments: ${e}`)
-      return allComments
+      getLogger().warning(`Failed to list review comments: ${e}`)
+      return []
     }
   }
 
   /** 创建新的 issue comment */
   async create(body: string, target: number) {
     try {
-      const response = await octokit.issues.createComment({
-        owner: repo.owner,
-        repo: repo.repo,
-        // eslint-disable-next-line camelcase
-        issue_number: target,
+      const result = await getPlatform().createComment(
+        repo.owner,
+        repo.repo,
+        target,
         body
-      })
-      // 将新评论添加到缓存
+      )
+      const data = {
+        id: result.id,
+        body: result.body,
+        user: {login: result.author},
+        // eslint-disable-next-line camelcase
+        node_id: result.nodeId,
+        // eslint-disable-next-line camelcase
+        created_at: result.createdAt
+      }
       if (this.issueCommentsCache[target]) {
-        this.issueCommentsCache[target].push(response.data)
+        this.issueCommentsCache[target].push(data)
       } else {
-        this.issueCommentsCache[target] = [response.data]
+        this.issueCommentsCache[target] = [data]
       }
     } catch (e) {
-      warning(`Failed to create comment: ${e}`)
+      getLogger().warning(`Failed to create comment: ${e}`)
     }
   }
 
   /** 查找并替换已有评论；如果不存在则新建。同时清理并发运行产生的重复评论 */
   async replace(body: string, tag: string, target: number) {
+    const platform = getPlatform()
+    const logger = getLogger()
     try {
       const comments = await this.listComments(target)
       const matchedComments = comments.filter(
@@ -782,37 +735,32 @@ ${chain}
       )
 
       if (matchedComments.length > 0) {
-        // 更新第一条匹配的评论
-        await octokit.issues.updateComment({
-          owner: repo.owner,
-          repo: repo.repo,
-          // eslint-disable-next-line camelcase
-          comment_id: matchedComments[0].id,
+        await platform.updateComment(
+          repo.owner,
+          repo.repo,
+          matchedComments[0].id,
           body
-        })
+        )
 
-        // 删除多余的重复评论（并发运行时可能产生）
         for (let i = 1; i < matchedComments.length; i++) {
-          info(
+          logger.info(
             `Deleting duplicate comment ${matchedComments[i].id} with tag ${tag}`
           )
           try {
-            await octokit.issues.deleteComment({
-              owner: repo.owner,
-              repo: repo.repo,
-              // eslint-disable-next-line camelcase
-              comment_id: matchedComments[i].id
-            })
+            await platform.deleteComment(
+              repo.owner,
+              repo.repo,
+              matchedComments[i].id
+            )
           } catch (e) {
-            warning(`Failed to delete duplicate comment: ${e}`)
+            logger.warning(`Failed to delete duplicate comment: ${e}`)
           }
         }
       } else {
-        // 未找到，创建新评论
         await this.create(body, target)
       }
     } catch (e) {
-      warning(`Failed to replace comment: ${e}`)
+      logger.warning(`Failed to replace comment: ${e}`)
     }
   }
 
@@ -828,7 +776,7 @@ ${chain}
 
       return null
     } catch (e: unknown) {
-      warning(`Failed to find comment with tag: ${e}`)
+      getLogger().warning(`Failed to find comment with tag: ${e}`)
       return null
     }
   }
@@ -842,31 +790,26 @@ ${chain}
       return this.issueCommentsCache[target]
     }
 
-    const allComments: any[] = []
-    let page = 1
     try {
-      for (;;) {
-        const {data: comments} = await octokit.issues.listComments({
-          owner: repo.owner,
-          repo: repo.repo,
-          // eslint-disable-next-line camelcase
-          issue_number: target,
-          page,
-          // eslint-disable-next-line camelcase
-          per_page: 100
-        })
-        allComments.push(...comments)
-        page++
-        if (!comments || comments.length < 100) {
-          break
-        }
-      }
-
-      this.issueCommentsCache[target] = allComments
-      return allComments
+      const comments = await getPlatform().listComments(
+        repo.owner,
+        repo.repo,
+        target
+      )
+      const mapped = comments.map(c => ({
+        id: c.id,
+        body: c.body,
+        user: {login: c.author},
+        // eslint-disable-next-line camelcase
+        node_id: c.nodeId,
+        // eslint-disable-next-line camelcase
+        created_at: c.createdAt
+      }))
+      this.issueCommentsCache[target] = mapped
+      return mapped
     } catch (e: any) {
-      warning(`Failed to list comments: ${e}`)
-      return allComments
+      getLogger().warning(`Failed to list comments: ${e}`)
+      return []
     }
   }
 
@@ -940,27 +883,14 @@ ${chain}
 
   /** 获取 PR 的所有 commit ID（分页获取完整列表） */
   async getAllCommitIds(): Promise<string[]> {
-    const allCommits = []
-    let page = 1
-    let commits
     if (context && context.payload && context.payload.pull_request != null) {
-      do {
-        commits = await octokit.pulls.listCommits({
-          owner: repo.owner,
-          repo: repo.repo,
-          // eslint-disable-next-line camelcase
-          pull_number: context.payload.pull_request.number,
-          // eslint-disable-next-line camelcase
-          per_page: 100,
-          page
-        })
-
-        allCommits.push(...commits.data.map(commit => commit.sha))
-        page++
-      } while (commits.data.length > 0)
+      return getPlatform().listChangeRequestCommits(
+        repo.owner,
+        repo.repo,
+        context.payload.pull_request.number
+      )
     }
-
-    return allCommits
+    return []
   }
 
   // ==================== 审查进度状态管理 ====================

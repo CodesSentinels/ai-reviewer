@@ -36,13 +36,12 @@ import {
  */
 export interface FileContentFetcher {
   getContent(
-    // eslint-disable-next-line no-unused-vars
     owner: string,
-    // eslint-disable-next-line no-unused-vars
+
     repo: string,
-    // eslint-disable-next-line no-unused-vars
+
     path: string,
-    // eslint-disable-next-line no-unused-vars
+
     ref: string
   ): Promise<string | null>
 }

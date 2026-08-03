@@ -15,13 +15,6 @@
 import {describe, expect, test, beforeEach, jest} from '@jest/globals'
 
 // --- mocks ---
-jest.mock('@actions/core', () => ({
-  getInput: jest.fn().mockReturnValue(''),
-  info: jest.fn(),
-  warning: jest.fn(),
-  error: jest.fn()
-}))
-
 const mockPayload: any = {}
 const mockContext: any = {
   eventName: 'issue_comment',
@@ -32,42 +25,28 @@ jest.mock('@actions/github', () => ({
   context: mockContext
 }))
 
-const octokitState: Record<string, any> = {
+jest.mock('../src/platform/logger', () => ({
+  getLogger: () => ({
+    info: jest.fn(),
+    warning: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn()
+  })
+}))
+
+const platformState: Record<string, any> = {
   listComments: jest.fn(),
   createComment: jest.fn(),
   updateComment: jest.fn(),
-  getCollaboratorPermissionLevel: jest.fn(),
-  getPull: jest.fn(),
-  updatePull: jest.fn(),
-  createReplyForReviewComment: jest.fn(),
-  createReactionForIssueComment: jest.fn(),
-  createReactionForPRComment: jest.fn()
+  getCollaboratorPermission: jest.fn(),
+  getChangeRequest: jest.fn(),
+  updateChangeRequestBody: jest.fn(),
+  replyToReviewComment: jest.fn(),
+  addReaction: jest.fn()
 }
 
-jest.mock('../src/octokit', () => ({
-  octokit: {
-    issues: {
-      createComment: (...a: any[]) => octokitState.createComment(...a),
-      updateComment: (...a: any[]) => octokitState.updateComment(...a),
-      listComments: (...a: any[]) => octokitState.listComments(...a)
-    },
-    pulls: {
-      get: (...a: any[]) => octokitState.getPull(...a),
-      update: (...a: any[]) => octokitState.updatePull(...a),
-      createReplyForReviewComment: (...a: any[]) =>
-        octokitState.createReplyForReviewComment(...a)
-    },
-    repos: {
-      getCollaboratorPermissionLevel: (...a: any[]) =>
-        octokitState.getCollaboratorPermissionLevel(...a)
-    },
-    reactions: {
-      createForIssueComment: (...a: any[]) =>
-        octokitState.createReactionForIssueComment(...a),
-      createForPullRequestReviewComment: (...a: any[]) =>
-        octokitState.createReactionForPRComment(...a)
-    }
-  }
+jest.mock('../src/platform/git-platform', () => ({
+  getPlatform: () => platformState
 }))
 
 // ---
@@ -129,29 +108,38 @@ beforeEach(() => {
   _resetRateLimit()
   bootstrapCommands()
 
-  octokitState.listComments.mockReset()
-  octokitState.createComment.mockReset()
-  octokitState.updateComment.mockReset()
-  octokitState.getCollaboratorPermissionLevel.mockReset()
-  octokitState.getPull.mockReset()
-  octokitState.updatePull.mockReset()
-  octokitState.createReplyForReviewComment.mockReset()
-  octokitState.createReactionForIssueComment.mockReset()
-  octokitState.createReactionForPRComment.mockReset()
+  for (const key of Object.keys(platformState)) {
+    platformState[key].mockReset()
+  }
 
   // 默认: 不存在已处理标记
-  octokitState.listComments.mockResolvedValue({data: []})
-  octokitState.createComment.mockResolvedValue({data: {id: 9000}})
-  octokitState.updateComment.mockResolvedValue({data: {id: 9000}})
-  octokitState.getPull.mockResolvedValue({data: {body: 'PR body'}})
-  octokitState.updatePull.mockResolvedValue({data: {id: 42}})
-  octokitState.createReplyForReviewComment.mockResolvedValue({data: {id: 9001}})
-  octokitState.createReactionForIssueComment.mockResolvedValue({data: {id: 1}})
-  octokitState.createReactionForPRComment.mockResolvedValue({data: {id: 1}})
-  // 默认: alice 有 write 权限
-  octokitState.getCollaboratorPermissionLevel.mockResolvedValue({
-    data: {permission: 'write'}
+  platformState.listComments.mockResolvedValue([])
+  platformState.createComment.mockResolvedValue({
+    id: 9000,
+    body: '',
+    author: ''
   })
+  platformState.updateComment.mockResolvedValue(undefined)
+  platformState.getChangeRequest.mockResolvedValue({
+    number: 42,
+    title: '',
+    body: 'PR body',
+    state: 'open',
+    baseSha: 'base-sha',
+    headSha: 'head-sha',
+    baseRef: 'main',
+    headRef: 'feature',
+    author: 'pr-author'
+  })
+  platformState.replyToReviewComment.mockResolvedValue({
+    id: 9001,
+    body: '',
+    author: ''
+  })
+  platformState.addReaction.mockResolvedValue(undefined)
+  platformState.updateChangeRequestBody.mockResolvedValue(undefined)
+  // 默认: alice 有 write 权限
+  platformState.getCollaboratorPermission.mockResolvedValue('write')
 })
 
 describe('dispatcher — 事件过滤', () => {
@@ -218,10 +206,10 @@ describe('dispatcher — 解析与 fallback', () => {
       error: 'UNKNOWN_COMMAND'
     })
     // 应添加 ACK reaction
-    expect(octokitState.createReactionForIssueComment).toHaveBeenCalled()
+    expect(platformState.addReaction).toHaveBeenCalled()
     // 应回复评论并包含支持的命令列表
-    expect(octokitState.createComment).toHaveBeenCalled()
-    const body = octokitState.createComment.mock.calls[0][0].body
+    expect(platformState.createComment).toHaveBeenCalled()
+    const body = platformState.createComment.mock.calls[0][3] // positional: (owner, repo, issueNumber, body)
     expect(body).toContain('invalidcmd')
     expect(body).toContain('commands I support')
   })
@@ -254,14 +242,13 @@ describe('dispatcher — 解析与 fallback', () => {
       ok: false,
       error: 'UNKNOWN_COMMAND'
     })
-    // 应添加 ACK reaction（PR review comment endpoint）
-    expect(octokitState.createReactionForPRComment).toHaveBeenCalled()
-    // 应使用 createReplyForReviewComment 回复到 thread
-    expect(octokitState.createReplyForReviewComment).toHaveBeenCalled()
-    // 不应使用 issues.createComment
-    expect(octokitState.createComment).not.toHaveBeenCalled()
-    const body =
-      octokitState.createReplyForReviewComment.mock.calls[0][0].body
+    // 应添加 ACK reaction
+    expect(platformState.addReaction).toHaveBeenCalled()
+    // 应使用 replyToReviewComment 回复到 thread
+    expect(platformState.replyToReviewComment).toHaveBeenCalled()
+    // 不应使用 createComment
+    expect(platformState.createComment).not.toHaveBeenCalled()
+    const body = platformState.replyToReviewComment.mock.calls[0][4] // positional: (owner, repo, prNumber, commentId, body)
     expect(body).toContain('invalidcmd')
     expect(body).toContain('commands I support')
   })
@@ -272,10 +259,10 @@ describe('dispatcher — 命令执行', () => {
     setEvent('issue_comment', buildIssueCommentPayload('@ai-reviewer help'))
     const r = await dispatchCommentEvent({options: stubOptions})
     expect(r).toEqual({kind: 'executed', command: 'help', ok: true})
-    expect(octokitState.createComment).toHaveBeenCalled()
+    expect(platformState.createComment).toHaveBeenCalled()
     // help handler 的响应 body 应包含 "支持的命令"
-    const createCall: any = octokitState.createComment.mock.calls[0][0]
-    expect(createCall.body).toMatch(/支持的命令/)
+    const bodyArg = platformState.createComment.mock.calls[0][3] // positional: (owner, repo, issueNumber, body)
+    expect(bodyArg).toMatch(/支持的命令/)
   })
 
   test('stub handler 抛 NOT_IMPLEMENTED', async () => {
@@ -288,8 +275,8 @@ describe('dispatcher — 命令执行', () => {
       expect(r.error).toBe('NOT_IMPLEMENTED')
     }
     // 需要 ACK，所以先 create 后 update
-    expect(octokitState.createComment).toHaveBeenCalled()
-    expect(octokitState.updateComment).toHaveBeenCalled()
+    expect(platformState.createComment).toHaveBeenCalled()
+    expect(platformState.updateComment).toHaveBeenCalled()
   })
 
   test('review_comment 上的 help 命令', async () => {
@@ -314,9 +301,7 @@ describe('dispatcher — 命令执行', () => {
   })
 
   test('权限不足 → FORBIDDEN', async () => {
-    octokitState.getCollaboratorPermissionLevel.mockResolvedValue({
-      data: {permission: 'read'}
-    })
+    platformState.getCollaboratorPermission.mockResolvedValue('read')
     // 用 pause 命令（无 PR 作者豁免）
     setEvent('issue_comment', buildIssueCommentPayload('@ai-reviewer pause'))
     const r = await dispatchCommentEvent({options: stubOptions})
@@ -327,14 +312,18 @@ describe('dispatcher — 命令执行', () => {
   })
 
   test('PR 作者豁免可以跑 review（即使是 read 权限，但需 paused 状态）', async () => {
-    octokitState.getCollaboratorPermissionLevel.mockResolvedValue({
-      data: {permission: 'read'}
-    })
+    platformState.getCollaboratorPermission.mockResolvedValue('read')
     // PR body 中包含 paused 状态标记
-    octokitState.getPull.mockResolvedValue({
-      data: {
-        body: '<!-- codesentinel-review-state:start -->\nstate: paused\n<!-- codesentinel-review-state:end -->'
-      }
+    platformState.getChangeRequest.mockResolvedValue({
+      number: 42,
+      title: '',
+      body: '<!-- codesentinel-review-state:start -->\nstate: paused\n<!-- codesentinel-review-state:end -->',
+      state: 'open',
+      baseSha: 'base-sha',
+      headSha: 'head-sha',
+      baseRef: 'main',
+      headRef: 'feature',
+      author: 'pr-author'
     })
     const triggerReview: any = jest.fn().mockResolvedValue(undefined as never)
     // 让 alice 成为 PR 作者
@@ -354,10 +343,7 @@ describe('dispatcher — 命令执行', () => {
 
   test('review 命令在非 paused 状态下返回提示信息', async () => {
     const triggerReview: any = jest.fn().mockResolvedValue(undefined as never)
-    setEvent(
-      'issue_comment',
-      buildIssueCommentPayload('@ai-reviewer review')
-    )
+    setEvent('issue_comment', buildIssueCommentPayload('@ai-reviewer review'))
     const r = await dispatchCommentEvent({options: stubOptions, triggerReview})
     expect(r.kind).toBe('executed')
     if (r.kind === 'executed') {
@@ -379,19 +365,16 @@ describe('dispatcher — 命令执行', () => {
 
   test('full review 命令：HEAD 已审查 → 不再重复触发', async () => {
     const triggerReview: any = jest.fn().mockResolvedValue(undefined as never)
-    // dispatcher 会查 PR 拿到 headSha
-    octokitState.getPull.mockResolvedValue({
-      data: {body: 'PR body', head: {sha: 'head-sha'}, base: {sha: 'base-sha'}}
-    })
     // 摘要评论已把 head-sha 记入已审查 commit 区块
-    octokitState.listComments.mockResolvedValue({
-      data: [
-        {
-          id: 555,
-          body: `<!-- This is an auto-generated comment: summarize by AI Reviewer -->\n<!-- commit_ids_reviewed_start -->\n<!-- head-sha -->\n<!-- commit_ids_reviewed_end -->`
-        }
-      ]
-    })
+    platformState.listComments.mockResolvedValue([
+      {
+        id: 555,
+        body: `<!-- This is an auto-generated comment: summarize by AI Reviewer -->\n<!-- commit_ids_reviewed_start -->\n<!-- head-sha -->\n<!-- commit_ids_reviewed_end -->`,
+        author: 'bot',
+        nodeId: 'N555',
+        createdAt: '2024-01-01T00:00:00Z'
+      }
+    ])
     setEvent(
       'issue_comment',
       buildIssueCommentPayload('@ai-reviewer full review')
@@ -413,22 +396,24 @@ describe('dispatcher — 命令执行', () => {
     setEvent('issue_comment', buildIssueCommentPayload('@ai-reviewer pause'))
     const r = await dispatchCommentEvent({options: stubOptions})
     expect(r).toEqual({kind: 'executed', command: 'pause', ok: true})
-    expect(octokitState.updatePull).toHaveBeenCalled()
-    const updateCall: any = octokitState.updatePull.mock.calls[0][0]
-    expect(updateCall.body).toContain('state: paused')
+    expect(platformState.updateChangeRequestBody).toHaveBeenCalled()
+    const newBody = platformState.updateChangeRequestBody.mock.calls[0][3] // positional: (owner, repo, prNumber, body)
+    expect(newBody).toContain('state: paused')
   })
 })
 
 describe('dispatcher — 幂等', () => {
   test('已有 CMD_REPLY_TAG 的评论 → DUPLICATE', async () => {
     // 模拟 listComments 返回包含标签的历史评论
-    octokitState.listComments.mockResolvedValue({
-      data: [
-        {
-          body: '<!-- codesentinel-cmd-reply:1001:help -->\n之前的回复'
-        }
-      ]
-    })
+    platformState.listComments.mockResolvedValue([
+      {
+        id: 800,
+        body: '<!-- codesentinel-cmd-reply:1001:help -->\n之前的回复',
+        author: 'bot',
+        nodeId: 'N800',
+        createdAt: '2024-01-01T00:00:00Z'
+      }
+    ])
     setEvent('issue_comment', buildIssueCommentPayload('@ai-reviewer help'))
     const r = await dispatchCommentEvent({options: stubOptions})
     expect(r.kind).toBe('executed')
@@ -437,6 +422,6 @@ describe('dispatcher — 幂等', () => {
       expect(r.ok).toBe(false)
     }
     // 不应二次发布 create 评论
-    expect(octokitState.createComment).not.toHaveBeenCalled()
+    expect(platformState.createComment).not.toHaveBeenCalled()
   })
 })

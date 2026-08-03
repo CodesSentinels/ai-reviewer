@@ -230,7 +230,7 @@ export class GitLabConfigProvider implements ConfigProvider {
    * 打印所有非敏感配置（ARCH-011）。
    * 不输出 OPENAI_API_KEY、GITLAB_PAT、Trigger token 等 secret。
    */
-  // eslint-disable-next-line no-unused-vars
+
   print(log: (msg: string) => void): void {
     const opts = this.getOptions()
     const bot = this.getBotConfig()

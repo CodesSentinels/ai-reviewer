@@ -11,8 +11,8 @@
  *   octokit.repos.getCollaboratorPermissionLevel({owner, repo, username})
  *   返回 permission ∈ {admin, maintain, write, triage, read, none}
  */
-import {warning} from '@actions/core'
-import {octokit} from '../octokit'
+import {getPlatform} from '../platform/git-platform'
+import {getLogger} from '../platform/logger'
 import type {PermissionLevel, CommandHandler} from './types'
 import {permissionAtLeast} from './types'
 
@@ -37,17 +37,15 @@ export async function getPermission(
   if (cached) return cached
 
   try {
-    const res = await octokit.repos.getCollaboratorPermissionLevel({
-      owner: q.owner,
-      repo: q.repo,
-      username: q.username
-    })
-    // API 返回的 permission 字符串已经是我们需要的枚举之一
-    const perm = (res.data?.permission ?? 'none') as PermissionLevel
+    const perm = (await getPlatform().getCollaboratorPermission(
+      q.owner,
+      q.repo,
+      q.username
+    )) as PermissionLevel
     cache.set(key, perm)
     return perm
   } catch (e) {
-    warning(
+    getLogger().warning(
       `getCollaboratorPermissionLevel failed for ${key}: ${String(e)} — ` +
         `falling back to 'none'`
     )

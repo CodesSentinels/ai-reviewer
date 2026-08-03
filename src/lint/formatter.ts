@@ -54,9 +54,15 @@ export function formatLintContextForFile(
   }
 
   lines.push('Review guidance:')
-  lines.push('1. For each tool finding, confirm whether it is a real issue and explain its business impact.')
-  lines.push("2. Mention findings the tools missed (logic / architecture issues a Linter cannot detect).")
-  lines.push('3. When you write a review comment that overlaps with a tool finding, mark it as cross-validated by listing the tool name(s).')
+  lines.push(
+    '1. For each tool finding, confirm whether it is a real issue and explain its business impact.'
+  )
+  lines.push(
+    '2. Mention findings the tools missed (logic / architecture issues a Linter cannot detect).'
+  )
+  lines.push(
+    '3. When you write a review comment that overlaps with a tool finding, mark it as cross-validated by listing the tool name(s).'
+  )
 
   return truncate(lines.join('\n'), MAX_PROMPT_CHARS_PER_FILE)
 }
@@ -181,5 +187,5 @@ function oneLine(s: string): string {
 function truncate(s: string, max: number): string {
   if (s.length <= max) return s
   const cut = s.lastIndexOf('\n', max)
-  return s.substring(0, cut > 0 ? cut : max) + '\n... (truncated)'
+  return `${s.substring(0, cut > 0 ? cut : max)}\n... (truncated)`
 }

@@ -27,21 +27,22 @@ const mockContext: any = {
 }
 jest.mock('@actions/github', () => ({context: mockContext}))
 
-const octokitState = {
-  compareCommits: jest.fn<(...a: any[]) => Promise<any>>(),
-  getContent: jest.fn<(...a: any[]) => Promise<any>>(),
-  pullsGet: jest.fn<(...a: any[]) => Promise<any>>()
+const platformState = {
+  compareDiff: jest.fn<(...a: any[]) => Promise<any>>(),
+  getFileContent: jest.fn<(...a: any[]) => Promise<any>>(),
+  getChangeRequest: jest.fn<(...a: any[]) => Promise<any>>(),
+  listRepositoryTree: jest.fn<(...a: any[]) => Promise<any>>()
 }
-jest.mock('../../src/octokit', () => ({
-  octokit: {
-    repos: {
-      compareCommits: (...a: any[]) => octokitState.compareCommits(...a),
-      getContent: (...a: any[]) => octokitState.getContent(...a)
-    },
-    pulls: {
-      get: (...a: any[]) => octokitState.pullsGet(...a)
-    }
-  }
+jest.mock('../../src/platform/git-platform', () => ({
+  getPlatform: () => platformState
+}))
+jest.mock('../../src/platform/logger', () => ({
+  getLogger: () => ({
+    info: jest.fn(),
+    warning: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn()
+  })
 }))
 
 const commenterState = {
@@ -54,13 +55,25 @@ const commenterState = {
   getRawSummary: jest.fn().mockReturnValue(''),
   getShortSummary: jest.fn().mockReturnValue(''),
   addInProgressStatus: jest.fn().mockReturnValue('IN_PROGRESS'),
-  comment: jest.fn<(...a: any[]) => Promise<void>>().mockResolvedValue(undefined),
-  updateDescription: jest.fn<(...a: any[]) => Promise<void>>().mockResolvedValue(undefined),
-  submitReview: jest.fn<(...a: any[]) => Promise<void>>().mockResolvedValue(undefined),
-  addReviewedCommitId: jest.fn().mockReturnValue('<!-- reviewed-commit-ids -->'),
-  bufferReviewComment: jest.fn<(...a: any[]) => Promise<void>>().mockResolvedValue(undefined),
+  comment: jest
+    .fn<(...a: any[]) => Promise<void>>()
+    .mockResolvedValue(undefined),
+  updateDescription: jest
+    .fn<(...a: any[]) => Promise<void>>()
+    .mockResolvedValue(undefined),
+  submitReview: jest
+    .fn<(...a: any[]) => Promise<void>>()
+    .mockResolvedValue(undefined),
+  addReviewedCommitId: jest
+    .fn()
+    .mockReturnValue('<!-- reviewed-commit-ids -->'),
+  bufferReviewComment: jest
+    .fn<(...a: any[]) => Promise<void>>()
+    .mockResolvedValue(undefined),
   listReviewComments: jest.fn<() => Promise<any[]>>().mockResolvedValue([]),
-  getCommentChainsWithinRange: jest.fn<(...a: any[]) => Promise<string>>().mockResolvedValue('')
+  getCommentChainsWithinRange: jest
+    .fn<(...a: any[]) => Promise<string>>()
+    .mockResolvedValue('')
 }
 jest.mock('../../src/commenter', () => ({
   Commenter: jest.fn().mockImplementation(() => commenterState),
@@ -78,7 +91,9 @@ jest.mock('../../src/commenter', () => ({
 jest.mock('../../src/tokenizer', () => ({getTokenCount: () => 0}))
 
 jest.mock('../../src/github/review-thread', () => ({
-  fetchThreadStatusMap: jest.fn<() => Promise<Map<string, boolean>>>().mockResolvedValue(new Map())
+  fetchThreadStatusMap: jest
+    .fn<() => Promise<Map<string, boolean>>>()
+    .mockResolvedValue(new Map())
 }))
 
 import {codeReview} from '../../src/review'
@@ -87,7 +102,9 @@ import {Prompts} from '../../src/prompts'
 
 const IGNORE_KEYWORD = '@ai-reviewer: ignore'
 
-function makeOptions(overrides: Partial<{disableReleaseNotes: boolean}> = {}): Options {
+function makeOptions(
+  overrides: Partial<{disableReleaseNotes: boolean}> = {}
+): Options {
   return new Options(
     false, // debug
     false, // disableReview
@@ -159,30 +176,46 @@ describe('codeReview() — 改造前控制流行为基线', () => {
     jest.clearAllMocks()
     mockContext.eventName = 'pull_request'
     mockContext.payload = {}
-    commenterState.getDescription.mockImplementation((body: string) => body ?? '')
+    commenterState.getDescription.mockImplementation(
+      (body: string) => body ?? ''
+    )
     commenterState.findCommentWithTag.mockResolvedValue(null)
     commenterState.getAllCommitIds.mockResolvedValue([])
     commenterState.addInProgressStatus.mockReturnValue('IN_PROGRESS')
-    commenterState.addReviewedCommitId.mockReturnValue('<!-- reviewed-commit-ids -->')
+    commenterState.addReviewedCommitId.mockReturnValue(
+      '<!-- reviewed-commit-ids -->'
+    )
   })
 
-  test('非 pull_request/pull_request_target 事件（非命令触发）→ 直接跳过，不调用任何 octokit', async () => {
+  test('非 pull_request/pull_request_target 事件（非命令触发）→ 直接跳过，不调用任何 platform API', async () => {
     mockContext.eventName = 'push'
     mockContext.payload = {}
 
-    await codeReview(makeExecCtx(), makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
+    await codeReview(
+      makeExecCtx(),
+      makeBot(),
+      makeBot(),
+      makeOptions(),
+      new Prompts('', '')
+    )
 
-    expect(octokitState.compareCommits).not.toHaveBeenCalled()
+    expect(platformState.compareDiff).not.toHaveBeenCalled()
     expect(commenterState.comment).not.toHaveBeenCalled()
   })
 
-  test('context.payload.pull_request 缺失（非命令触发）→ 跳过，不调用 octokit', async () => {
+  test('context.payload.pull_request 缺失（非命令触发）→ 跳过，不调用 platform API', async () => {
     mockContext.eventName = 'pull_request'
     mockContext.payload = {}
 
-    await codeReview(makeExecCtx(), makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
+    await codeReview(
+      makeExecCtx(),
+      makeBot(),
+      makeBot(),
+      makeOptions(),
+      new Prompts('', '')
+    )
 
-    expect(octokitState.compareCommits).not.toHaveBeenCalled()
+    expect(platformState.compareDiff).not.toHaveBeenCalled()
     expect(commenterState.comment).not.toHaveBeenCalled()
   })
 
@@ -193,54 +226,84 @@ describe('codeReview() — 改造前控制流行为基线', () => {
       })
     }
 
-    await codeReview(makeExecCtx(), makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
+    await codeReview(
+      makeExecCtx(),
+      makeBot(),
+      makeBot(),
+      makeOptions(),
+      new Prompts('', '')
+    )
 
-    expect(octokitState.compareCommits).not.toHaveBeenCalled()
+    expect(platformState.compareDiff).not.toHaveBeenCalled()
     expect(commenterState.comment).not.toHaveBeenCalled()
   })
 
   test('PR 描述含 ignore 关键词 → 跳过，不查询 diff', async () => {
     mockContext.payload = {
-      pull_request: makePullRequestPayload({body: `Description. ${IGNORE_KEYWORD}`})
+      pull_request: makePullRequestPayload({
+        body: `Description. ${IGNORE_KEYWORD}`
+      })
     }
-    commenterState.getDescription.mockReturnValue(`Description. ${IGNORE_KEYWORD}`)
+    commenterState.getDescription.mockReturnValue(
+      `Description. ${IGNORE_KEYWORD}`
+    )
 
-    await codeReview(makeExecCtx(), makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
+    await codeReview(
+      makeExecCtx(),
+      makeBot(),
+      makeBot(),
+      makeOptions(),
+      new Prompts('', '')
+    )
 
-    expect(octokitState.compareCommits).not.toHaveBeenCalled()
+    expect(platformState.compareDiff).not.toHaveBeenCalled()
   })
 
   test('无增量变更（compareCommits 返回空 files）→ 查询一次 diff 后跳过，不发布评论', async () => {
     mockContext.payload = {pull_request: makePullRequestPayload()}
-    octokitState.compareCommits.mockResolvedValue({data: {files: [], commits: []}})
+    platformState.compareDiff.mockResolvedValue({files: [], commits: []})
 
-    await codeReview(makeExecCtx(), makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
+    await codeReview(
+      makeExecCtx(),
+      makeBot(),
+      makeBot(),
+      makeOptions(),
+      new Prompts('', '')
+    )
 
-    expect(octokitState.compareCommits).toHaveBeenCalled()
+    expect(platformState.compareDiff).toHaveBeenCalled()
     expect(commenterState.comment).not.toHaveBeenCalled()
   })
 
   test('首次审查：incremental 与 targetBranch diff 均从 base sha 起算（历史无 reviewed commit）', async () => {
     mockContext.payload = {pull_request: makePullRequestPayload()}
-    octokitState.compareCommits.mockResolvedValue({
-      data: {
-        files: [{filename: 'src/foo.ts', status: 'modified', patch: '@@ -1,3 +1,4 @@\n line1\n line2\n+added line\n line3'}],
-        commits: [{sha: 'head-sha-0001'}]
-      }
+    platformState.compareDiff.mockResolvedValue({
+      files: [
+        {
+          filename: 'src/foo.ts',
+          status: 'modified',
+          patch: '@@ -1,3 +1,4 @@\n line1\n line2\n+added line\n line3'
+        }
+      ],
+      commits: [{sha: 'head-sha-0001'}]
     })
-    octokitState.getContent.mockResolvedValue({
-      data: {type: 'file', content: Buffer.from('line1\nline2\nline3').toString('base64')}
-    })
+    platformState.getFileContent.mockResolvedValue('line1\nline2\nline3')
 
-    await codeReview(makeExecCtx(), makeBot('[TRIAGE]: APPROVED\nAdds a comment line.'), makeBot(), makeOptions(), new Prompts('', ''))
+    await codeReview(
+      makeExecCtx(),
+      makeBot('[TRIAGE]: APPROVED\nAdds a comment line.'),
+      makeBot(),
+      makeOptions(),
+      new Prompts('', '')
+    )
 
     // 首次审查：两次 compareCommits 的 base 均为 PR base sha（不存在历史 reviewed commit）
-    expect(octokitState.compareCommits).toHaveBeenCalledTimes(2)
-    for (const call of octokitState.compareCommits.mock.calls) {
-      expect((call[0] as any).base).toBe('base-sha-0001')
-      expect((call[0] as any).head).toBe('head-sha-0001')
-      expect((call[0] as any).owner).toBe('octo')
-      expect((call[0] as any).repo).toBe('demo')
+    expect(platformState.compareDiff).toHaveBeenCalledTimes(2)
+    for (const call of platformState.compareDiff.mock.calls) {
+      expect(call[0]).toBe('octo') // owner
+      expect(call[1]).toBe('demo') // repo
+      expect(call[2]).toBe('base-sha-0001') // base
+      expect(call[3]).toBe('head-sha-0001') // head
     }
 
     // in-progress 摘要 + 最终摘要，各发布一次（commenter.comment 共 2 次，均为 SUMMARIZE_TAG + replace）
@@ -266,30 +329,57 @@ describe('codeReview() — 改造前控制流行为基线', () => {
   test('reviewMode="full" → 忽略历史 reviewed commit，强制从 PR base sha 开始', async () => {
     mockContext.payload = {pull_request: makePullRequestPayload()}
     // 即使存在历史摘要评论和 reviewed commit block，full 模式也必须忽略它们
-    commenterState.findCommentWithTag.mockResolvedValue({body: 'existing summary body'})
-    commenterState.getReviewedCommitIdsBlock.mockReturnValue('<!-- reviewed: old-sha -->')
-    commenterState.getAllCommitIds.mockResolvedValue(['old-sha', 'head-sha-0001'])
+    commenterState.findCommentWithTag.mockResolvedValue({
+      body: 'existing summary body'
+    })
+    commenterState.getReviewedCommitIdsBlock.mockReturnValue(
+      '<!-- reviewed: old-sha -->'
+    )
+    commenterState.getAllCommitIds.mockResolvedValue([
+      'old-sha',
+      'head-sha-0001'
+    ])
     commenterState.getHighestReviewedCommitId.mockReturnValue('old-sha')
-    octokitState.compareCommits.mockResolvedValue({data: {files: [], commits: []}})
+    platformState.compareDiff.mockResolvedValue({files: [], commits: []})
 
-    await codeReview(makeExecCtx(), makeBot(), makeBot(), makeOptions(), new Prompts('', ''), {mode: 'full'})
+    await codeReview(
+      makeExecCtx(),
+      makeBot(),
+      makeBot(),
+      makeOptions(),
+      new Prompts('', ''),
+      {mode: 'full'}
+    )
 
-    const firstCallArgs = octokitState.compareCommits.mock.calls[0][0] as any
-    expect(firstCallArgs.base).toBe('base-sha-0001') // 不是 'old-sha'
+    expect(platformState.compareDiff.mock.calls[0][2]).toBe('base-sha-0001') // base（不是 'old-sha'）
   })
 
   test('增量审查：存在历史 reviewed commit 时，diff 从该 commit 而非 base sha 起算', async () => {
-    mockContext.payload = {pull_request: makePullRequestPayload({head: {sha: 'head-sha-0002'}})}
-    commenterState.findCommentWithTag.mockResolvedValue({body: 'existing summary body'})
-    commenterState.getReviewedCommitIdsBlock.mockReturnValue('<!-- reviewed: head-sha-0001 -->')
-    commenterState.getAllCommitIds.mockResolvedValue(['head-sha-0001', 'head-sha-0002'])
+    mockContext.payload = {
+      pull_request: makePullRequestPayload({head: {sha: 'head-sha-0002'}})
+    }
+    commenterState.findCommentWithTag.mockResolvedValue({
+      body: 'existing summary body'
+    })
+    commenterState.getReviewedCommitIdsBlock.mockReturnValue(
+      '<!-- reviewed: head-sha-0001 -->'
+    )
+    commenterState.getAllCommitIds.mockResolvedValue([
+      'head-sha-0001',
+      'head-sha-0002'
+    ])
     commenterState.getHighestReviewedCommitId.mockReturnValue('head-sha-0001')
-    octokitState.compareCommits.mockResolvedValue({data: {files: [], commits: []}})
+    platformState.compareDiff.mockResolvedValue({files: [], commits: []})
 
-    await codeReview(makeExecCtx(), makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
+    await codeReview(
+      makeExecCtx(),
+      makeBot(),
+      makeBot(),
+      makeOptions(),
+      new Prompts('', '')
+    )
 
-    const incrementalCallArgs = octokitState.compareCommits.mock.calls[0][0] as any
-    expect(incrementalCallArgs.base).toBe('head-sha-0001') // 从上次审查的 commit 起，不是 base sha
-    expect(incrementalCallArgs.head).toBe('head-sha-0002')
+    expect(platformState.compareDiff.mock.calls[0][2]).toBe('head-sha-0001') // base：从上次审查的 commit 起，不是 base sha
+    expect(platformState.compareDiff.mock.calls[0][3]).toBe('head-sha-0002') // head
   })
 })

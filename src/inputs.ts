@@ -7,21 +7,21 @@
  */
 import {info} from '@actions/core'
 export class Inputs {
-  systemMessage: string   // 系统消息（定义 AI 的角色和行为准则）
-  title: string           // PR 标题
-  description: string     // PR 描述
-  rawSummary: string      // 原始摘要（所有文件摘要的汇总，用于后续处理）
-  shortSummary: string    // 精简摘要（用于代码审查时提供上下文）
-  filename: string        // 当前处理的文件名
-  fileContent: string     // 文件原始内容（基准分支的版本）
-  fileDiff: string        // 文件的完整 diff
-  patches: string         // 打包后的代码变更块（hunk），用于逐段审查
-  diff: string            // 当前被评论的 diff 片段
-  commentChain: string    // 评论对话链（已有的评论上下文）
-  comment: string         // 当前用户的评论内容
+  systemMessage: string // 系统消息（定义 AI 的角色和行为准则）
+  title: string // PR 标题
+  description: string // PR 描述
+  rawSummary: string // 原始摘要（所有文件摘要的汇总，用于后续处理）
+  shortSummary: string // 精简摘要（用于代码审查时提供上下文）
+  filename: string // 当前处理的文件名
+  fileContent: string // 文件原始内容（基准分支的版本）
+  fileDiff: string // 文件的完整 diff
+  patches: string // 打包后的代码变更块（hunk），用于逐段审查
+  diff: string // 当前被评论的 diff 片段
+  commentChain: string // 评论对话链（已有的评论上下文）
+  comment: string // 当前用户的评论内容
   crossFileContext: string // 跨文件引用上下文（依赖分析生成，注入到审查提示词）
-  analysisChain: string   // 分析链（逐步推理过程，由轻量模型生成，注入到审查提示词）
-  lintContext: string     // 静态分析工具结果上下文（Linter/SAST 适配器生成，注入到审查提示词）
+  analysisChain: string // 分析链（逐步推理过程，由轻量模型生成，注入到审查提示词）
+  lintContext: string // 静态分析工具结果上下文（Linter/SAST 适配器生成，注入到审查提示词）
 
   constructor(
     systemMessage = '',
@@ -132,11 +132,14 @@ export class Inputs {
       this.crossFileContext || 'No cross-file references detected.'
     )
     // 分析链：无论是否有值，都替换占位符（避免模板残留）
-    const analysisChainValue = this.analysisChain || 'No analysis chain available.'
+    const analysisChainValue =
+      this.analysisChain || 'No analysis chain available.'
     const hadPlaceholder = content.includes('$analysis_chain')
     content = content.replace('$analysis_chain', analysisChainValue)
     if (hadPlaceholder) {
-      info(`[render] $analysis_chain replaced: hasValue=${!!this.analysisChain}, valueLen=${analysisChainValue.length}, preview="${analysisChainValue.substring(0, 100).replace(/\n/g, '\\n')}"`)
+      info(
+        `[render] $analysis_chain replaced: hasValue=${!!this.analysisChain}, valueLen=${analysisChainValue.length}, preview="${analysisChainValue.substring(0, 100).replace(/\n/g, '\\n')}"`
+      )
     }
     // 静态分析工具结果：仅在 lintContext 非空时替换。
     // 杠杆 A：当无 finding 时，prompts.renderReviewFileDiff 已整体移除
