@@ -13,10 +13,7 @@ jest.mock('@actions/core', () => ({
 import {CommandRegistry} from '../src/commands/registry'
 import type {CommandHandler} from '../src/commands/types'
 
-function fakeHandler(
-  name: string,
-  overrides: Partial<CommandHandler> = {}
-): CommandHandler {
+function fakeHandler(name: string, overrides: Partial<CommandHandler> = {}): CommandHandler {
   return {
     name,
     description: `desc ${name}`,
@@ -54,9 +51,7 @@ describe('CommandRegistry', () => {
 
   test('alias colliding with existing name throws', () => {
     reg.register(fakeHandler('help'))
-    expect(() =>
-      reg.register(fakeHandler('other', {aliases: ['help']}))
-    ).toThrow(/collid/i)
+    expect(() => reg.register(fakeHandler('other', {aliases: ['help']}))).toThrow(/collid/i)
   })
 
   test('getRegisteredNames returns main + aliases', () => {

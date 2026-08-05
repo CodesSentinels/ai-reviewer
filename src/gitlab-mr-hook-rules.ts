@@ -37,10 +37,7 @@ export interface HeadStaleCheck {
   currentHeadSha: string
 }
 
-export function isHeadStale(
-  eventHeadSha: string,
-  currentHeadSha: string
-): HeadStaleCheck {
+export function isHeadStale(eventHeadSha: string, currentHeadSha: string): HeadStaleCheck {
   return {
     stale: eventHeadSha !== currentHeadSha,
     eventHeadSha,
@@ -48,10 +45,6 @@ export function isHeadStale(
   }
 }
 
-export function buildMrIdempotencyKey(
-  projectId: string,
-  mrIid: number,
-  headSha: string
-): string {
+export function buildMrIdempotencyKey(projectId: string, mrIid: number, headSha: string): string {
   return `gitlab:${projectId}:${mrIid}:head:${headSha}`
 }

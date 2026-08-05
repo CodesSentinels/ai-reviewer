@@ -202,9 +202,7 @@ export class Options {
  * - 如果文件匹配任何排除规则，则被排除
  */
 export class PathFilter {
-  private readonly rules: Array<
-    [string /* 规则模式 */, boolean /* 是否为排除规则 */]
-  >
+  private readonly rules: Array<[string /* 规则模式 */, boolean /* 是否为排除规则 */]>
 
   constructor(rules: string[] | null = null) {
     this.rules = []

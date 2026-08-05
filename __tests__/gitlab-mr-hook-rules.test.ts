@@ -19,9 +19,7 @@ describe('EVENT-010: checkForkMergeRequest()', () => {
   test('source_project_id !== target_project_id → isFork:true，附带 reason', () => {
     const result = checkForkMergeRequest(99, 42)
     expect(result.isFork).toBe(true)
-    expect(result.reason).toBe(
-      'source_project_id(99) !== target_project_id(42)'
-    )
+    expect(result.reason).toBe('source_project_id(99) !== target_project_id(42)')
   })
 
   test('source_project_id === target_project_id → isFork:false，reason 缺失', () => {
@@ -70,9 +68,7 @@ describe('EVENT-012: isHeadStale()', () => {
 
 describe('EVENT-013: buildMrIdempotencyKey()', () => {
   test('格式为 gitlab:{project_id}:{mr_iid}:head:{head_sha}', () => {
-    expect(buildMrIdempotencyKey('42', 7, 'head-sha-0001')).toBe(
-      'gitlab:42:7:head:head-sha-0001'
-    )
+    expect(buildMrIdempotencyKey('42', 7, 'head-sha-0001')).toBe('gitlab:42:7:head:head-sha-0001')
   })
 
   test('不同 project_id/mr_iid/head_sha 组合产生不同的键（无碰撞）', () => {

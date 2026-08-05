@@ -70,9 +70,7 @@ export function ensureFixSuggestionHeaders(commentBody: string): string {
       const lookback = out.slice(-5).join('\n')
       const lookahead = lines.slice(endIdx + 1, endIdx + 6).join('\n')
       const alreadyWrapped =
-        lookback.includes('<details>') &&
-        hasFixMarker(lookback) &&
-        lookahead.includes('</details>')
+        lookback.includes('<details>') && hasFixMarker(lookback) && lookahead.includes('</details>')
 
       if (alreadyWrapped) {
         // 原样照搬整个 diff 块

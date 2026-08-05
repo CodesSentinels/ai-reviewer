@@ -23,12 +23,7 @@ function createBots(options: Options): {lightBot: Bot; heavyBot: Bot} | null {
   try {
     lightBot = new Bot(
       options,
-      new OpenAIOptions(
-        options.openaiLightModel,
-        options.lightTokenLimits,
-        false,
-        false
-      )
+      new OpenAIOptions(options.openaiLightModel, options.lightTokenLimits, false, false)
     )
   } catch (e: any) {
     warning(

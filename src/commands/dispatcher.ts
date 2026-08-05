@@ -34,13 +34,7 @@ import {checkRateLimit} from './rate-limit'
 import {hasBeenProcessed, Reply} from './reply'
 import {addAckReaction} from './reaction'
 import {buildUnknownCommandMessage} from './handlers/help'
-import type {
-  ActorInfo,
-  CommandContext,
-  CommandEventName,
-  ErrorCode,
-  ParsedCommand
-} from './types'
+import type {ActorInfo, CommandContext, CommandEventName, ErrorCode, ParsedCommand} from './types'
 import type {ExecutionContext} from '../platform/execution-context'
 
 // eslint-disable-next-line camelcase
@@ -71,18 +65,13 @@ export interface DispatcherDeps {
  * 调用方 (command-handler.ts) 负责:
  *   - 当返回 'fallback_conversation' 时，调用成员 D 的 handleConversation（对话式追问）
  */
-export async function dispatchCommentEvent(
-  deps: DispatcherDeps
-): Promise<DispatchOutcome> {
+export async function dispatchCommentEvent(deps: DispatcherDeps): Promise<DispatchOutcome> {
   const logger = getLogger()
   // [事件白名单] 仅放行 issue_comment / pull_request_review_comment 两类带评论的事件；
   // 其余事件（push、pull_request、schedule 等）不携带用户评论，直接忽略，
   // 同时把 eventName 收窄为 CommandEventName 供后续分支安全使用。
   const eventName = context.eventName as CommandEventName
-  if (
-    eventName !== 'issue_comment' &&
-    eventName !== 'pull_request_review_comment'
-  ) {
+  if (eventName !== 'issue_comment' && eventName !== 'pull_request_review_comment') {
     return {kind: 'ignored', reason: `unsupported event: ${eventName}`}
   }
 
@@ -123,9 +112,7 @@ export async function dispatchCommentEvent(
       baseSha = cr.baseSha
     } catch (e) {
       logger.warning(
-        `command dispatcher: failed to fetch head/base sha for PR #${prNumber}: ${String(
-          e
-        )}`
+        `command dispatcher: failed to fetch head/base sha for PR #${prNumber}: ${String(e)}`
       )
     }
   } else {
@@ -152,8 +139,7 @@ export async function dispatchCommentEvent(
   // [bot 自评论过滤] 通过 user.type 或登录名 `xxx[bot]` 后缀识别机器人，
   // 防止 bot 自己回帖再次触发命令造成死循环。
   const actorLogin: string = comment.user?.login ?? ''
-  const actorIsBot =
-    comment.user?.type === 'Bot' || /\[bot\]$/i.test(actorLogin)
+  const actorIsBot = comment.user?.type === 'Bot' || /\[bot\]$/i.test(actorLogin)
   if (actorIsBot) {
     // 打印作者信息，便于排查"明明是人却被当成 bot"的情况
     logger.info(
@@ -225,17 +211,9 @@ export async function dispatchCommentEvent(
 
   // [幂等检查] 同一 commentId × 同一 command 是否已有回复；
   // Actions 可能因重试/重复投递触发多次，命中则跳过避免重复执行。
-  const processed = await hasBeenProcessed(
-    owner,
-    repoName,
-    prNumber,
-    comment.id,
-    parsed.name
-  )
+  const processed = await hasBeenProcessed(owner, repoName, prNumber, comment.id, parsed.name)
   if (processed) {
-    logger.info(
-      `command dispatcher: skip duplicate commentId=${comment.id} cmd=${parsed.name}`
-    )
+    logger.info(`command dispatcher: skip duplicate commentId=${comment.id} cmd=${parsed.name}`)
     return {
       kind: 'executed',
       command: parsed.name,
@@ -247,10 +225,7 @@ export async function dispatchCommentEvent(
   // [速率限制] 按操作者维度限流；超限则回帖提示重试时间并结束。
   const rl = checkRateLimit(actorLogin)
   if (!rl.allowed) {
-    await reply.error(
-      'RATE_LIMITED',
-      `请 ${Math.ceil((rl.retryAfterMs ?? 0) / 1000)} 秒后再试`
-    )
+    await reply.error('RATE_LIMITED', `请 ${Math.ceil((rl.retryAfterMs ?? 0) / 1000)} 秒后再试`)
     return {
       kind: 'executed',
       command: parsed.name,
@@ -280,10 +255,7 @@ export async function dispatchCommentEvent(
   })
   const isPrAuthor = actorLogin === prAuthor
   if (!canExecute(handler, permission, isPrAuthor)) {
-    await reply.error(
-      'FORBIDDEN',
-      `用户 \`${actorLogin}\` 当前权限: \`${permission}\``
-    )
+    await reply.error('FORBIDDEN', `用户 \`${actorLogin}\` 当前权限: \`${permission}\``)
     return {
       kind: 'executed',
       command: parsed.name,
@@ -337,9 +309,7 @@ export async function dispatchCommentEvent(
     const code = extractErrorCode(e)
     const detail = e instanceof Error ? e.message : String(e)
     await reply.error(code, detail, ackId)
-    logger.warning(
-      `command handler failed: name=${parsed.name} code=${code} ${detail}`
-    )
+    logger.warning(`command handler failed: name=${parsed.name} code=${code} ${detail}`)
     return {
       kind: 'executed',
       command: parsed.name,

@@ -118,13 +118,7 @@ export interface TreeEntry {
 }
 
 /** 权限等级 */
-export type PlatformPermission =
-  | 'admin'
-  | 'maintain'
-  | 'write'
-  | 'triage'
-  | 'read'
-  | 'none'
+export type PlatformPermission = 'admin' | 'maintain' | 'write' | 'triage' | 'read' | 'none'
 
 /** Reaction 类型 */
 export type ReactionContent =
@@ -158,11 +152,7 @@ export interface IGitPlatform {
   // ─── 1. PR/MR 信息 ───────────────────────────────────────────────────────
 
   /** 获取 PR/MR 详情 */
-  getChangeRequest(
-    owner: string,
-    repo: string,
-    changeRequestId: number
-  ): Promise<ChangeRequestInfo>
+  getChangeRequest(owner: string, repo: string, changeRequestId: number): Promise<ChangeRequestInfo>
 
   /** 更新 PR/MR body（描述） */
   updateChangeRequestBody(
@@ -173,31 +163,17 @@ export interface IGitPlatform {
   ): Promise<void>
 
   /** 获取 PR/MR 的所有 commit SHA */
-  listChangeRequestCommits(
-    owner: string,
-    repo: string,
-    changeRequestId: number
-  ): Promise<string[]>
+  listChangeRequestCommits(owner: string, repo: string, changeRequestId: number): Promise<string[]>
 
   // ─── 2. Diff ──────────────────────────────────────────────────────────────
 
   /** 比较两个 commit 的 diff */
-  compareDiff(
-    owner: string,
-    repo: string,
-    base: string,
-    head: string
-  ): Promise<DiffResult>
+  compareDiff(owner: string, repo: string, base: string, head: string): Promise<DiffResult>
 
   // ─── 3. 文件内容 ──────────────────────────────────────────────────────────
 
   /** 获取指定 ref 下的文件内容（base64 解码后的字符串） */
-  getFileContent(
-    owner: string,
-    repo: string,
-    path: string,
-    ref: string
-  ): Promise<string | null>
+  getFileContent(owner: string, repo: string, path: string, ref: string): Promise<string | null>
 
   // ─── 4. 顶层评论（issue comment / MR note）──────────────────────────────
 
@@ -210,31 +186,18 @@ export interface IGitPlatform {
   ): Promise<PlatformComment>
 
   /** 更新顶层评论 */
-  updateComment(
-    owner: string,
-    repo: string,
-    commentId: number,
-    body: string
-  ): Promise<void>
+  updateComment(owner: string, repo: string, commentId: number, body: string): Promise<void>
 
   /** 删除顶层评论 */
   deleteComment(owner: string, repo: string, commentId: number): Promise<void>
 
   /** 列出顶层评论 */
-  listComments(
-    owner: string,
-    repo: string,
-    changeRequestId: number
-  ): Promise<PlatformComment[]>
+  listComments(owner: string, repo: string, changeRequestId: number): Promise<PlatformComment[]>
 
   // ─── 5. 行级评论（review comment / diff note）────────────────────────────
 
   /** 列出行级评论 */
-  listReviewComments(
-    owner: string,
-    repo: string,
-    changeRequestId: number
-  ): Promise<ReviewComment[]>
+  listReviewComments(owner: string, repo: string, changeRequestId: number): Promise<ReviewComment[]>
 
   /**
    * 批量提交行级评论（GitHub: createReview + submitReview; GitLab: batch notes）
@@ -268,26 +231,13 @@ export interface IGitPlatform {
   ): Promise<PlatformComment>
 
   /** 更新行级评论 */
-  updateReviewComment(
-    owner: string,
-    repo: string,
-    commentId: number,
-    body: string
-  ): Promise<void>
+  updateReviewComment(owner: string, repo: string, commentId: number, body: string): Promise<void>
 
   /** 删除行级评论 */
-  deleteReviewComment(
-    owner: string,
-    repo: string,
-    commentId: number
-  ): Promise<void>
+  deleteReviewComment(owner: string, repo: string, commentId: number): Promise<void>
 
   /** 删除 PENDING 状态的 review（GitHub 专有，GitLab 空实现） */
-  deletePendingReview(
-    owner: string,
-    repo: string,
-    changeRequestId: number
-  ): Promise<void>
+  deletePendingReview(owner: string, repo: string, changeRequestId: number): Promise<void>
 
   // ─── 6. Review thread ─────────────────────────────────────────────────────
 
@@ -313,9 +263,7 @@ export interface IGitPlatform {
   ): Promise<ReviewThreadInfo[]>
 
   /** 批量 resolve thread */
-  resolveThreads(
-    threadIds: string[]
-  ): Promise<{ok: number; failed: number; errors: Error[]}>
+  resolveThreads(threadIds: string[]): Promise<{ok: number; failed: number; errors: Error[]}>
 
   // ─── 7. Reaction ──────────────────────────────────────────────────────────
 
@@ -348,11 +296,7 @@ export interface IGitPlatform {
    * 获取仓库文件树（所有文件路径）。
    * GitHub: Git Tree API (recursive)；GitLab: Repository Tree API (recursive + paginated)。
    */
-  listRepositoryTree(
-    owner: string,
-    repo: string,
-    ref: string
-  ): Promise<TreeEntry[]>
+  listRepositoryTree(owner: string, repo: string, ref: string): Promise<TreeEntry[]>
 }
 
 // ─── 平台单例（ARCH-018）────────────────────────────────────────────────

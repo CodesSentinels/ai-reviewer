@@ -9,14 +9,7 @@
  * - GitLab 安全强制覆盖 enable_shell/enable_lint_tools（CFG-002）
  * - GitLab/GitHub 默认值一致性
  */
-import {
-  describe,
-  expect,
-  test,
-  jest,
-  beforeEach,
-  afterEach
-} from '@jest/globals'
+import {describe, expect, test, jest, beforeEach, afterEach} from '@jest/globals'
 
 // ======================== Mock @actions/core ========================
 const inputStore: Record<string, string> = {}
@@ -29,9 +22,7 @@ jest.mock('@actions/core', () => ({
     const v = boolInputStore[name] ?? inputStore[name] ?? 'false'
     if (v.toLowerCase() === 'true') return true
     if (v.toLowerCase() === 'false') return false
-    throw new Error(
-      `Input does not meet YAML 1.2 "Core Schema" specification: ${name}`
-    )
+    throw new Error(`Input does not meet YAML 1.2 "Core Schema" specification: ${name}`)
   }),
   getMultilineInput: jest.fn((name: string) => {
     const v = multilineInputStore[name] ?? inputStore[name] ?? ''
@@ -400,9 +391,7 @@ describe('GitLabConfigProvider (ARCH-009)', () => {
     expect(provider.securityOverrides).toHaveLength(2)
     expect(provider.securityOverrides[0]).toContain('AI_REVIEWER_ENABLE_SHELL')
     expect(provider.securityOverrides[0]).toContain('CFG-002')
-    expect(provider.securityOverrides[1]).toContain(
-      'AI_REVIEWER_ENABLE_LINT_TOOLS'
-    )
+    expect(provider.securityOverrides[1]).toContain('AI_REVIEWER_ENABLE_LINT_TOOLS')
   })
 
   test('CFG-002: no security override log when values are already false', () => {
@@ -458,8 +447,7 @@ describe('GitLabConfigProvider (ARCH-009)', () => {
 
   test('getPromptConfig() returns prompt templates from env vars', () => {
     process.env.AI_REVIEWER_SUMMARIZE = 'Custom GitLab summarize'
-    process.env.AI_REVIEWER_SUMMARIZE_RELEASE_NOTES =
-      'Custom GitLab release notes'
+    process.env.AI_REVIEWER_SUMMARIZE_RELEASE_NOTES = 'Custom GitLab release notes'
 
     const provider = new GitLabConfigProvider()
     const prompt = provider.getPromptConfig()
@@ -473,9 +461,7 @@ describe('GitLabConfigProvider (ARCH-009)', () => {
     const prompt = provider.getPromptConfig()
 
     expect(prompt.summarize).toBe(CONFIG_DEFAULTS.summarize)
-    expect(prompt.summarizeReleaseNotes).toBe(
-      CONFIG_DEFAULTS.summarizeReleaseNotes
-    )
+    expect(prompt.summarizeReleaseNotes).toBe(CONFIG_DEFAULTS.summarizeReleaseNotes)
     // Verify defaults are non-empty
     expect(prompt.summarize.length).toBeGreaterThan(0)
     expect(prompt.summarizeReleaseNotes.length).toBeGreaterThan(0)
@@ -813,9 +799,7 @@ describe('Cross-platform config consistency', () => {
     expect(ghOpts.githubConcurrencyLimit).toBe(glOpts.githubConcurrencyLimit)
     expect(ghOpts.apiBaseUrl).toBe(glOpts.apiBaseUrl)
     expect(ghOpts.language).toBe(glOpts.language)
-    expect(ghOpts.enableDependencyAnalysis).toBe(
-      glOpts.enableDependencyAnalysis
-    )
+    expect(ghOpts.enableDependencyAnalysis).toBe(glOpts.enableDependencyAnalysis)
     expect(ghOpts.maxDependencyFiles).toBe(glOpts.maxDependencyFiles)
     expect(ghOpts.enableWebSearch).toBe(glOpts.enableWebSearch)
     expect(ghOpts.semgrepConfig).toBe(glOpts.semgrepConfig)

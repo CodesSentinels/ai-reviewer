@@ -104,9 +104,7 @@ export function dedupeFindings(findings: Finding[]): Finding[] {
     if (existing) {
       existing.count++
       // 保留更高的严重级别
-      if (
-        SEVERITY_RANK[f.severity] > SEVERITY_RANK[existing.finding.severity]
-      ) {
+      if (SEVERITY_RANK[f.severity] > SEVERITY_RANK[existing.finding.severity]) {
         existing.finding = {...existing.finding, severity: f.severity}
       }
     } else {
@@ -136,8 +134,7 @@ export function prepareFindings(
   options: NoiseControlOptions = {}
 ): {kept: Finding[]; truncated: number} {
   const maxComments = options.maxComments ?? DEFAULT_MAX_COMMENTS
-  const deduped =
-    options.dedupe === false ? [...findings] : dedupeFindings(findings)
+  const deduped = options.dedupe === false ? [...findings] : dedupeFindings(findings)
 
   // 按严重级别降序稳定排序
   const sorted = deduped
@@ -220,32 +217,10 @@ export function classifyFindingSeverity(text: string): FindingSeverity {
   ) {
     return 'major'
   }
-  if (
-    has(
-      'nit',
-      'typo',
-      'formatting',
-      'indentation',
-      'naming',
-      '拼写',
-      '格式',
-      '命名'
-    )
-  ) {
+  if (has('nit', 'typo', 'formatting', 'indentation', 'naming', '拼写', '格式', '命名')) {
     return 'nit'
   }
-  if (
-    has(
-      'consider',
-      'recommend',
-      'prefer',
-      'readability',
-      'document',
-      '建议',
-      '可读性',
-      '推荐'
-    )
-  ) {
+  if (has('consider', 'recommend', 'prefer', 'readability', 'document', '建议', '可读性', '推荐')) {
     return 'minor'
   }
   return 'minor'

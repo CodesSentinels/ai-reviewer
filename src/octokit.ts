@@ -25,12 +25,7 @@ export const octokit = new RetryAndThrottlingOctokit({
   auth: `token ${token}`,
   throttle: {
     // 主要速率限制回调：当 API 配额耗尽时触发
-    onRateLimit: (
-      retryAfter: number,
-      options: any,
-      _o: any,
-      retryCount: number
-    ) => {
+    onRateLimit: (retryAfter: number, options: any, _o: any, retryCount: number) => {
       warning(
         `Request quota exhausted for request ${options.method} ${options.url}
 Retry after: ${retryAfter} seconds
@@ -49,10 +44,7 @@ Retry count: ${retryCount}
         `SecondaryRateLimit detected for request ${options.method} ${options.url} ; retry after ${retryAfter} seconds`
       )
       // 对于提交 PR Review 的 POST 请求不重试（避免重复提交审查）
-      if (
-        options.method === 'POST' &&
-        options.url.match(/\/repos\/.*\/.*\/pulls\/.*\/reviews/)
-      ) {
+      if (options.method === 'POST' && options.url.match(/\/repos\/.*\/.*\/pulls\/.*\/reviews/)) {
         return false
       }
       return true

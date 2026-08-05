@@ -62,10 +62,7 @@ export interface ToolFindingForDedup {
  * 与 formatToolAttribution 使用的判定保持一致，保证"评论上挂着哪些 Tools 卡片"
  * 与"评论按哪些 finding 去重"两者口径相同。
  */
-function overlapsFinding(
-  review: Review,
-  finding: ToolFindingForDedup
-): boolean {
+function overlapsFinding(review: Review, finding: ToolFindingForDedup): boolean {
   const fEnd = finding.endLine ?? finding.line
   return fEnd >= review.startLine && finding.line <= review.endLine
 }
@@ -194,9 +191,7 @@ function canMerge(
   if (entry.ruleIds.size === 0 && group.cumulativeRuleIds.size === 0) {
     // 两边都无 tool finding 覆盖 → 用 v1 行为：精确行号匹配
     return group.members.some(
-      m =>
-        m.startLine === entry.review.startLine &&
-        m.endLine === entry.review.endLine
+      m => m.startLine === entry.review.startLine && m.endLine === entry.review.endLine
     )
   }
   // 一边有 ruleId 一边没有 → 不同类，不合并
@@ -212,9 +207,6 @@ function canMerge(
  * @deprecated 新代码请用 `mergeReviewsByTopic` 并传入 toolFindings 让议题级
  *   去重生效；本别名仅为旧测试与外部调用方保留
  */
-export function mergeReviewsByLineRange(
-  reviews: Review[],
-  filename: string
-): Review[] {
+export function mergeReviewsByLineRange(reviews: Review[], filename: string): Review[] {
   return mergeReviewsByTopic(reviews, filename, [])
 }

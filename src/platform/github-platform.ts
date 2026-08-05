@@ -119,11 +119,7 @@ function toGitPlatformError(e: unknown): GitPlatformError {
   if (status != null && status >= 500) {
     return new GitPlatformError(msg, 'server_error', status, e)
   }
-  if (
-    /ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|timed? ?out/i.test(
-      msg
-    )
-  ) {
+  if (/ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|timed? ?out/i.test(msg)) {
     return new GitPlatformError(msg, 'timeout', undefined, e)
   }
   return new GitPlatformError(msg, 'unknown', status, e)
@@ -215,12 +211,7 @@ export class GitHubPlatform implements IGitPlatform {
 
   // ─── 2. Diff ──────────────────────────────────────────────────────────────
 
-  async compareDiff(
-    owner: string,
-    repo: string,
-    base: string,
-    head: string
-  ): Promise<DiffResult> {
+  async compareDiff(owner: string, repo: string, base: string, head: string): Promise<DiffResult> {
     try {
       const {data} = await octokit.repos.compareCommits({
         owner,
@@ -291,12 +282,7 @@ export class GitHubPlatform implements IGitPlatform {
     }
   }
 
-  async updateComment(
-    owner: string,
-    repo: string,
-    commentId: number,
-    body: string
-  ): Promise<void> {
+  async updateComment(owner: string, repo: string, commentId: number, body: string): Promise<void> {
     try {
       await octokit.issues.updateComment({
         owner,
@@ -310,11 +296,7 @@ export class GitHubPlatform implements IGitPlatform {
     }
   }
 
-  async deleteComment(
-    owner: string,
-    repo: string,
-    commentId: number
-  ): Promise<void> {
+  async deleteComment(owner: string, repo: string, commentId: number): Promise<void> {
     try {
       await octokit.issues.deleteComment({
         owner,
@@ -530,11 +512,7 @@ export class GitHubPlatform implements IGitPlatform {
     }
   }
 
-  async deleteReviewComment(
-    owner: string,
-    repo: string,
-    commentId: number
-  ): Promise<void> {
+  async deleteReviewComment(owner: string, repo: string, commentId: number): Promise<void> {
     try {
       await octokit.pulls.deleteReviewComment({
         owner,
@@ -547,11 +525,7 @@ export class GitHubPlatform implements IGitPlatform {
     }
   }
 
-  async deletePendingReview(
-    owner: string,
-    repo: string,
-    changeRequestId: number
-  ): Promise<void> {
+  async deletePendingReview(owner: string, repo: string, changeRequestId: number): Promise<void> {
     const logger = getLogger()
     try {
       const {data: reviews} = await octokit.pulls.listReviews({
@@ -562,9 +536,7 @@ export class GitHubPlatform implements IGitPlatform {
       })
       const pending = reviews.find(r => r.state === 'PENDING')
       if (pending) {
-        logger.info(
-          `Deleting pending review for PR #${changeRequestId} id: ${pending.id}`
-        )
+        logger.info(`Deleting pending review for PR #${changeRequestId} id: ${pending.id}`)
         await octokit.pulls.deletePendingReview({
           owner,
           repo,
@@ -590,10 +562,12 @@ export class GitHubPlatform implements IGitPlatform {
     let cursor: string | null = null
 
     do {
-      const data: GetReviewThreadsResponse = await octokit.graphql(
-        GET_REVIEW_THREADS,
-        {owner, repo, number: changeRequestId, after: cursor ?? undefined}
-      )
+      const data: GetReviewThreadsResponse = await octokit.graphql(GET_REVIEW_THREADS, {
+        owner,
+        repo,
+        number: changeRequestId,
+        after: cursor ?? undefined
+      })
       const page = data.repository.pullRequest.reviewThreads
       for (const node of page.nodes) {
         if (node.path != null && node.line != null) {
@@ -620,10 +594,12 @@ export class GitHubPlatform implements IGitPlatform {
     const normalizedBot = normalizeLogin(botLogin)
 
     do {
-      const data: GetReviewThreadsResponse = await octokit.graphql(
-        GET_REVIEW_THREADS,
-        {owner, repo, number: changeRequestId, after: cursor ?? undefined}
-      )
+      const data: GetReviewThreadsResponse = await octokit.graphql(GET_REVIEW_THREADS, {
+        owner,
+        repo,
+        number: changeRequestId,
+        after: cursor ?? undefined
+      })
       const page = data.repository.pullRequest.reviewThreads
       for (const node of page.nodes) {
         const firstComment = node.comments.nodes[0]
@@ -736,11 +712,7 @@ export class GitHubPlatform implements IGitPlatform {
 
   // ─── 10. 仓库文件树（DEP-001 / DEP-003）──────────────────────────────────
 
-  async listRepositoryTree(
-    owner: string,
-    repo: string,
-    ref: string
-  ): Promise<TreeEntry[]> {
+  async listRepositoryTree(owner: string, repo: string, ref: string): Promise<TreeEntry[]> {
     try {
       const {data} = await octokit.git.getTree({
         owner,

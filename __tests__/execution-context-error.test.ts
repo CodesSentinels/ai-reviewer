@@ -38,14 +38,11 @@ describe('ExecutionContextError', () => {
     {platform: 'gitlab', reason: 'missing_payload'},
     {platform: 'gitlab', reason: 'unknown_event'},
     {platform: 'gitlab', reason: 'missing_required_field'}
-  ] as const)(
-    '$platform 平台可以构造 reason=$reason 的错误，且字段可读',
-    ({platform, reason}) => {
-      const e = new ExecutionContextError(`${platform}/${reason} test`, platform, reason)
-      expect(e.platform).toBe(platform)
-      expect(e.reason).toBe(reason)
-    }
-  )
+  ] as const)('$platform 平台可以构造 reason=$reason 的错误，且字段可读', ({platform, reason}) => {
+    const e = new ExecutionContextError(`${platform}/${reason} test`, platform, reason)
+    expect(e.platform).toBe(platform)
+    expect(e.reason).toBe(reason)
+  })
 
   test('malformed_payload 是类型定义里预留但当前两个工厂函数均未使用的 reason（记录现状，非缺陷）', () => {
     // 仍然能正常构造——只是没有任何生产代码路径会触发它

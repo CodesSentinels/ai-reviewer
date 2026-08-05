@@ -13,10 +13,7 @@ jest.mock('@actions/core', () => ({
 import {buildHelpMessage} from '../src/commands/handlers/help'
 import type {CommandHandler} from '../src/commands/types'
 
-const mk = (
-  name: string,
-  overrides: Partial<CommandHandler> = {}
-): CommandHandler => ({
+const mk = (name: string, overrides: Partial<CommandHandler> = {}): CommandHandler => ({
   name,
   description: `desc for ${name}`,
   usage: `@ai-reviewer ${name}`,
@@ -41,11 +38,7 @@ describe('buildHelpMessage', () => {
   })
 
   test('help 自身排在列表末尾', () => {
-    const msg = buildHelpMessage([
-      mk('help', {minPermission: 'read'}),
-      mk('review'),
-      mk('resolve')
-    ])
+    const msg = buildHelpMessage([mk('help', {minPermission: 'read'}), mk('review'), mk('resolve')])
     const helpIdx = msg.indexOf('`@ai-reviewer help`')
     const reviewIdx = msg.indexOf('`@ai-reviewer review`')
     const resolveIdx = msg.indexOf('`@ai-reviewer resolve`')

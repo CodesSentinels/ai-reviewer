@@ -134,10 +134,7 @@ describe('parseImports', () => {
     const imports = parseImports(content, 'src/main.py')
     expect(imports).toHaveLength(1)
     expect(imports[0].importPath).toBe('utils.helper')
-    expect(imports[0].importedSymbols).toEqual([
-      'calculate_total',
-      'format_output'
-    ])
+    expect(imports[0].importedSymbols).toEqual(['calculate_total', 'format_output'])
   })
 
   test('解析 Go 分组 import（不重复计数）', () => {
@@ -155,9 +152,7 @@ describe('parseImports', () => {
     const content = `import com.example.utils.StringHelper;\nimport static java.util.Collections.sort;`
     const imports = parseImports(content, 'src/Main.java')
     expect(imports.length).toBeGreaterThanOrEqual(2)
-    const helperImport = imports.find(
-      i => i.importPath === 'com.example.utils.StringHelper'
-    )
+    const helperImport = imports.find(i => i.importPath === 'com.example.utils.StringHelper')
     expect(helperImport).toBeDefined()
     expect(helperImport!.importedSymbols).toEqual(['StringHelper'])
   })
@@ -234,18 +229,8 @@ describe('extractModifiedSymbols', () => {
 +export enum UserRole {`
     const symbols = extractModifiedSymbols('src/user.ts', diff)
     expect(symbols).toHaveLength(4)
-    expect(symbols.map(s => s.name)).toEqual([
-      'UserService',
-      'UserProfile',
-      'UserId',
-      'UserRole'
-    ])
-    expect(symbols.map(s => s.type)).toEqual([
-      'class',
-      'interface',
-      'type',
-      'enum'
-    ])
+    expect(symbols.map(s => s.name)).toEqual(['UserService', 'UserProfile', 'UserId', 'UserRole'])
+    expect(symbols.map(s => s.type)).toEqual(['class', 'interface', 'type', 'enum'])
   })
 
   test('Case A：提取 export default function', () => {
@@ -483,9 +468,7 @@ describe('findReferencesInContent', () => {
 const result = calculateTotal(items)
 console.log(calculateTotal([]))
 `
-    const refs = findReferencesInContent('src/checkout.ts', content, [
-      'calculateTotal'
-    ])
+    const refs = findReferencesInContent('src/checkout.ts', content, ['calculateTotal'])
     expect(refs).toHaveLength(2)
     expect(refs[0].symbolName).toBe('calculateTotal')
     expect(refs[0].lineNumber).toBe(3)
@@ -523,9 +506,7 @@ console.log('hello world')
 # calculateTotal (Python comment)
 const result = calculateTotal(items)
 `
-    const refs = findReferencesInContent('src/app.ts', content, [
-      'calculateTotal'
-    ])
+    const refs = findReferencesInContent('src/app.ts', content, ['calculateTotal'])
     expect(refs).toHaveLength(1)
     expect(refs[0].lineNumber).toBe(5)
   })
@@ -536,9 +517,7 @@ from pricing import calculateTotal
 const { calculateTotal } = require('./pricing')
 const result = calculateTotal(items)
 `
-    const refs = findReferencesInContent('src/app.ts', content, [
-      'calculateTotal'
-    ])
+    const refs = findReferencesInContent('src/app.ts', content, ['calculateTotal'])
     expect(refs).toHaveLength(1)
     expect(refs[0].lineNumber).toBe(4)
   })
@@ -558,19 +537,14 @@ const prefoo = 3
   })
 
   test('maxRefsPerSymbol 限制', () => {
-    const lines = Array.from(
-      {length: 20},
-      (_, i) => `console.log(myFunc(${i}))`
-    ).join('\n')
+    const lines = Array.from({length: 20}, (_, i) => `console.log(myFunc(${i}))`).join('\n')
     const refs = findReferencesInContent('src/app.ts', lines, ['myFunc'], 3)
     expect(refs).toHaveLength(3)
   })
 
   test('行内容截断到 120 字符', () => {
     const longLine = `const result = calculateTotal(${'a'.repeat(200)})`
-    const refs = findReferencesInContent('src/app.ts', longLine, [
-      'calculateTotal'
-    ])
+    const refs = findReferencesInContent('src/app.ts', longLine, ['calculateTotal'])
     expect(refs).toHaveLength(1)
     expect(refs[0].lineContent.length).toBeLessThanOrEqual(120)
   })
@@ -624,11 +598,7 @@ describe('resolveImportPath', () => {
   })
 
   test('解析带扩展名的路径', () => {
-    const result = resolveImportPath(
-      'src/review.ts',
-      './lib/parser.js',
-      repoFiles
-    )
+    const result = resolveImportPath('src/review.ts', './lib/parser.js', repoFiles)
     expect(result).toBe('src/lib/parser.js')
   })
 
@@ -638,11 +608,7 @@ describe('resolveImportPath', () => {
   })
 
   test('解析父级目录路径', () => {
-    const result = resolveImportPath(
-      'src/utils/helper.ts',
-      '../types',
-      repoFiles
-    )
+    const result = resolveImportPath('src/utils/helper.ts', '../types', repoFiles)
     expect(result).toBe('src/types.ts')
   })
 
@@ -652,11 +618,7 @@ describe('resolveImportPath', () => {
   })
 
   test('解析失败返回 null', () => {
-    const result = resolveImportPath(
-      'src/app.ts',
-      './nonexistent',
-      repoFiles
-    )
+    const result = resolveImportPath('src/app.ts', './nonexistent', repoFiles)
     expect(result).toBeNull()
   })
 
@@ -666,10 +628,7 @@ describe('resolveImportPath', () => {
   })
 
   test('解析 @/ 路径别名（映射到 app/ 目录）', () => {
-    const appRepoFiles = new Set([
-      'app/components/Button.tsx',
-      'app/utils/format.ts'
-    ])
+    const appRepoFiles = new Set(['app/components/Button.tsx', 'app/utils/format.ts'])
     const result = resolveImportPath('app/page.tsx', '@/components/Button', appRepoFiles)
     expect(result).toBe('app/components/Button.tsx')
   })
@@ -699,13 +658,7 @@ describe('resolveImportPath', () => {
 
 describe('filterByExtension', () => {
   test('按扩展名过滤', () => {
-    const files = [
-      'src/app.ts',
-      'src/style.css',
-      'src/utils.js',
-      'README.md',
-      'src/types.tsx'
-    ]
+    const files = ['src/app.ts', 'src/style.css', 'src/utils.js', 'README.md', 'src/types.tsx']
     const result = filterByExtension(files, ['.ts', '.tsx'])
     expect(result).toEqual(['src/app.ts', 'src/types.tsx'])
   })
@@ -720,12 +673,7 @@ describe('filterByExtension', () => {
 
 describe('sortByProximity', () => {
   test('同目录文件优先', () => {
-    const candidates = [
-      'lib/remote.ts',
-      'src/sibling.ts',
-      'src/utils/child.ts',
-      'test/far.ts'
-    ]
+    const candidates = ['lib/remote.ts', 'src/sibling.ts', 'src/utils/child.ts', 'test/far.ts']
     const modified = ['src/review.ts']
     const sorted = sortByProximity(candidates, modified)
     expect(sorted[0]).toBe('src/sibling.ts')
@@ -777,12 +725,8 @@ describe('formatCrossFileContext', () => {
     expect(result).toContain('### Files that import from this file (2):')
     expect(result).toContain('src/checkout/payment.ts')
     expect(result).toContain('### References to modified symbols:')
-    expect(result).toContain(
-      'src/checkout/payment.ts:45: const total = calculateTotal(cartItems)'
-    )
-    expect(result).toContain(
-      'src/reports/summary.ts:12: const tax = amount * TAX_RATE'
-    )
+    expect(result).toContain('src/checkout/payment.ts:45: const total = calculateTotal(cartItems)')
+    expect(result).toContain('src/reports/summary.ts:12: const tax = amount * TAX_RATE')
   })
 
   test('Case B：无引用时不包含 References 部分', () => {
@@ -908,19 +852,13 @@ export function processPayment(items: Item[]): PaymentResult {
       'src/utils/format.ts',
       'src/checkout/payment.ts'
     ])
-    const resolved = resolveImportPath(
-      'src/checkout/payment.ts',
-      '../utils/pricing',
-      repoFiles
-    )
+    const resolved = resolveImportPath('src/checkout/payment.ts', '../utils/pricing', repoFiles)
     expect(resolved).toBe('src/utils/pricing.ts')
 
     // 步骤 4：搜索引用
-    const refs = findReferencesInContent(
-      'src/checkout/payment.ts',
-      paymentContent,
-      ['calculateTotal']
-    )
+    const refs = findReferencesInContent('src/checkout/payment.ts', paymentContent, [
+      'calculateTotal'
+    ])
     expect(refs.length).toBeGreaterThanOrEqual(1)
     expect(refs[0].lineContent).toContain('calculateTotal(items)')
 
@@ -951,9 +889,7 @@ describe('端到端场景: Case B — 修改入口/内部函数，无外部引�
     expect(exported.length).toBeGreaterThanOrEqual(1)
 
     // 验证入口文件检测
-    const basename = 'src/main.ts'
-      .substring('src/main.ts'.lastIndexOf('/') + 1)
-      .toLowerCase()
+    const basename = 'src/main.ts'.substring('src/main.ts'.lastIndexOf('/') + 1).toLowerCase()
     expect(['main.ts', 'app.ts', 'server.ts', 'cli.ts']).toContain(basename)
   })
 
@@ -983,9 +919,7 @@ describe('端到端场景: Case B — 修改入口/内部函数，无外部引�
 const x = something()
 console.log('this file does not call it')
 `
-    const refs = findReferencesInContent('src/app.ts', otherFileContent, [
-      'unusedHelper'
-    ])
+    const refs = findReferencesInContent('src/app.ts', otherFileContent, ['unusedHelper'])
     expect(refs).toHaveLength(0)
 
     // 格式化：无引用 → 不包含 References 部分
@@ -1005,18 +939,13 @@ console.log('this file does not call it')
 +export function createMockUser(): User {
 +  return { name: 'test', id: 1 }
 +}`
-    const symbols = extractModifiedSymbols(
-      '__tests__/helpers/mock.test.ts',
-      diff
-    )
+    const symbols = extractModifiedSymbols('__tests__/helpers/mock.test.ts', diff)
     const exported = symbols.filter(s => s.isExported)
     expect(exported).toHaveLength(1)
 
     // 验证文件名被识别为测试文件（匹配 __tests__ 目录 和 .test.ts 后缀）
     const lower = '__tests__/helpers/mock.test.ts'.toLowerCase()
-    expect(
-      lower.includes('__tests__') || lower.endsWith('.test.ts')
-    ).toBe(true)
+    expect(lower.includes('__tests__') || lower.endsWith('.test.ts')).toBe(true)
   })
 })
 
@@ -1053,28 +982,17 @@ export function processPayment(items: Item[]): PaymentResult {
     const alias = pricingImport!.aliasMap['calculateTotal']
     if (alias) searchSymbols.push(alias)
 
-    const refs = findReferencesInContent(
-      'src/checkout/payment.ts',
-      paymentContent,
-      searchSymbols
-    )
+    const refs = findReferencesInContent('src/checkout/payment.ts', paymentContent, searchSymbols)
     // 应该找到 calcTotal(items) 这一行
     expect(refs.length).toBeGreaterThanOrEqual(1)
     expect(refs.some(r => r.lineContent.includes('calcTotal(items)'))).toBe(true)
   })
 
   test('路径别名：@/ 路径导入能正确解析', () => {
-    const repoFiles = new Set([
-      'src/utils/pricing.ts',
-      'src/checkout/payment.ts'
-    ])
+    const repoFiles = new Set(['src/utils/pricing.ts', 'src/checkout/payment.ts'])
 
     // @/utils/pricing 应解析到 src/utils/pricing.ts
-    const resolved = resolveImportPath(
-      'src/checkout/payment.ts',
-      '@/utils/pricing',
-      repoFiles
-    )
+    const resolved = resolveImportPath('src/checkout/payment.ts', '@/utils/pricing', repoFiles)
     expect(resolved).toBe('src/utils/pricing.ts')
   })
 
@@ -1160,11 +1078,9 @@ export function Dashboard() {
     expect(reExportResolved).toBe('src/utils/calculator.ts')
 
     // 引用搜索能在 Dashboard 中找到 calculateTotal
-    const refs = findReferencesInContent(
-      'src/pages/Dashboard.tsx',
-      dashboardContent,
-      ['calculateTotal']
-    )
+    const refs = findReferencesInContent('src/pages/Dashboard.tsx', dashboardContent, [
+      'calculateTotal'
+    ])
     expect(refs.length).toBeGreaterThanOrEqual(1)
     expect(refs.some(r => r.lineContent.includes('calculateTotal(cartItems)'))).toBe(true)
   })
@@ -1207,11 +1123,7 @@ const price = utils.formatPrice(total)
     expect(imports[0].importedSymbols).toEqual(['utils'])
 
     // 搜索 utils.calculateTotal 应能找到
-    const refs = findReferencesInContent(
-      'src/consumer.ts',
-      content,
-      ['utils.calculateTotal']
-    )
+    const refs = findReferencesInContent('src/consumer.ts', content, ['utils.calculateTotal'])
     expect(refs.length).toBeGreaterThanOrEqual(1)
     expect(refs.some(r => r.lineContent.includes('utils.calculateTotal(items)'))).toBe(true)
   })
@@ -1380,14 +1292,10 @@ export async function createOrder() {
   logError('Failed', String(err))
   logInfo('Cancelling order', orderId)
   logWarn('Order cancelled', orderId)
-}`,
+}`
     }
 
-    const repoFiles = new Set([
-      'src/utils/logger.ts',
-      'src/utils/index.ts',
-      ...Object.keys(files),
-    ])
+    const repoFiles = new Set(['src/utils/logger.ts', 'src/utils/index.ts', ...Object.keys(files)])
 
     // 模拟依赖图构建
     const deps: Array<{file: string; symbols: string[]; aliasMap: Record<string, string>}> = []
@@ -1423,12 +1331,16 @@ export async function createOrder() {
 
     // Step 6: 引用搜索
     const symbolNames = ['logInfo']
-    let allReferences: Array<{filename: string; symbolName: string; lineNumber: number; lineContent: string}> = []
+    let allReferences: Array<{
+      filename: string
+      symbolName: string
+      lineNumber: number
+      lineContent: string
+    }> = []
     for (const dep of deps) {
       const content = files[dep.file]
-      const relevantSymbols = dep.symbols.length > 0
-        ? symbolNames.filter(s => dep.symbols.includes(s))
-        : symbolNames
+      const relevantSymbols =
+        dep.symbols.length > 0 ? symbolNames.filter(s => dep.symbols.includes(s)) : symbolNames
       const searchSymbols = relevantSymbols.length > 0 ? relevantSymbols : symbolNames
 
       const refs = findReferencesInContent(dep.file, content, searchSymbols)
@@ -1436,7 +1348,10 @@ export async function createOrder() {
     }
 
     // 多引用聚合验证
-    console.log('All references:', allReferences.map(r => `${r.filename}:${r.lineNumber}: ${r.lineContent}`))
+    console.log(
+      'All references:',
+      allReferences.map(r => `${r.filename}:${r.lineNumber}: ${r.lineContent}`)
+    )
     // useCart: 2 refs, CartSummary: 1 ref, CheckoutForm: 1 ref, orderService: 3 refs = 7 total
     expect(allReferences.length).toBe(7)
 
@@ -1663,49 +1578,30 @@ describe('extractModifiedSymbols - Vue SFC', () => {
 
 describe('resolveImportPath - .vue extension', () => {
   test('无扩展名路径解析到 .vue 文件', () => {
-    const repoFiles = new Set([
-      'components/ProductCard.vue',
-      'components/ui/BaseButton.vue'
-    ])
+    const repoFiles = new Set(['components/ProductCard.vue', 'components/ui/BaseButton.vue'])
 
-    const result = resolveImportPath(
-      'pages/index.vue',
-      '../components/ProductCard',
-      repoFiles
-    )
+    const result = resolveImportPath('pages/index.vue', '../components/ProductCard', repoFiles)
     expect(result).toBe('components/ProductCard.vue')
   })
 
   test('显式 .vue 扩展名解析', () => {
     const repoFiles = new Set(['components/ui/BaseButton.vue'])
 
-    const result = resolveImportPath(
-      'components/CartSummary.vue',
-      './ui/BaseButton.vue',
-      repoFiles
-    )
+    const result = resolveImportPath('components/CartSummary.vue', './ui/BaseButton.vue', repoFiles)
     expect(result).toBe('components/ui/BaseButton.vue')
   })
 
   test('#components/ 别名解析', () => {
     const repoFiles = new Set(['components/AppHeader.vue'])
 
-    const result = resolveImportPath(
-      'layouts/default.vue',
-      '#components/AppHeader',
-      repoFiles
-    )
+    const result = resolveImportPath('layouts/default.vue', '#components/AppHeader', repoFiles)
     expect(result).toBe('components/AppHeader.vue')
   })
 
   test('解析 index.vue 目录入口', () => {
     const repoFiles = new Set(['components/ui/index.vue'])
 
-    const result = resolveImportPath(
-      'pages/index.vue',
-      '../components/ui',
-      repoFiles
-    )
+    const result = resolveImportPath('pages/index.vue', '../components/ui', repoFiles)
     expect(result).toBe('components/ui/index.vue')
   })
 })
@@ -1720,22 +1616,13 @@ describe('detectLanguage - Vue', () => {
 
 describe('filterByExtension - Vue', () => {
   test('按 .vue 扩展名过滤', () => {
-    const files = [
-      'components/Foo.vue',
-      'utils/helper.ts',
-      'pages/index.vue',
-      'README.md'
-    ]
+    const files = ['components/Foo.vue', 'utils/helper.ts', 'pages/index.vue', 'README.md']
     const result = filterByExtension(files, ['.vue'])
     expect(result).toEqual(['components/Foo.vue', 'pages/index.vue'])
   })
 
   test('.vue 包含在 typescript 扩展名组中', () => {
-    const files = [
-      'components/Foo.vue',
-      'utils/helper.ts',
-      'main.py'
-    ]
+    const files = ['components/Foo.vue', 'utils/helper.ts', 'main.py']
     const result = filterByExtension(files, ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.vue'])
     expect(result).toEqual(['components/Foo.vue', 'utils/helper.ts'])
   })

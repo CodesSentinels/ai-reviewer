@@ -269,25 +269,13 @@ and emphasize features visible to the end-user while omitting code-level details
  * 校验整数字符串（ARCH-010 fail closed）。
  * 拒绝 NaN、Infinity、浮点数、科学计数法（1e3 → parseInt=1，不符合语义）。
  */
-export function validateIntStr(
-  value: string,
-  platform: Platform,
-  field: string
-): string {
+export function validateIntStr(value: string, platform: Platform, field: string): string {
   const trimmed = value.trim()
   if (trimmed === '') {
-    throw new ConfigError(
-      `Empty value for integer field ${field}`,
-      platform,
-      field
-    )
+    throw new ConfigError(`Empty value for integer field ${field}`, platform, field)
   }
   if (!/^-?\d+$/.test(trimmed)) {
-    throw new ConfigError(
-      `Invalid integer value for ${field}: "${value}"`,
-      platform,
-      field
-    )
+    throw new ConfigError(`Invalid integer value for ${field}: "${value}"`, platform, field)
   }
   return trimmed
 }
@@ -296,25 +284,13 @@ export function validateIntStr(
  * 校验浮点数字符串（ARCH-010 fail closed）。
  * 允许小数点，拒绝 NaN、Infinity、科学计数法。
  */
-export function validateFloatStr(
-  value: string,
-  platform: Platform,
-  field: string
-): string {
+export function validateFloatStr(value: string, platform: Platform, field: string): string {
   const trimmed = value.trim()
   if (trimmed === '') {
-    throw new ConfigError(
-      `Empty value for numeric field ${field}`,
-      platform,
-      field
-    )
+    throw new ConfigError(`Empty value for numeric field ${field}`, platform, field)
   }
   if (!/^-?\d+(\.\d+)?$/.test(trimmed)) {
-    throw new ConfigError(
-      `Invalid numeric value for ${field}: "${value}"`,
-      platform,
-      field
-    )
+    throw new ConfigError(`Invalid numeric value for ${field}: "${value}"`, platform, field)
   }
   return trimmed
 }

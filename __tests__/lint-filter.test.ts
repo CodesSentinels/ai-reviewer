@@ -46,10 +46,7 @@ describe('filterByChangedLines', () => {
       mkResult('src/b.ts', 10) // file not in map
     ]
     const out = filterByChangedLines(results, map, 3)
-    expect(out.map(r => `${r.file}:${r.line}`)).toEqual([
-      'src/a.ts:10',
-      'src/a.ts:12'
-    ])
+    expect(out.map(r => `${r.file}:${r.line}`)).toEqual(['src/a.ts:10', 'src/a.ts:12'])
   })
 
   test('drops results when changedLineMap entry is empty', () => {

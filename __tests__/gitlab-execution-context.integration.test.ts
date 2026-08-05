@@ -168,9 +168,7 @@ describe('I2: GitLab fixture 全字段完整性快照', () => {
   ] as const)(
     '$label → 不产出 ExecutionContext，reason=$expectedReason',
     ({fixture, expectedReason}) => {
-      expect(() => createGitLabExecutionContext(fixture)).toThrow(
-        ExecutionContextError
-      )
+      expect(() => createGitLabExecutionContext(fixture)).toThrow(ExecutionContextError)
       try {
         createGitLabExecutionContext(fixture)
       } catch (e) {

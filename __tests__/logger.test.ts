@@ -8,12 +8,7 @@
  * - ARCH-015：GitLabLogger 模块不含 @actions/core 依赖
  */
 import {describe, expect, test, jest, beforeEach} from '@jest/globals'
-import {
-  type Logger,
-  setLogger,
-  getLogger,
-  resetLogger
-} from '../src/platform/logger'
+import {type Logger, setLogger, getLogger, resetLogger} from '../src/platform/logger'
 
 describe('Logger singleton', () => {
   beforeEach(() => {

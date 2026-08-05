@@ -32,9 +32,7 @@ export function handleExecCtxError(
   if (e instanceof ExecutionContextError) {
     onFailed(`Failed to build ExecutionContext: ${e.message}`)
   } else if (e instanceof Error) {
-    onFailed(
-      `Failed to build ExecutionContext: ${e.message}, backtrace: ${e.stack}`
-    )
+    onFailed(`Failed to build ExecutionContext: ${e.message}, backtrace: ${e.stack}`)
   } else {
     onFailed(`Failed to build ExecutionContext: ${e}`)
   }

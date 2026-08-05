@@ -132,13 +132,14 @@ export class Inputs {
       this.crossFileContext || 'No cross-file references detected.'
     )
     // 分析链：无论是否有值，都替换占位符（避免模板残留）
-    const analysisChainValue =
-      this.analysisChain || 'No analysis chain available.'
+    const analysisChainValue = this.analysisChain || 'No analysis chain available.'
     const hadPlaceholder = content.includes('$analysis_chain')
     content = content.replace('$analysis_chain', analysisChainValue)
     if (hadPlaceholder) {
       info(
-        `[render] $analysis_chain replaced: hasValue=${!!this.analysisChain}, valueLen=${analysisChainValue.length}, preview="${analysisChainValue.substring(0, 100).replace(/\n/g, '\\n')}"`
+        `[render] $analysis_chain replaced: hasValue=${!!this.analysisChain}, valueLen=${
+          analysisChainValue.length
+        }, preview="${analysisChainValue.substring(0, 100).replace(/\n/g, '\\n')}"`
       )
     }
     // 静态分析工具结果：仅在 lintContext 非空时替换。
@@ -148,10 +149,7 @@ export class Inputs {
     if (this.lintContext) {
       content = content.replace('$lint_context', this.lintContext)
     } else {
-      content = content.replace(
-        '$lint_context',
-        'No static analysis tool results available.'
-      )
+      content = content.replace('$lint_context', 'No static analysis tool results available.')
     }
     return content
   }

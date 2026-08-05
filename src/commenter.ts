@@ -43,16 +43,13 @@ export function initBotGreeting(icon: string, name: string): void {
 }
 
 /** 标识 bot 自动生成的代码审查评论 */
-export const COMMENT_TAG =
-  '<!-- This is an auto-generated comment by AI Reviewer -->'
+export const COMMENT_TAG = '<!-- This is an auto-generated comment by AI Reviewer -->'
 
 /** 标识 bot 自动生成的回复评论 */
-export const COMMENT_REPLY_TAG =
-  '<!-- This is an auto-generated reply by AI Reviewer -->'
+export const COMMENT_REPLY_TAG = '<!-- This is an auto-generated reply by AI Reviewer -->'
 
 /** 标识 bot 的摘要评论 */
-export const SUMMARIZE_TAG =
-  '<!-- This is an auto-generated comment: summarize by AI Reviewer -->'
+export const SUMMARIZE_TAG = '<!-- This is an auto-generated comment: summarize by AI Reviewer -->'
 
 /** 标识审查进行中的状态标签（开始） */
 export const IN_PROGRESS_START_TAG =
@@ -168,29 +165,17 @@ ${tag}`
 
   /** 从摘要评论中提取原始摘要内容 */
   getRawSummary(summary: string) {
-    return this.getContentWithinTags(
-      summary,
-      RAW_SUMMARY_START_TAG,
-      RAW_SUMMARY_END_TAG
-    )
+    return this.getContentWithinTags(summary, RAW_SUMMARY_START_TAG, RAW_SUMMARY_END_TAG)
   }
 
   /** 从摘要评论中提取精简摘要内容 */
   getShortSummary(summary: string) {
-    return this.getContentWithinTags(
-      summary,
-      SHORT_SUMMARY_START_TAG,
-      SHORT_SUMMARY_END_TAG
-    )
+    return this.getContentWithinTags(summary, SHORT_SUMMARY_START_TAG, SHORT_SUMMARY_END_TAG)
   }
 
   /** 从 PR 描述中提取用户原始描述（移除 bot 生成的发布说明部分） */
   getDescription(description: string) {
-    return this.removeContentWithinTags(
-      description,
-      DESCRIPTION_START_TAG,
-      DESCRIPTION_END_TAG
-    )
+    return this.removeContentWithinTags(description, DESCRIPTION_START_TAG, DESCRIPTION_END_TAG)
   }
 
   /** 从 PR 描述中提取发布说明内容 */
@@ -210,11 +195,7 @@ ${tag}`
   async updateDescription(pullNumber: number, message: string) {
     const platform = getPlatform()
     try {
-      const cr = await platform.getChangeRequest(
-        repo.owner,
-        repo.repo,
-        pullNumber
-      )
+      const cr = await platform.getChangeRequest(repo.owner, repo.repo, pullNumber)
       let body = ''
       if (cr.body) {
         body = cr.body
@@ -227,16 +208,9 @@ ${tag}`
         DESCRIPTION_END_TAG
       )
       const newDescription = `${description}\n${DESCRIPTION_START_TAG}\n${messageClean}\n${DESCRIPTION_END_TAG}`
-      await platform.updateChangeRequestBody(
-        repo.owner,
-        repo.repo,
-        pullNumber,
-        newDescription
-      )
+      await platform.updateChangeRequestBody(repo.owner, repo.repo, pullNumber, newDescription)
     } catch (e) {
-      getLogger().warning(
-        `Failed to get PR: ${e}, skipping adding release notes to description.`
-      )
+      getLogger().warning(`Failed to get PR: ${e}, skipping adding release notes to description.`)
     }
   }
 
@@ -254,12 +228,7 @@ ${tag}`
    * 将审查评论添加到缓冲区（不立即提交）
    * 所有缓冲的评论将在 submitReview() 中一次性提交
    */
-  async bufferReviewComment(
-    path: string,
-    startLine: number,
-    endLine: number,
-    message: string
-  ) {
+  async bufferReviewComment(path: string, startLine: number, endLine: number, message: string) {
     message = `${getCommentGreeting()}
 
 ${message}
@@ -315,9 +284,7 @@ ${statusMsg}
 
     if (this.reviewCommentsBuffer.length === 0) {
       // 没有审查评论时，跳过空审查提交（GitHub API 不允许无评论的 COMMENT 审查）
-      logger.info(
-        `Skipping empty review for PR #${pullNumber} — no review comments to submit`
-      )
+      logger.info(`Skipping empty review for PR #${pullNumber} — no review comments to submit`)
       return
     }
 
@@ -330,9 +297,7 @@ ${statusMsg}
         comment.startLine,
         comment.endLine
       )
-      const existingBotComments = existingComments.filter(c =>
-        c.body.includes(COMMENT_TAG)
-      )
+      const existingBotComments = existingComments.filter(c => c.body.includes(COMMENT_TAG))
       if (existingBotComments.length > 0) {
         // 检查该位置是否已 resolved
         const key = `${comment.path}:${comment.endLine}`
@@ -373,10 +338,7 @@ ${statusMsg}
       path: comment.path as string,
       body: comment.message as string,
       line: comment.endLine as number,
-      startLine:
-        comment.startLine !== comment.endLine
-          ? (comment.startLine as number)
-          : undefined,
+      startLine: comment.startLine !== comment.endLine ? (comment.startLine as number) : undefined,
       startSide: comment.startLine !== comment.endLine ? 'RIGHT' : undefined
     })
 
@@ -390,14 +352,10 @@ ${statusMsg}
         body
       )
 
-      logger.info(
-        `Submitting review for PR #${pullNumber}, total comments: ${submitted}`
-      )
+      logger.info(`Submitting review for PR #${pullNumber}, total comments: ${submitted}`)
     } catch (e) {
       // 批量提交失败时，降级为逐条提交
-      logger.warning(
-        `Failed to create review: ${e}. Falling back to individual comments.`
-      )
+      logger.warning(`Failed to create review: ${e}. Falling back to individual comments.`)
       await this.deletePendingReview(pullNumber)
       let commentCounter = 0
       for (const comment of commentsToSubmit) {
@@ -418,9 +376,7 @@ ${statusMsg}
         }
 
         commentCounter++
-        logger.info(
-          `Comment ${commentCounter}/${commentsToSubmit.length} posted`
-        )
+        logger.info(`Comment ${commentCounter}/${commentsToSubmit.length} posted`)
       }
     }
   }
@@ -431,11 +387,7 @@ ${statusMsg}
    * 在顶层评论下创建回复，并将顶层评论的标签从 COMMENT_TAG 更新为 COMMENT_REPLY_TAG，
    * 表示该评论链已有 bot 参与回复
    */
-  async reviewCommentReply(
-    pullNumber: number,
-    topLevelComment: any,
-    message: string
-  ) {
+  async reviewCommentReply(pullNumber: number, topLevelComment: any, message: string) {
     const platform = getPlatform()
     const logger = getLogger()
     const reply = `${getCommentGreeting()}
@@ -468,16 +420,8 @@ ${COMMENT_REPLY_TAG}
     }
     try {
       if (topLevelComment.body.includes(COMMENT_TAG)) {
-        const newBody = topLevelComment.body.replace(
-          COMMENT_TAG,
-          COMMENT_REPLY_TAG
-        )
-        await platform.updateReviewComment(
-          repo.owner,
-          repo.repo,
-          topLevelComment.id,
-          newBody
-        )
+        const newBody = topLevelComment.body.replace(COMMENT_TAG, COMMENT_REPLY_TAG)
+        await platform.updateReviewComment(repo.owner, repo.repo, topLevelComment.id, newBody)
       }
     } catch (error) {
       logger.warning(`Failed to update the top-level comment ${error}`)
@@ -506,12 +450,7 @@ ${COMMENT_REPLY_TAG}
   }
 
   /** 获取精确匹配指定行号范围的 review comment */
-  async getCommentsAtRange(
-    pullNumber: number,
-    path: string,
-    startLine: number,
-    endLine: number
-  ) {
+  async getCommentsAtRange(pullNumber: number, path: string, startLine: number, endLine: number) {
     const comments = await this.listReviewComments(pullNumber)
     return comments.filter(
       (comment: any) =>
@@ -540,12 +479,7 @@ ${COMMENT_REPLY_TAG}
     tag = '',
     threadStatusMap?: Map<string, boolean>
   ) {
-    const existingComments = await this.getCommentsWithinRange(
-      pullNumber,
-      path,
-      startLine,
-      endLine
-    )
+    const existingComments = await this.getCommentsWithinRange(pullNumber, path, startLine, endLine)
     // 找出所有顶层评论（没有 in_reply_to_id 的评论）
     const topLevelComments = []
     for (const comment of existingComments) {
@@ -558,10 +492,7 @@ ${COMMENT_REPLY_TAG}
     let allChains = ''
     let chainNum = 0
     for (const topLevelComment of topLevelComments) {
-      const chain = await this.composeCommentChain(
-        existingComments,
-        topLevelComment
-      )
+      const chain = await this.composeCommentChain(existingComments, topLevelComment)
       if (chain && chain.includes(tag)) {
         chainNum += 1
         // 从 threadStatusMap 推断该评论所在行是否已 resolved
@@ -596,9 +527,7 @@ ${chain}
       .filter((cmt: any) => cmt.in_reply_to_id === topLevelComment.id)
       .map((cmt: any) => `${cmt.user.login}: ${cmt.body}`)
 
-    conversationChain.unshift(
-      `${topLevelComment.user.login}: ${topLevelComment.body}`
-    )
+    conversationChain.unshift(`${topLevelComment.user.login}: ${topLevelComment.body}`)
 
     return conversationChain.join('\n---\n')
   }
@@ -610,14 +539,8 @@ ${chain}
   async getCommentChain(pullNumber: number, comment: any) {
     try {
       const reviewComments = await this.listReviewComments(pullNumber)
-      const topLevelComment = await this.getTopLevelComment(
-        reviewComments,
-        comment
-      )
-      const chain = await this.composeCommentChain(
-        reviewComments,
-        topLevelComment
-      )
+      const topLevelComment = await this.getTopLevelComment(reviewComments, comment)
+      const chain = await this.composeCommentChain(reviewComments, topLevelComment)
       return {chain, topLevelComment}
     } catch (e) {
       getLogger().warning(`Failed to get conversation chain: ${e}`)
@@ -665,11 +588,7 @@ ${chain}
     }
 
     try {
-      const comments = await getPlatform().listReviewComments(
-        repo.owner,
-        repo.repo,
-        target
-      )
+      const comments = await getPlatform().listReviewComments(repo.owner, repo.repo, target)
       // 映射为旧 Octokit 格式以保持 getCommentsWithinRange 等消费者兼容
       const mapped = comments.map(c => ({
         id: c.id,
@@ -699,12 +618,7 @@ ${chain}
   /** 创建新的 issue comment */
   async create(body: string, target: number) {
     try {
-      const result = await getPlatform().createComment(
-        repo.owner,
-        repo.repo,
-        target,
-        body
-      )
+      const result = await getPlatform().createComment(repo.owner, repo.repo, target, body)
       const data = {
         id: result.id,
         body: result.body,
@@ -730,28 +644,15 @@ ${chain}
     const logger = getLogger()
     try {
       const comments = await this.listComments(target)
-      const matchedComments = comments.filter(
-        (cmt: any) => cmt.body && cmt.body.includes(tag)
-      )
+      const matchedComments = comments.filter((cmt: any) => cmt.body && cmt.body.includes(tag))
 
       if (matchedComments.length > 0) {
-        await platform.updateComment(
-          repo.owner,
-          repo.repo,
-          matchedComments[0].id,
-          body
-        )
+        await platform.updateComment(repo.owner, repo.repo, matchedComments[0].id, body)
 
         for (let i = 1; i < matchedComments.length; i++) {
-          logger.info(
-            `Deleting duplicate comment ${matchedComments[i].id} with tag ${tag}`
-          )
+          logger.info(`Deleting duplicate comment ${matchedComments[i].id} with tag ${tag}`)
           try {
-            await platform.deleteComment(
-              repo.owner,
-              repo.repo,
-              matchedComments[i].id
-            )
+            await platform.deleteComment(repo.owner, repo.repo, matchedComments[i].id)
           } catch (e) {
             logger.warning(`Failed to delete duplicate comment: ${e}`)
           }
@@ -791,11 +692,7 @@ ${chain}
     }
 
     try {
-      const comments = await getPlatform().listComments(
-        repo.owner,
-        repo.repo,
-        target
-      )
+      const comments = await getPlatform().listComments(repo.owner, repo.repo, target)
       const mapped = comments.map(c => ({
         id: c.id,
         body: c.body,
@@ -869,10 +766,7 @@ ${chain}
    * 从 commit 列表中找到最近一次已审查的 commit ID
    * 从后向前遍历，返回第一个匹配的已审查 commit
    */
-  getHighestReviewedCommitId(
-    commitIds: string[],
-    reviewedCommitIds: string[]
-  ): string {
+  getHighestReviewedCommitId(commitIds: string[], reviewedCommitIds: string[]): string {
     for (let i = commitIds.length - 1; i >= 0; i--) {
       if (reviewedCommitIds.includes(commitIds[i])) {
         return commitIds[i]
@@ -924,8 +818,7 @@ ${commentBody}`
     const end = commentBody.indexOf(IN_PROGRESS_END_TAG)
     if (start !== -1 && end !== -1) {
       return (
-        commentBody.substring(0, start) +
-        commentBody.substring(end + IN_PROGRESS_END_TAG.length)
+        commentBody.substring(0, start) + commentBody.substring(end + IN_PROGRESS_END_TAG.length)
       )
     }
     return commentBody

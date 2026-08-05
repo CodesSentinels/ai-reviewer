@@ -16,9 +16,7 @@ export interface TriggerPayloadValidation {
   sourceTargetMismatch?: boolean
 }
 
-export function validateTriggerPayload(
-  payload: unknown
-): TriggerPayloadValidation {
+export function validateTriggerPayload(payload: unknown): TriggerPayloadValidation {
   if (payload == null || typeof payload !== 'object') {
     return {ok: false, reason: 'payload is not an object'}
   }

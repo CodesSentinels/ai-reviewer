@@ -21,11 +21,7 @@ import {info, warning} from '@actions/core'
 import {existsSync, mkdirSync, writeFileSync} from 'fs'
 import {tmpdir} from 'os'
 import {join} from 'path'
-import {
-  type InstallSpec,
-  type NpmInstallSpec,
-  type PipInstallSpec
-} from './types'
+import {type InstallSpec, type NpmInstallSpec, type PipInstallSpec} from './types'
 import {runCommand} from './adapters/exec'
 
 /**
@@ -53,9 +49,7 @@ export interface InstallResult {
  *
  * @param spec 适配器声明的安装方式（来自 ToolAdapter.installSpec）
  */
-export async function ensureToolInstalled(
-  spec: InstallSpec
-): Promise<InstallResult> {
+export async function ensureToolInstalled(spec: InstallSpec): Promise<InstallResult> {
   switch (spec.kind) {
     case 'npm':
       return await installViaNpm(spec)
@@ -103,8 +97,7 @@ async function installViaNpm(spec: NpmInstallSpec): Promise<InstallResult> {
             name: 'ai-reviewer-lint-tools',
             private: true,
             version: '0.0.0',
-            description:
-              'ai-reviewer 内部 lint 工具沙箱（自动管理，请勿手动修改）'
+            description: 'ai-reviewer 内部 lint 工具沙箱（自动管理，请勿手动修改）'
           },
           null,
           2
@@ -123,9 +116,7 @@ async function installViaNpm(spec: NpmInstallSpec): Promise<InstallResult> {
   // 3) 跑 npm install
   // version 缺省时不带 `@<range>`，npm 安装 latest。真实 Action 运行里 version 总会
   // 由 action.yml 的 *_version default 注入；缺省仅出现在未经 Action 的直接调用。
-  const installTarget = spec.version
-    ? `${spec.package}@${spec.version}`
-    : spec.package
+  const installTarget = spec.version ? `${spec.package}@${spec.version}` : spec.package
   info(`lint/installer: installing ${installTarget} → ${root}`)
   const result = await runCommand({
     command: 'npm',
@@ -161,9 +152,7 @@ async function installViaNpm(spec: NpmInstallSpec): Promise<InstallResult> {
     }
   }
   if (!existsSync(binPath)) {
-    warning(
-      `lint/installer: ${installTarget} installed but bin not at ${binPath}`
-    )
+    warning(`lint/installer: ${installTarget} installed but bin not at ${binPath}`)
     return {
       ok: false,
       reason: `package installed but bin not at ${binPath} (unexpected layout)`
@@ -264,8 +253,7 @@ async function installViaPip(spec: PipInstallSpec): Promise<InstallResult> {
 
   // 3) 跑 pip install
   const pipSpecifier = npmRangeToPipSpecifier(spec.version)
-  const pkgArg =
-    pipSpecifier.length > 0 ? `${spec.package}${pipSpecifier}` : spec.package
+  const pkgArg = pipSpecifier.length > 0 ? `${spec.package}${pipSpecifier}` : spec.package
   info(
     `lint/installer[pip]: installing ${spec.package} (range "${spec.version}" → pip "${pipSpecifier}") → ${targetDir}`
   )
@@ -293,15 +281,12 @@ async function installViaPip(spec: PipInstallSpec): Promise<InstallResult> {
   const elapsed = Date.now() - startedAt
   if (result.spawnError) {
     warning(
-      `lint/installer[pip]: spawn failed after ${elapsed}ms — ${
-        result.spawnErrorMessage ?? ''
-      }`
+      `lint/installer[pip]: spawn failed after ${elapsed}ms — ${result.spawnErrorMessage ?? ''}`
     )
     return {
       ok: false,
       reason:
-        result.spawnErrorMessage != null &&
-        result.spawnErrorMessage.includes('python3')
+        result.spawnErrorMessage != null && result.spawnErrorMessage.includes('python3')
           ? `python3 not found on runner: ${result.spawnErrorMessage}. ` +
             'ubuntu-latest GitHub-hosted runners ship Python 3 by default — ' +
             'if you are on a self-hosted runner, install Python 3.8+ first.'

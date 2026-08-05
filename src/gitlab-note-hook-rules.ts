@@ -15,17 +15,10 @@
  * 参考 docs/tasks/gitlab-note-hook-design.md 第 3.3/3.5 节。
  */
 
-export function isSelfNote(
-  actorLogin: string,
-  configuredPatUsername: string
-): boolean {
+export function isSelfNote(actorLogin: string, configuredPatUsername: string): boolean {
   return actorLogin.toLowerCase() === configuredPatUsername.toLowerCase()
 }
 
-export function buildNoteIdempotencyKey(
-  projectId: string,
-  mrIid: number,
-  noteId: number
-): string {
+export function buildNoteIdempotencyKey(projectId: string, mrIid: number, noteId: number): string {
   return `gitlab:${projectId}:${mrIid}:note:${noteId}:create`
 }

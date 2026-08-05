@@ -60,11 +60,7 @@ export async function fetchThreadStatusMap(params: {
   repo: string
   prNumber: number
 }): Promise<ThreadStatusMap> {
-  return getPlatform().fetchThreadStatusMap(
-    params.owner,
-    params.repo,
-    params.prNumber
-  )
+  return getPlatform().fetchThreadStatusMap(params.owner, params.repo, params.prNumber)
 }
 
 export async function fetchUnresolvedBotThreads(
@@ -121,15 +117,11 @@ export function isNetworkError(e: unknown): boolean {
 function simulateDebugError(threadId: string): Error | null {
   if (!threadId.startsWith('PRRT_debug_inject_')) return null
   if (threadId.includes('_permission_')) {
-    return new Error(
-      "Resource not accessible by integration (mutation 'resolveReviewThread')"
-    )
+    return new Error("Resource not accessible by integration (mutation 'resolveReviewThread')")
   }
   if (threadId.includes('_network_')) {
     // TODO: Maybe gitlab in the future, or other network errors, but for now just simulate a connection reset.
-    return new Error(
-      'request to https://api.github.com/graphql failed, reason: read ECONNRESET'
-    )
+    return new Error('request to https://api.github.com/graphql failed, reason: read ECONNRESET')
   }
   // 默认：node not found（无效的 global id）
   return new Error(
@@ -142,10 +134,7 @@ export function threadLabel(t: ReviewThread): string {
   if (t.path) {
     const loc = t.line != null ? `${t.path}:${t.line}` : t.path
     if (t.firstCommentBody) {
-      const snippet = t.firstCommentBody
-        .trim()
-        .replace(/\s+/g, ' ')
-        .slice(0, 60)
+      const snippet = t.firstCommentBody.trim().replace(/\s+/g, ' ').slice(0, 60)
       const ellipsis = snippet.length === 60 ? '…' : ''
       return `${loc} – "${snippet}${ellipsis}"`
     }
@@ -154,9 +143,7 @@ export function threadLabel(t: ReviewThread): string {
   return t.id
 }
 
-export async function batchResolve(
-  threads: ReviewThread[]
-): Promise<BatchResolveResult> {
+export async function batchResolve(threads: ReviewThread[]): Promise<BatchResolveResult> {
   const logger = getLogger()
   const limit = pLimit(6)
   let ok = 0
@@ -205,9 +192,7 @@ export async function batchResolve(
     )
   }
 
-  const permissionFailed = failedItems.filter(({error}) =>
-    isPermissionError(error)
-  )
+  const permissionFailed = failedItems.filter(({error}) => isPermissionError(error))
   const otherFailed = failedItems.filter(({error}) => !isPermissionError(error))
 
   if (permissionFailed.length > 0) {

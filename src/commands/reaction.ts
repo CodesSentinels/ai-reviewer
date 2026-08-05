@@ -40,17 +40,10 @@ const VALID_REACTIONS: readonly ReactionContent[] = [
 /**
  * 把 raw 配置归一化为合法的 ReactionContent；不合法或禁用时返回 null。
  */
-export function normalizeReaction(
-  raw: string | undefined
-): ReactionContent | null {
+export function normalizeReaction(raw: string | undefined): ReactionContent | null {
   if (raw == null) return null
   const trimmed = raw.trim().toLowerCase()
-  if (
-    trimmed === '' ||
-    trimmed === 'off' ||
-    trimmed === 'none' ||
-    trimmed === 'false'
-  ) {
+  if (trimmed === '' || trimmed === 'off' || trimmed === 'none' || trimmed === 'false') {
     return null
   }
   if ((VALID_REACTIONS as readonly string[]).includes(trimmed)) {
@@ -58,9 +51,7 @@ export function normalizeReaction(
   }
   getLogger().warning(
     `command_ack_reaction "${raw}" is not a valid GitHub reaction ` +
-      `(expected one of ${VALID_REACTIONS.join(
-        ', '
-      )}); ACK reaction will be skipped.`
+      `(expected one of ${VALID_REACTIONS.join(', ')}); ACK reaction will be skipped.`
   )
   return null
 }
@@ -86,9 +77,7 @@ export async function addAckReaction(params: AckReactionParams): Promise<void> {
   const logger = getLogger()
   try {
     const commentKind =
-      params.eventName === 'pull_request_review_comment'
-        ? 'review_comment'
-        : 'issue_comment'
+      params.eventName === 'pull_request_review_comment' ? 'review_comment' : 'issue_comment'
     await getPlatform().addReaction(
       params.owner,
       params.repo,
@@ -101,9 +90,7 @@ export async function addAckReaction(params: AckReactionParams): Promise<void> {
     )
   } catch (e) {
     logger.warning(
-      `addAckReaction failed (content=${content}, commentId=${
-        params.commentId
-      }): ${String(e)}`
+      `addAckReaction failed (content=${content}, commentId=${params.commentId}): ${String(e)}`
     )
   }
 }

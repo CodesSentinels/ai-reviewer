@@ -160,8 +160,7 @@ function parseTsImports(content: string): ImportInfo[] {
 
   // import { foo, bar } from './module'（排除 import type { ... }）
   // import { foo as bar } from './module' → importedSymbols: ['foo'], aliasMap: { foo: 'bar' }
-  const namedImportRe =
-    /import\s+(?!type\s)\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]/g
+  const namedImportRe = /import\s+(?!type\s)\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]/g
   let match
   while ((match = namedImportRe.exec(content)) !== null) {
     const aliasMap: Record<string, string> = {}
@@ -200,8 +199,7 @@ function parseTsImports(content: string): ImportInfo[] {
   }
 
   // import * as foo from './module'
-  const namespaceImportRe =
-    /import\s+\*\s+as\s+(\w+)\s+from\s+['"]([^'"]+)['"]/g
+  const namespaceImportRe = /import\s+\*\s+as\s+(\w+)\s+from\s+['"]([^'"]+)['"]/g
   while ((match = namespaceImportRe.exec(content)) !== null) {
     imports.push({
       importPath: match[2],
@@ -239,8 +237,7 @@ function parseTsImports(content: string): ImportInfo[] {
   }
 
   // const foo = require('./module')
-  const simpleRequireRe =
-    /(?:const|let|var)\s+(\w+)\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)/g
+  const simpleRequireRe = /(?:const|let|var)\s+(\w+)\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)/g
   while ((match = simpleRequireRe.exec(content)) !== null) {
     imports.push({
       importPath: match[2],
@@ -478,10 +475,7 @@ function parseJavaImports(content: string): ImportInfo[] {
  * @param fileDiff - 文件的 unified diff
  * @returns 被修改的符号列表
  */
-export function extractModifiedSymbols(
-  filename: string,
-  fileDiff: string
-): ModifiedSymbol[] {
+export function extractModifiedSymbols(filename: string, fileDiff: string): ModifiedSymbol[] {
   const language = detectLanguage(filename)
   const symbols: ModifiedSymbol[] = []
   const seen = new Set<string>()
@@ -503,13 +497,7 @@ export function extractModifiedSymbols(
     if (line.startsWith('@@')) {
       // 先处理上一个 hunk 的上下文函数
       if (hunkHasChanges && currentHunkContext != null) {
-        addHunkContextSymbol(
-          language,
-          currentHunkContext,
-          symbols,
-          seen,
-          filename
-        )
+        addHunkContextSymbol(language, currentHunkContext, symbols, seen, filename)
       }
       const hunkMatch = line.match(/^@@[^@]*@@\s*(.*)$/)
       currentHunkContext = hunkMatch?.[1]?.trim() || null
@@ -584,9 +572,7 @@ export function extractModifiedSymbols(
     const hasComponentMarker = symbols.some(s => s.name === '__vue_component__')
     if (hasComponentMarker) {
       // 从文件名派生 PascalCase 组件名：components/HeavyChart.vue → HeavyChart
-      const baseName = filename
-        .substring(filename.lastIndexOf('/') + 1)
-        .replace('.vue', '')
+      const baseName = filename.substring(filename.lastIndexOf('/') + 1).replace('.vue', '')
       const componentName = baseName.charAt(0).toUpperCase() + baseName.slice(1)
 
       // 移除标记，替换为组件名
@@ -691,10 +677,7 @@ export function findEnclosingExports(
   if (filename.endsWith('.vue')) {
     const scriptMatch = fileContent.match(/<script\b[^>]*>/)
     if (scriptMatch && scriptMatch.index != null) {
-      const beforeScript = fileContent.substring(
-        0,
-        scriptMatch.index + scriptMatch[0].length
-      )
+      const beforeScript = fileContent.substring(0, scriptMatch.index + scriptMatch[0].length)
       lineOffset = beforeScript.split('\n').length - 1
     }
     content = extractVueScriptContent(fileContent)
@@ -755,9 +738,7 @@ export function findEnclosingExports(
     const decl = exportDeclarations[i]
     const scopeStart = decl.line
     const scopeEnd =
-      i + 1 < exportDeclarations.length
-        ? exportDeclarations[i + 1].line - 1
-        : Infinity
+      i + 1 < exportDeclarations.length ? exportDeclarations[i + 1].line - 1 : Infinity
 
     // 检查是否有实际修改行在此导出的作用域内
     let hasModifiedLine = false
@@ -1170,9 +1151,7 @@ function hasReExportFrom(
  * @returns 完整的依赖分析上下文
  */
 export async function analyzeDependencies(
-  filesAndChanges: Array<
-    [string, string, string, Array<[number, number, string]>]
-  >,
+  filesAndChanges: Array<[string, string, string, Array<[number, number, string]>]>,
   repoFiles: string[],
   options: Options,
   concurrencyLimit: ReturnType<typeof pLimit>,
@@ -1185,9 +1164,7 @@ export async function analyzeDependencies(
 
   // 空文件树时跳过分析（getRepoFileTree 失败返回空数组）
   if (repoFiles.length === 0) {
-    getLogger().warning(
-      'dependency analysis: repo file tree is empty, skipping analysis'
-    )
+    getLogger().warning('dependency analysis: repo file tree is empty, skipping analysis')
     return {fileAnalyses}
   }
 
@@ -1209,17 +1186,10 @@ export async function analyzeDependencies(
     if (fileContent.length > 0) {
       // 优先复用预扫描的 touchedLines；缺失时就地 walk
       const touchedLines =
-        patchScans?.get(filename)?.touchedLines ??
-        scanPatch(fileDiff).touchedLines
-      const enclosingExports = findEnclosingExports(
-        filename,
-        fileContent,
-        touchedLines
-      )
+        patchScans?.get(filename)?.touchedLines ?? scanPatch(fileDiff).touchedLines
+      const enclosingExports = findEnclosingExports(filename, fileContent, touchedLines)
       for (const sym of enclosingExports) {
-        if (
-          !exportedSymbols.some(s => s.name === sym.name && s.type === sym.type)
-        ) {
+        if (!exportedSymbols.some(s => s.name === sym.name && s.type === sym.type)) {
           exportedSymbols.push(sym)
           getLogger().info(
             `dependency analysis [step 1]: ${filename} → enclosing export detected: ${sym.name}(${sym.type})`
@@ -1283,9 +1253,7 @@ export async function analyzeDependencies(
     getLogger().info(
       `dependency analysis [step 1.5]: filtered ${preFilterCount} → ${
         allModifiedSymbols.size
-      } files (removed ${
-        preFilterCount - allModifiedSymbols.size
-      } entry/test files)`
+      } files (removed ${preFilterCount - allModifiedSymbols.size} entry/test files)`
     )
   }
 
@@ -1310,18 +1278,11 @@ export async function analyzeDependencies(
   }
 
   // 并行获取 PR 内非自身文件的 head 版本内容
-  const prCandidates = filesAndChanges
-    .map(([f]) => f)
-    .filter(f => !allModifiedSymbols.has(f))
+  const prCandidates = filesAndChanges.map(([f]) => f).filter(f => !allModifiedSymbols.has(f))
 
   const prFetchPromises = prCandidates.map(f =>
     concurrencyLimit(async () => {
-      const content = await contentFetcher.getContent(
-        project.owner,
-        project.repo,
-        f,
-        headSha
-      )
+      const content = await contentFetcher.getContent(project.owner, project.repo, f, headSha)
       if (content != null) {
         fileContents.set(f, content)
       }
@@ -1336,11 +1297,7 @@ export async function analyzeDependencies(
 
     const imports = parseImports(content, candidateFile)
     for (const imp of imports) {
-      const resolvedPath = resolveImportPath(
-        candidateFile,
-        imp.importPath,
-        repoFilesSet
-      )
+      const resolvedPath = resolveImportPath(candidateFile, imp.importPath, repoFilesSet)
       if (resolvedPath != null && allModifiedSymbols.has(resolvedPath)) {
         const deps = dependencyGraph.get(resolvedPath) ?? []
         // 去重：同一文件多次 import 同一模块时合并符号和别名
@@ -1400,12 +1357,7 @@ export async function analyzeDependencies(
   // ===== 步骤 4: 并行获取外部候选文件内容 =====
   const fetchPromises = candidateFiles.map(f =>
     concurrencyLimit(async () => {
-      const content = await contentFetcher.getContent(
-        project.owner,
-        project.repo,
-        f,
-        headSha
-      )
+      const content = await contentFetcher.getContent(project.owner, project.repo, f, headSha)
       if (content != null) {
         fileContents.set(f, content)
       }
@@ -1427,11 +1379,7 @@ export async function analyzeDependencies(
     const imports = parseImports(content, candidateFile)
 
     for (const imp of imports) {
-      const resolvedPath = resolveImportPath(
-        candidateFile,
-        imp.importPath,
-        repoFilesSet
-      )
+      const resolvedPath = resolveImportPath(candidateFile, imp.importPath, repoFilesSet)
 
       if (resolvedPath != null && allModifiedSymbols.has(resolvedPath)) {
         const deps = dependencyGraph.get(resolvedPath) ?? []
@@ -1477,12 +1425,7 @@ export async function analyzeDependencies(
         : content
       if (searchContent.trim().length === 0) continue
 
-      const refs = findReferencesInContent(
-        candidateFile,
-        searchContent,
-        symbolNames,
-        1
-      )
+      const refs = findReferencesInContent(candidateFile, searchContent, symbolNames, 1)
       if (refs.length > 0) {
         deps.push({
           file: candidateFile,
@@ -1541,11 +1484,7 @@ export async function analyzeDependencies(
 
       const imports = parseImports(content, candidateFile)
       for (const imp of imports) {
-        const resolved = resolveImportPath(
-          candidateFile,
-          imp.importPath,
-          repoFilesSet
-        )
+        const resolved = resolveImportPath(candidateFile, imp.importPath, repoFilesSet)
         if (resolved != null && barrelFiles.includes(resolved)) {
           mergeDep(deps, candidateFile, imp)
           existingDepFiles.add(candidateFile)
@@ -1595,12 +1534,9 @@ export async function analyzeDependencies(
 
       // 仅搜索该依赖文件实际导入的符号（取交集），减少假阳性
       const relevantSymbols =
-        dep.symbols.length > 0
-          ? symbolNames.filter(s => dep.symbols.includes(s))
-          : symbolNames
+        dep.symbols.length > 0 ? symbolNames.filter(s => dep.symbols.includes(s)) : symbolNames
       // 如果该文件导入的符号与修改符号无交集，仍用全量搜索（可能是 namespace import）
-      const baseSymbols =
-        relevantSymbols.length > 0 ? relevantSymbols : symbolNames
+      const baseSymbols = relevantSymbols.length > 0 ? relevantSymbols : symbolNames
 
       // 扩展搜索列表：除原始符号名外，还搜索其在该文件中的别名
       const searchSymbols = [...baseSymbols]
@@ -1612,10 +1548,7 @@ export async function analyzeDependencies(
       }
 
       // default import：消费者用本地名引用默认导出（如 import calc from './utils' → 搜索 calc）
-      if (
-        dep.defaultImportName &&
-        !searchSymbols.includes(dep.defaultImportName)
-      ) {
+      if (dep.defaultImportName && !searchSymbols.includes(dep.defaultImportName)) {
         searchSymbols.push(dep.defaultImportName)
       }
 
@@ -1630,9 +1563,7 @@ export async function analyzeDependencies(
       }
 
       // 对 .vue 文件，提取 script 块内容再搜索引用，避免 template 误匹配
-      const searchContent = dep.file.endsWith('.vue')
-        ? extractVueScriptContent(content)
-        : content
+      const searchContent = dep.file.endsWith('.vue') ? extractVueScriptContent(content) : content
 
       const refs = findReferencesInContent(
         dep.file,
@@ -1657,9 +1588,7 @@ export async function analyzeDependencies(
 
       if (refs.length > 0) {
         getLogger().info(
-          `dependency analysis [step 6]: ✓ ${dep.file} → ${
-            refs.length
-          } references found: [${refs
+          `dependency analysis [step 6]: ✓ ${dep.file} → ${refs.length} references found: [${refs
             .map(r => `${r.symbolName}:L${r.lineNumber}`)
             .join(', ')}]`
         )
@@ -1737,9 +1666,7 @@ export function formatCrossFileContext(analysis: FileDependencyInfo): string {
 
   // 第 2 部分：依赖文件列表
   if (analysis.dependentFiles.length > 0) {
-    parts.push(
-      `### Files that import from this file (${analysis.dependentFiles.length}):`
-    )
+    parts.push(`### Files that import from this file (${analysis.dependentFiles.length}):`)
     // 最多展示 10 个依赖文件
     const displayFiles = analysis.dependentFiles.slice(0, 10)
     for (const f of displayFiles) {
@@ -1892,11 +1819,7 @@ export function formatDependencySummary(ctx: DependencyContext): string {
     if (symbols.length === 0) {
       lines.push('- No exported symbols modified')
     } else {
-      lines.push(
-        `- Modified exports: ${symbols
-          .map(s => `\`${s.name}\` (${s.type})`)
-          .join(', ')}`
-      )
+      lines.push(`- Modified exports: ${symbols.map(s => `\`${s.name}\` (${s.type})`).join(', ')}`)
     }
 
     if (refs.length === 0) {
@@ -1909,9 +1832,7 @@ export function formatDependencySummary(ctx: DependencyContext): string {
         list.push(ref.symbolName)
         byFile.set(ref.filename, list)
       }
-      lines.push(
-        `- Referenced by ${byFile.size} file${byFile.size > 1 ? 's' : ''}:`
-      )
+      lines.push(`- Referenced by ${byFile.size} file${byFile.size > 1 ? 's' : ''}:`)
       for (const [refFile, syms] of byFile) {
         const unique = [...new Set(syms)]
         lines.push(`  - ${refFile} → ${unique.map(s => `\`${s}\``).join(', ')}`)

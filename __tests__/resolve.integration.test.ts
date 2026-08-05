@@ -258,51 +258,32 @@ describeIntegration('resolve command — integration with GitHub API', () => {
   // ── Tests ─────────────────────────────────────────────────────────────────────
 
   test('1. fetchUnresolvedBotThreads 能找到 Bot 发出的 2 条未解决 review thread，且 path/line/firstCommentBody 已填充', async () => {
-    const threads = await fetchUnresolvedBotThreads(
-      {owner: OWNER, repo: REPO, prNumber},
-      botLogin
-    )
+    const threads = await fetchUnresolvedBotThreads({owner: OWNER, repo: REPO, prNumber}, botLogin)
 
     console.log(`  找到 ${threads.length} 条未解决 thread`)
     threads.forEach((t, i) =>
       console.log(
         `  Thread[${i}]: id=${t.id} isResolved=${t.isResolved} author=${t.firstCommentAuthorLogin}` +
-          ` path=${t.path} line=${t.line} body="${t.firstCommentBody?.slice(
-            0,
-            40
-          )}"`
+          ` path=${t.path} line=${t.line} body="${t.firstCommentBody?.slice(0, 40)}"`
       )
     )
 
     expect(threads.length).toBe(2)
     expect(threads.every(t => !t.isResolved)).toBe(true)
-    expect(threads.every(t => t.firstCommentAuthorLogin === botLogin)).toBe(
-      true
-    )
+    expect(threads.every(t => t.firstCommentAuthorLogin === botLogin)).toBe(true)
 
     // 新字段断言
     expect(threads.every(t => t.path === filePath)).toBe(true)
     expect(threads.map(t => t.line).sort()).toEqual([3, 5])
     expect(
-      threads.every(
-        t =>
-          typeof t.firstCommentBody === 'string' &&
-          t.firstCommentBody.length > 0
-      )
+      threads.every(t => typeof t.firstCommentBody === 'string' && t.firstCommentBody.length > 0)
     ).toBe(true)
-    expect(
-      threads.some(t => t.firstCommentBody?.includes('第一条审查意见'))
-    ).toBe(true)
-    expect(
-      threads.some(t => t.firstCommentBody?.includes('第二条审查意见'))
-    ).toBe(true)
+    expect(threads.some(t => t.firstCommentBody?.includes('第一条审查意见'))).toBe(true)
+    expect(threads.some(t => t.firstCommentBody?.includes('第二条审查意见'))).toBe(true)
   }, 30_000)
 
   test('2. batchResolve 将所有 thread 标记为已解决，resolve 后 fetch 返回空列表', async () => {
-    const threads = await fetchUnresolvedBotThreads(
-      {owner: OWNER, repo: REPO, prNumber},
-      botLogin
-    )
+    const threads = await fetchUnresolvedBotThreads({owner: OWNER, repo: REPO, prNumber}, botLogin)
 
     const {ok, failed} = await batchResolve(threads)
     console.log(`  resolve 结果: ok=${ok} failed=${failed}`)
@@ -327,14 +308,10 @@ describeIntegration('resolve command — integration with GitHub API', () => {
       firstCommentBody: '🤖 [集成测试-T5] 模拟解决失败用的假 thread'
     }
 
-    const warnSpy = jest
-      .spyOn(actionsCore, 'warning')
-      .mockImplementation(() => {})
+    const warnSpy = jest.spyOn(actionsCore, 'warning').mockImplementation(() => {})
     try {
       const {ok, failed, errors} = await batchResolve([fakeThread])
-      console.log(
-        `  batchResolve 结果: ok=${ok} failed=${failed} errorMsg="${errors[0]?.message}"`
-      )
+      console.log(`  batchResolve 结果: ok=${ok} failed=${failed} errorMsg="${errors[0]?.message}"`)
 
       expect(ok).toBe(0)
       expect(failed).toBe(1)
@@ -369,9 +346,7 @@ describeIntegration('resolve command — integration with GitHub API', () => {
       botLogin
     )
     expect(realThreads.length).toBe(1)
-    console.log(
-      `  获取到真实 thread: path=${realThreads[0].path} line=${realThreads[0].line}`
-    )
+    console.log(`  获取到真实 thread: path=${realThreads[0].path} line=${realThreads[0].line}`)
 
     const fakeThread = {
       id: 'PRRT_nonexistent_fake_id_for_mixed_test',
@@ -382,9 +357,7 @@ describeIntegration('resolve command — integration with GitHub API', () => {
       firstCommentBody: '🤖 [集成测试-T6] 模拟失败项'
     }
 
-    const warnSpy = jest
-      .spyOn(actionsCore, 'warning')
-      .mockImplementation(() => {})
+    const warnSpy = jest.spyOn(actionsCore, 'warning').mockImplementation(() => {})
     try {
       const {ok, failed} = await batchResolve([...realThreads, fakeThread])
       console.log(`  batchResolve 结果: ok=${ok} failed=${failed}`)
@@ -450,14 +423,9 @@ describeIntegration('resolve command — integration with GitHub API', () => {
       }
     ]
 
-    const warnSpy = jest
-      .spyOn(actionsCore, 'warning')
-      .mockImplementation(() => {})
+    const warnSpy = jest.spyOn(actionsCore, 'warning').mockImplementation(() => {})
     try {
-      const {ok, failed, errors} = await batchResolve([
-        ...realThreads,
-        ...fakeThreads
-      ])
+      const {ok, failed, errors} = await batchResolve([...realThreads, ...fakeThreads])
       console.log(`  batchResolve 结果: ok=${ok} failed=${failed}`)
 
       expect(ok).toBe(2)

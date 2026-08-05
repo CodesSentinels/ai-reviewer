@@ -18,17 +18,11 @@ jest.mock('../src/platform/logger', () => ({
   })
 }))
 
-import {
-  getPermission,
-  canExecute,
-  _resetPermissionCache
-} from '../src/commands/permission'
+import {getPermission, canExecute, _resetPermissionCache} from '../src/commands/permission'
 import type {CommandHandler} from '../src/commands/types'
 
 const mockResolve = (permission: string) =>
-  (mockGetCollaboratorPermission as jest.Mock).mockResolvedValue(
-    permission as never
-  )
+  (mockGetCollaboratorPermission as jest.Mock).mockResolvedValue(permission as never)
 
 const mockReject = (err: Error) =>
   (mockGetCollaboratorPermission as jest.Mock).mockRejectedValue(err as never)

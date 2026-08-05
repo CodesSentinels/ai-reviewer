@@ -10,10 +10,7 @@
  */
 import type {CommandHandler, CommandContext, CommandResult} from '../types'
 import {getReviewState, setReviewState} from '../../review-state'
-import {
-  clearReviewedCommitIds,
-  isHeadAlreadyReviewed
-} from '../../review-commit-ids'
+import {clearReviewedCommitIds, isHeadAlreadyReviewed} from '../../review-commit-ids'
 import {PRIMARY_BOT_MENTION} from '../../constants'
 
 function notImplemented(name: string): CommandHandler['execute'] {
@@ -57,15 +54,14 @@ export const fullReviewStub: CommandHandler = {
   needsAck: true,
   minPermission: 'write',
   async execute(ctx: CommandContext): Promise<CommandResult> {
-    if (ctx.triggerReview == null)
-      return await notImplemented('full review')(ctx)
-    const alreadyReviewed = await isHeadAlreadyReviewed(
-      ctx.prNumber,
-      ctx.headSha
-    )
+    if (ctx.triggerReview == null) return await notImplemented('full review')(ctx)
+    const alreadyReviewed = await isHeadAlreadyReviewed(ctx.prNumber, ctx.headSha)
     if (alreadyReviewed) {
       return {
-        message: `✅ Full review finished.\n\n> **Note:** The current HEAD (\`${ctx.headSha.slice(0, 7)}\`) has already been reviewed. No new changes detected since the last review.`
+        message: `✅ Full review finished.\n\n> **Note:** The current HEAD (\`${ctx.headSha.slice(
+          0,
+          7
+        )}\`) has already been reviewed. No new changes detected since the last review.`
       }
     }
     await ctx.triggerReview('full')

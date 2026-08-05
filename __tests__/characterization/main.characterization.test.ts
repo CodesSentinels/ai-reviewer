@@ -90,28 +90,21 @@ jest.mock('../../src/bot', () => ({
 }))
 
 const reviewState = {
-  codeReview: jest
-    .fn<(...a: any[]) => Promise<void>>()
-    .mockResolvedValue(undefined)
+  codeReview: jest.fn<(...a: any[]) => Promise<void>>().mockResolvedValue(undefined)
 }
 jest.mock('../../src/review', () => ({
   codeReview: (...a: any[]) => reviewState.codeReview(...a)
 }))
 
 const commandHandlerState = {
-  handleCommentEvent: jest
-    .fn<(...a: any[]) => Promise<void>>()
-    .mockResolvedValue(undefined)
+  handleCommentEvent: jest.fn<(...a: any[]) => Promise<void>>().mockResolvedValue(undefined)
 }
 jest.mock('../../src/command-handler', () => ({
-  handleCommentEvent: (...a: any[]) =>
-    commandHandlerState.handleCommentEvent(...a)
+  handleCommentEvent: (...a: any[]) => commandHandlerState.handleCommentEvent(...a)
 }))
 
 const earlyReactionState = {
-  tryEarlyReaction: jest
-    .fn<(...a: any[]) => Promise<void>>()
-    .mockResolvedValue(undefined)
+  tryEarlyReaction: jest.fn<(...a: any[]) => Promise<void>>().mockResolvedValue(undefined)
 }
 jest.mock('../../src/commands/early-reaction', () => ({
   tryEarlyReaction: (...a: any[]) => earlyReactionState.tryEarlyReaction(...a)
@@ -141,9 +134,7 @@ describe('main.ts run() — 改造前事件分发行为基线', () => {
       max_dependency_files: '50',
       debug_resolve_inject_failures: '0'
     }
-    coreState.getInput.mockImplementation(
-      (name: string) => numericDefaults[name] ?? ''
-    )
+    coreState.getInput.mockImplementation((name: string) => numericDefaults[name] ?? '')
     coreState.getBooleanInput.mockReturnValue(false)
     coreState.getMultilineInput.mockReturnValue([])
     reviewState.codeReview.mockResolvedValue(undefined)
@@ -169,8 +160,7 @@ describe('main.ts run() — 改造前事件分发行为基线', () => {
     expect(commandHandlerState.handleCommentEvent).not.toHaveBeenCalled()
     expect(earlyReactionState.tryEarlyReaction).not.toHaveBeenCalled()
 
-    const [execCtx, lightBot, heavyBot] = reviewState.codeReview.mock
-      .calls[0] as any[]
+    const [execCtx, lightBot, heavyBot] = reviewState.codeReview.mock.calls[0] as any[]
     expect(execCtx.eventKind).toBe('pr_opened')
     expect(execCtx.changeRequestId).toBe(42)
     expect(lightBot).toBe(botInstance)
@@ -240,9 +230,7 @@ describe('main.ts run() — 改造前事件分发行为基线', () => {
     expect(reviewState.codeReview).not.toHaveBeenCalled()
     expect(commandHandlerState.handleCommentEvent).not.toHaveBeenCalled()
     expect(coreState.setFailed).toHaveBeenCalledTimes(1)
-    expect(coreState.setFailed.mock.calls[0][0]).toContain(
-      'Configuration error'
-    )
+    expect(coreState.setFailed.mock.calls[0][0]).toContain('Configuration error')
     expect(coreState.setFailed.mock.calls[0][0]).toContain('max_files')
   })
 
@@ -280,8 +268,6 @@ describe('main.ts run() — 改造前事件分发行为基线', () => {
     expect(reviewState.codeReview).not.toHaveBeenCalled()
     expect(commandHandlerState.handleCommentEvent).not.toHaveBeenCalled()
     expect(coreState.setFailed).toHaveBeenCalledTimes(1)
-    expect(coreState.setFailed.mock.calls[0][0]).toContain(
-      'Failed to build ExecutionContext'
-    )
+    expect(coreState.setFailed.mock.calls[0][0]).toContain('Failed to build ExecutionContext')
   })
 })

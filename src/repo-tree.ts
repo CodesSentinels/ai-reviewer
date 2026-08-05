@@ -68,9 +68,7 @@ export async function getRepoFileTree(
   fetcher: TreeFetcher
 ): Promise<string[]> {
   const logger = getLogger()
-  const cacheKey = `${project.platform ?? 'github'}:${project.owner}/${
-    project.repo
-  }@${ref}`
+  const cacheKey = `${project.platform ?? 'github'}:${project.owner}/${project.repo}@${ref}`
 
   // 如果缓存命中，直接返回
   if (cachedTree != null && cachedTreeKey === cacheKey) {
@@ -125,10 +123,7 @@ export function detectLanguage(filename: string): Language {
  * @param extensions - 允许的扩展名列表（如 ['.ts', '.js']）
  * @returns 匹配的文件路径
  */
-export function filterByExtension(
-  files: string[],
-  extensions: string[]
-): string[] {
+export function filterByExtension(files: string[], extensions: string[]): string[] {
   const exts = new Set(extensions.map(e => e.toLowerCase()))
   return files.filter(f => {
     const idx = f.lastIndexOf('.')
@@ -218,28 +213,14 @@ function resolveRelativePath(
 }
 
 /** 尝试直接匹配、补全扩展名、补全 index 文件 */
-function tryResolveWithExtensions(
-  basePath: string,
-  repoFilesSet: Set<string>
-): string | null {
+function tryResolveWithExtensions(basePath: string, repoFilesSet: Set<string>): string | null {
   // 如果路径本身已存在（如导入 JSON 等带扩展名的文件）
   if (repoFilesSet.has(basePath)) {
     return basePath
   }
 
   // 尝试补全扩展名
-  const extensions = [
-    '.ts',
-    '.tsx',
-    '.js',
-    '.jsx',
-    '.mjs',
-    '.cjs',
-    '.vue',
-    '.py',
-    '.go',
-    '.java'
-  ]
+  const extensions = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.vue', '.py', '.go', '.java']
   for (const ext of extensions) {
     if (repoFilesSet.has(basePath + ext)) {
       return basePath + ext
@@ -271,14 +252,9 @@ function tryResolveWithExtensions(
  * @param modifiedFiles - PR 中被修改的文件列表
  * @returns 按优先级排序后的文件列表
  */
-export function sortByProximity(
-  candidateFiles: string[],
-  modifiedFiles: string[]
-): string[] {
+export function sortByProximity(candidateFiles: string[], modifiedFiles: string[]): string[] {
   // 收集所有修改文件的目录
-  const modifiedDirs = new Set(
-    modifiedFiles.map(f => f.substring(0, f.lastIndexOf('/')))
-  )
+  const modifiedDirs = new Set(modifiedFiles.map(f => f.substring(0, f.lastIndexOf('/'))))
 
   // 计算优先级分数：同目录 = 0，同父目录 = 1，其他 = 2
   const getScore = (file: string): number => {

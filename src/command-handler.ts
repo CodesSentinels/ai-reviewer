@@ -34,9 +34,7 @@ export interface HandleCommentEventDeps {
   prompts: Prompts
 }
 
-export async function handleCommentEvent(
-  deps: HandleCommentEventDeps
-): Promise<void> {
+export async function handleCommentEvent(deps: HandleCommentEventDeps): Promise<void> {
   bootstrapCommands()
 
   const triggerReview = async (mode: ReviewCommandMode): Promise<void> => {
@@ -49,18 +47,11 @@ export async function handleCommentEvent(
       throw new Error('OpenAI bot is unavailable for review command')
     }
 
-    await codeReview(
-      deps.execCtx,
-      bots.lightBot,
-      bots.heavyBot,
-      deps.options,
-      deps.prompts,
-      {
-        mode: mode === 'incremental' ? 'incremental' : 'full',
-        source: 'command',
-        summaryOnly: mode === 'summary'
-      }
-    )
+    await codeReview(deps.execCtx, bots.lightBot, bots.heavyBot, deps.options, deps.prompts, {
+      mode: mode === 'incremental' ? 'incremental' : 'full',
+      source: 'command',
+      summaryOnly: mode === 'summary'
+    })
   }
 
   const outcome = await dispatchCommentEvent({
@@ -73,12 +64,9 @@ export async function handleCommentEvent(
 
   if (outcome.kind === 'fallback_conversation') {
     // 行级评论与主评论区对话共用 heavyBot；仅在需要时构造。
-    const bots =
-      deps.heavyBot != null ? {heavyBot: deps.heavyBot} : deps.getReviewBots?.()
+    const bots = deps.heavyBot != null ? {heavyBot: deps.heavyBot} : deps.getReviewBots?.()
     if (bots == null) {
-      info(
-        'commentEvent: conversation fallback skipped (OpenAI bot unavailable)'
-      )
+      info('commentEvent: conversation fallback skipped (OpenAI bot unavailable)')
       return
     }
 
@@ -86,20 +74,10 @@ export async function handleCommentEvent(
       // 行级评论对话式追问（含意图识别 / 轮次上限 / 上下文截断）。
       // handleConversation 与 handleIssueConversation 都会回帖，按事件类型二选一，
       // **不可同时调用**，否则重复回复 + 双倍 LLM 开销。
-      await handleConversation(
-        deps.execCtx,
-        bots.heavyBot,
-        deps.options,
-        deps.prompts
-      )
+      await handleConversation(deps.execCtx, bots.heavyBot, deps.options, deps.prompts)
     } else if (deps.execCtx.eventKind === 'comment_created') {
       // PR 主评论区对话式追问（整个 PR 上下文 + 幂等去重 + 无关问题婉拒）。
-      await handleIssueConversation(
-        deps.execCtx,
-        bots.heavyBot,
-        deps.options,
-        deps.prompts
-      )
+      await handleIssueConversation(deps.execCtx, bots.heavyBot, deps.options, deps.prompts)
     } else {
       info(
         `commentEvent: conversation fallback skipped (unsupported eventKind ${deps.execCtx.eventKind})`

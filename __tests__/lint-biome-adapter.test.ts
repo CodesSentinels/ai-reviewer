@@ -117,10 +117,7 @@ describe('BiomeAdapter — github reporter 解析', () => {
 
     const adapter = new BiomeAdapter()
     await adapter.detect(tmpRoot)
-    const findings = await adapter.scan(
-      ['src/a.ts', 'src/b.ts', 'src/c.ts'],
-      tmpRoot
-    )
+    const findings = await adapter.scan(['src/a.ts', 'src/b.ts', 'src/c.ts'], tmpRoot)
 
     expect(findings).toHaveLength(3)
     expect(findings[0].severity).toBe('error')
@@ -215,16 +212,9 @@ describe('BiomeAdapter — github reporter 解析', () => {
     await adapter.scan(['src/foo.ts'], tmpRoot)
 
     // 第二次 runCommand 调用（scan）的参数
-    const scanCall = runCommandMock.mock.calls[1]?.[0] as
-      | {args: string[]; cwd: string}
-      | undefined
+    const scanCall = runCommandMock.mock.calls[1]?.[0] as {args: string[]; cwd: string} | undefined
     expect(scanCall?.args).toEqual(
-      expect.arrayContaining([
-        'check',
-        '--reporter=github',
-        '--max-diagnostics=999',
-        'src/foo.ts'
-      ])
+      expect.arrayContaining(['check', '--reporter=github', '--max-diagnostics=999', 'src/foo.ts'])
     )
   })
 })

@@ -196,9 +196,7 @@ export const handleConversation = async (
 
   // ===== 1. 事件与 payload 校验 =====
   if (execCtx.eventKind !== 'review_comment_created') {
-    logger.info(
-      `conversation: skip non review_comment event (${execCtx.eventKind})`
-    )
+    logger.info(`conversation: skip non review_comment event (${execCtx.eventKind})`)
     return
   }
   const payload = execCtx.raw as any
@@ -239,10 +237,7 @@ export const handleConversation = async (
   inputs.filename = comment.path ?? ''
 
   // ===== 3. Thread 对话历史收集 =====
-  const {chain: rawChain, topLevelComment} = await commenter.getCommentChain(
-    pullNumber,
-    comment
-  )
+  const {chain: rawChain, topLevelComment} = await commenter.getCommentChain(pullNumber, comment)
   if (!topLevelComment) {
     logger.warning('conversation: cannot locate top-level comment, abort')
     return
@@ -262,9 +257,7 @@ export const handleConversation = async (
   // ===== 5. 对话轮次上限控制 =====
   const turns = countBotTurns(rawChain)
   if (turns >= MAX_CONVERSATION_TURNS) {
-    logger.info(
-      `conversation: turn limit reached (${turns}/${MAX_CONVERSATION_TURNS})`
-    )
+    logger.info(`conversation: turn limit reached (${turns}/${MAX_CONVERSATION_TURNS})`)
     await commenter.reviewCommentReply(
       pullNumber,
       topLevelComment,
@@ -290,9 +283,7 @@ export const handleConversation = async (
       fileDiff = file.patch
     }
   } catch (e) {
-    logger.warning(
-      `conversation: failed to get file diff: ${e}, continue without it`
-    )
+    logger.warning(`conversation: failed to get file diff: ${e}, continue without it`)
   }
 
   // 评论本身没有 diff 片段时，退化为使用完整文件 diff
@@ -315,10 +306,7 @@ export const handleConversation = async (
 
   if (tokens > options.heavyTokenLimits.requestTokens) {
     // 对话链可能仍过长，进一步压缩后重试一次
-    inputs.commentChain = truncateConversationChain(
-      rawChain,
-      Math.floor(MAX_CHAIN_CHARS / 2)
-    )
+    inputs.commentChain = truncateConversationChain(rawChain, Math.floor(MAX_CHAIN_CHARS / 2))
     tokens = getTokenCount(prompts.renderComment(inputs))
   }
   if (tokens > options.heavyTokenLimits.requestTokens) {
@@ -336,8 +324,7 @@ export const handleConversation = async (
     const fileDiffTokens = getTokenCount(fileDiff)
     if (
       fileDiffCount > 0 &&
-      tokens + fileDiffTokens * fileDiffCount <=
-        options.heavyTokenLimits.requestTokens
+      tokens + fileDiffTokens * fileDiffCount <= options.heavyTokenLimits.requestTokens
     ) {
       tokens += fileDiffTokens * fileDiffCount
       inputs.fileDiff = fileDiff
@@ -436,16 +423,12 @@ export const handleIssueConversation = async (
 
   // ===== 1. 事件与 payload 校验 =====
   if (execCtx.eventKind !== 'comment_created') {
-    logger.info(
-      `issue-conversation: skip non issue_comment event (${execCtx.eventKind})`
-    )
+    logger.info(`issue-conversation: skip non issue_comment event (${execCtx.eventKind})`)
     return
   }
   const payload = execCtx.raw as any
   if (!payload || payload.action !== 'created') {
-    logger.info(
-      'issue-conversation: skip (missing payload or action != created)'
-    )
+    logger.info('issue-conversation: skip (missing payload or action != created)')
     return
   }
   // 只处理 PR 上的评论（GitHub 中 PR 复用 issue 模型）
@@ -477,9 +460,7 @@ export const handleIssueConversation = async (
       authorIsBot: false
     })
   ) {
-    logger.info(
-      'issue-conversation: not a follow-up question (no @mention), skip'
-    )
+    logger.info('issue-conversation: not a follow-up question (no @mention), skip')
     return
   }
 
@@ -492,9 +473,7 @@ export const handleIssueConversation = async (
     (c: any) => typeof c.body === 'string' && c.body.includes(replyTag)
   )
   if (alreadyReplied) {
-    logger.info(
-      `issue-conversation: skip duplicate reply for comment ${comment.id}`
-    )
+    logger.info(`issue-conversation: skip duplicate reply for comment ${comment.id}`)
     return
   }
 
@@ -502,9 +481,7 @@ export const handleIssueConversation = async (
   const rawChain = composeIssueCommentChain(allComments, comment.id)
   const turns = countBotTurns(rawChain)
   if (turns >= MAX_CONVERSATION_TURNS) {
-    logger.info(
-      `issue-conversation: turn limit reached (${turns}/${MAX_CONVERSATION_TURNS})`
-    )
+    logger.info(`issue-conversation: turn limit reached (${turns}/${MAX_CONVERSATION_TURNS})`)
     await postIssueReply(
       commenter,
       pullNumber,
@@ -528,30 +505,20 @@ export const handleIssueConversation = async (
   try {
     const platform = getPlatform()
     const cr = await platform.getChangeRequest(repoOwner, repoName, pullNumber)
-    const diffResult = await platform.compareDiff(
-      repoOwner,
-      repoName,
-      cr.baseSha,
-      cr.headSha
-    )
+    const diffResult = await platform.compareDiff(repoOwner, repoName, cr.baseSha, cr.headSha)
     prDiff = diffResult.files
       .map(f => (f.patch ? `--- ${f.filename}\n${f.patch}` : ''))
       .filter(s => s.length > 0)
       .join('\n\n')
   } catch (e) {
-    logger.warning(
-      `issue-conversation: failed to get PR diff: ${e}, continue without it`
-    )
+    logger.warning(`issue-conversation: failed to get PR diff: ${e}, continue without it`)
   }
 
   // ===== 8. Token 预算内打包上下文 =====
   let tokens = getTokenCount(prompts.renderCommentIssue(inputs))
   if (tokens > options.heavyTokenLimits.requestTokens) {
     // 对话链可能过长，进一步压缩后重试一次
-    inputs.commentChain = truncateConversationChain(
-      rawChain,
-      Math.floor(MAX_CHAIN_CHARS / 2)
-    )
+    inputs.commentChain = truncateConversationChain(rawChain, Math.floor(MAX_CHAIN_CHARS / 2))
     tokens = getTokenCount(prompts.renderCommentIssue(inputs))
   }
   if (tokens > options.heavyTokenLimits.requestTokens) {
@@ -570,8 +537,7 @@ export const handleIssueConversation = async (
     const prDiffTokens = getTokenCount(prDiff)
     if (
       fileDiffCount > 0 &&
-      tokens + prDiffTokens * fileDiffCount <=
-        options.heavyTokenLimits.requestTokens
+      tokens + prDiffTokens * fileDiffCount <= options.heavyTokenLimits.requestTokens
     ) {
       tokens += prDiffTokens * fileDiffCount
       inputs.fileDiff = prDiff

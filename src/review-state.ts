@@ -14,10 +14,7 @@ export function getReviewStateFromBody(body = ''): ReviewState {
   return block.includes('state: paused') ? 'paused' : 'active'
 }
 
-export function writeReviewStateToBody(
-  body: string,
-  state: ReviewState
-): string {
+export function writeReviewStateToBody(body: string, state: ReviewState): string {
   const start = body.indexOf(REVIEW_STATE_START_TAG)
   const end = body.indexOf(REVIEW_STATE_END_TAG)
   const stateBlock = `${REVIEW_STATE_START_TAG}

@@ -20,16 +20,10 @@ jest.mock('../src/review', () => ({
   codeReview: jest.fn<() => Promise<void>>().mockResolvedValue(undefined)
 }))
 jest.mock('../src/command-handler', () => ({
-  handleCommentEvent: jest
-    .fn<() => Promise<void>>()
-    .mockResolvedValue(undefined)
+  handleCommentEvent: jest.fn<() => Promise<void>>().mockResolvedValue(undefined)
 }))
 
-import {
-  handleExecCtxError,
-  dispatchEvent,
-  runOrchestrator
-} from '../src/platform/orchestrator'
+import {handleExecCtxError, dispatchEvent, runOrchestrator} from '../src/platform/orchestrator'
 import {codeReview} from '../src/review'
 import {handleCommentEvent} from '../src/command-handler'
 import {ConfigError} from '../src/platform/config-provider'
@@ -68,11 +62,7 @@ describe('handleExecCtxError（ARCH-026）', () => {
   test('其他 ExecutionContextError → fatal + onFailed', () => {
     const logger = mockLogger()
     const onFailed = jest.fn()
-    const err = new ExecutionContextError(
-      'bad payload',
-      'github',
-      'missing_required_field'
-    )
+    const err = new ExecutionContextError('bad payload', 'github', 'missing_required_field')
     const result = handleExecCtxError(err, logger, onFailed)
     expect(result).toBe('fatal')
     expect(onFailed).toHaveBeenCalledWith(
@@ -199,9 +189,7 @@ describe('runOrchestrator（ARCH-025）', () => {
       onFailed,
       createBots: () => ({lightBot: {} as any, heavyBot: {} as any})
     })
-    expect(onFailed).toHaveBeenCalledWith(
-      expect.stringContaining('Configuration error')
-    )
+    expect(onFailed).toHaveBeenCalledWith(expect.stringContaining('Configuration error'))
     expect(codeReview).not.toHaveBeenCalled()
   })
 

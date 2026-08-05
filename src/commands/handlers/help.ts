@@ -15,10 +15,7 @@ import {BOT_MENTIONS, PRIMARY_BOT_MENTION} from '../../constants'
  * 提取出来便于单元测试（不依赖 registry 单例）。
  * @param botIcon 可选 bot 图标，用于底部提示（CFG-005）
  */
-export function buildHelpMessage(
-  commands: CommandHandler[],
-  botIcon = '🤖'
-): string {
+export function buildHelpMessage(commands: CommandHandler[], botIcon = '🤖'): string {
   const lines: string[] = []
   lines.push('## 支持的命令')
   lines.push('')
@@ -43,18 +40,16 @@ export function buildHelpMessage(
     lines.push('### 别名')
     for (const c of ordered) {
       if (c.aliases && c.aliases.length > 0) {
-        lines.push(
-          `- \`${c.name}\` → ${c.aliases.map(a => `\`${a}\``).join(', ')}`
-        )
+        lines.push(`- \`${c.name}\` → ${c.aliases.map(a => `\`${a}\``).join(', ')}`)
       }
     }
   }
 
   lines.push('')
   lines.push(
-    `> ${botIcon} Bot 同时支持 ${BOT_MENTIONS.map(m => `\`${m}\``).join(
-      ' 与 '
-    )} 共 ${BOT_MENTIONS.length} 个 mention。`
+    `> ${botIcon} Bot 同时支持 ${BOT_MENTIONS.map(m => `\`${m}\``).join(' 与 ')} 共 ${
+      BOT_MENTIONS.length
+    } 个 mention。`
   )
   return lines.join('\n')
 }
@@ -86,9 +81,7 @@ export function buildUnknownCommandMessage(
   }
 
   lines.push('')
-  lines.push(
-    `Let me know which one you'd like to run, or feel free to ask me a question directly!`
-  )
+  lines.push(`Let me know which one you'd like to run, or feel free to ask me a question directly!`)
   return lines.join('\n')
 }
 

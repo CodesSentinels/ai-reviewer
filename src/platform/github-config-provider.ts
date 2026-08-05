@@ -53,31 +53,15 @@ export class GitHubConfigProvider implements ConfigProvider {
       getInput('system_message'),
       getInput('openai_light_model'),
       getInput('openai_heavy_model'),
-      validateFloatStr(
-        getInput('openai_model_temperature'),
-        P,
-        'openai_model_temperature'
-      ),
+      validateFloatStr(getInput('openai_model_temperature'), P, 'openai_model_temperature'),
       validateIntStr(getInput('openai_retries'), P, 'openai_retries'),
       validateIntStr(getInput('openai_timeout_ms'), P, 'openai_timeout_ms'),
-      validateIntStr(
-        getInput('openai_concurrency_limit'),
-        P,
-        'openai_concurrency_limit'
-      ),
-      validateIntStr(
-        getInput('github_concurrency_limit'),
-        P,
-        'github_concurrency_limit'
-      ),
+      validateIntStr(getInput('openai_concurrency_limit'), P, 'openai_concurrency_limit'),
+      validateIntStr(getInput('github_concurrency_limit'), P, 'github_concurrency_limit'),
       getInput('openai_base_url'),
       getInput('language'),
       getBooleanInput('enable_dependency_analysis'),
-      validateIntStr(
-        getInput('max_dependency_files'),
-        P,
-        'max_dependency_files'
-      ),
+      validateIntStr(getInput('max_dependency_files'), P, 'max_dependency_files'),
       getBooleanInput('enable_web_search'),
       getBooleanInput('enable_shell'),
       getBooleanInput('enable_lint_tools'),
@@ -92,11 +76,7 @@ export class GitHubConfigProvider implements ConfigProvider {
       getInput('semgrep_config'),
       getInput('command_ack_reaction'),
       validateIntStr(getInput('max_review_comments'), P, 'max_review_comments'),
-      validateIntStr(
-        getInput('debug_resolve_inject_failures'),
-        P,
-        'debug_resolve_inject_failures'
-      ),
+      validateIntStr(getInput('debug_resolve_inject_failures'), P, 'debug_resolve_inject_failures'),
       getInput('bot_icon') || '🤖',
       getInput('bot_name') || 'AI Reviewer',
       getInput('bot_github_login')
@@ -164,9 +144,7 @@ export class GitHubConfigProvider implements ConfigProvider {
     log(`  enable_shell: ${opts.enableShell}`)
     log(`  enable_lint_tools: ${opts.enableLintTools}`)
     log(`  tool_enable_overrides: ${JSON.stringify(opts.toolEnableOverrides)}`)
-    log(
-      `  tool_version_overrides: ${JSON.stringify(opts.toolVersionOverrides)}`
-    )
+    log(`  tool_version_overrides: ${JSON.stringify(opts.toolVersionOverrides)}`)
     log(`  semgrep_config: ${opts.semgrepConfig}`)
     log(`  command_ack_reaction: ${opts.commandAckReaction}`)
     log(`  max_review_comments: ${opts.maxReviewComments}`)
@@ -174,10 +152,6 @@ export class GitHubConfigProvider implements ConfigProvider {
     log(`  bot_name: ${bot.name}`)
     log(`  bot_github_login: ${bot.platformLogin}`)
     log(`  summarize: ${prompt.summarize ? '(custom)' : '(default)'}`)
-    log(
-      `  summarize_release_notes: ${
-        prompt.summarizeReleaseNotes ? '(custom)' : '(default)'
-      }`
-    )
+    log(`  summarize_release_notes: ${prompt.summarizeReleaseNotes ? '(custom)' : '(default)'}`)
   }
 }

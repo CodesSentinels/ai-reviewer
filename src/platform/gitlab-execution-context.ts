@@ -17,11 +17,7 @@
  * 用真实 payload 复核字段名，如有出入回填 docs/tasks/execution-context-design.md
  * 第 5.1 节。参考该文档第 5 节。
  */
-import {
-  type EventKind,
-  type ExecutionContext,
-  ExecutionContextError
-} from './execution-context'
+import {type EventKind, type ExecutionContext, ExecutionContextError} from './execution-context'
 
 /**
  * 输入为已由 EVENT-002 任务解析出的 GitLab webhook payload 对象
@@ -29,9 +25,7 @@ import {
  *
  * @throws {ExecutionContextError} payload 缺失/非对象、object_kind 不支持，或缺少必需字段时
  */
-export function createGitLabExecutionContext(
-  payload: unknown
-): ExecutionContext {
+export function createGitLabExecutionContext(payload: unknown): ExecutionContext {
   if (payload == null || typeof payload !== 'object') {
     throw new ExecutionContextError(
       'TRIGGER_PAYLOAD is empty or not an object',
@@ -103,11 +97,7 @@ function buildFromNoteHook(p: Record<string, any>): ExecutionContext {
     )
   }
   if (attrs.system === true) {
-    throw new ExecutionContextError(
-      'system note — ignorable',
-      'gitlab',
-      'ignorable_event'
-    )
+    throw new ExecutionContextError('system note — ignorable', 'gitlab', 'ignorable_event')
   }
   if (attrs.noteable_type !== 'MergeRequest') {
     throw new ExecutionContextError(
@@ -121,9 +111,7 @@ function buildFromNoteHook(p: Record<string, any>): ExecutionContext {
     projectPath: p.project?.path_with_namespace ?? '',
     projectId: String(p.project_id ?? p.project?.id ?? ''),
     changeRequestId: mr.iid,
-    eventKind: attrs.discussion_id
-      ? 'review_comment_created'
-      : 'comment_created',
+    eventKind: attrs.discussion_id ? 'review_comment_created' : 'comment_created',
     actor: {login: p.user?.username ?? '', isBot: false},
     baseSha: '',
     headSha: mr.diff_head_sha ?? '',
@@ -136,15 +124,11 @@ function buildFromNoteHook(p: Record<string, any>): ExecutionContext {
   }
 }
 
-function mapMergeRequestAction(
-  attrs: Record<string, any>,
-  changes: any
-): EventKind {
+function mapMergeRequestAction(attrs: Record<string, any>, changes: any): EventKind {
   if (attrs.action === 'open') return 'pr_opened'
   if (attrs.action === 'reopen') return 'pr_reopened'
   if (attrs.action === 'update') {
-    const headChanged =
-      changes?.last_commit != null || changes?.source_branch != null
+    const headChanged = changes?.last_commit != null || changes?.source_branch != null
     return headChanged ? 'pr_synchronize' : 'metadata_updated'
   }
   return 'unknown'

@@ -43,9 +43,7 @@ describe('createGitLabExecutionContext()', () => {
   })
 
   test('payload 非对象（字符串）→ ExecutionContextError(missing_payload)', () => {
-    const e = getThrownError(() =>
-      createGitLabExecutionContext('not-an-object')
-    )
+    const e = getThrownError(() => createGitLabExecutionContext('not-an-object'))
     expect(e).toBeInstanceOf(ExecutionContextError)
     expect((e as ExecutionContextError).reason).toBe('missing_payload')
   })

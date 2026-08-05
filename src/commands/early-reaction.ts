@@ -32,10 +32,7 @@ export async function tryEarlyReaction(
   rawReaction: string | undefined
 ): Promise<void> {
   try {
-    if (
-      execCtx.eventKind !== 'comment_created' &&
-      execCtx.eventKind !== 'review_comment_created'
-    ) {
+    if (execCtx.eventKind !== 'comment_created' && execCtx.eventKind !== 'review_comment_created') {
       return
     }
     const eventName: CommandEventName =
@@ -57,9 +54,7 @@ export async function tryEarlyReaction(
 
     if (!comment || typeof comment.body !== 'string') return
 
-    const actorIsBot =
-      comment.user?.type === 'Bot' ||
-      /\[bot\]$/i.test(comment.user?.login ?? '')
+    const actorIsBot = comment.user?.type === 'Bot' || /\[bot\]$/i.test(comment.user?.login ?? '')
     if (actorIsBot) return
 
     bootstrapCommands()

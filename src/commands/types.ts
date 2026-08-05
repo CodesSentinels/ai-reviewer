@@ -21,13 +21,7 @@ export type ReviewCommandMode = 'incremental' | 'full' | 'summary'
 export type CommandEventName = 'issue_comment' | 'pull_request_review_comment'
 
 /** 仓库协作者权限等级（与 GitHub API 返回对齐） */
-export type PermissionLevel =
-  | 'admin'
-  | 'maintain'
-  | 'write'
-  | 'triage'
-  | 'read'
-  | 'none'
+export type PermissionLevel = 'admin' | 'maintain' | 'write' | 'triage' | 'read' | 'none'
 
 /** 解析结果种类 */
 export type ParseOutcomeKind = 'command' | 'conversation' | 'none'
@@ -145,9 +139,6 @@ export const PERMISSION_RANK: Record<PermissionLevel, number> = {
 }
 
 /** 判断 actual >= required */
-export function permissionAtLeast(
-  actual: PermissionLevel,
-  required: PermissionLevel
-): boolean {
+export function permissionAtLeast(actual: PermissionLevel, required: PermissionLevel): boolean {
   return PERMISSION_RANK[actual] >= PERMISSION_RANK[required]
 }

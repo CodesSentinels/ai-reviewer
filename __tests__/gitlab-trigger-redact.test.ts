@@ -9,15 +9,11 @@ import {redact} from '../src/gitlab-trigger-redact'
 
 describe('redact()', () => {
   test('脱敏 GitLab PAT（glpat- 前缀）', () => {
-    expect(redact('token=glpat-AbC123_-xyz failed')).toBe(
-      'token=glpat-*** failed'
-    )
+    expect(redact('token=glpat-AbC123_-xyz failed')).toBe('token=glpat-*** failed')
   })
 
   test('脱敏 Bearer token（大小写不敏感）', () => {
-    expect(redact('Authorization: bearer AbC123.def-456')).toBe(
-      'Authorization: Bearer ***'
-    )
+    expect(redact('Authorization: bearer AbC123.def-456')).toBe('Authorization: Bearer ***')
   })
 
   test('脱敏 URL query 中的 token 参数', () => {
@@ -27,14 +23,13 @@ describe('redact()', () => {
   })
 
   test('脱敏 URL query 中的 private_token 参数', () => {
-    expect(
-      redact('https://gitlab.example.com/api?private_token=secret456')
-    ).toBe('https://gitlab.example.com/api?private_token=***')
+    expect(redact('https://gitlab.example.com/api?private_token=secret456')).toBe(
+      'https://gitlab.example.com/api?private_token=***'
+    )
   })
 
   test('同一字符串中多种 token 形态同时出现，全部脱敏', () => {
-    const input =
-      'glpat-secret1 Bearer secret2 ?token=secret3&private_token=secret4'
+    const input = 'glpat-secret1 Bearer secret2 ?token=secret3&private_token=secret4'
     const result = redact(input)
     expect(result).not.toContain('secret1')
     expect(result).not.toContain('secret2')

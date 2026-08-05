@@ -29,9 +29,7 @@ export interface PermissionQuery {
  * 查询评论者权限，带缓存。
  * 查询失败时回退为 'none'，并记录 warning（不抛异常）。
  */
-export async function getPermission(
-  q: PermissionQuery
-): Promise<PermissionLevel> {
+export async function getPermission(q: PermissionQuery): Promise<PermissionLevel> {
   const key = `${q.owner}/${q.repo}/${q.username}`
   const cached = cache.get(key)
   if (cached) return cached
@@ -46,8 +44,7 @@ export async function getPermission(
     return perm
   } catch (e) {
     getLogger().warning(
-      `getCollaboratorPermissionLevel failed for ${key}: ${String(e)} — ` +
-        `falling back to 'none'`
+      `getCollaboratorPermissionLevel failed for ${key}: ${String(e)} — falling back to 'none'`
     )
     cache.set(key, 'none')
     return 'none'

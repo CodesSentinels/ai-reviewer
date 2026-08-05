@@ -197,16 +197,8 @@ describe('1.2.3 — full review 全量审查', () => {
 
 describe('1.2.1 — 增量与全量 diff 文件交集', () => {
   test('只保留同时出现在增量和全量 diff 中的文件', () => {
-    const targetBranchFiles = [
-      {filename: 'a.ts'},
-      {filename: 'b.ts'},
-      {filename: 'c.ts'}
-    ]
-    const incrementalFiles = [
-      {filename: 'b.ts'},
-      {filename: 'c.ts'},
-      {filename: 'd.ts'}
-    ]
+    const targetBranchFiles = [{filename: 'a.ts'}, {filename: 'b.ts'}, {filename: 'c.ts'}]
+    const incrementalFiles = [{filename: 'b.ts'}, {filename: 'c.ts'}, {filename: 'd.ts'}]
 
     const files = targetBranchFiles.filter(tbf =>
       incrementalFiles.some(inf => inf.filename === tbf.filename)

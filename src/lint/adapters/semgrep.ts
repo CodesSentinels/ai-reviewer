@@ -43,12 +43,7 @@
 import {info, warning} from '@actions/core'
 import {dirname} from 'path'
 import {ensureToolInstalled} from '../tool-installer'
-import {
-  type InstallSpec,
-  type LintResult,
-  type ToolAdapter,
-  type ToolDetection
-} from '../types'
+import {type InstallSpec, type LintResult, type ToolAdapter, type ToolDetection} from '../types'
 import {extractVersion, parseJsonSafe, runCommand} from './exec'
 
 /** semgrep `--json` 输出中单条 finding 的字段（仅保留我们消费的部分） */
@@ -167,10 +162,7 @@ export class SemgrepAdapter implements ToolAdapter {
     this.config = options?.config ?? 'p/default'
   }
 
-  async detect(
-    repoRoot: string,
-    versionOverride?: string
-  ): Promise<ToolDetection> {
+  async detect(repoRoot: string, versionOverride?: string): Promise<ToolDetection> {
     const detectStart = Date.now()
     info(
       `lint/semgrep[detect]: start repoRoot=${repoRoot}, versionOverride=${
@@ -189,7 +181,9 @@ export class SemgrepAdapter implements ToolAdapter {
     const install = await ensureToolInstalled(spec)
     if (!install.ok) {
       warning(
-        `lint/semgrep[detect]: install failed after ${Date.now() - detectStart}ms — ${install.reason ?? 'unknown'}`
+        `lint/semgrep[detect]: install failed after ${Date.now() - detectStart}ms — ${
+          install.reason ?? 'unknown'
+        }`
       )
       return {
         available: false,
@@ -245,7 +239,9 @@ export class SemgrepAdapter implements ToolAdapter {
     await this.probeRulePack(repoRoot)
 
     info(
-      `lint/semgrep[detect]: ready in ${Date.now() - detectStart}ms — bin=${this.resolvedBinPath}, version=${version}, config=${this.config}`
+      `lint/semgrep[detect]: ready in ${Date.now() - detectStart}ms — bin=${
+        this.resolvedBinPath
+      }, version=${version}, config=${this.config}`
     )
     return {available: true, version}
   }
@@ -320,7 +316,9 @@ export class SemgrepAdapter implements ToolAdapter {
     const ruleCount = ruleCountMatch?.[1] ?? '?'
 
     info(
-      `lint/semgrep[probe]: ✅ "${this.config}" validates — ${ruleCount} rule(s) loaded in ${elapsed}ms${
+      `lint/semgrep[probe]: ✅ "${
+        this.config
+      }" validates — ${ruleCount} rule(s) loaded in ${elapsed}ms${
         ruleCount === '?'
           ? " (semgrep didn't print a rule count; exit=0 still proves config loaded)"
           : ''
@@ -347,9 +345,7 @@ export class SemgrepAdapter implements ToolAdapter {
     if (this.resolvedBinPath === '') {
       // 防御：orchestrator 保证 detect 成功才会调 scan；这里仅锁住"绕过 orchestrator
       // 直接 new SemgrepAdapter().scan(...)"的误用，避免给 runCommand 传空 command
-      warning(
-        'lint/semgrep[scan]: called before successful detect() — bin path empty, skipping'
-      )
+      warning('lint/semgrep[scan]: called before successful detect() — bin path empty, skipping')
       return []
     }
     if (files.length === 0) {
@@ -375,9 +371,9 @@ export class SemgrepAdapter implements ToolAdapter {
       ...files
     ]
     info(
-      `lint/semgrep[scan]: invoking ${this.resolvedBinPath} ${args
-        .slice(0, 6)
-        .join(' ')} ... [${files.length} file arg(s)]`
+      `lint/semgrep[scan]: invoking ${this.resolvedBinPath} ${args.slice(0, 6).join(' ')} ... [${
+        files.length
+      } file arg(s)]`
     )
     const result = await runCommand({
       command: this.resolvedBinPath,
@@ -397,9 +393,7 @@ export class SemgrepAdapter implements ToolAdapter {
       `lint/semgrep[scan]: returned in ${elapsed}ms — exit=${result.exitCode}, ` +
         `timedOut=${result.timedOut}, spawnError=${result.spawnError}, ` +
         `stdout_len=${result.stdout.length}, stderr_len=${result.stderr.length}${
-          stderrFirstLine.length > 0
-            ? `, stderr_first="${stderrFirstLine}"`
-            : ''
+          stderrFirstLine.length > 0 ? `, stderr_first="${stderrFirstLine}"` : ''
         }`
     )
 
@@ -431,7 +425,10 @@ export class SemgrepAdapter implements ToolAdapter {
           `Common causes: (a) semgrep can't reach semgrep.dev to fetch "${this.config}" rules — ` +
           `try a self-contained config like p/ci or pre-cache rules; ` +
           `(b) semgrep printed Python traceback to stderr; ` +
-          `(c) semgrep CLI was killed by signal. Raw stdout first 500 chars: "${result.stdout.substring(0, 500)}"`
+          `(c) semgrep CLI was killed by signal. Raw stdout first 500 chars: "${result.stdout.substring(
+            0,
+            500
+          )}"`
       )
       return []
     }
@@ -440,10 +437,7 @@ export class SemgrepAdapter implements ToolAdapter {
     const errCount = parsed.errors?.length ?? 0
     if (errCount > 0) {
       // semgrep 把"无法解析的文件 / 规则加载错误"放在 errors 数组里 —— 重要诊断信号
-      const firstErr = JSON.stringify(parsed.errors?.[0] ?? {}).substring(
-        0,
-        300
-      )
+      const firstErr = JSON.stringify(parsed.errors?.[0] ?? {}).substring(0, 300)
       warning(
         `lint/semgrep[scan]: ${errCount} semgrep-level error(s) reported (this is separate from "findings"); ` +
           `first: ${firstErr}`
@@ -485,13 +479,10 @@ export class SemgrepAdapter implements ToolAdapter {
       // （Semgrep 默认 message 通常只描述"做了什么"，不带"属于哪类漏洞"）
       const baseMessage = r.extra?.message?.trim() ?? ''
       const tags = formatVulnTags(r.extra?.metadata)
-      const enrichedMessage =
-        tags.length > 0 ? `${baseMessage}\n${tags}` : baseMessage
+      const enrichedMessage = tags.length > 0 ? `${baseMessage}\n${tags}` : baseMessage
 
       const fixText =
-        typeof r.extra?.fix === 'string' && r.extra.fix.length > 0
-          ? r.extra.fix.trim()
-          : undefined
+        typeof r.extra?.fix === 'string' && r.extra.fix.length > 0 ? r.extra.fix.trim() : undefined
 
       findings.push({
         tool: this.displayName,
@@ -529,22 +520,15 @@ export class SemgrepAdapter implements ToolAdapter {
       for (const f of findings) {
         const prefix = f.ruleId.split('.').slice(0, 2).join('.')
         findingPrefixes.set(prefix, (findingPrefixes.get(prefix) ?? 0) + 1)
-        findingSeverities.set(
-          f.severity,
-          (findingSeverities.get(f.severity) ?? 0) + 1
-        )
+        findingSeverities.set(f.severity, (findingSeverities.get(f.severity) ?? 0) + 1)
       }
       const fmtMap = (m: Map<string, number>): string =>
         [...m.entries()]
           .sort((a, b) => b[1] - a[1])
           .map(([k, v]) => `${k}:${v}`)
           .join(', ')
-      info(
-        `lint/semgrep[scan]: finding rule_id prefix breakdown = { ${fmtMap(findingPrefixes)} }`
-      )
-      info(
-        `lint/semgrep[scan]: finding severity breakdown = { ${fmtMap(findingSeverities)} }`
-      )
+      info(`lint/semgrep[scan]: finding rule_id prefix breakdown = { ${fmtMap(findingPrefixes)} }`)
+      info(`lint/semgrep[scan]: finding severity breakdown = { ${fmtMap(findingSeverities)} }`)
       info(
         `lint/semgrep[scan]: first 3 finding rule_ids: ${findings
           .slice(0, 3)
@@ -621,8 +605,7 @@ function formatVulnTags(metadata?: SemgrepResult['extra']['metadata']): string {
 /** 把 string | string[] | undefined 统一成 string[] */
 function toStringArray(v: unknown): string[] {
   if (typeof v === 'string') return [v]
-  if (Array.isArray(v))
-    return v.filter((x): x is string => typeof x === 'string')
+  if (Array.isArray(v)) return v.filter((x): x is string => typeof x === 'string')
   return []
 }
 

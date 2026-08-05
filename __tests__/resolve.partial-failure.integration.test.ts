@@ -170,7 +170,10 @@ describeIntegration('batchResolve 部分失败场景', () => {
   afterAll(async () => {
     try {
       await octokit.pulls.update({
-        owner: OWNER, repo: REPO, pull_number: prNumber, state: 'closed'
+        owner: OWNER,
+        repo: REPO,
+        pull_number: prNumber,
+        state: 'closed'
       })
       console.log(`🧹 关闭 PR #${prNumber}`)
     } catch (e) {
@@ -186,169 +189,157 @@ describeIntegration('batchResolve 部分失败场景', () => {
 
   // ── P1: 全部失败 ─────────────────────────────────────────────────────────────
 
-  test(
-    'P1. 全部失败 — 单个假 thread ID → ok=0 failed=1，warning 含 path:line',
-    async () => {
-      const fakeThread = {
-        id: 'PRRT_pf_fake_all_fail',
-        isResolved: false,
-        firstCommentAuthorLogin: botLogin,
-        path: filePath,
-        line: 3,
-        firstCommentBody: '🤖 [P1] 模拟全部失败的假 thread'
-      }
+  test('P1. 全部失败 — 单个假 thread ID → ok=0 failed=1，warning 含 path:line', async () => {
+    const fakeThread = {
+      id: 'PRRT_pf_fake_all_fail',
+      isResolved: false,
+      firstCommentAuthorLogin: botLogin,
+      path: filePath,
+      line: 3,
+      firstCommentBody: '🤖 [P1] 模拟全部失败的假 thread'
+    }
 
-      const warnSpy = jest.spyOn(actionsCore, 'warning').mockImplementation(() => {})
-      try {
-        const {ok, failed, errors} = await batchResolve([fakeThread])
-        console.log(`  结果: ok=${ok} failed=${failed}`)
-        console.log(`  错误: ${errors[0]?.message}`)
+    const warnSpy = jest.spyOn(actionsCore, 'warning').mockImplementation(() => {})
+    try {
+      const {ok, failed, errors} = await batchResolve([fakeThread])
+      console.log(`  结果: ok=${ok} failed=${failed}`)
+      console.log(`  错误: ${errors[0]?.message}`)
 
-        expect(ok).toBe(0)
-        expect(failed).toBe(1)
-        expect(errors).toHaveLength(1)
+      expect(ok).toBe(0)
+      expect(failed).toBe(1)
+      expect(errors).toHaveLength(1)
 
-        expect(warnSpy).toHaveBeenCalledTimes(1)
-        const msg = warnSpy.mock.calls[0][0] as string
-        console.log(`  warning: ${msg}`)
-        expect(msg).toMatch(/failed to resolve 1\/1/)
-        expect(msg).toMatch(filePath)
-        expect(msg).toMatch(/:3/)
-        expect(msg).not.toMatch(/resolve_token/)
-      } finally {
-        warnSpy.mockRestore()
-      }
-    },
-    30_000
-  )
+      expect(warnSpy).toHaveBeenCalledTimes(1)
+      const msg = warnSpy.mock.calls[0][0] as string
+      console.log(`  warning: ${msg}`)
+      expect(msg).toMatch(/failed to resolve 1\/1/)
+      expect(msg).toMatch(filePath)
+      expect(msg).toMatch(/:3/)
+      expect(msg).not.toMatch(/resolve_token/)
+    } finally {
+      warnSpy.mockRestore()
+    }
+  }, 30_000)
 
   // ── P2: 混合失败 ─────────────────────────────────────────────────────────────
 
-  test(
-    'P2. 混合失败 — 1 真实 thread + 1 假 ID → ok=1 failed=1，warning 只列失败项',
-    async () => {
-      // 添加 1 条真实 comment
-      await octokit.pulls.createReviewComment({
-        owner: OWNER,
-        repo: REPO,
-        pull_number: prNumber,
-        commit_id: headSha,
-        path: filePath,
-        line: 4,
-        side: 'RIGHT',
-        body: '🤖 [P2] 混合失败测试 — 真实 thread'
-      })
+  test('P2. 混合失败 — 1 真实 thread + 1 假 ID → ok=1 failed=1，warning 只列失败项', async () => {
+    // 添加 1 条真实 comment
+    await octokit.pulls.createReviewComment({
+      owner: OWNER,
+      repo: REPO,
+      pull_number: prNumber,
+      commit_id: headSha,
+      path: filePath,
+      line: 4,
+      side: 'RIGHT',
+      body: '🤖 [P2] 混合失败测试 — 真实 thread'
+    })
 
-      const realThreads = await fetchUnresolvedBotThreads(
-        {owner: OWNER, repo: REPO, prNumber},
-        botLogin
-      )
-      expect(realThreads.length).toBe(1)
-      console.log(`  真实 thread: ${realThreads[0].path}:${realThreads[0].line}`)
+    const realThreads = await fetchUnresolvedBotThreads(
+      {owner: OWNER, repo: REPO, prNumber},
+      botLogin
+    )
+    expect(realThreads.length).toBe(1)
+    console.log(`  真实 thread: ${realThreads[0].path}:${realThreads[0].line}`)
 
-      const fakeThread = {
-        id: 'PRRT_pf_fake_mixed',
-        isResolved: false,
-        firstCommentAuthorLogin: botLogin,
-        path: filePath,
-        line: 99,
-        firstCommentBody: '🤖 [P2] 假 thread（必定失败）'
-      }
+    const fakeThread = {
+      id: 'PRRT_pf_fake_mixed',
+      isResolved: false,
+      firstCommentAuthorLogin: botLogin,
+      path: filePath,
+      line: 99,
+      firstCommentBody: '🤖 [P2] 假 thread（必定失败）'
+    }
 
-      const warnSpy = jest.spyOn(actionsCore, 'warning').mockImplementation(() => {})
-      try {
-        const {ok, failed} = await batchResolve([...realThreads, fakeThread])
-        console.log(`  结果: ok=${ok} failed=${failed}`)
+    const warnSpy = jest.spyOn(actionsCore, 'warning').mockImplementation(() => {})
+    try {
+      const {ok, failed} = await batchResolve([...realThreads, fakeThread])
+      console.log(`  结果: ok=${ok} failed=${failed}`)
 
-        expect(ok).toBe(1)
-        expect(failed).toBe(1)
+      expect(ok).toBe(1)
+      expect(failed).toBe(1)
 
-        expect(warnSpy).toHaveBeenCalledTimes(1)
-        const msg = warnSpy.mock.calls[0][0] as string
-        console.log(`  warning: ${msg}`)
-        expect(msg).toMatch(/failed to resolve 1\/2/)
-        expect(msg).toMatch(/:99/)
-        // 成功的 thread 不应出现在 warning 里
-        expect(msg).not.toMatch(/:4/)
-      } finally {
-        warnSpy.mockRestore()
-      }
-    },
-    30_000
-  )
+      expect(warnSpy).toHaveBeenCalledTimes(1)
+      const msg = warnSpy.mock.calls[0][0] as string
+      console.log(`  warning: ${msg}`)
+      expect(msg).toMatch(/failed to resolve 1\/2/)
+      expect(msg).toMatch(/:99/)
+      // 成功的 thread 不应出现在 warning 里
+      expect(msg).not.toMatch(/:4/)
+    } finally {
+      warnSpy.mockRestore()
+    }
+  }, 30_000)
 
   // ── P3: 部分成功 ─────────────────────────────────────────────────────────────
 
-  test(
-    'P3. 部分成功 — 2 真实 thread + 2 假 ID → ok=2 failed=2，warning 汇总所有失败项',
-    async () => {
-      // 添加 2 条真实 comment（P2 的真实 thread 已被 resolve）
-      await octokit.pulls.createReviewComment({
-        owner: OWNER,
-        repo: REPO,
-        pull_number: prNumber,
-        commit_id: headSha,
+  test('P3. 部分成功 — 2 真实 thread + 2 假 ID → ok=2 failed=2，warning 汇总所有失败项', async () => {
+    // 添加 2 条真实 comment（P2 的真实 thread 已被 resolve）
+    await octokit.pulls.createReviewComment({
+      owner: OWNER,
+      repo: REPO,
+      pull_number: prNumber,
+      commit_id: headSha,
+      path: filePath,
+      line: 3,
+      side: 'RIGHT',
+      body: '🤖 [P3] 部分成功测试第一条'
+    })
+    await octokit.pulls.createReviewComment({
+      owner: OWNER,
+      repo: REPO,
+      pull_number: prNumber,
+      commit_id: headSha,
+      path: filePath,
+      line: 5,
+      side: 'RIGHT',
+      body: '🤖 [P3] 部分成功测试第二条'
+    })
+
+    const realThreads = await fetchUnresolvedBotThreads(
+      {owner: OWNER, repo: REPO, prNumber},
+      botLogin
+    )
+    expect(realThreads.length).toBe(2)
+    console.log(`  真实 thread: ${realThreads.map(t => `${t.path}:${t.line}`).join(', ')}`)
+
+    const fakeThreads = [
+      {
+        id: 'PRRT_pf_fake_partial_A',
+        isResolved: false,
+        firstCommentAuthorLogin: botLogin,
         path: filePath,
-        line: 3,
-        side: 'RIGHT',
-        body: '🤖 [P3] 部分成功测试第一条'
-      })
-      await octokit.pulls.createReviewComment({
-        owner: OWNER,
-        repo: REPO,
-        pull_number: prNumber,
-        commit_id: headSha,
+        line: 10,
+        firstCommentBody: '🤖 [P3] 假 thread A'
+      },
+      {
+        id: 'PRRT_pf_fake_partial_B',
+        isResolved: false,
+        firstCommentAuthorLogin: botLogin,
         path: filePath,
-        line: 5,
-        side: 'RIGHT',
-        body: '🤖 [P3] 部分成功测试第二条'
-      })
-
-      const realThreads = await fetchUnresolvedBotThreads(
-        {owner: OWNER, repo: REPO, prNumber},
-        botLogin
-      )
-      expect(realThreads.length).toBe(2)
-      console.log(`  真实 thread: ${realThreads.map(t => `${t.path}:${t.line}`).join(', ')}`)
-
-      const fakeThreads = [
-        {
-          id: 'PRRT_pf_fake_partial_A',
-          isResolved: false,
-          firstCommentAuthorLogin: botLogin,
-          path: filePath,
-          line: 10,
-          firstCommentBody: '🤖 [P3] 假 thread A'
-        },
-        {
-          id: 'PRRT_pf_fake_partial_B',
-          isResolved: false,
-          firstCommentAuthorLogin: botLogin,
-          path: filePath,
-          line: 20,
-          firstCommentBody: '🤖 [P3] 假 thread B'
-        }
-      ]
-
-      const warnSpy = jest.spyOn(actionsCore, 'warning').mockImplementation(() => {})
-      try {
-        const {ok, failed, errors} = await batchResolve([...realThreads, ...fakeThreads])
-        console.log(`  结果: ok=${ok} failed=${failed}`)
-
-        expect(ok).toBe(2)
-        expect(failed).toBe(2)
-        expect(errors).toHaveLength(2)
-
-        expect(warnSpy).toHaveBeenCalledTimes(1)
-        const msg = warnSpy.mock.calls[0][0] as string
-        console.log(`  warning:\n${msg}`)
-        expect(msg).toMatch(/failed to resolve 2\/4/)
-        expect(msg).toMatch(/:10/)
-        expect(msg).toMatch(/:20/)
-      } finally {
-        warnSpy.mockRestore()
+        line: 20,
+        firstCommentBody: '🤖 [P3] 假 thread B'
       }
-    },
-    30_000
-  )
+    ]
+
+    const warnSpy = jest.spyOn(actionsCore, 'warning').mockImplementation(() => {})
+    try {
+      const {ok, failed, errors} = await batchResolve([...realThreads, ...fakeThreads])
+      console.log(`  结果: ok=${ok} failed=${failed}`)
+
+      expect(ok).toBe(2)
+      expect(failed).toBe(2)
+      expect(errors).toHaveLength(2)
+
+      expect(warnSpy).toHaveBeenCalledTimes(1)
+      const msg = warnSpy.mock.calls[0][0] as string
+      console.log(`  warning:\n${msg}`)
+      expect(msg).toMatch(/failed to resolve 2\/4/)
+      expect(msg).toMatch(/:10/)
+      expect(msg).toMatch(/:20/)
+    } finally {
+      warnSpy.mockRestore()
+    }
+  }, 30_000)
 })

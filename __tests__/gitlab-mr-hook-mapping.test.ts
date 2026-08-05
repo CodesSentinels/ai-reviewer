@@ -27,15 +27,11 @@ describe('EVENT-006~009: MR action → eventKind 映射', () => {
   })
 
   test('EVENT-008 action=update 且 changes.last_commit 存在 → pr_synchronize', () => {
-    expect(createGitLabExecutionContext(mrUpdateSha).eventKind).toBe(
-      'pr_synchronize'
-    )
+    expect(createGitLabExecutionContext(mrUpdateSha).eventKind).toBe('pr_synchronize')
   })
 
   test('EVENT-008 action=update 且 changes 只含 source_branch（强制推送，last_commit 缺失）→ pr_synchronize', () => {
-    expect(
-      createGitLabExecutionContext(mrUpdateSourceBranchOnly).eventKind
-    ).toBe('pr_synchronize')
+    expect(createGitLabExecutionContext(mrUpdateSourceBranchOnly).eventKind).toBe('pr_synchronize')
   })
 
   test('EVENT-009 action=update 且 changes 为空对象 → metadata_updated', () => {
@@ -47,9 +43,7 @@ describe('EVENT-006~009: MR action → eventKind 映射', () => {
       },
       changes: {}
     }
-    expect(createGitLabExecutionContext(payload).eventKind).toBe(
-      'metadata_updated'
-    )
+    expect(createGitLabExecutionContext(payload).eventKind).toBe('metadata_updated')
   })
 
   test('EVENT-009 action=update 且 changes 字段整体缺失（undefined）→ metadata_updated', () => {
@@ -61,20 +55,14 @@ describe('EVENT-006~009: MR action → eventKind 映射', () => {
       }
     }
     delete payload.changes
-    expect(createGitLabExecutionContext(payload).eventKind).toBe(
-      'metadata_updated'
-    )
+    expect(createGitLabExecutionContext(payload).eventKind).toBe('metadata_updated')
   })
 
   test('EVENT-009 action=update 且 changes 只含 title/labels → metadata_updated', () => {
-    expect(createGitLabExecutionContext(mrUpdateMeta).eventKind).toBe(
-      'metadata_updated'
-    )
+    expect(createGitLabExecutionContext(mrUpdateMeta).eventKind).toBe('metadata_updated')
   })
 
   test('action 为其他值（如 merge）→ unknown（不触发模型）', () => {
-    expect(createGitLabExecutionContext(mrMergeAction).eventKind).toBe(
-      'unknown'
-    )
+    expect(createGitLabExecutionContext(mrMergeAction).eventKind).toBe('unknown')
   })
 })

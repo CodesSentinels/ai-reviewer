@@ -55,25 +55,13 @@ const commenterState = {
   getRawSummary: jest.fn().mockReturnValue(''),
   getShortSummary: jest.fn().mockReturnValue(''),
   addInProgressStatus: jest.fn().mockReturnValue('IN_PROGRESS'),
-  comment: jest
-    .fn<(...a: any[]) => Promise<void>>()
-    .mockResolvedValue(undefined),
-  updateDescription: jest
-    .fn<(...a: any[]) => Promise<void>>()
-    .mockResolvedValue(undefined),
-  submitReview: jest
-    .fn<(...a: any[]) => Promise<void>>()
-    .mockResolvedValue(undefined),
-  addReviewedCommitId: jest
-    .fn()
-    .mockReturnValue('<!-- reviewed-commit-ids -->'),
-  bufferReviewComment: jest
-    .fn<(...a: any[]) => Promise<void>>()
-    .mockResolvedValue(undefined),
+  comment: jest.fn<(...a: any[]) => Promise<void>>().mockResolvedValue(undefined),
+  updateDescription: jest.fn<(...a: any[]) => Promise<void>>().mockResolvedValue(undefined),
+  submitReview: jest.fn<(...a: any[]) => Promise<void>>().mockResolvedValue(undefined),
+  addReviewedCommitId: jest.fn().mockReturnValue('<!-- reviewed-commit-ids -->'),
+  bufferReviewComment: jest.fn<(...a: any[]) => Promise<void>>().mockResolvedValue(undefined),
   listReviewComments: jest.fn<() => Promise<any[]>>().mockResolvedValue([]),
-  getCommentChainsWithinRange: jest
-    .fn<(...a: any[]) => Promise<string>>()
-    .mockResolvedValue('')
+  getCommentChainsWithinRange: jest.fn<(...a: any[]) => Promise<string>>().mockResolvedValue('')
 }
 jest.mock('../../src/commenter', () => ({
   Commenter: jest.fn().mockImplementation(() => commenterState),
@@ -91,9 +79,7 @@ jest.mock('../../src/commenter', () => ({
 jest.mock('../../src/tokenizer', () => ({getTokenCount: () => 0}))
 
 jest.mock('../../src/github/review-thread', () => ({
-  fetchThreadStatusMap: jest
-    .fn<() => Promise<Map<string, boolean>>>()
-    .mockResolvedValue(new Map())
+  fetchThreadStatusMap: jest.fn<() => Promise<Map<string, boolean>>>().mockResolvedValue(new Map())
 }))
 
 import {codeReview} from '../../src/review'
@@ -102,9 +88,7 @@ import {Prompts} from '../../src/prompts'
 
 const IGNORE_KEYWORD = '@ai-reviewer: ignore'
 
-function makeOptions(
-  overrides: Partial<{disableReleaseNotes: boolean}> = {}
-): Options {
+function makeOptions(overrides: Partial<{disableReleaseNotes: boolean}> = {}): Options {
   return new Options(
     false, // debug
     false, // disableReview
@@ -176,28 +160,18 @@ describe('codeReview() — 改造前控制流行为基线', () => {
     jest.clearAllMocks()
     mockContext.eventName = 'pull_request'
     mockContext.payload = {}
-    commenterState.getDescription.mockImplementation(
-      (body: string) => body ?? ''
-    )
+    commenterState.getDescription.mockImplementation((body: string) => body ?? '')
     commenterState.findCommentWithTag.mockResolvedValue(null)
     commenterState.getAllCommitIds.mockResolvedValue([])
     commenterState.addInProgressStatus.mockReturnValue('IN_PROGRESS')
-    commenterState.addReviewedCommitId.mockReturnValue(
-      '<!-- reviewed-commit-ids -->'
-    )
+    commenterState.addReviewedCommitId.mockReturnValue('<!-- reviewed-commit-ids -->')
   })
 
   test('非 pull_request/pull_request_target 事件（非命令触发）→ 直接跳过，不调用任何 platform API', async () => {
     mockContext.eventName = 'push'
     mockContext.payload = {}
 
-    await codeReview(
-      makeExecCtx(),
-      makeBot(),
-      makeBot(),
-      makeOptions(),
-      new Prompts('', '')
-    )
+    await codeReview(makeExecCtx(), makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
 
     expect(platformState.compareDiff).not.toHaveBeenCalled()
     expect(commenterState.comment).not.toHaveBeenCalled()
@@ -207,13 +181,7 @@ describe('codeReview() — 改造前控制流行为基线', () => {
     mockContext.eventName = 'pull_request'
     mockContext.payload = {}
 
-    await codeReview(
-      makeExecCtx(),
-      makeBot(),
-      makeBot(),
-      makeOptions(),
-      new Prompts('', '')
-    )
+    await codeReview(makeExecCtx(), makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
 
     expect(platformState.compareDiff).not.toHaveBeenCalled()
     expect(commenterState.comment).not.toHaveBeenCalled()
@@ -226,13 +194,7 @@ describe('codeReview() — 改造前控制流行为基线', () => {
       })
     }
 
-    await codeReview(
-      makeExecCtx(),
-      makeBot(),
-      makeBot(),
-      makeOptions(),
-      new Prompts('', '')
-    )
+    await codeReview(makeExecCtx(), makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
 
     expect(platformState.compareDiff).not.toHaveBeenCalled()
     expect(commenterState.comment).not.toHaveBeenCalled()
@@ -244,17 +206,9 @@ describe('codeReview() — 改造前控制流行为基线', () => {
         body: `Description. ${IGNORE_KEYWORD}`
       })
     }
-    commenterState.getDescription.mockReturnValue(
-      `Description. ${IGNORE_KEYWORD}`
-    )
+    commenterState.getDescription.mockReturnValue(`Description. ${IGNORE_KEYWORD}`)
 
-    await codeReview(
-      makeExecCtx(),
-      makeBot(),
-      makeBot(),
-      makeOptions(),
-      new Prompts('', '')
-    )
+    await codeReview(makeExecCtx(), makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
 
     expect(platformState.compareDiff).not.toHaveBeenCalled()
   })
@@ -263,13 +217,7 @@ describe('codeReview() — 改造前控制流行为基线', () => {
     mockContext.payload = {pull_request: makePullRequestPayload()}
     platformState.compareDiff.mockResolvedValue({files: [], commits: []})
 
-    await codeReview(
-      makeExecCtx(),
-      makeBot(),
-      makeBot(),
-      makeOptions(),
-      new Prompts('', '')
-    )
+    await codeReview(makeExecCtx(), makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
 
     expect(platformState.compareDiff).toHaveBeenCalled()
     expect(commenterState.comment).not.toHaveBeenCalled()
@@ -332,24 +280,14 @@ describe('codeReview() — 改造前控制流行为基线', () => {
     commenterState.findCommentWithTag.mockResolvedValue({
       body: 'existing summary body'
     })
-    commenterState.getReviewedCommitIdsBlock.mockReturnValue(
-      '<!-- reviewed: old-sha -->'
-    )
-    commenterState.getAllCommitIds.mockResolvedValue([
-      'old-sha',
-      'head-sha-0001'
-    ])
+    commenterState.getReviewedCommitIdsBlock.mockReturnValue('<!-- reviewed: old-sha -->')
+    commenterState.getAllCommitIds.mockResolvedValue(['old-sha', 'head-sha-0001'])
     commenterState.getHighestReviewedCommitId.mockReturnValue('old-sha')
     platformState.compareDiff.mockResolvedValue({files: [], commits: []})
 
-    await codeReview(
-      makeExecCtx(),
-      makeBot(),
-      makeBot(),
-      makeOptions(),
-      new Prompts('', ''),
-      {mode: 'full'}
-    )
+    await codeReview(makeExecCtx(), makeBot(), makeBot(), makeOptions(), new Prompts('', ''), {
+      mode: 'full'
+    })
 
     expect(platformState.compareDiff.mock.calls[0][2]).toBe('base-sha-0001') // base（不是 'old-sha'）
   })
@@ -361,23 +299,12 @@ describe('codeReview() — 改造前控制流行为基线', () => {
     commenterState.findCommentWithTag.mockResolvedValue({
       body: 'existing summary body'
     })
-    commenterState.getReviewedCommitIdsBlock.mockReturnValue(
-      '<!-- reviewed: head-sha-0001 -->'
-    )
-    commenterState.getAllCommitIds.mockResolvedValue([
-      'head-sha-0001',
-      'head-sha-0002'
-    ])
+    commenterState.getReviewedCommitIdsBlock.mockReturnValue('<!-- reviewed: head-sha-0001 -->')
+    commenterState.getAllCommitIds.mockResolvedValue(['head-sha-0001', 'head-sha-0002'])
     commenterState.getHighestReviewedCommitId.mockReturnValue('head-sha-0001')
     platformState.compareDiff.mockResolvedValue({files: [], commits: []})
 
-    await codeReview(
-      makeExecCtx(),
-      makeBot(),
-      makeBot(),
-      makeOptions(),
-      new Prompts('', '')
-    )
+    await codeReview(makeExecCtx(), makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
 
     expect(platformState.compareDiff.mock.calls[0][2]).toBe('head-sha-0001') // base：从上次审查的 commit 起，不是 base sha
     expect(platformState.compareDiff.mock.calls[0][3]).toBe('head-sha-0002') // head

@@ -10,14 +10,7 @@
  * （Issue #66 已知缺口）；本文件随 EVENT-016/017 的修复同步更新为断言
  * 优雅跳过（exit 0），并新增 system note/非 MR note 两个同类场景。
  */
-import {
-  describe,
-  expect,
-  test,
-  jest,
-  beforeEach,
-  afterEach
-} from '@jest/globals'
+import {describe, expect, test, jest, beforeEach, afterEach} from '@jest/globals'
 
 import mrOpen from './fixtures/gitlab-mr-hook-open.json'
 import mrFork from './fixtures/gitlab-mr-hook-fork.json'
@@ -88,9 +81,7 @@ describe('gitlab-trigger.ts run()', () => {
 
     await runTrigger()
 
-    expect(errorSpy).toHaveBeenCalledWith(
-      '[ERROR] TRIGGER_PAYLOAD content is not valid JSON'
-    )
+    expect(errorSpy).toHaveBeenCalledWith('[ERROR] TRIGGER_PAYLOAD content is not valid JSON')
     expect(process.exitCode).toBe(1)
   })
 
@@ -117,9 +108,7 @@ describe('gitlab-trigger.ts run()', () => {
     expect(process.exitCode).toBeUndefined()
     // GitLabLogger.warning → console.warn（带 [WARNING] 前缀）
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'Skipped: Unsupported GitLab object_kind: pipeline'
-      )
+      expect.stringContaining('Skipped: Unsupported GitLab object_kind: pipeline')
     )
   })
 
@@ -181,18 +170,13 @@ describe('gitlab-trigger.ts run()', () => {
 
     expect(errorSpy).not.toHaveBeenCalled()
     expect(process.exitCode).toBeUndefined()
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('is not MergeRequest')
-    )
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('is not MergeRequest'))
   })
 
   test('ARCH-015: gitlab-trigger.ts 不 import orchestrator / @actions/core / @actions/github', () => {
     const fs = require('fs')
     const path = require('path')
-    const source = fs.readFileSync(
-      path.resolve(__dirname, '../src/gitlab-trigger.ts'),
-      'utf8'
-    )
+    const source = fs.readFileSync(path.resolve(__dirname, '../src/gitlab-trigger.ts'), 'utf8')
     expect(source).not.toContain("from './platform/orchestrator'")
     expect(source).not.toContain("from '@actions/core'")
     expect(source).not.toContain("from '@actions/github'")

@@ -56,11 +56,7 @@ function makeActor(login: string | undefined | null): ActorInfo {
 export function createGitHubExecutionContext(): ExecutionContext {
   const eventName = process.env.GITHUB_EVENT_NAME
   if (eventName == null || eventName === '') {
-    throw new ExecutionContextError(
-      'GITHUB_EVENT_NAME is not set',
-      'github',
-      'missing_payload'
-    )
+    throw new ExecutionContextError('GITHUB_EVENT_NAME is not set', 'github', 'missing_payload')
   }
 
   const mapper = EVENT_MAP[eventName]
@@ -76,10 +72,7 @@ export function createGitHubExecutionContext(): ExecutionContext {
   const eventKind = mapper(githubContext.payload)
 
   // pull_request* 事件
-  if (
-    eventKind !== 'comment_created' &&
-    eventKind !== 'review_comment_created'
-  ) {
+  if (eventKind !== 'comment_created' && eventKind !== 'review_comment_created') {
     const pr = (githubContext.payload as any).pull_request
     if (pr == null) {
       throw new ExecutionContextError(
@@ -125,8 +118,7 @@ export function createGitHubExecutionContext(): ExecutionContext {
     baseSha: '',
     headSha: '',
     comment: {
-      kind:
-        eventKind === 'review_comment_created' ? 'review_thread' : 'top_level',
+      kind: eventKind === 'review_comment_created' ? 'review_thread' : 'top_level',
       id: comment.id,
       threadId: comment.node_id
     },

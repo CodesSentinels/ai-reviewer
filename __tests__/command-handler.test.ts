@@ -36,8 +36,7 @@ const conversationState = {
 }
 jest.mock('./../src/conversation', () => ({
   handleConversation: (...a: any[]) => conversationState.handleConversation(...a),
-  handleIssueConversation: (...a: any[]) =>
-    conversationState.handleIssueConversation(...a)
+  handleIssueConversation: (...a: any[]) => conversationState.handleIssueConversation(...a)
 }))
 
 import {handleCommentEvent} from '../src/command-handler'

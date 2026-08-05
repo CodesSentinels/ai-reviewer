@@ -22,9 +22,7 @@ describe('EVENT-014: 顶层 MR note → comment.kind=top_level, eventKind=commen
     expect(execCtx.comment?.threadId).toBeUndefined()
     // 命令解析器（EVENT-019）只依赖评论正文，不依赖 ExecutionContext 本身，
     // 这里确认原始 note body 保留在 raw 里，供 adapter 层取出后传给 parser
-    expect((execCtx.raw as any).object_attributes.note).toBe(
-      '@ai-reviewer review'
-    )
+    expect((execCtx.raw as any).object_attributes.note).toBe('@ai-reviewer review')
   })
 })
 

@@ -103,8 +103,7 @@ jest.mock('../src/octokit', () => ({
       updateComment: (...a: any[]) => octokitState.updateComment(...a)
     },
     reactions: {
-      createForIssueComment: (...a: any[]) =>
-        octokitState.createReactionForIssueComment(...a),
+      createForIssueComment: (...a: any[]) => octokitState.createReactionForIssueComment(...a),
       createForPullRequestReviewComment: (...a: any[]) =>
         octokitState.createReactionForPRComment(...a)
     }

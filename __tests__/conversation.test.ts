@@ -18,11 +18,7 @@ jest.mock('../src/commenter', () => ({
 jest.mock('../src/octokit', () => ({octokit: {}}))
 jest.mock('../src/tokenizer', () => ({getTokenCount: () => 0}))
 
-import {
-  isFollowUpQuestion,
-  countBotTurns,
-  truncateConversationChain
-} from '../src/conversation'
+import {isFollowUpQuestion, countBotTurns, truncateConversationChain} from '../src/conversation'
 
 const BOT_REPLY = '<!-- BOT_REPLY -->'
 const BOT_COMMENT = '<!-- BOT_COMMENT -->'
@@ -101,9 +97,7 @@ describe('truncateConversationChain — 截断与压缩', () => {
   })
 
   test('超长对话保留最近内容并标注省略', () => {
-    const turns = Array.from({length: 20}, (_, i) =>
-      `u: 第 ${i} 轮`.padEnd(50, 'x')
-    )
+    const turns = Array.from({length: 20}, (_, i) => `u: 第 ${i} 轮`.padEnd(50, 'x'))
     const chain = turns.join('\n---\n')
     const out = truncateConversationChain(chain, 200)
     expect(out.length).toBeLessThan(chain.length)

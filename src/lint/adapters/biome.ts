@@ -19,12 +19,7 @@
 
 import {info} from '@actions/core'
 import {ensureToolInstalled} from '../tool-installer'
-import {
-  type InstallSpec,
-  type LintResult,
-  type ToolAdapter,
-  type ToolDetection
-} from '../types'
+import {type InstallSpec, type LintResult, type ToolAdapter, type ToolDetection} from '../types'
 import {extractVersion, runCommand} from './exec'
 
 /**
@@ -62,9 +57,7 @@ function parseGithubAnnotation(line: string): ParsedAnnotation | null {
   }
 }
 
-function severityFromLevel(
-  level: ParsedAnnotation['level']
-): LintResult['severity'] {
+function severityFromLevel(level: ParsedAnnotation['level']): LintResult['severity'] {
   if (level === 'error') return 'error'
   if (level === 'warning') return 'warning'
   return 'info'
@@ -85,16 +78,7 @@ export class BiomeAdapter implements ToolAdapter {
   readonly name = 'biome'
   readonly displayName = 'Biome'
   readonly supportedLanguages = ['javascript', 'typescript']
-  readonly fileExtensions = [
-    '.js',
-    '.jsx',
-    '.mjs',
-    '.cjs',
-    '.ts',
-    '.tsx',
-    '.mts',
-    '.cts'
-  ]
+  readonly fileExtensions = ['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts']
   readonly defaultEnabled = true
 
   /**
@@ -110,10 +94,7 @@ export class BiomeAdapter implements ToolAdapter {
   private resolvedVersion = ''
   private resolvedBinPath = ''
 
-  async detect(
-    repoRoot: string,
-    versionOverride?: string
-  ): Promise<ToolDetection> {
+  async detect(repoRoot: string, versionOverride?: string): Promise<ToolDetection> {
     // 1) 让 installer 装到沙箱（待审查项目不需要 @biomejs/biome）
     const spec: InstallSpec =
       versionOverride && versionOverride.length > 0
@@ -155,9 +136,7 @@ export class BiomeAdapter implements ToolAdapter {
   async scan(files: string[], repoRoot: string): Promise<LintResult[]> {
     if (files.length === 0) return []
 
-    info(
-      `lint/biome: scanning ${files.length} files via ${this.resolvedBinPath}`
-    )
+    info(`lint/biome: scanning ${files.length} files via ${this.resolvedBinPath}`)
     // --reporter=github 输出 GitHub Actions 标注格式（一行一条诊断），
     // --max-diagnostics=999 防止默认 20 条上限把发现截断
     const result = await runCommand({
@@ -193,12 +172,8 @@ export class BiomeAdapter implements ToolAdapter {
 
       const lineNo = parseInt(ann.fields.line ?? '1', 10)
       const colNo = parseInt(ann.fields.col ?? ann.fields.column ?? '1', 10)
-      const endLineNo = ann.fields.endLine
-        ? parseInt(ann.fields.endLine, 10)
-        : undefined
-      const endColNo = ann.fields.endColumn
-        ? parseInt(ann.fields.endColumn, 10)
-        : undefined
+      const endLineNo = ann.fields.endLine ? parseInt(ann.fields.endLine, 10) : undefined
+      const endColNo = ann.fields.endColumn ? parseInt(ann.fields.endColumn, 10) : undefined
 
       const ruleId = ann.fields.title ?? 'biome/unknown'
 
@@ -217,9 +192,7 @@ export class BiomeAdapter implements ToolAdapter {
         category: categoryToType(ruleId)
       })
     }
-    info(
-      `lint/biome: parsed ${results.length} finding(s) from --reporter=github output`
-    )
+    info(`lint/biome: parsed ${results.length} finding(s) from --reporter=github output`)
     return results
   }
 }

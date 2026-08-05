@@ -150,10 +150,7 @@ describe('dispatcher — 事件过滤', () => {
   })
 
   test('action !== created → ignored', async () => {
-    setEvent(
-      'issue_comment',
-      buildIssueCommentPayload('@ai-reviewer help', {action: 'edited'})
-    )
+    setEvent('issue_comment', buildIssueCommentPayload('@ai-reviewer help', {action: 'edited'}))
     const r = await dispatchCommentEvent({options: stubOptions})
     expect(r.kind).toBe('ignored')
   })
@@ -185,19 +182,13 @@ describe('dispatcher — 解析与 fallback', () => {
   })
 
   test('@bot 后跟自然语言（中文）→ fallback_conversation', async () => {
-    setEvent(
-      'issue_comment',
-      buildIssueCommentPayload('@ai-reviewer 这里为啥这样写？')
-    )
+    setEvent('issue_comment', buildIssueCommentPayload('@ai-reviewer 这里为啥这样写？'))
     const r = await dispatchCommentEvent({options: stubOptions})
     expect(r.kind).toBe('fallback_conversation')
   })
 
   test('@bot 后跟未知 ASCII 命令 → UNKNOWN_COMMAND with help listing and ACK reaction', async () => {
-    setEvent(
-      'issue_comment',
-      buildIssueCommentPayload('@ai-reviewer invalidcmd')
-    )
+    setEvent('issue_comment', buildIssueCommentPayload('@ai-reviewer invalidcmd'))
     const r = await dispatchCommentEvent({options: stubOptions})
     expect(r).toEqual({
       kind: 'executed',
@@ -231,10 +222,7 @@ describe('dispatcher — 解析与 fallback', () => {
   })
 
   test('review_comment 未知命令 → 回复到 thread 而非主评论区', async () => {
-    setEvent(
-      'pull_request_review_comment',
-      buildReviewCommentPayload('@ai-reviewer invalidcmd')
-    )
+    setEvent('pull_request_review_comment', buildReviewCommentPayload('@ai-reviewer invalidcmd'))
     const r = await dispatchCommentEvent({options: stubOptions})
     expect(r).toEqual({
       kind: 'executed',
@@ -280,19 +268,13 @@ describe('dispatcher — 命令执行', () => {
   })
 
   test('review_comment 上的 help 命令', async () => {
-    setEvent(
-      'pull_request_review_comment',
-      buildReviewCommentPayload('@ai-reviewer help')
-    )
+    setEvent('pull_request_review_comment', buildReviewCommentPayload('@ai-reviewer help'))
     const r = await dispatchCommentEvent({options: stubOptions})
     expect(r.kind).toBe('executed')
   })
 
   test('非法参数 → INVALID_ARGS', async () => {
-    setEvent(
-      'issue_comment',
-      buildIssueCommentPayload('@ai-reviewer review $(whoami)')
-    )
+    setEvent('issue_comment', buildIssueCommentPayload('@ai-reviewer review $(whoami)'))
     const r = await dispatchCommentEvent({options: stubOptions})
     expect(r.kind).toBe('executed')
     if (r.kind === 'executed') {
@@ -354,10 +336,7 @@ describe('dispatcher — 命令执行', () => {
 
   test('full review 命令触发全量审查', async () => {
     const triggerReview: any = jest.fn().mockResolvedValue(undefined as never)
-    setEvent(
-      'issue_comment',
-      buildIssueCommentPayload('@ai-reviewer full review')
-    )
+    setEvent('issue_comment', buildIssueCommentPayload('@ai-reviewer full review'))
     const r = await dispatchCommentEvent({options: stubOptions, triggerReview})
     expect(r).toEqual({kind: 'executed', command: 'full review', ok: true})
     expect(triggerReview).toHaveBeenCalledWith('full')
@@ -375,10 +354,7 @@ describe('dispatcher — 命令执行', () => {
         createdAt: '2024-01-01T00:00:00Z'
       }
     ])
-    setEvent(
-      'issue_comment',
-      buildIssueCommentPayload('@ai-reviewer full review')
-    )
+    setEvent('issue_comment', buildIssueCommentPayload('@ai-reviewer full review'))
     const r = await dispatchCommentEvent({options: stubOptions, triggerReview})
     expect(r).toEqual({kind: 'executed', command: 'full review', ok: true})
     expect(triggerReview).not.toHaveBeenCalled()

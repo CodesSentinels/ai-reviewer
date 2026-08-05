@@ -5,10 +5,7 @@
  * 参考 docs/tasks/gitlab-note-hook-design.md 第 3.3/3.5/3.6 节。
  */
 import {describe, expect, test} from '@jest/globals'
-import {
-  isSelfNote,
-  buildNoteIdempotencyKey
-} from '../src/gitlab-note-hook-rules'
+import {isSelfNote, buildNoteIdempotencyKey} from '../src/gitlab-note-hook-rules'
 
 describe('EVENT-018: isSelfNote()', () => {
   test('actorLogin 与 configuredPatUsername 相同（大小写一致）→ true', () => {
@@ -30,9 +27,7 @@ describe('EVENT-018: isSelfNote()', () => {
 
 describe('EVENT-020: buildNoteIdempotencyKey()', () => {
   test('格式为 gitlab:{project_id}:{mr_iid}:note:{note_id}:create', () => {
-    expect(buildNoteIdempotencyKey('42', 7, 5001)).toBe(
-      'gitlab:42:7:note:5001:create'
-    )
+    expect(buildNoteIdempotencyKey('42', 7, 5001)).toBe('gitlab:42:7:note:5001:create')
   })
 
   test('不同 project_id/mr_iid/note_id 组合产生不同的键（无碰撞）', () => {

@@ -58,10 +58,7 @@ class FakeAdapter implements ToolAdapter {
     this.defaultEnabled = defaultEnabled
   }
 
-  async detect(
-    _repoRoot: string,
-    versionOverride?: string
-  ): Promise<ToolDetection> {
+  async detect(_repoRoot: string, versionOverride?: string): Promise<ToolDetection> {
     this.lastVersionOverride = versionOverride
     return this.detection
   }
@@ -72,9 +69,7 @@ class FakeAdapter implements ToolAdapter {
   }
 }
 
-const filesAndChanges: Array<
-  [string, string, string, Array<[number, number, string]>]
-> = [
+const filesAndChanges: Array<[string, string, string, Array<[number, number, string]>]> = [
   [
     'src/a.ts',
     'content',
@@ -98,16 +93,8 @@ describe('runLintTools', () => {
       message: 'oops',
       fixable: false
     }
-    const enabled = new FakeAdapter(
-      'fake',
-      {available: true, version: '1.0.0'},
-      [finding]
-    )
-    const unavailable = new FakeAdapter(
-      'gone',
-      {available: false, reason: 'not installed'},
-      []
-    )
+    const enabled = new FakeAdapter('fake', {available: true, version: '1.0.0'}, [finding])
+    const unavailable = new FakeAdapter('gone', {available: false, reason: 'not installed'}, [])
     const disabled = new FakeAdapter('off', {available: true, version: '1'}, [
       {...finding, tool: 'off'}
     ])
@@ -143,15 +130,9 @@ describe('runLintTools', () => {
       message: 'far away',
       fixable: false
     }
-    const adapter = new FakeAdapter(
-      'fake',
-      {available: true, version: '1.0.0'},
-      [outOfWindow]
-    )
+    const adapter = new FakeAdapter('fake', {available: true, version: '1.0.0'}, [outOfWindow])
 
-    const report = await runLintTools({repoRoot: '/tmp', filesAndChanges}, [
-      adapter
-    ])
+    const report = await runLintTools({repoRoot: '/tmp', filesAndChanges}, [adapter])
     expect(report.results.length).toBe(0)
   })
 
@@ -161,7 +142,7 @@ describe('runLintTools', () => {
       tool: 'fake',
       toolVersion: '1.0.0',
       file: 'src/a.ts',
-      line: 2,                      // changed line is 2 → 命中
+      line: 2, // changed line is 2 → 命中
       column: 1,
       severity: 'error',
       ruleId: 'fake/A',
@@ -181,15 +162,13 @@ describe('runLintTools', () => {
       message: 'off-2',
       severity: 'warning'
     }
-    const adapter = new FakeAdapter(
-      'fake',
-      {available: true, version: '1.0.0'},
-      [onChanged, offChanged1, offChanged2]
-    )
-
-    const report = await runLintTools({repoRoot: '/tmp', filesAndChanges}, [
-      adapter
+    const adapter = new FakeAdapter('fake', {available: true, version: '1.0.0'}, [
+      onChanged,
+      offChanged1,
+      offChanged2
     ])
+
+    const report = await runLintTools({repoRoot: '/tmp', filesAndChanges}, [adapter])
 
     expect(report.results.length).toBe(1) // 只有变更行上的进入最终结果
     const s = report.toolSummaries[0]
@@ -202,42 +181,29 @@ describe('runLintTools', () => {
   })
 
   test('adapter throwing during scan is treated as no findings', async () => {
-    const adapter = new FakeAdapter(
-      'fake',
-      {available: true, version: '1.0.0'},
-      [],
-      true,
-      true
-    )
-    const report = await runLintTools({repoRoot: '/tmp', filesAndChanges}, [
-      adapter
-    ])
+    const adapter = new FakeAdapter('fake', {available: true, version: '1.0.0'}, [], true, true)
+    const report = await runLintTools({repoRoot: '/tmp', filesAndChanges}, [adapter])
     expect(report.results.length).toBe(0)
     expect(report.toolSummaries[0].available).toBe(true)
   })
 
   test('disabled flag short-circuits the orchestrator', async () => {
-    const adapter = new FakeAdapter(
-      'fake',
-      {available: true, version: '1.0.0'},
-      [
-        {
-          tool: 'fake',
-          toolVersion: '1.0.0',
-          file: 'src/a.ts',
-          line: 2,
-          column: 1,
-          severity: 'error',
-          ruleId: 'fake/rule',
-          message: 'oops',
-          fixable: false
-        }
-      ]
-    )
-    const report = await runLintTools(
-      {repoRoot: '/tmp', filesAndChanges, disabled: true},
-      [adapter]
-    )
+    const adapter = new FakeAdapter('fake', {available: true, version: '1.0.0'}, [
+      {
+        tool: 'fake',
+        toolVersion: '1.0.0',
+        file: 'src/a.ts',
+        line: 2,
+        column: 1,
+        severity: 'error',
+        ruleId: 'fake/rule',
+        message: 'oops',
+        fixable: false
+      }
+    ])
+    const report = await runLintTools({repoRoot: '/tmp', filesAndChanges, disabled: true}, [
+      adapter
+    ])
     expect(report.results.length).toBe(0)
     expect(report.toolSummaries.length).toBe(0)
   })

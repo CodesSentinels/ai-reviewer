@@ -34,10 +34,7 @@ export interface ReplyContext {
 }
 
 /** 组装幂等 tag */
-export function buildCmdReplyTag(
-  originalCommentId: number,
-  commandName: string
-): string {
+export function buildCmdReplyTag(originalCommentId: number, commandName: string): string {
   return `${CMD_REPLY_TAG_PREFIX}:${originalCommentId}:${commandName} -->`
 }
 
@@ -48,16 +45,13 @@ export function formatErrorMessage(code: ErrorCode, detail?: string): string {
 }
 
 const ERROR_MESSAGES: Record<ErrorCode, string> = {
-  UNKNOWN_COMMAND:
-    '❓ **未知命令**。发送 `@ai-reviewer help` 查看支持的命令列表。',
-  INVALID_ARGS:
-    '⚠️ **参数不合法**。命令参数仅接受字母、数字以及 `._-/:=` 字符。',
+  UNKNOWN_COMMAND: '❓ **未知命令**。发送 `@ai-reviewer help` 查看支持的命令列表。',
+  INVALID_ARGS: '⚠️ **参数不合法**。命令参数仅接受字母、数字以及 `._-/:=` 字符。',
   FORBIDDEN: '🚫 **权限不足**。执行该命令需要仓库 `write` 及以上权限。',
   BOT_FORBIDDEN:
     '🚫 **Bot 权限不足**。请检查 workflow `permissions` 配置（pull-requests: write / contents: read）。',
   NOT_IMPLEMENTED: '🚧 **命令暂未实现**。该命令已在路线图中，等待实现。',
-  RATE_LIMITED:
-    '⏱️ **请求过于频繁**。同一用户在 60 秒内最多执行 10 条命令，请稍后再试。',
+  RATE_LIMITED: '⏱️ **请求过于频繁**。同一用户在 60 秒内最多执行 10 条命令，请稍后再试。',
   DUPLICATE: 'ℹ️ **命令已处理**（重复事件已去重）。',
   INTERNAL: '💥 **命令执行失败**。错误已记录，请联系维护者。'
 }
@@ -100,14 +94,8 @@ export class Reply implements IReply {
     await this.publish(body, ackId)
   }
 
-  async error(
-    code: ErrorCode,
-    detail?: string,
-    ackId?: number | null
-  ): Promise<void> {
-    const body = this.wrap(
-      `${formatErrorMessage(code, detail)}\n\n\`错误码: ${code}\``
-    )
+  async error(code: ErrorCode, detail?: string, ackId?: number | null): Promise<void> {
+    const body = this.wrap(`${formatErrorMessage(code, detail)}\n\n\`错误码: ${code}\``)
     await this.publish(body, ackId)
     getLogger().info(`command error [${code}] ${detail ?? ''}`)
   }
@@ -115,12 +103,7 @@ export class Reply implements IReply {
   async progress(message: string, ackId: number): Promise<void> {
     const body = this.wrap(`⏳ ${message}`)
     try {
-      await getPlatform().updateComment(
-        this.ctx.owner,
-        this.ctx.repo,
-        ackId,
-        body
-      )
+      await getPlatform().updateComment(this.ctx.owner, this.ctx.repo, ackId, body)
     } catch (e) {
       getLogger().warning(`reply.progress update failed: ${String(e)}`)
     }
@@ -135,9 +118,7 @@ export class Reply implements IReply {
         await platform.updateComment(this.ctx.owner, this.ctx.repo, ackId, body)
         return
       } catch (e) {
-        logger.warning(
-          `reply.publish update failed, falling back to create: ${String(e)}`
-        )
+        logger.warning(`reply.publish update failed, falling back to create: ${String(e)}`)
       }
     }
     // 行级评论场景：回复到同一 review thread
@@ -153,32 +134,20 @@ export class Reply implements IReply {
         return
       } catch (e) {
         logger.warning(
-          `reply.publish review thread reply failed, falling back to issue comment: ${String(
-            e
-          )}`
+          `reply.publish review thread reply failed, falling back to issue comment: ${String(e)}`
         )
       }
     }
     try {
-      await platform.createComment(
-        this.ctx.owner,
-        this.ctx.repo,
-        this.ctx.issueNumber,
-        body
-      )
+      await platform.createComment(this.ctx.owner, this.ctx.repo, this.ctx.issueNumber, body)
     } catch (e) {
       logger.warning(`reply.publish create failed: ${String(e)}`)
     }
   }
 
   private wrap(message: string): string {
-    const tag = buildCmdReplyTag(
-      this.ctx.originalCommentId,
-      this.ctx.commandName
-    )
-    return `${tag}\n${getCommentGreeting()} · \`${
-      this.ctx.commandName
-    }\`\n\n${message}`
+    const tag = buildCmdReplyTag(this.ctx.originalCommentId, this.ctx.commandName)
+    return `${tag}\n${getCommentGreeting()} · \`${this.ctx.commandName}\`\n\n${message}`
   }
 }
 
@@ -203,9 +172,7 @@ export async function hasBeenProcessed(
     }
     return false
   } catch (e) {
-    getLogger().warning(
-      `hasBeenProcessed failed: ${String(e)} — treating as not processed`
-    )
+    getLogger().warning(`hasBeenProcessed failed: ${String(e)} — treating as not processed`)
     return false
   }
 }

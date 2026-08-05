@@ -62,9 +62,7 @@ export async function dispatchEvent(deps: {
       getReviewBots: createBots
     })
   } else {
-    logger.info(
-      `Skipped: eventKind ${execCtx.eventKind} does not trigger model calls`
-    )
+    logger.info(`Skipped: eventKind ${execCtx.eventKind} does not trigger model calls`)
   }
 }
 
@@ -116,25 +114,19 @@ export async function runOrchestrator(deps: OrchestratorDeps): Promise<void> {
     return
   }
 
-  logger.info(
-    `Event: platform=${execCtx.platform} eventKind=${execCtx.eventKind}`
-  )
+  logger.info(`Event: platform=${execCtx.platform} eventKind=${execCtx.eventKind}`)
 
   // 3. 评论事件 ACK
   if (
     deps.earlyReaction &&
-    (execCtx.eventKind === 'comment_created' ||
-      execCtx.eventKind === 'review_comment_created')
+    (execCtx.eventKind === 'comment_created' || execCtx.eventKind === 'review_comment_created')
   ) {
     await deps.earlyReaction(execCtx, options.commandAckReaction)
   }
 
   // 4. 构建提示词
   const promptConfig = configProvider.getPromptConfig()
-  const prompts = new Prompts(
-    promptConfig.summarize,
-    promptConfig.summarizeReleaseNotes
-  )
+  const prompts = new Prompts(promptConfig.summarize, promptConfig.summarizeReleaseNotes)
 
   // 5. 事件分发
   try {

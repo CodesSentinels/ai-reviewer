@@ -77,9 +77,7 @@ function isExempt(rel: string): boolean {
 
 describe('ARCH-023: 共享核心不得新增直接平台依赖', () => {
   const allFiles = collectTsFiles(SRC)
-  const coreFiles = allFiles.filter(
-    f => !isExempt(path.relative(SRC, f).replace(/\\/g, '/'))
-  )
+  const coreFiles = allFiles.filter(f => !isExempt(path.relative(SRC, f).replace(/\\/g, '/')))
 
   test('共享核心文件列表非空（防止 glob 误匹配导致假通过）', () => {
     expect(coreFiles.length).toBeGreaterThan(5)
@@ -134,8 +132,6 @@ describe('ARCH-023: 共享核心不得新增直接平台依赖', () => {
   })
 
   test('GitHub adapter 文件存在', () => {
-    expect(fs.existsSync(path.join(SRC, 'platform/github-platform.ts'))).toBe(
-      true
-    )
+    expect(fs.existsSync(path.join(SRC, 'platform/github-platform.ts'))).toBe(true)
   })
 })

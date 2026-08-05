@@ -36,8 +36,7 @@ const HALF_BLOCK = String.fromCharCode(0x258c) // ▌
 
 describe('sanitizeModelOutput — 裸文本引用标记', () => {
   test('剥离用户实际遇到的乱码（citeturn0search0）', () => {
-    const input =
-      'TS2339 指出的不是"类型小问题"，而是这里会在编译阶段直接失败。citeturn0search0'
+    const input = 'TS2339 指出的不是"类型小问题"，而是这里会在编译阶段直接失败。citeturn0search0'
     const out = sanitizeModelOutput(input)
     expect(out).not.toMatch(/cite[a-z]*turn/i)
     expect(out).toContain('TS2339')
@@ -45,8 +44,7 @@ describe('sanitizeModelOutput — 裸文本引用标记', () => {
   })
 
   test('剥离一段文本中的多个标记', () => {
-    const input =
-      'A说citeturn0search0，B说citeturn1search3，C 没说citeturn2file2。'
+    const input = 'A说citeturn0search0，B说citeturn1search3，C 没说citeturn2file2。'
     const out = sanitizeModelOutput(input)
     expect(out).not.toMatch(/cite[a-z]*turn/i)
     expect(out).toContain('A说')

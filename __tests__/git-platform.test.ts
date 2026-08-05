@@ -94,11 +94,7 @@ describe('GitHubPlatform', () => {
         }
       })
 
-      const result: ChangeRequestInfo = await platform.getChangeRequest(
-        'owner',
-        'repo',
-        42
-      )
+      const result: ChangeRequestInfo = await platform.getChangeRequest('owner', 'repo', 42)
       expect(result.number).toBe(42)
       expect(result.title).toBe('Fix bug')
       expect(result.baseSha).toBe('base123')
@@ -131,9 +127,7 @@ describe('GitHubPlatform', () => {
       err.status = 404
       mockOctokit.pulls.get.mockRejectedValue(err)
 
-      await expect(platform.getChangeRequest('o', 'r', 1)).rejects.toThrow(
-        GitPlatformError
-      )
+      await expect(platform.getChangeRequest('o', 'r', 1)).rejects.toThrow(GitPlatformError)
       try {
         await platform.getChangeRequest('o', 'r', 1)
       } catch (e: any) {
@@ -231,12 +225,7 @@ describe('GitHubPlatform', () => {
         }
       })
 
-      const result: PlatformComment = await platform.createComment(
-        'o',
-        'r',
-        1,
-        'hello'
-      )
+      const result: PlatformComment = await platform.createComment('o', 'r', 1, 'hello')
       expect(result.id).toBe(100)
       expect(result.author).toBe('bot')
     })
@@ -282,11 +271,7 @@ describe('GitHubPlatform', () => {
         ]
       })
 
-      const result: ReviewComment[] = await platform.listReviewComments(
-        'o',
-        'r',
-        1
-      )
+      const result: ReviewComment[] = await platform.listReviewComments('o', 'r', 1)
       expect(result).toHaveLength(1)
       expect(result[0].path).toBe('src/a.ts')
       expect(result[0].startLine).toBe(8)
@@ -381,9 +366,7 @@ describe('GitHubPlatform', () => {
                   path: 'a.ts',
                   line: 10,
                   comments: {
-                    nodes: [
-                      {author: {login: 'github-actions[bot]'}, body: 'fix this'}
-                    ]
+                    nodes: [{author: {login: 'github-actions[bot]'}, body: 'fix this'}]
                   }
                 },
                 {
@@ -410,8 +393,12 @@ describe('GitHubPlatform', () => {
         }
       })
 
-      const result: ReviewThreadInfo[] =
-        await platform.fetchUnresolvedBotThreads('o', 'r', 1, 'github-actions')
+      const result: ReviewThreadInfo[] = await platform.fetchUnresolvedBotThreads(
+        'o',
+        'r',
+        1,
+        'github-actions'
+      )
       expect(result).toHaveLength(1)
       expect(result[0].id).toBe('t1')
       expect(result[0].firstCommentBody).toBe('fix this')
@@ -452,13 +439,9 @@ describe('GitHubPlatform', () => {
     })
 
     test('review_comment 使用 createForPullRequestReviewComment', async () => {
-      mockOctokit.reactions.createForPullRequestReviewComment.mockResolvedValue(
-        {}
-      )
+      mockOctokit.reactions.createForPullRequestReviewComment.mockResolvedValue({})
       await platform.addReaction('o', 'r', 200, 'rocket', 'review_comment')
-      expect(
-        mockOctokit.reactions.createForPullRequestReviewComment
-      ).toHaveBeenCalled()
+      expect(mockOctokit.reactions.createForPullRequestReviewComment).toHaveBeenCalled()
     })
   })
 
@@ -479,9 +462,9 @@ describe('GitHubPlatform', () => {
       err.status = 403
       mockOctokit.repos.getCollaboratorPermissionLevel.mockRejectedValue(err)
 
-      await expect(
-        platform.getCollaboratorPermission('o', 'r', 'user')
-      ).rejects.toThrow(GitPlatformError)
+      await expect(platform.getCollaboratorPermission('o', 'r', 'user')).rejects.toThrow(
+        GitPlatformError
+      )
     })
   })
 
@@ -497,9 +480,7 @@ describe('GitHubPlatform', () => {
     })
 
     test('失败时回退为 github-actions', async () => {
-      mockOctokit.users.getAuthenticated.mockRejectedValue(
-        new Error('no scope')
-      )
+      mockOctokit.users.getAuthenticated.mockRejectedValue(new Error('no scope'))
       const login = await platform.getAuthenticatedLogin()
       expect(login).toBe('github-actions')
     })
@@ -529,9 +510,7 @@ describe('GitHubPlatform', () => {
       err.status = 500
       mockOctokit.git.getTree.mockRejectedValue(err)
 
-      await expect(
-        platform.listRepositoryTree('o', 'r', 'sha')
-      ).rejects.toThrow(GitPlatformError)
+      await expect(platform.listRepositoryTree('o', 'r', 'sha')).rejects.toThrow(GitPlatformError)
     })
   })
 

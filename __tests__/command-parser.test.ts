@@ -51,7 +51,6 @@ describe('parse — bot mention 识别', () => {
     expect(r.command?.name).toBe('help')
   })
 
-
   test('bot mention 忽略大小写', () => {
     expect(parse('@AI-Reviewer help', opts).command?.name).toBe('help')
     expect(parse('@CodeSentinel help', opts).command?.name).toBe('help')
@@ -94,9 +93,7 @@ describe('parse — 命令命中', () => {
 
   test('命令名不区分大小写', () => {
     expect(parse('@ai-reviewer REVIEW', opts).command?.name).toBe('review')
-    expect(parse('@ai-reviewer Full Review', opts).command?.name).toBe(
-      'full review'
-    )
+    expect(parse('@ai-reviewer Full Review', opts).command?.name).toBe('full review')
   })
 
   test('mention 后紧跟标点: @ai-reviewer: help', () => {

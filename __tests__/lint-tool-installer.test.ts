@@ -9,14 +9,7 @@
  * 不真实执行 npm — runCommand 全部 mock，纯单元测试。
  */
 
-import {
-  describe,
-  expect,
-  jest,
-  test,
-  beforeEach,
-  afterEach
-} from '@jest/globals'
+import {describe, expect, jest, test, beforeEach, afterEach} from '@jest/globals'
 import {existsSync, mkdtempSync, rmSync, statSync, writeFileSync} from 'fs'
 import * as path from 'path'
 
@@ -55,15 +48,8 @@ jest.mock('os', () => {
   }
 })
 
-import {
-  ensureToolInstalled,
-  npmRangeToPipSpecifier
-} from '../src/lint/tool-installer'
-import {
-  type BinaryInstallSpec,
-  type NpmInstallSpec,
-  type PipInstallSpec
-} from '../src/lint/types'
+import {ensureToolInstalled, npmRangeToPipSpecifier} from '../src/lint/tool-installer'
+import {type BinaryInstallSpec, type NpmInstallSpec, type PipInstallSpec} from '../src/lint/types'
 
 const npmSpec: NpmInstallSpec = {
   kind: 'npm',
@@ -136,13 +122,7 @@ describe('ensureToolInstalled — npm 策略', () => {
 
     expect(result.ok).toBe(true)
     expect(result.binPath).toBe(
-      path.join(
-        testTmp,
-        'ai-reviewer-lint-tools',
-        'node_modules',
-        '.bin',
-        'eslint'
-      )
+      path.join(testTmp, 'ai-reviewer-lint-tools', 'node_modules', '.bin', 'eslint')
     )
     expect(existsSync(result.binPath as string)).toBe(true)
     // npm install 应被调用一次
@@ -150,11 +130,7 @@ describe('ensureToolInstalled — npm 策略', () => {
     const call = runCommandMock.mock.calls[0][0] as Record<string, unknown>
     expect(call.command).toBe('npm')
     expect(call.args).toEqual(
-      expect.arrayContaining([
-        'install',
-        'eslint@^9.15.0',
-        '--legacy-peer-deps'
-      ])
+      expect.arrayContaining(['install', 'eslint@^9.15.0', '--legacy-peer-deps'])
     )
   })
 
@@ -276,13 +252,7 @@ describe('ensureToolInstalled — pip 策略（Phase 4：semgrep）', () => {
 
     expect(result.ok).toBe(true)
     expect(result.binPath).toBe(
-      path.join(
-        testTmp,
-        'ai-reviewer-lint-tools',
-        'python-tools',
-        'bin',
-        'semgrep'
-      )
+      path.join(testTmp, 'ai-reviewer-lint-tools', 'python-tools', 'bin', 'semgrep')
     )
     expect(existsSync(result.binPath as string)).toBe(true)
     // pip install 应被调用一次
@@ -291,9 +261,7 @@ describe('ensureToolInstalled — pip 策略（Phase 4：semgrep）', () => {
     expect(call.command).toBe('python3')
     // npm-range "^1.95.0" 应该被转成 pip range ">=1.95.0,<2"
     const args = call.args as string[]
-    expect(args).toEqual(
-      expect.arrayContaining(['-m', 'pip', 'install', 'semgrep>=1.95.0,<2'])
-    )
+    expect(args).toEqual(expect.arrayContaining(['-m', 'pip', 'install', 'semgrep>=1.95.0,<2']))
     // --target 应指向沙箱 python-tools 子目录
     expect(args.find(a => a.startsWith('--target='))).toBe(
       `--target=${path.join(testTmp, 'ai-reviewer-lint-tools', 'python-tools')}`
@@ -301,12 +269,7 @@ describe('ensureToolInstalled — pip 策略（Phase 4：semgrep）', () => {
   })
 
   test('缓存命中：console script 已存在 → 不再调用 pip', async () => {
-    const binDir = path.join(
-      testTmp,
-      'ai-reviewer-lint-tools',
-      'python-tools',
-      'bin'
-    )
+    const binDir = path.join(testTmp, 'ai-reviewer-lint-tools', 'python-tools', 'bin')
     require('fs').mkdirSync(binDir, {recursive: true})
     writeFileSync(path.join(binDir, 'semgrep'), '#!/usr/bin/env python3\n')
 
@@ -319,11 +282,7 @@ describe('ensureToolInstalled — pip 策略（Phase 4：semgrep）', () => {
 
   test('沙箱 python-tools 子目录被自动创建', async () => {
     mockPipInstallSuccess('semgrep')
-    const pythonToolsDir = path.join(
-      testTmp,
-      'ai-reviewer-lint-tools',
-      'python-tools'
-    )
+    const pythonToolsDir = path.join(testTmp, 'ai-reviewer-lint-tools', 'python-tools')
     expect(existsSync(pythonToolsDir)).toBe(false)
 
     await ensureToolInstalled(pipSpec)
@@ -337,8 +296,7 @@ describe('ensureToolInstalled — pip 策略（Phase 4：semgrep）', () => {
       exitCode: 1,
       timedOut: false,
       stdout: '',
-      stderr:
-        'ERROR: Could not find a version that satisfies the requirement semgrep\n',
+      stderr: 'ERROR: Could not find a version that satisfies the requirement semgrep\n',
       spawnError: false
     })
 

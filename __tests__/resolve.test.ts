@@ -17,8 +17,7 @@ import type {ReviewThread} from '../src/github/review-thread'
 const mockPlatform = {
   getAuthenticatedLogin: jest.fn<() => Promise<string>>(),
   fetchUnresolvedBotThreads: jest.fn<() => Promise<ReviewThread[]>>(),
-  resolveThreads:
-    jest.fn<() => Promise<{ok: number; failed: number; errors: Error[]}>>()
+  resolveThreads: jest.fn<() => Promise<{ok: number; failed: number; errors: Error[]}>>()
 }
 
 jest.mock('../src/platform/git-platform', () => ({
@@ -122,10 +121,7 @@ describe('fetchUnresolvedBotThreads', () => {
     mockPlatform.fetchUnresolvedBotThreads.mockResolvedValueOnce([
       makeThread({id: 't2', firstCommentAuthorLogin: 'cs-bot'})
     ])
-    const threads = await fetchUnresolvedBotThreads(
-      {owner: 'o', repo: 'r', prNumber: 1},
-      'cs-bot'
-    )
+    const threads = await fetchUnresolvedBotThreads({owner: 'o', repo: 'r', prNumber: 1}, 'cs-bot')
     expect(threads).toHaveLength(1)
     expect(threads[0].id).toBe('t2')
   })
@@ -139,10 +135,7 @@ describe('fetchUnresolvedBotThreads', () => {
         firstCommentAuthorLogin: 'cs-bot'
       })
     ])
-    const threads = await fetchUnresolvedBotThreads(
-      {owner: 'o', repo: 'r', prNumber: 1},
-      'cs-bot'
-    )
+    const threads = await fetchUnresolvedBotThreads({owner: 'o', repo: 'r', prNumber: 1}, 'cs-bot')
     expect(threads).toHaveLength(1)
     expect(threads[0].id).toBe('t2')
   })
@@ -166,16 +159,8 @@ describe('fetchUnresolvedBotThreads', () => {
 
   test('平台层被正确调用：传入 owner/repo/prNumber/botLogin', async () => {
     mockPlatform.fetchUnresolvedBotThreads.mockResolvedValueOnce([])
-    await fetchUnresolvedBotThreads(
-      {owner: 'o', repo: 'r', prNumber: 1},
-      'cs-bot'
-    )
-    expect(mockPlatform.fetchUnresolvedBotThreads).toHaveBeenCalledWith(
-      'o',
-      'r',
-      1,
-      'cs-bot'
-    )
+    await fetchUnresolvedBotThreads({owner: 'o', repo: 'r', prNumber: 1}, 'cs-bot')
+    expect(mockPlatform.fetchUnresolvedBotThreads).toHaveBeenCalledWith('o', 'r', 1, 'cs-bot')
   })
 })
 
@@ -245,9 +230,7 @@ describe('resolveHandler.execute', () => {
     mockPlatform.fetchUnresolvedBotThreads.mockResolvedValueOnce([
       makeThread({id: 't1', firstCommentAuthorLogin: 'cs-bot'})
     ])
-    mockPlatform.resolveThreads.mockRejectedValueOnce(
-      new Error('unexpected throw')
-    )
+    mockPlatform.resolveThreads.mockRejectedValueOnce(new Error('unexpected throw'))
 
     const result = await resolveHandler.execute(makeCtx())
     expect(result.message).toMatch(/❌/)
@@ -277,12 +260,8 @@ describe('batchResolve', () => {
 
     test('多线程全为权限错误 → warning 仍只输出一次', async () => {
       mockPlatform.resolveThreads
-        .mockRejectedValueOnce(
-          new Error('Resource not accessible by integration')
-        )
-        .mockRejectedValueOnce(
-          new Error('Resource not accessible by integration')
-        )
+        .mockRejectedValueOnce(new Error('Resource not accessible by integration'))
+        .mockRejectedValueOnce(new Error('Resource not accessible by integration'))
 
       await batchResolve([makeThread({id: 't1'}), makeThread({id: 't2'})])
 
@@ -290,9 +269,7 @@ describe('batchResolve', () => {
     })
 
     test('非权限错误 → warning 输出含 path:line 和注释摘要的标签', async () => {
-      mockPlatform.resolveThreads.mockRejectedValueOnce(
-        new Error('network timeout')
-      )
+      mockPlatform.resolveThreads.mockRejectedValueOnce(new Error('network timeout'))
 
       await batchResolve([
         makeThread({
@@ -320,9 +297,7 @@ describe('batchResolve', () => {
 
     test('混合错误 → 权限 warning + 其他 warning 各一条', async () => {
       mockPlatform.resolveThreads
-        .mockRejectedValueOnce(
-          new Error('Resource not accessible by integration')
-        )
+        .mockRejectedValueOnce(new Error('Resource not accessible by integration'))
         .mockRejectedValueOnce(new Error('network timeout'))
 
       await batchResolve([
@@ -343,9 +318,7 @@ describe('batchResolve', () => {
         errors: [new Error('network timeout')]
       })
 
-      const result = await batchResolve([
-        makeThread({path: 'src/x.ts', line: 5})
-      ])
+      const result = await batchResolve([makeThread({path: 'src/x.ts', line: 5})])
 
       expect(result.ok).toBe(0)
       expect(result.failed).toBe(1)
