@@ -11,7 +11,7 @@
 import {readFileSync} from 'fs'
 import {createGitLabExecutionContext} from './platform/gitlab-execution-context'
 import {GitLabLogger} from './platform/gitlab-logger'
-import {GitLabPlatform} from './platform/gitlab-platform'
+import {GitLabPlatform, type GitLabCredential} from './platform/gitlab-platform'
 import {setPlatform} from './platform/git-platform'
 import {setLogger} from './platform/logger'
 import {handleExecCtxError} from './platform/exec-ctx-error-handler'
@@ -25,14 +25,14 @@ export async function run(): Promise<void> {
   // 初始化 GitLab Logger（ARCH-014）+ Platform（ARCH-018/020）
   setLogger(logger)
 
-  const gitlabToken = process.env.GITLAB_PAT ?? process.env.CI_JOB_TOKEN ?? ''
-  if (gitlabToken === '') {
+  const credential = resolveGitLabCredential()
+  if (credential == null) {
     logger.error('GITLAB_PAT or CI_JOB_TOKEN is required')
     process.exitCode = 1
     return
   }
   const gitlabHost = process.env.CI_SERVER_URL ?? 'https://gitlab.com'
-  setPlatform(new GitLabPlatform(gitlabToken, gitlabHost))
+  setPlatform(new GitLabPlatform(credential, gitlabHost))
 
   const payloadPath = process.env.TRIGGER_PAYLOAD
   if (payloadPath == null || payloadPath === '') {
@@ -92,6 +92,17 @@ export async function run(): Promise<void> {
     `GitLab event validated: platform=${execCtx.platform} eventKind=${execCtx.eventKind} project=${execCtx.projectPath} mr=${execCtx.changeRequestId}`
   )
   // TODO: 待 GLAPI-* 补全后，此处调用 runOrchestrator 或 dispatchEvent 执行审查。
+}
+
+/** PAT 优先；PAT 为空或未设置时 fallback 到 CI_JOB_TOKEN（使用 job-token header） */
+function resolveGitLabCredential(): GitLabCredential | null {
+  const pat = (process.env.GITLAB_PAT ?? '').trim()
+  if (pat !== '') return {type: 'pat', value: pat}
+
+  const jobToken = (process.env.CI_JOB_TOKEN ?? '').trim()
+  if (jobToken !== '') return {type: 'job_token', value: jobToken}
+
+  return null
 }
 
 // 不用顶层 await（同 main.ts 的既有原因）

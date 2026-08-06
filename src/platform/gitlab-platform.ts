@@ -15,7 +15,7 @@ import {
   type ReviewComment,
   type ReviewCommentDraft,
   type ReviewThreadInfo,
-  type TreeEntry,
+  type TreeResult,
   type PlatformPermission,
   type ReactionContent,
   GitPlatformError,
@@ -52,11 +52,20 @@ function notImplemented(method: string): never {
 
 // ─── GitLabPlatform ────────────────────────────────────────────────────────
 
+export interface GitLabCredential {
+  type: 'pat' | 'job_token'
+  value: string
+}
+
 export class GitLabPlatform implements IGitPlatform {
   private api: InstanceType<typeof Gitlab>
 
-  constructor(token: string, host?: string) {
-    this.api = new Gitlab({token, host: host || 'https://gitlab.com'})
+  constructor(credential: GitLabCredential, host?: string) {
+    const h = host || 'https://gitlab.com'
+    this.api =
+      credential.type === 'job_token'
+        ? new Gitlab({host: h, jobToken: credential.value})
+        : new Gitlab({host: h, token: credential.value})
   }
 
   // ─── 10. 仓库文件树（DEP-001 / DEP-004）─────────────────────────────────
@@ -73,21 +82,22 @@ export class GitLabPlatform implements IGitPlatform {
    * - Unicode 路径 → gitbeaker 内部做 URL 编码
    * - API 部分失败 → 抛 GitPlatformError（不静默返回空数组）
    */
-  async listRepositoryTree(owner: string, repo: string, ref: string): Promise<TreeEntry[]> {
+  async listRepositoryTree(owner: string, repo: string, ref: string): Promise<TreeResult> {
     const projectPath = `${owner}/${repo}`
     try {
       const trees = await this.api.Repositories.allRepositoryTrees(projectPath, {
         ref,
         recursive: true
       })
-      // 映射为平台无关的 TreeEntry（只保留 type/path，不泄露 gitbeaker 类型）
-      return trees.map(t => ({type: t.type, path: t.path}))
+      // gitbeaker allRepositoryTrees 自动处理 keyset 分页，不存在截断
+      const entries = trees.map(t => ({type: t.type, path: t.path}))
+      return {entries, truncated: false}
     } catch (e) {
       // 空仓库返回 404 "404 Tree Not Found"，视为合法的空树
       const status = (e as any)?.cause?.response?.status ?? (e as any)?.response?.status
       if (status === 404) {
         const msg = e instanceof Error ? e.message : String(e)
-        if (/tree not found/i.test(msg)) return []
+        if (/tree not found/i.test(msg)) return {entries: [], truncated: false}
       }
       throw toGitPlatformError(e)
     }

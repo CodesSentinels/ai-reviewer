@@ -489,20 +489,34 @@ describe('GitHubPlatform', () => {
   // ─── 10. 仓库文件树 ─────────────────────────────────────────────────
 
   describe('listRepositoryTree (DEP-001/003)', () => {
-    test('返回 tree entries', async () => {
+    test('返回 TreeResult（entries + truncated）', async () => {
       mockOctokit.git.getTree.mockResolvedValue({
         data: {
           tree: [
             {type: 'blob', path: 'src/a.ts'},
             {type: 'tree', path: 'src'},
             {type: 'blob', path: 'README.md'}
-          ]
+          ],
+          truncated: false
         }
       })
 
-      const entries = await platform.listRepositoryTree('o', 'r', 'sha')
-      expect(entries).toHaveLength(3)
-      expect(entries[0]).toEqual({type: 'blob', path: 'src/a.ts'})
+      const result = await platform.listRepositoryTree('o', 'r', 'sha')
+      expect(result.entries).toHaveLength(3)
+      expect(result.entries[0]).toEqual({type: 'blob', path: 'src/a.ts'})
+      expect(result.truncated).toBe(false)
+    })
+
+    test('truncated=true 时正确传递', async () => {
+      mockOctokit.git.getTree.mockResolvedValue({
+        data: {
+          tree: [{type: 'blob', path: 'a.ts'}],
+          truncated: true
+        }
+      })
+
+      const result = await platform.listRepositoryTree('o', 'r', 'sha')
+      expect(result.truncated).toBe(true)
     })
 
     test('API 失败抛出 GitPlatformError', async () => {

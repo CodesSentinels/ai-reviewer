@@ -68,8 +68,13 @@ const context = github_context
 /** 平台无关的 TreeFetcher 实现（DEP-005 → ARCH-018） */
 const platformTreeFetcher: TreeFetcher = {
   async getTree(owner, repoName, treeSha) {
-    const entries = await getPlatform().listRepositoryTree(owner, repoName, treeSha)
-    return entries
+    const result = await getPlatform().listRepositoryTree(owner, repoName, treeSha)
+    if (result.truncated) {
+      getLogger().warning(
+        `repo tree for ${owner}/${repoName}@${treeSha} was truncated by the API — dependency analysis may be incomplete`
+      )
+    }
+    return result.entries
   }
 }
 

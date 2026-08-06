@@ -24,7 +24,7 @@ import {
   type ReviewComment,
   type ReviewCommentDraft,
   type ReviewThreadInfo,
-  type TreeEntry
+  type TreeResult
 } from './git-platform'
 
 // ─── GraphQL documents（ARCH-019：保留在 GitHub adapter 内）──────────────
@@ -712,7 +712,7 @@ export class GitHubPlatform implements IGitPlatform {
 
   // ─── 10. 仓库文件树（DEP-001 / DEP-003）──────────────────────────────────
 
-  async listRepositoryTree(owner: string, repo: string, ref: string): Promise<TreeEntry[]> {
+  async listRepositoryTree(owner: string, repo: string, ref: string): Promise<TreeResult> {
     try {
       const {data} = await octokit.git.getTree({
         owner,
@@ -721,7 +721,7 @@ export class GitHubPlatform implements IGitPlatform {
         tree_sha: ref,
         recursive: 'true'
       })
-      return data.tree
+      return {entries: data.tree, truncated: data.truncated === true}
     } catch (e) {
       throw toGitPlatformError(e)
     }

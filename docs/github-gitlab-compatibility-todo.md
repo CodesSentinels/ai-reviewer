@@ -231,8 +231,10 @@
 - [x] `DEP-004` GitLab tree 实现处理空仓库、subgroup 项目、超大仓库、截断响应
       、Unicode 路径和 API 部分失败；两平台均须区分”成功取得空树””响应被截断/不
       完整”和”API 请求失败”，不得统一静默返回空数组。（`gitlab-platform.ts`
-      `listRepositoryTree` 已实现；`repo-tree.ts` 移除静默吞错误；测试覆盖：
-      `dep-tree-consistency.test.ts` DEP-004 组）
+      `listRepositoryTree` 已实现；`repo-tree.ts` 移除静默吞错误；
+      `TreeResult.truncated` 承载截断状态，GitHub adapter 检查 `data.truncated`，
+      `review.ts` 在截断时输出 warning；测试覆盖：`dep-tree-consistency.test.ts`
+      DEP-004 组 + `git-platform.test.ts` truncated 用例）
 - [x] `DEP-005` 重构 `repo-tree.ts`，移除对 `@actions/core`、`@actions/github`
       和 Octokit 的直接依赖，只保留缓存、过滤、语言识别和 import path 解析。新增
       `TreeFetcher` 接口注入，日志通过 `getLogger()`。GitHub Issue

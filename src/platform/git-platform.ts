@@ -117,6 +117,13 @@ export interface TreeEntry {
   path?: string
 }
 
+/** 文件树查询结果（承载截断状态，DEP-004） */
+export interface TreeResult {
+  entries: TreeEntry[]
+  /** API 明确返回响应被截断（如 GitHub truncated=true） */
+  truncated: boolean
+}
+
 /** 权限等级 */
 export type PlatformPermission = 'admin' | 'maintain' | 'write' | 'triage' | 'read' | 'none'
 
@@ -296,7 +303,7 @@ export interface IGitPlatform {
    * 获取仓库文件树（所有文件路径）。
    * GitHub: Git Tree API (recursive)；GitLab: Repository Tree API (recursive + paginated)。
    */
-  listRepositoryTree(owner: string, repo: string, ref: string): Promise<TreeEntry[]>
+  listRepositoryTree(owner: string, repo: string, ref: string): Promise<TreeResult>
 }
 
 // ─── 平台单例（ARCH-018）────────────────────────────────────────────────
