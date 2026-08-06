@@ -39,6 +39,8 @@ describe('gitlab-trigger.ts run()', () => {
   beforeEach(() => {
     jest.clearAllMocks()
     delete process.env.TRIGGER_PAYLOAD
+    // GitLabPlatform 初始化需要 token
+    process.env.GITLAB_PAT = 'glpat-test-token'
     process.exitCode = undefined
     logSpy = jest.spyOn(console, 'log').mockImplementation(() => {})
     warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {})
@@ -49,7 +51,18 @@ describe('gitlab-trigger.ts run()', () => {
     logSpy.mockRestore()
     warnSpy.mockRestore()
     errorSpy.mockRestore()
+    delete process.env.GITLAB_PAT
+    delete process.env.CI_JOB_TOKEN
     process.exitCode = undefined
+  })
+
+  test('GITLAB_PAT 和 CI_JOB_TOKEN 均未设置 → 报错退出', async () => {
+    delete process.env.GITLAB_PAT
+    delete process.env.CI_JOB_TOKEN
+    await runTrigger()
+
+    expect(errorSpy).toHaveBeenCalledWith('[ERROR] GITLAB_PAT or CI_JOB_TOKEN is required')
+    expect(process.exitCode).toBe(1)
   })
 
   test('TRIGGER_PAYLOAD 未设置 → 报错退出，不读文件', async () => {
