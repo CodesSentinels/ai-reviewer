@@ -223,14 +223,16 @@
 - [x] `DEP-001` **高**：在 `IGitPlatform` 中增加 `listRepositoryTree(ref)` 或等
       价能力；GitLab adapter 使用 Repository Tree API，并支持 recursive 和完整分
       页。（接口已定义，GitLab adapter 实现待 ARCH-020）
-- [ ] `DEP-002` **高**：保持 `dependency-analyzer` + `repo-tree` 的跨文件依赖分
-      析在两个平台语义一致。
+- [x] `DEP-002` **高**：保持 `dependency-analyzer` + `repo-tree` 的跨文件依赖分
+      析在两个平台语义一致。（测试覆盖：`dep-tree-consistency.test.ts` DEP-002 组）
 - [x] `DEP-003` GitHub adapter 使用 Git Tree API 实现 repository tree，保留现有
       recursive 行为；缓存键必须包含
       `platform + project/repository identity + ref`，不得只按 ref 命中。
-- [ ] `DEP-004` GitLab tree 实现处理空仓库、subgroup 项目、超大仓库、截断响应
+- [x] `DEP-004` GitLab tree 实现处理空仓库、subgroup 项目、超大仓库、截断响应
       、Unicode 路径和 API 部分失败；两平台均须区分”成功取得空树””响应被截断/不
-      完整”和”API 请求失败”，不得统一静默返回空数组。
+      完整”和”API 请求失败”，不得统一静默返回空数组。（`gitlab-platform.ts`
+      `listRepositoryTree` 已实现；`repo-tree.ts` 移除静默吞错误；测试覆盖：
+      `dep-tree-consistency.test.ts` DEP-004 组）
 - [x] `DEP-005` 重构 `repo-tree.ts`，移除对 `@actions/core`、`@actions/github`
       和 Octokit 的直接依赖，只保留缓存、过滤、语言识别和 import path 解析。新增
       `TreeFetcher` 接口注入，日志通过 `getLogger()`。GitHub Issue
@@ -239,10 +241,11 @@
       读取接口获取数据。新增 `FileContentFetcher` 接口注入，28 处日志替换为
       `getLogger()`；`review.ts` 提供 GitHub 适配器。GitHub Issue
       [#85](https://github.com/CodesSentinels/ai-reviewer/issues/85) 跟踪。
-- [ ] `DEP-007` 保持 `enable_dependency_analysis` 和 `max_dependency_files` 在两
-      个平台的配置语义一致。
-- [ ] `DEP-008` 同一 repository tree、changed files 和 diff fixture 在两平台产生
-      一致的依赖候选、路径解析、优先级排序和截断结果。
+- [x] `DEP-007` 保持 `enable_dependency_analysis` 和 `max_dependency_files` 在两
+      个平台的配置语义一致。（测试覆盖：`dep-tree-consistency.test.ts` DEP-007 组）
+- [x] `DEP-008` 同一 repository tree、changed files 和 diff fixture 在两平台产生
+      一致的依赖候选、路径解析、优先级排序和截断结果。（测试覆盖：
+      `dep-tree-consistency.test.ts` DEP-008 组）
 
 ### 4.6 Entry Orchestrator
 
