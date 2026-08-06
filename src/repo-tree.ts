@@ -76,26 +76,21 @@ export async function getRepoFileTree(
     return cachedTree
   }
 
-  try {
-    logger.info(`fetching repo tree for: ${cacheKey}`)
-    const tree = await fetcher.getTree(project.owner, project.repo, ref)
+  logger.info(`fetching repo tree for: ${cacheKey}`)
+  const tree = await fetcher.getTree(project.owner, project.repo, ref)
 
-    // 仅保留 blob 类型（文件），排除 tree 类型（目录）
-    const files = tree
-      .filter(item => item.type === 'blob' && item.path != null)
-      .map(item => item.path as string)
+  // 仅保留 blob 类型（文件），排除 tree 类型（目录）
+  const files = tree
+    .filter(item => item.type === 'blob' && item.path != null)
+    .map(item => item.path as string)
 
-    logger.info(`repo tree fetched: ${files.length} files`)
+  logger.info(`repo tree fetched: ${files.length} files`)
 
-    // 更新缓存
-    cachedTree = files
-    cachedTreeKey = cacheKey
+  // 更新缓存
+  cachedTree = files
+  cachedTreeKey = cacheKey
 
-    return files
-  } catch (e: any) {
-    logger.warning(`failed to fetch repo tree: ${e.message}`)
-    return []
-  }
+  return files
 }
 
 /**
