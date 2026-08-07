@@ -218,8 +218,10 @@
       discussion ID 建立类型边界。
 - [x] `ARCH-022` 为分页、429、5xx、超时、404/409 和权限不足定义统一错误语义。
 - [x] `ARCH-023` 增加架构测试，阻止共享核心新增直接平台依赖。
-- [ ] `ARCH-024` `@gitbeaker/rest` 的实例、请求参数、响应类型和错误类型只能存在
+- [x] `ARCH-024` `@gitbeaker/rest` 的实例、请求参数、响应类型和错误类型只能存在
       于 GitLab adapter/客户端层，不得泄露到 `IGitPlatform` 或共享业务核心。
+      （`arch-guard.test.ts` ARCH-024 组 4 个守卫用例：IGitPlatform 不引用
+      gitbeaker、export 不暴露 gitbeaker 类型、api 字段 private、文件存在）
 
 ### 4.5 Repository Tree 与跨文件依赖分析
 

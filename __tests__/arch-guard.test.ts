@@ -135,3 +135,37 @@ describe('ARCH-023: 共享核心不得新增直接平台依赖', () => {
     expect(fs.existsSync(path.join(SRC, 'platform/github-platform.ts'))).toBe(true)
   })
 })
+
+describe('ARCH-024: @gitbeaker/rest 类型不泄露到 IGitPlatform 或共享核心', () => {
+  test('IGitPlatform 定义文件不引用 @gitbeaker', () => {
+    const content = fs.readFileSync(path.join(SRC, 'platform/git-platform.ts'), 'utf8')
+    expect(content).not.toMatch(/from ['"]@gitbeaker\//)
+    // 类型名也不应出现（防止通过 type import 间接引用）
+    expect(content).not.toMatch(/import.*from.*gitbeaker/)
+  })
+
+  test('gitlab-platform.ts 的 export 不暴露 gitbeaker 类型', () => {
+    const content = fs.readFileSync(path.join(SRC, 'platform/gitlab-platform.ts'), 'utf8')
+
+    // 提取所有 export 行（export interface/class/type/function/const）
+    const exportLines = content.split('\n').filter(line => /^export\s/.test(line))
+    expect(exportLines.length).toBeGreaterThan(0)
+
+    // export 的类型签名中不应包含 gitbeaker 的具体类型
+    // （如 Gitlab, RepositoryTreeSchema, ProjectSchema 等）
+    const gitbeakerTypes = /\b(Gitlab|RepositoryTreeSchema|ProjectSchema|MergeRequestSchema)\b/
+    for (const line of exportLines) {
+      expect(line).not.toMatch(gitbeakerTypes)
+    }
+  })
+
+  test('GitLabPlatform 的 api 字段是 private，不泄露到消费方', () => {
+    const content = fs.readFileSync(path.join(SRC, 'platform/gitlab-platform.ts'), 'utf8')
+    // Gitlab 实例必须标记为 private
+    expect(content).toMatch(/private\s+api/)
+  })
+
+  test('GitLab adapter 文件存在', () => {
+    expect(fs.existsSync(path.join(SRC, 'platform/gitlab-platform.ts'))).toBe(true)
+  })
+})
