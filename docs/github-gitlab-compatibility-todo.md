@@ -382,13 +382,13 @@
 
 ### 7.1 项目、MR 和仓库内容
 
-- [ ] `GLAPI-001` 按 project ID 或安全编码的项目路径访问 GitLab 项目。
-- [ ] `GLAPI-002` 获取 MR 标题、描述、作者、状态、source/target project 和分支。
-- [ ] `GLAPI-003` 获取最新 diff version 的 `base_sha`、`head_sha` 和
+- [x] `GLAPI-001` 按 project ID 或安全编码的项目路径访问 GitLab 项目。
+- [x] `GLAPI-002` 获取 MR 标题、描述、作者、状态、source/target project 和分支。
+- [x] `GLAPI-003` 获取最新 diff version 的 `base_sha`、`head_sha` 和
       `start_sha`。
-- [ ] `GLAPI-004` 分页获取 changed files/diffs，处理截断和超大 diff。
-- [ ] `GLAPI-005` 按受控 ref/path 读取仓库文件内容。
-- [ ] `GLAPI-006` 写操作前检查 MR 仍打开且 HEAD 未变化。
+- [x] `GLAPI-004` 分页获取 changed files/diffs，处理截断和超大 diff。
+- [x] `GLAPI-005` 按受控 ref/path 读取仓库文件内容。
+- [x] `GLAPI-006` 写操作前检查 MR 仍打开且 HEAD 未变化。
 
 ### 7.2 Notes
 
