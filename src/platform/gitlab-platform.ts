@@ -1,15 +1,22 @@
 /**
- * platform/gitlab-platform.ts - GitLab REST adapter（ARCH-020 部分实现）
+ * platform/gitlab-platform.ts - GitLab REST adapter（ARCH-020）
  *
- * 当前仅实现 listRepositoryTree（DEP-001/004），其余方法待后续 GLAPI-* 任务补全。
- * 使用 @gitbeaker/rest 作为标准客户端（ARCH-020）。
+ * 使用 @gitbeaker/rest 作为标准客户端。
  * @gitbeaker/rest 类型不泄露到 IGitPlatform 或共享业务核心（ARCH-024）。
+ *
+ * 已实现：
+ * - GLAPI-001/002: getChangeRequest（MR 详情）
+ * - GLAPI-003/004: compareDiff（diff 比较）
+ * - GLAPI-005: getFileContent（文件内容）
+ * - GLAPI-006: getChangeRequest 返回 headSha 供调用方做 HEAD 比较
+ * - DEP-001/004: listRepositoryTree（仓库文件树）
  */
 
 import {Gitlab} from '@gitbeaker/rest'
 import {
   type IGitPlatform,
   type ChangeRequestInfo,
+  type DiffFile,
   type DiffResult,
   type PlatformComment,
   type ReviewComment,
@@ -25,6 +32,7 @@ import {
 // ─── gitbeaker 错误 → GitPlatformError 转换 ────────────────────────────────
 
 function toGitPlatformError(e: unknown): GitPlatformError {
+  if (e instanceof GitPlatformError) return e
   const msg = e instanceof Error ? e.message : String(e)
   const status = (e as any)?.cause?.response?.status ?? (e as any)?.response?.status ?? undefined
 
@@ -48,6 +56,19 @@ function notImplemented(method: string): never {
     `GitLabPlatform.${method}() is not yet implemented (pending GLAPI-* tasks)`,
     'unknown'
   )
+}
+
+// ─── GitLab diff 状态映射 ──────────────────────────────────────────────────
+
+function diffStatus(d: {
+  new_file?: boolean
+  deleted_file?: boolean
+  renamed_file?: boolean
+}): DiffFile['status'] {
+  if (d.new_file) return 'added'
+  if (d.deleted_file) return 'removed'
+  if (d.renamed_file) return 'renamed'
+  return 'modified'
 }
 
 // ─── GitLabPlatform ────────────────────────────────────────────────────────
@@ -122,40 +143,108 @@ export class GitLabPlatform implements IGitPlatform {
     }
   }
 
-  // ─── 以下方法待 GLAPI-* 任务实现 ──────────────────────────────────────────
+  // ─── 1. PR/MR 信息（GLAPI-001/002/006）────────────────────────────────────
 
   async getChangeRequest(
-    _owner: string,
-    _repo: string,
-    _changeRequestId: number
+    owner: string,
+    repo: string,
+    changeRequestId: number
   ): Promise<ChangeRequestInfo> {
-    notImplemented('getChangeRequest')
+    const projectPath = `${owner}/${repo}`
+    try {
+      const mr = await this.api.MergeRequests.show(projectPath, changeRequestId)
+      const state: 'open' | 'closed' | 'merged' =
+        mr.state === 'merged' ? 'merged' : mr.state === 'opened' ? 'open' : 'closed'
+      // gitbeaker 返回 Camelize<unknown> 联合类型，需要 as any 断言
+      const diffRefs = mr.diff_refs as any
+      // GitLab 新建 MR 时 diff_refs 可能暂时为空（异步计算），需显式校验
+      if (!diffRefs?.base_sha || !diffRefs?.head_sha) {
+        throw new GitPlatformError(
+          `MR !${changeRequestId} diff_refs not yet available (GitLab is still computing diffs)`,
+          'conflict',
+          undefined
+        )
+      }
+      return {
+        number: mr.iid,
+        title: mr.title,
+        body: mr.description ?? '',
+        state,
+        baseSha: diffRefs.base_sha as string,
+        headSha: diffRefs.head_sha as string,
+        baseRef: mr.target_branch as string,
+        headRef: mr.source_branch as string,
+        author: mr.author.username
+      }
+    } catch (e) {
+      throw toGitPlatformError(e)
+    }
   }
 
   async updateChangeRequestBody(
-    _owner: string,
-    _repo: string,
-    _changeRequestId: number,
-    _body: string
+    owner: string,
+    repo: string,
+    changeRequestId: number,
+    body: string
   ): Promise<void> {
-    notImplemented('updateChangeRequestBody')
+    const projectPath = `${owner}/${repo}`
+    try {
+      await this.api.MergeRequests.edit(projectPath, changeRequestId, {description: body})
+    } catch (e) {
+      throw toGitPlatformError(e)
+    }
   }
 
   async listChangeRequestCommits(
-    _owner: string,
-    _repo: string,
-    _changeRequestId: number
+    owner: string,
+    repo: string,
+    changeRequestId: number
   ): Promise<string[]> {
-    notImplemented('listChangeRequestCommits')
+    const projectPath = `${owner}/${repo}`
+    try {
+      const commits = await this.api.MergeRequests.allCommits(projectPath, changeRequestId)
+      return commits.map(c => c.id)
+    } catch (e) {
+      throw toGitPlatformError(e)
+    }
   }
 
+  // ─── 2. Diff（GLAPI-003/004）──────────────────────────────────────────────
+
   async compareDiff(
-    _owner: string,
-    _repo: string,
+    owner: string,
+    repo: string,
     _base: string,
     _head: string
   ): Promise<DiffResult> {
-    notImplemented('compareDiff')
+    // 使用 Repositories.compare API 比较两个 ref/SHA 的 diff
+    const projectPath = `${owner}/${repo}`
+    try {
+      const diff = await this.api.Repositories.compare(projectPath, _base, _head)
+      // GitLab compare_timeout=true 时 diffs 可能不完整，fail closed 不审查残缺内容
+      if ((diff as any).compare_timeout) {
+        throw new GitPlatformError(
+          `GitLab compare timed out for ${_base}..${_head} — diff may be incomplete`,
+          'timeout',
+          undefined
+        )
+      }
+      // gitbeaker 返回 Camelize<unknown> 联合类型，需要 as any 断言
+      const diffs = (diff.diffs ?? []) as any[]
+      const files: DiffFile[] = diffs.map(d => ({
+        filename: d.new_path,
+        status: diffStatus(d),
+        patch: d.diff ?? undefined,
+        previousFilename: d.old_path !== d.new_path ? d.old_path : undefined
+      }))
+      const commits = (diff.commits ?? []) as any[]
+      return {
+        files,
+        commits: commits.map(c => ({sha: c.id as string}))
+      }
+    } catch (e) {
+      throw toGitPlatformError(e)
+    }
   }
 
   async createComment(
