@@ -210,7 +210,10 @@
       迁移至 `getPlatform()` 调用，LEGACY_ALLOWLIST 已清除 octokit 引用项）
 - [x] `ARCH-019` 将 GitHub GraphQL review-thread 逻辑保留在 GitHub adapter 内。
 - [ ] `ARCH-020` 新增以 `@gitbeaker/rest` 为标准客户端的 GitLab REST adapter；只
-      有 REST 无法满足时才使用 GitLab GraphQL。
+      有 REST 无法满足时才使用 GitLab GraphQL。（部分完成：
+      `gitlab-platform.ts` 已实现 `listRepositoryTree` + `getFileContent`，
+      支持 `GitLabCredential`（PAT / CI job token）认证；其余 21 个方法待
+      GLAPI-* 补全）
 - [x] `ARCH-021` 为 PR number、MR IID、comment/note ID、thread node ID 和
       discussion ID 建立类型边界。
 - [x] `ARCH-022` 为分页、429、5xx、超时、404/409 和权限不足定义统一错误语义。
@@ -222,7 +225,7 @@
 
 - [x] `DEP-001` **高**：在 `IGitPlatform` 中增加 `listRepositoryTree(ref)` 或等
       价能力；GitLab adapter 使用 Repository Tree API，并支持 recursive 和完整分
-      页。（接口已定义，GitLab adapter 实现待 ARCH-020）
+      页。（接口已定义，GitLab adapter `listRepositoryTree` 已实现）
 - [x] `DEP-002` **高**：保持 `dependency-analyzer` + `repo-tree` 的跨文件依赖分
       析在两个平台语义一致。（测试覆盖：`dep-tree-consistency.test.ts` DEP-002 组）
 - [x] `DEP-003` GitHub adapter 使用 Git Tree API 实现 repository tree，保留现有
@@ -321,7 +324,10 @@
 > 并 main，Issue #64 状态仍为 open；设计文档见
 > `docs/tasks/gitlab-trigger-cli-design.md`）。交付
 > `src/gitlab-trigger.ts`、`src/gitlab-trigger-validation.ts`、`src/gitlab-trigger-redact.ts` +
-> 9 个 fixture + 对应单元/集成测试。成功路径目前只打印摘要日志，不调用模型、不写
+> 9 个 fixture + 对应单元/集成测试。`gitlab-trigger.ts` 已通过
+> `setPlatform(new GitLabPlatform(...))` 注入平台实例（与 `main.ts` 对称），
+> 支持 `GITLAB_PAT`（PAT）和 `CI_JOB_TOKEN`（CI job token）两种认证方式，
+> token 缺失时 fail-closed。成功路径目前只打印摘要日志，不调用模型、不写
 > GitLab note/discussion——真正的审查动作需要 `GLAPI-*`（第 7 章），不在本任务范
 > 围。`EVENT-006`~`EVENT-021`（MR/Note Hook 具体业务规则）未开始。
 
