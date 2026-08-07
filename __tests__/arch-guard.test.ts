@@ -137,32 +137,63 @@ describe('ARCH-023: 共享核心不得新增直接平台依赖', () => {
 })
 
 describe('ARCH-024: @gitbeaker/rest 类型不泄露到 IGitPlatform 或共享核心', () => {
-  test('IGitPlatform 定义文件不引用 @gitbeaker', () => {
-    const content = fs.readFileSync(path.join(SRC, 'platform/git-platform.ts'), 'utf8')
-    expect(content).not.toMatch(/from ['"]@gitbeaker\//)
-    // 类型名也不应出现（防止通过 type import 间接引用）
-    expect(content).not.toMatch(/import.*from.*gitbeaker/)
+  const gitPlatformContent = fs.readFileSync(path.join(SRC, 'platform/git-platform.ts'), 'utf8')
+  const gitlabPlatformContent = fs.readFileSync(
+    path.join(SRC, 'platform/gitlab-platform.ts'),
+    'utf8'
+  )
+
+  test('IGitPlatform 定义文件不引用 @gitbeaker（任何形式）', () => {
+    // from '@gitbeaker/...'
+    expect(gitPlatformContent).not.toMatch(/['"]@gitbeaker\//)
+    // import('@gitbeaker/...')
+    expect(gitPlatformContent).not.toMatch(/import\s*\(\s*['"]@gitbeaker\//)
+    // require('@gitbeaker/...')
+    expect(gitPlatformContent).not.toMatch(/require\s*\(\s*['"]@gitbeaker\//)
   })
 
-  test('gitlab-platform.ts 的 export 不暴露 gitbeaker 类型', () => {
-    const content = fs.readFileSync(path.join(SRC, 'platform/gitlab-platform.ts'), 'utf8')
+  test('gitlab-platform.ts 只导出项目自定义类型（allowlist）', () => {
+    // 允许导出的项目自定义标识符（新增 export 时必须同步更新此列表）
+    const allowedExports = new Set(['GitLabCredential', 'GitLabPlatform'])
 
-    // 提取所有 export 行（export interface/class/type/function/const）
-    const exportLines = content.split('\n').filter(line => /^export\s/.test(line))
-    expect(exportLines.length).toBeGreaterThan(0)
-
-    // export 的类型签名中不应包含 gitbeaker 的具体类型
-    // （如 Gitlab, RepositoryTreeSchema, ProjectSchema 等）
-    const gitbeakerTypes = /\b(Gitlab|RepositoryTreeSchema|ProjectSchema|MergeRequestSchema)\b/
-    for (const line of exportLines) {
-      expect(line).not.toMatch(gitbeakerTypes)
+    // 匹配所有 export 声明的标识符名称（覆盖多行情况）
+    const exportPattern = /export\s+(?:interface|class|type|function|const|enum)\s+(\w+)/g
+    const exportedNames: string[] = []
+    let match
+    while ((match = exportPattern.exec(gitlabPlatformContent)) !== null) {
+      exportedNames.push(match[1])
     }
+
+    // 也检查 re-export：export { Foo } from '...' 或 export type { Foo } from '...'
+    const reExportPattern = /export\s+(?:type\s+)?{([^}]+)}/g
+    while ((match = reExportPattern.exec(gitlabPlatformContent)) !== null) {
+      const names = match[1].split(',').map(n =>
+        n
+          .trim()
+          .split(/\s+as\s+/)
+          .pop()!
+          .trim()
+      )
+      exportedNames.push(...names.filter(n => n.length > 0))
+    }
+
+    expect(exportedNames.length).toBeGreaterThan(0)
+
+    const unexpected = exportedNames.filter(name => !allowedExports.has(name))
+    expect(unexpected).toEqual([])
   })
 
-  test('GitLabPlatform 的 api 字段是 private，不泄露到消费方', () => {
-    const content = fs.readFileSync(path.join(SRC, 'platform/gitlab-platform.ts'), 'utf8')
-    // Gitlab 实例必须标记为 private
-    expect(content).toMatch(/private\s+api/)
+  test('gitlab-platform.ts 内容中不存在 gitbeaker 类型的 re-export 或动态 import', () => {
+    // export ... from '@gitbeaker/...'
+    expect(gitlabPlatformContent).not.toMatch(/export\s+.*from\s+['"]@gitbeaker\//)
+    // import('@gitbeaker/...') 形式的动态类型引用
+    expect(gitlabPlatformContent).not.toMatch(/import\s*\(\s*['"]@gitbeaker\//)
+    // require('@gitbeaker/...')
+    expect(gitlabPlatformContent).not.toMatch(/require\s*\(\s*['"]@gitbeaker\//)
+  })
+
+  test('GitLabPlatform 的 Gitlab 实例是 private，不泄露到消费方', () => {
+    expect(gitlabPlatformContent).toMatch(/private\s+api/)
   })
 
   test('GitLab adapter 文件存在', () => {
