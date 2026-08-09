@@ -331,7 +331,7 @@
 > 支持 `GITLAB_PAT`（PAT）和 `CI_JOB_TOKEN`（CI job token）两种认证方式，
 > token 缺失时 fail-closed。成功路径目前只打印摘要日志，不调用模型、不写
 > GitLab note/discussion——真正的审查动作需要 `GLAPI-*`（第 7 章），不在本任务范
-> 围。`EVENT-006`~`EVENT-021`（MR/Note Hook 具体业务规则）未开始。
+> 围。`EVENT-006`~`EVENT-021`（MR/Note Hook 具体业务规则）已完成，见 6.2/6.3 节。
 
 - [x] `EVENT-001` 新增 GitLab trigger CLI 源入口。
 - [x] `EVENT-002` CLI 从 file-type `TRIGGER_PAYLOAD` 路径读取原始 payload。
@@ -342,39 +342,75 @@
 
 ### 6.2 MR Hook
 
-- [ ] `EVENT-006` 支持 MR 创建事件。
-- [ ] `EVENT-007` 支持 MR reopen 事件。
-- [ ] `EVENT-008` 支持 MR HEAD SHA 更新事件。
-- [ ] `EVENT-009` 标题、label、assignee 等纯元数据更新不调用模型。
-- [ ] `EVENT-010` MVP 拒绝 source project 与 target project 不同的 fork MR。
-- [ ] `EVENT-011` 同项目 MR 内容仍按不可信数据处理。
+> **状态**：✅ 代码已完成（GitHub Issue
+> [#69](https://github.com/CodesSentinels/ai-reviewer/issues/69) 跟踪，PR
+> [#72](https://github.com/CodesSentinels/ai-reviewer/pull/72) 已合并进
+> `develop`，commit `00d3c43`；汇总见 Issue
+> [#75](https://github.com/CodesSentinels/ai-reviewer/issues/75)）。交付
+> `src/gitlab-mr-hook-rules.ts`（`checkForkMergeRequest()`/`isHeadStale()`/
+> `buildMrIdempotencyKey()`）+ `mapMergeRequestAction()`
+> （`src/platform/gitlab-execution-context.ts`），并接入 `gitlab-trigger.ts`。
+> `isHeadStale()`/`buildMrIdempotencyKey()` 目前只是纯函数，真正的"写前重新读取
+> HEAD"和"幂等键与 summary note marker 比对"落地属于 `GLAPI-*`/`STATE-*`，尚未接
+> 线。⚠️ Issue #75 复核（2026-08-05）指出 `mapMergeRequestAction()` 用
+> `changes.last_commit`/`changes.source_branch` 判断代码变更，与 GitLab 官方
+> Webhook 契约（应看 `object_attributes.oldrev`）可能不符，真实 push 事件有被误
+> 判为 `metadata_updated` 而跳过审查的风险；现有 fixture 是人工构造的，未覆盖官方
+> 契约，修复前 `EVENT-008` 不应视为完全验证。
+
+- [x] `EVENT-006` 支持 MR 创建事件。
+- [x] `EVENT-007` 支持 MR reopen 事件。
+- [x] `EVENT-008` 支持 MR HEAD SHA 更新事件（⚠️ 见上方状态说明，判定信号与官方
+      Webhook 契约可能不符）。
+- [x] `EVENT-009` 标题、label、assignee 等纯元数据更新不调用模型。
+- [x] `EVENT-010` MVP 拒绝 source project 与 target project 不同的 fork MR。
+- [x] `EVENT-011` 同项目 MR 内容仍按不可信数据处理。
 - [ ] `EVENT-012` 每次写操作前重新读取当前 MR HEAD；不一致时退出且不写旧结果。
+      `isHeadStale()` 已实现比较逻辑，但调用方（写操作前重新读取 GLAPI）尚未接
+      入，不得勾选完成。
 - [ ] `EVENT-013` MR 自动审查幂等键使用
       `gitlab:{project_id}:{mr_iid}:head:{head_sha}`，并与 summary note 中的
       reviewed SHA marker 一起判断；不得依赖未明确进入 `TRIGGER_PAYLOAD` 的
-      Webhook Header。
+      Webhook Header。`buildMrIdempotencyKey()` 已实现格式生成，但与 summary
+      note marker 的比对属于 `STATE-005`，尚未接入，不得勾选完成。
 
 ### 6.3 Note Hook
 
-> **已知缺口**：GitHub Issue
-> [#66](https://github.com/CodesSentinels/ai-reviewer/issues/66)（open，未修复
-> ）——`createGitLabExecutionContext()` 的 `buildFromNoteHook()` 把"note action ≠
-> create（正常编辑/删除）"和"payload 真正缺字段"混用同一个
-> `missing_required_field` 原因，导致 CLI 对编辑/删除事件 fail closed（非零退出
-> ）而非优雅跳过。修复需要拆分出独立的可忽略事件原因，随 `EVENT-016`/`EVENT-017`
-> 一并解决。
+> **状态**：✅ 代码已完成（GitHub Issue
+> [#70](https://github.com/CodesSentinels/ai-reviewer/issues/70) 跟踪，PR
+> [#73](https://github.com/CodesSentinels/ai-reviewer/pull/73) 已合并进
+> `develop`，commit `5dfafba`；汇总见 Issue
+> [#75](https://github.com/CodesSentinels/ai-reviewer/issues/75)）。原已知缺口
+> GitHub Issue [#66](https://github.com/CodesSentinels/ai-reviewer/issues/66)
+>（`createGitLabExecutionContext()` 把"note action ≠ create"和"payload 真正缺
+> 字段"混用同一个 `missing_required_field` 原因）已随本次修复解决——
+> `buildFromNoteHook()` 现在对 action≠create、system note、非 MR note 三种情形
+> 统一返回独立的 `ignorable_event` 原因（优雅跳过，退出码保持成功），与真正的字
+> 段缺失（`missing_required_field`，fail closed）区分开。Issue #66 在 GitHub 上
+> 状态仍为 open，将在 `develop` 合回 `main` 时由 PR #73 的 `Closes #66` 关键词自
+> 动关闭。交付 `src/gitlab-note-hook-rules.ts`（`isSelfNote()`/
+> `buildNoteIdempotencyKey()`），命令语法解析确认可直接复用现有
+> `src/commands/parser.ts`（`EVENT-019`，无需改动）。`isSelfNote()`/
+> `buildNoteIdempotencyKey()` 同样只是纯函数，尚未接入 `gitlab-trigger.ts` 的实
+> 际调用路径。
 
-- [ ] `EVENT-014` 支持 MR 顶层 note 命令。
-- [ ] `EVENT-015` 支持 discussion note/reply 命令和对话上下文。
-- [ ] `EVENT-016` 只处理 `action=create` 的用户 note。
-- [ ] `EVENT-017` 忽略编辑、删除、system note 和非 MR note。
-- [ ] `EVENT-018` 忽略 reviewer/PAT 账号自己的 note。
-- [ ] `EVENT-019` 不符合严格命令语法的文本不触发命令或模型。
+- [x] `EVENT-014` 支持 MR 顶层 note 命令。
+- [x] `EVENT-015` 支持 discussion note/reply 命令和对话上下文。
+- [x] `EVENT-016` 只处理 `action=create` 的用户 note。
+- [x] `EVENT-017` 忽略编辑、删除、system note 和非 MR note。
+- [ ] `EVENT-018` 忽略 reviewer/PAT 账号自己的 note。`isSelfNote()` 已实现比较
+      逻辑，但 `configuredPatUsername` 来源（`GITLAB_BOT_USERNAME` 占位）和调用
+      方尚未接入 `gitlab-trigger.ts`，不得勾选完成。
+- [x] `EVENT-019` 不符合严格命令语法的文本不触发命令或模型（复用
+      `commands/parser.ts`，见 `gitlab-note-hook-parser-reuse.test.ts`）。
 - [ ] `EVENT-020` Note Hook 幂等键固定为
       `gitlab:{project_id}:{mr_iid}:note:{note_id}:create`；只使用
       `TRIGGER_PAYLOAD` body 中可验证的字段，不假定 job 能读取
       `Idempotency-Key`、`X-Gitlab-Event-UUID` 等 Webhook Header。
-- [ ] `EVENT-021` 重复 webhook 投递不得重复调用模型或重复回复。
+      `buildNoteIdempotencyKey()` 已实现格式生成，与 marker 存储的对接属于
+      `STATE-005`，尚未接入，不得勾选完成。
+- [ ] `EVENT-021` 重复 webhook 投递不得重复调用模型或重复回复。依赖
+      `EVENT-020`/`STATE-*` 幂等存储接入，尚未完成。
 
 ---
 
@@ -606,19 +642,40 @@
 
 ## 11. 双入口打包开发
 
-- [ ] `BUILD-001` 新增 GitLab TypeScript 入口并编译为 `lib/gitlab-trigger.js`。
-- [ ] `BUILD-002` 新增 `package:github`，从 `lib/main.js` 生成 `dist/index.js`。
-- [ ] `BUILD-003` 新增 `package:gitlab`，从 `lib/gitlab-trigger.js` 生成
+> **状态**：✅ 代码已完成（GitHub Issue
+> [#71](https://github.com/CodesSentinels/ai-reviewer/issues/71) 跟踪，PR
+> [#74](https://github.com/CodesSentinels/ai-reviewer/pull/74) 已合并进
+> `develop`，commit `4ee0914`；汇总见 Issue
+> [#75](https://github.com/CodesSentinels/ai-reviewer/issues/75)）。实测验证
+>（2026-08-09，本地 `npm run build && npm run package && npm run smoke`，
+> 在 CI 同款环境变量下——`GITHUB_REPOSITORY`/`GITLAB_PAT` 均需存在，纯空环境会
+> 提前命中 credential 检查而非 bundle 加载检查）：`dist/index.js`（3.4MB）与
+> `dist/gitlab-trigger/index.js`（553KB）均可独立启动，`dist/*/SOURCE_SHA` 正确
+> 记录当前 commit。⚠️ `BUILD-005` 目前只部分满足：GitLab bundle 按设计不携带
+> `tiktoken_bg.wasm`（`gitlab-trigger.ts` 不 import tiktoken，符合
+> `docs/tasks/dual-entry-packaging-design.md` 的设计），但 PR #74 合并之后的
+> `gitlab-trigger 入口注入 GitLabPlatform` 改动（commit `ba40445`）让
+> `@gitbeaker/rest`（及 `@gitbeaker/core`/`@gitbeaker/requester-utils`）被打进
+> `dist/gitlab-trigger/index.js`，而 `dist/gitlab-trigger/licenses.txt` 里没有
+> 这三个包的许可证条目——`BUILD-005` 要求的"供应链检查覆盖 `@gitbeaker/rest`"当
+> 前未满足，需要新任务补齐 ncc 的 license 扫描或许可证清单。
+
+- [x] `BUILD-001` 新增 GitLab TypeScript 入口并编译为 `lib/gitlab-trigger.js`。
+- [x] `BUILD-002` 新增 `package:github`，从 `lib/main.js` 生成 `dist/index.js`。
+- [x] `BUILD-003` 新增 `package:gitlab`，从 `lib/gitlab-trigger.js` 生成
       `dist/gitlab-trigger/index.js`。
-- [ ] `BUILD-004` 防止两次 `ncc` 构建互相覆盖。
+- [x] `BUILD-004` 防止两次 `ncc` 构建互相覆盖。
 - [ ] `BUILD-005` 为两个 bundle 复制正确的 `tiktoken_bg.wasm` 和 license 资产，
       并将 `@gitbeaker/rest` 及其传递依赖纳入 GitLab bundle 的许可证与供应链检查
-      。
-- [ ] `BUILD-006` 为两个 bundle 增加 Node 24 启动冒烟测试。
-- [ ] `BUILD-007` 更新 `npm run package`，连续生成两个入口。
-- [ ] `BUILD-008` 更新 `npm run all`，包含双入口构建和测试。
-- [ ] `BUILD-009` 保持 `action.yml` 的 `node24` 与 GitLab `node:24` 一致。
-- [ ] `BUILD-010` 产物或构建日志记录源 commit SHA。
+      。wasm/license 资产复制机制已完成，但 `@gitbeaker/rest` 许可证未被
+      `dist/gitlab-trigger/licenses.txt` 收录（见上方状态说明），不得勾选完成。
+- [x] `BUILD-006` 为两个 bundle 增加 Node 24 启动冒烟测试
+      （`scripts/smoke-test.sh`）。
+- [x] `BUILD-007` 更新 `npm run package`，连续生成两个入口。
+- [x] `BUILD-008` 更新 `npm run all`，包含双入口构建和测试。
+- [x] `BUILD-009` 保持 `action.yml` 的 `node24` 与 GitLab `node:24` 一致。
+- [x] `BUILD-010` 产物或构建日志记录源 commit SHA（`dist/SOURCE_SHA` /
+      `dist/gitlab-trigger/SOURCE_SHA`）。
 
 ---
 
