@@ -10,6 +10,7 @@
  * - GLAPI-005: getFileContent（文件内容）
  * - GLAPI-006: getChangeRequest 返回 headSha 供调用方做 HEAD 比较
  * - GLAPI-007~012: Notes CRUD（createComment/updateComment/deleteComment/listComments）
+ * - GLAPI-013~019: Discussions（行级评论 + resolve）
  * - DEP-001/004: listRepositoryTree（仓库文件树）
  */
 
@@ -88,6 +89,22 @@ export class GitLabPlatform implements IGitPlatform {
    * 缓存映射关系，供后续 update/delete 使用。
    */
   private noteToMrIid = new Map<number, number>()
+  /**
+   * discussion noteId → {discussionId, mrIid, projectPath} 映射缓存。
+   * IGitPlatform 的 replyToReviewComment/updateReviewComment/deleteReviewComment
+   * 只传 noteId，但 GitLab Discussions API 需要 discussionId + mrIid。
+   * 通过 listReviewComments/createReviewComment/submitReviewComments 时缓存。
+   */
+  private noteToDiscussion = new Map<
+    number,
+    {discussionId: string; mrIid: number; projectPath: string}
+  >()
+  /**
+   * discussionId → {projectPath, mrIid} 缓存。
+   * resolveThreads 只传 threadIds（即 discussionId），需要精确查找每个 discussion 的
+   * projectPath 和 mrIid，避免跨 MR 混用。
+   */
+  private discussionIdToContext = new Map<string, {projectPath: string; mrIid: number}>()
 
   constructor(credential: GitLabCredential, host?: string) {
     const h = host || 'https://gitlab.com'
@@ -343,56 +360,231 @@ export class GitLabPlatform implements IGitPlatform {
     }
   }
 
+  // ─── 5. 行级评论 / Discussions（GLAPI-013~019）─────────────────────────────
+
+  /**
+   * 获取所有 MR discussions，提取 DiffNote 作为 ReviewComment 返回。
+   * 同时缓存 noteId → {discussionId, mrIid, projectPath} 和
+   * discussionId → {projectPath, mrIid} 映射。
+   */
+  private async getAllDiffDiscussions(
+    projectPath: string,
+    changeRequestId: number
+  ): Promise<{discussions: any[]; reviewComments: ReviewComment[]}> {
+    const discussions = (await this.api.MergeRequestDiscussions.all(
+      projectPath,
+      changeRequestId
+    )) as any[]
+    const reviewComments: ReviewComment[] = []
+    for (const disc of discussions) {
+      if (!disc.notes?.length) continue
+      this.discussionIdToContext.set(disc.id, {projectPath, mrIid: changeRequestId})
+      for (const note of disc.notes) {
+        // 只提取 DiffNote（行级评论），跳过普通 DiscussionNote 和 system note
+        if (note.type !== 'DiffNote' || note.system) continue
+        this.noteToDiscussion.set(note.id, {
+          discussionId: disc.id,
+          mrIid: changeRequestId,
+          projectPath
+        })
+        const pos = note.position
+        const replyToId = disc.notes[0].id !== note.id ? disc.notes[0].id : undefined
+        reviewComments.push({
+          id: note.id,
+          body: note.body ?? '',
+          path: pos?.new_path ?? pos?.old_path ?? '',
+          line: pos?.new_line != null ? Number(pos.new_line) : null,
+          startLine: null,
+          originalLine: pos?.old_line != null ? Number(pos.old_line) : null,
+          author: note.author?.username ?? '',
+          // eslint-disable-next-line camelcase
+          in_reply_to_id: replyToId,
+          createdAt: note.created_at
+        })
+      }
+    }
+    return {discussions, reviewComments}
+  }
+
   async listReviewComments(
-    _owner: string,
-    _repo: string,
-    _changeRequestId: number
+    owner: string,
+    repo: string,
+    changeRequestId: number
   ): Promise<ReviewComment[]> {
-    notImplemented('listReviewComments')
+    const projectPath = `${owner}/${repo}`
+    try {
+      const {reviewComments} = await this.getAllDiffDiscussions(projectPath, changeRequestId)
+      return reviewComments
+    } catch (e) {
+      throw toGitPlatformError(e)
+    }
   }
 
   async submitReviewComments(
-    _owner: string,
-    _repo: string,
-    _changeRequestId: number,
-    _commitSha: string,
-    _comments: ReviewCommentDraft[],
+    owner: string,
+    repo: string,
+    changeRequestId: number,
+    commitSha: string,
+    comments: ReviewCommentDraft[],
     _reviewBody?: string
   ): Promise<number> {
-    notImplemented('submitReviewComments')
+    // GitLab 无 batch review 概念，逐条创建 discussion
+    let submitted = 0
+    for (const comment of comments) {
+      try {
+        await this.createReviewComment(owner, repo, changeRequestId, commitSha, comment)
+        submitted++
+      } catch {
+        // GLAPI-015: 行级位置无法映射时降级为顶层 note
+        try {
+          await this.api.MergeRequestNotes.create(
+            `${owner}/${repo}`,
+            changeRequestId,
+            `**${comment.path}** (line ${comment.line})\n\n${comment.body}`
+          )
+          submitted++
+        } catch {
+          // 降级也失败，跳过该条
+        }
+      }
+    }
+    return submitted
   }
 
   async createReviewComment(
-    _owner: string,
-    _repo: string,
-    _changeRequestId: number,
-    _commitSha: string,
-    _comment: ReviewCommentDraft
+    owner: string,
+    repo: string,
+    changeRequestId: number,
+    commitSha: string,
+    comment: ReviewCommentDraft
   ): Promise<void> {
-    notImplemented('createReviewComment')
+    const projectPath = `${owner}/${repo}`
+    try {
+      // 需要 base_sha / head_sha / start_sha 构造 position
+      const mr = await this.api.MergeRequests.show(projectPath, changeRequestId)
+      const diffRefs = mr.diff_refs as any
+      const discussion = (await this.api.MergeRequestDiscussions.create(
+        projectPath,
+        changeRequestId,
+        comment.body,
+        {
+          commitId: commitSha,
+          position: {
+            baseSha: diffRefs.base_sha,
+            headSha: diffRefs.head_sha,
+            startSha: diffRefs.start_sha,
+            positionType: 'text' as const,
+            newPath: comment.path,
+            oldPath: comment.path,
+            newLine: String(comment.line)
+          }
+        }
+      )) as any
+      // 缓存 discussion 及其第一个 note
+      this.discussionIdToContext.set(discussion.id, {projectPath, mrIid: changeRequestId})
+      if (discussion.notes?.[0]) {
+        this.noteToDiscussion.set(discussion.notes[0].id, {
+          discussionId: discussion.id,
+          mrIid: changeRequestId,
+          projectPath
+        })
+      }
+    } catch (e) {
+      throw toGitPlatformError(e)
+    }
   }
 
   async replyToReviewComment(
-    _owner: string,
-    _repo: string,
-    _changeRequestId: number,
-    _commentId: number,
-    _body: string
+    owner: string,
+    repo: string,
+    changeRequestId: number,
+    commentId: number,
+    body: string
   ): Promise<PlatformComment> {
-    notImplemented('replyToReviewComment')
+    const projectPath = `${owner}/${repo}`
+    try {
+      let cached = this.noteToDiscussion.get(commentId)
+      // cache miss fallback: webhook 路径下触发评论的 noteId 可能未缓存，
+      // 此时 fetch 所有 discussions 补充缓存
+      if (!cached) {
+        await this.getAllDiffDiscussions(projectPath, changeRequestId)
+        cached = this.noteToDiscussion.get(commentId)
+      }
+      if (!cached) {
+        throw new GitPlatformError(
+          `Cannot reply to note ${commentId}: discussion ID unknown`,
+          'not_found'
+        )
+      }
+      const note = (await this.api.MergeRequestDiscussions.addNote(
+        projectPath,
+        changeRequestId,
+        cached.discussionId,
+        body
+      )) as any
+      this.noteToDiscussion.set(note.id, {
+        discussionId: cached.discussionId,
+        mrIid: changeRequestId,
+        projectPath
+      })
+      return {
+        id: note.id as number,
+        body: note.body as string,
+        author: note.author?.username ?? '',
+        createdAt: note.created_at as string
+      }
+    } catch (e) {
+      throw toGitPlatformError(e)
+    }
   }
 
   async updateReviewComment(
-    _owner: string,
-    _repo: string,
-    _commentId: number,
-    _body: string
+    owner: string,
+    repo: string,
+    commentId: number,
+    body: string
   ): Promise<void> {
-    notImplemented('updateReviewComment')
+    const projectPath = `${owner}/${repo}`
+    const cached = this.noteToDiscussion.get(commentId)
+    if (!cached) {
+      throw new GitPlatformError(
+        `Cannot update note ${commentId}: discussion ID unknown`,
+        'not_found'
+      )
+    }
+    try {
+      await this.api.MergeRequestDiscussions.editNote(
+        projectPath,
+        cached.mrIid,
+        cached.discussionId,
+        commentId,
+        {body} as any
+      )
+    } catch (e) {
+      throw toGitPlatformError(e)
+    }
   }
 
-  async deleteReviewComment(_owner: string, _repo: string, _commentId: number): Promise<void> {
-    notImplemented('deleteReviewComment')
+  async deleteReviewComment(owner: string, repo: string, commentId: number): Promise<void> {
+    const projectPath = `${owner}/${repo}`
+    const cached = this.noteToDiscussion.get(commentId)
+    if (!cached) {
+      throw new GitPlatformError(
+        `Cannot delete note ${commentId}: discussion ID unknown`,
+        'not_found'
+      )
+    }
+    try {
+      await this.api.MergeRequestDiscussions.removeNote(
+        projectPath,
+        cached.mrIid,
+        cached.discussionId,
+        commentId
+      )
+      this.noteToDiscussion.delete(commentId)
+    } catch (e) {
+      throw toGitPlatformError(e)
+    }
   }
 
   async deletePendingReview(
@@ -403,27 +595,95 @@ export class GitLabPlatform implements IGitPlatform {
     // GitLab 无 pending review 概念，空实现
   }
 
+  // ─── 6. Review thread（GLAPI-017/018/019）────────────────────────────────
+
   async fetchThreadStatusMap(
-    _owner: string,
-    _repo: string,
-    _changeRequestId: number
+    owner: string,
+    repo: string,
+    changeRequestId: number
   ): Promise<Map<string, boolean>> {
-    notImplemented('fetchThreadStatusMap')
+    const projectPath = `${owner}/${repo}`
+    // discussionIdToContext 在 getAllDiffDiscussions 中自动填充
+    try {
+      const {discussions} = await this.getAllDiffDiscussions(projectPath, changeRequestId)
+      const map = new Map<string, boolean>()
+      for (const disc of discussions) {
+        const firstNote = disc.notes?.[0]
+        if (!firstNote || firstNote.type !== 'DiffNote') continue
+        const pos = firstNote.position
+        const path = pos?.new_path ?? pos?.old_path
+        const line = pos?.new_line != null ? Number(pos.new_line) : null
+        if (path && line != null) {
+          const key = `${path}:${line}`
+          const resolved = disc.notes.every((n: any) => !n.resolvable || n.resolved)
+          if (!map.has(key) || !resolved) {
+            map.set(key, resolved)
+          }
+        }
+      }
+      return map
+    } catch (e) {
+      throw toGitPlatformError(e)
+    }
   }
 
   async fetchUnresolvedBotThreads(
-    _owner: string,
-    _repo: string,
-    _changeRequestId: number,
-    _botLogin: string
+    owner: string,
+    repo: string,
+    changeRequestId: number,
+    botLogin: string
   ): Promise<ReviewThreadInfo[]> {
-    notImplemented('fetchUnresolvedBotThreads')
+    const projectPath = `${owner}/${repo}`
+    // discussionIdToContext 在 getAllDiffDiscussions 中自动填充
+    try {
+      const {discussions} = await this.getAllDiffDiscussions(projectPath, changeRequestId)
+      const results: ReviewThreadInfo[] = []
+      const normalizedBot = botLogin.toLowerCase()
+      for (const disc of discussions) {
+        const firstNote = disc.notes?.[0]
+        if (!firstNote) continue
+        const authorLogin = firstNote.author?.username ?? ''
+        const isResolved = disc.notes.every((n: any) => !n.resolvable || n.resolved)
+        if (!isResolved && authorLogin.toLowerCase() === normalizedBot) {
+          const pos = firstNote.position
+          results.push({
+            id: disc.id,
+            isResolved: false,
+            path: pos?.new_path ?? pos?.old_path ?? null,
+            line: pos?.new_line != null ? Number(pos.new_line) : null,
+            firstCommentAuthorLogin: authorLogin,
+            firstCommentBody: firstNote.body ?? null
+          })
+        }
+      }
+      return results
+    } catch (e) {
+      throw toGitPlatformError(e)
+    }
   }
 
   async resolveThreads(
-    _threadIds: string[]
+    threadIds: string[]
   ): Promise<{ok: number; failed: number; errors: Error[]}> {
-    notImplemented('resolveThreads')
+    let ok = 0
+    const errors: Error[] = []
+
+    await Promise.allSettled(
+      threadIds.map(async threadId => {
+        const ctx = this.discussionIdToContext.get(threadId)
+        if (!ctx) {
+          errors.push(new Error(`No cached context for discussion ${threadId}`))
+          return
+        }
+        try {
+          await this.api.MergeRequestDiscussions.resolve(ctx.projectPath, ctx.mrIid, threadId, true)
+          ok++
+        } catch (e) {
+          errors.push(e instanceof Error ? e : new Error(String(e)))
+        }
+      })
+    )
+    return {ok, failed: errors.length, errors}
   }
 
   async addReaction(

@@ -29,13 +29,22 @@ const mockMergeRequestNotes = {
   remove: jest.fn<any>(),
   all: jest.fn<any>()
 }
+const mockMergeRequestDiscussions = {
+  all: jest.fn<any>(),
+  create: jest.fn<any>(),
+  addNote: jest.fn<any>(),
+  editNote: jest.fn<any>(),
+  removeNote: jest.fn<any>(),
+  resolve: jest.fn<any>()
+}
 
 jest.mock('@gitbeaker/rest', () => ({
   Gitlab: jest.fn().mockImplementation(() => ({
     MergeRequests: mockMergeRequests,
     Repositories: mockRepositories,
     RepositoryFiles: mockRepositoryFiles,
-    MergeRequestNotes: mockMergeRequestNotes
+    MergeRequestNotes: mockMergeRequestNotes,
+    MergeRequestDiscussions: mockMergeRequestDiscussions
   }))
 }))
 
@@ -270,9 +279,7 @@ describe('GitLabPlatform', () => {
         commits: []
       })
 
-      await expect(platform.compareDiff('g', 'r', 'base', 'head')).rejects.toThrow(
-        GitPlatformError
-      )
+      await expect(platform.compareDiff('g', 'r', 'base', 'head')).rejects.toThrow(GitPlatformError)
       try {
         await platform.compareDiff('g', 'r', 'base', 'head')
       } catch (e: any) {
@@ -360,9 +367,7 @@ describe('GitLabPlatform', () => {
       ;(err as any).response = {status: 404}
       mockRepositories.allRepositoryTrees.mockRejectedValue(err)
 
-      await expect(platform.listRepositoryTree('g', 'r', 'main')).rejects.toThrow(
-        GitPlatformError
-      )
+      await expect(platform.listRepositoryTree('g', 'r', 'main')).rejects.toThrow(GitPlatformError)
     })
 
     test('subgroup 项目 owner 含 / 时正确拼接 projectPath', async () => {
@@ -469,7 +474,13 @@ describe('GitLabPlatform', () => {
     test('更新已知 note（通过 listComments 缓存 mrIid）', async () => {
       // 先 list 缓存映射
       mockMergeRequestNotes.all.mockResolvedValue([
-        {id: 300, body: 'existing', author: {username: 'bot'}, created_at: '2026-08-07', system: false}
+        {
+          id: 300,
+          body: 'existing',
+          author: {username: 'bot'},
+          created_at: '2026-08-07',
+          system: false
+        }
       ])
       await platform.listComments('g', 'r', 10)
 
@@ -533,9 +544,27 @@ describe('GitLabPlatform', () => {
   describe('listComments', () => {
     test('正常返回用户 note，过滤 system note', async () => {
       mockMergeRequestNotes.all.mockResolvedValue([
-        {id: 1, body: 'user note', author: {username: 'alice'}, created_at: '2026-08-07', system: false},
-        {id: 2, body: 'Merged', author: {username: 'system'}, created_at: '2026-08-07', system: true},
-        {id: 3, body: 'another note', author: {username: 'bob'}, created_at: '2026-08-07', system: false}
+        {
+          id: 1,
+          body: 'user note',
+          author: {username: 'alice'},
+          created_at: '2026-08-07',
+          system: false
+        },
+        {
+          id: 2,
+          body: 'Merged',
+          author: {username: 'system'},
+          created_at: '2026-08-07',
+          system: true
+        },
+        {
+          id: 3,
+          body: 'another note',
+          author: {username: 'bob'},
+          created_at: '2026-08-07',
+          system: false
+        }
       ])
 
       const result = await platform.listComments('g', 'r', 5)
@@ -568,7 +597,13 @@ describe('GitLabPlatform', () => {
 
     test('全部是 system note → 返回空数组', async () => {
       mockMergeRequestNotes.all.mockResolvedValue([
-        {id: 10, body: 'assigned', author: {username: 'sys'}, created_at: '2026-08-07', system: true}
+        {
+          id: 10,
+          body: 'assigned',
+          author: {username: 'sys'},
+          created_at: '2026-08-07',
+          system: true
+        }
       ])
 
       const result = await platform.listComments('g', 'r', 5)
@@ -581,6 +616,611 @@ describe('GitLabPlatform', () => {
       mockMergeRequestNotes.all.mockRejectedValue(err)
 
       await expect(platform.listComments('g', 'r', 5)).rejects.toThrow(GitPlatformError)
+    })
+  })
+
+  // ─── listReviewComments（GLAPI-017）────────────────────────────────────────
+
+  describe('listReviewComments', () => {
+    const diffDiscussion = {
+      id: 'disc-1',
+      individual_note: false,
+      notes: [
+        {
+          id: 1001,
+          type: 'DiffNote',
+          body: 'review comment',
+          system: false,
+          author: {username: 'reviewer'},
+          created_at: '2026-08-10',
+          position: {new_path: 'src/a.ts', old_path: 'src/a.ts', new_line: '10', old_line: null},
+          resolvable: true,
+          resolved: false
+        }
+      ]
+    }
+
+    test('提取 DiffNote 作为 ReviewComment', async () => {
+      mockMergeRequestDiscussions.all.mockResolvedValue([diffDiscussion])
+
+      const result = await platform.listReviewComments('g', 'r', 5)
+      expect(result).toHaveLength(1)
+      expect(result[0]).toEqual({
+        id: 1001,
+        body: 'review comment',
+        path: 'src/a.ts',
+        line: 10,
+        startLine: null,
+        originalLine: null,
+        author: 'reviewer',
+        in_reply_to_id: undefined,
+        createdAt: '2026-08-10'
+      })
+    })
+
+    test('跳过非 DiffNote 和 system note', async () => {
+      mockMergeRequestDiscussions.all.mockResolvedValue([
+        {
+          id: 'disc-2',
+          notes: [
+            {
+              id: 2001,
+              type: 'DiscussionNote',
+              body: 'plain',
+              system: false,
+              author: {username: 'a'},
+              position: null
+            },
+            {
+              id: 2002,
+              type: 'DiffNote',
+              body: 'system',
+              system: true,
+              author: {username: 'b'},
+              position: {}
+            }
+          ]
+        }
+      ])
+
+      const result = await platform.listReviewComments('g', 'r', 5)
+      expect(result).toEqual([])
+    })
+
+    test('reply note 的 in_reply_to_id 指向第一条 note', async () => {
+      mockMergeRequestDiscussions.all.mockResolvedValue([
+        {
+          id: 'disc-3',
+          notes: [
+            {
+              id: 3001,
+              type: 'DiffNote',
+              body: 'first',
+              system: false,
+              author: {username: 'a'},
+              created_at: 't1',
+              position: {new_path: 'f.ts', new_line: '5'},
+              resolvable: true
+            },
+            {
+              id: 3002,
+              type: 'DiffNote',
+              body: 'reply',
+              system: false,
+              author: {username: 'b'},
+              created_at: 't2',
+              position: {new_path: 'f.ts', new_line: '5'},
+              resolvable: true
+            }
+          ]
+        }
+      ])
+
+      const result = await platform.listReviewComments('g', 'r', 5)
+      expect(result[0].in_reply_to_id).toBeUndefined()
+      expect(result[1].in_reply_to_id).toBe(3001)
+    })
+  })
+
+  // ─── createReviewComment（GLAPI-013/014）───────────────────────────────────
+
+  describe('createReviewComment', () => {
+    test('创建行级 discussion，传递正确的 position', async () => {
+      mockMergeRequests.show.mockResolvedValue({
+        diff_refs: {base_sha: 'base', head_sha: 'head', start_sha: 'start'}
+      })
+      mockMergeRequestDiscussions.create.mockResolvedValue({
+        id: 'new-disc',
+        notes: [{id: 5001, body: 'comment', author: {username: 'bot'}}]
+      })
+
+      await platform.createReviewComment('g', 'r', 5, 'commit-sha', {
+        path: 'src/a.ts',
+        body: 'fix this',
+        line: 42
+      })
+
+      expect(mockMergeRequestDiscussions.create).toHaveBeenCalledWith('g/r', 5, 'fix this', {
+        commitId: 'commit-sha',
+        position: {
+          baseSha: 'base',
+          headSha: 'head',
+          startSha: 'start',
+          positionType: 'text',
+          newPath: 'src/a.ts',
+          oldPath: 'src/a.ts',
+          newLine: '42'
+        }
+      })
+    })
+  })
+
+  // ─── submitReviewComments（GLAPI-013/015）──────────────────────────────────
+
+  describe('submitReviewComments', () => {
+    test('逐条创建 discussion', async () => {
+      mockMergeRequests.show.mockResolvedValue({
+        diff_refs: {base_sha: 'b', head_sha: 'h', start_sha: 's'}
+      })
+      mockMergeRequestDiscussions.create.mockResolvedValue({
+        id: 'disc',
+        notes: [{id: 6001}]
+      })
+
+      const count = await platform.submitReviewComments('g', 'r', 5, 'sha', [
+        {path: 'a.ts', body: 'c1', line: 1},
+        {path: 'b.ts', body: 'c2', line: 2}
+      ])
+      expect(count).toBe(2)
+      expect(mockMergeRequestDiscussions.create).toHaveBeenCalledTimes(2)
+    })
+
+    test('行级创建失败时降级为顶层 note（GLAPI-015）', async () => {
+      mockMergeRequests.show.mockRejectedValue(new Error('diff_refs fail'))
+      mockMergeRequestNotes.create.mockResolvedValue({
+        id: 7001,
+        body: '',
+        author: {username: 'bot'}
+      })
+
+      const count = await platform.submitReviewComments('g', 'r', 5, 'sha', [
+        {path: 'x.ts', body: 'comment', line: 10}
+      ])
+      expect(count).toBe(1)
+      expect(mockMergeRequestNotes.create).toHaveBeenCalledWith(
+        'g/r',
+        5,
+        '**x.ts** (line 10)\n\ncomment'
+      )
+    })
+  })
+
+  // ─── replyToReviewComment（GLAPI-016）──────────────────────────────────────
+
+  describe('replyToReviewComment', () => {
+    test('回复已知 discussion', async () => {
+      // 先 list 缓存 discussion 映射
+      mockMergeRequestDiscussions.all.mockResolvedValue([
+        {
+          id: 'disc-reply',
+          notes: [
+            {
+              id: 8001,
+              type: 'DiffNote',
+              body: 'orig',
+              system: false,
+              author: {username: 'a'},
+              created_at: 't',
+              position: {new_path: 'f.ts', new_line: '1'},
+              resolvable: true
+            }
+          ]
+        }
+      ])
+      await platform.listReviewComments('g', 'r', 5)
+
+      mockMergeRequestDiscussions.addNote.mockResolvedValue({
+        id: 8002,
+        body: 'reply text',
+        author: {username: 'bot'},
+        created_at: '2026-08-10'
+      })
+
+      const result = await platform.replyToReviewComment('g', 'r', 5, 8001, 'reply text')
+      expect(result.body).toBe('reply text')
+      expect(mockMergeRequestDiscussions.addNote).toHaveBeenCalledWith(
+        'g/r',
+        5,
+        'disc-reply',
+        'reply text'
+      )
+    })
+
+    test('cache miss 时自动 fetch discussions 补缓存再回复', async () => {
+      // 不先调用 listReviewComments，模拟 webhook 触发路径
+      mockMergeRequestDiscussions.all.mockResolvedValue([
+        {
+          id: 'disc-webhook',
+          notes: [
+            {
+              id: 8888,
+              type: 'DiffNote',
+              body: 'trigger',
+              system: false,
+              author: {username: 'user'},
+              created_at: 't',
+              position: {new_path: 'f.ts', new_line: '1'},
+              resolvable: true
+            }
+          ]
+        }
+      ])
+      mockMergeRequestDiscussions.addNote.mockResolvedValue({
+        id: 8889,
+        body: 'reply',
+        author: {username: 'bot'},
+        created_at: '2026-08-10'
+      })
+
+      const result = await platform.replyToReviewComment('g', 'r', 5, 8888, 'reply')
+      expect(result.body).toBe('reply')
+      // 应先 fetch all discussions 补缓存，再 addNote
+      expect(mockMergeRequestDiscussions.all).toHaveBeenCalledWith('g/r', 5)
+      expect(mockMergeRequestDiscussions.addNote).toHaveBeenCalledWith(
+        'g/r',
+        5,
+        'disc-webhook',
+        'reply'
+      )
+    })
+
+    test('fetch 后仍找不到 noteId → 抛 not_found', async () => {
+      mockMergeRequestDiscussions.all.mockResolvedValue([])
+      await expect(platform.replyToReviewComment('g', 'r', 5, 9999, 'body')).rejects.toThrow(
+        GitPlatformError
+      )
+    })
+
+    test('cache miss 补缓存时 API 失败 → 统一转 GitPlatformError', async () => {
+      mockMergeRequestDiscussions.all.mockRejectedValue(
+        Object.assign(new Error('Network Error'), {response: {status: 500}})
+      )
+      try {
+        await platform.replyToReviewComment('g', 'r', 5, 7777, 'body')
+        expect('should have thrown').toBe('but did not')
+      } catch (e) {
+        expect(e).toBeInstanceOf(GitPlatformError)
+        expect((e as GitPlatformError).errorKind).toBe('server_error')
+      }
+    })
+  })
+
+  // ─── updateReviewComment / deleteReviewComment ─────────────────────────────
+
+  describe('updateReviewComment', () => {
+    test('更新已知 discussion note', async () => {
+      mockMergeRequestDiscussions.all.mockResolvedValue([
+        {
+          id: 'disc-upd',
+          notes: [
+            {
+              id: 9001,
+              type: 'DiffNote',
+              body: 'old',
+              system: false,
+              author: {username: 'a'},
+              created_at: 't',
+              position: {new_path: 'f.ts', new_line: '1'},
+              resolvable: true
+            }
+          ]
+        }
+      ])
+      await platform.listReviewComments('g', 'r', 5)
+
+      mockMergeRequestDiscussions.editNote.mockResolvedValue({})
+      await platform.updateReviewComment('g', 'r', 9001, 'new body')
+      expect(mockMergeRequestDiscussions.editNote).toHaveBeenCalledWith(
+        'g/r',
+        5,
+        'disc-upd',
+        9001,
+        {body: 'new body'}
+      )
+    })
+  })
+
+  describe('deleteReviewComment', () => {
+    test('删除已知 discussion note + 清除缓存', async () => {
+      mockMergeRequestDiscussions.all.mockResolvedValue([
+        {
+          id: 'disc-del',
+          notes: [
+            {
+              id: 9101,
+              type: 'DiffNote',
+              body: 'x',
+              system: false,
+              author: {username: 'a'},
+              created_at: 't',
+              position: {new_path: 'f.ts', new_line: '1'},
+              resolvable: true
+            }
+          ]
+        }
+      ])
+      await platform.listReviewComments('g', 'r', 5)
+
+      mockMergeRequestDiscussions.removeNote.mockResolvedValue(undefined)
+      await platform.deleteReviewComment('g', 'r', 9101)
+      expect(mockMergeRequestDiscussions.removeNote).toHaveBeenCalledWith(
+        'g/r',
+        5,
+        'disc-del',
+        9101
+      )
+
+      // 缓存已清除
+      await expect(platform.deleteReviewComment('g', 'r', 9101)).rejects.toThrow(GitPlatformError)
+    })
+  })
+
+  // ─── fetchThreadStatusMap（GLAPI-017）──────────────────────────────────────
+
+  describe('fetchThreadStatusMap', () => {
+    test('DiffNote discussion 映射为 path:line → resolved', async () => {
+      mockMergeRequestDiscussions.all.mockResolvedValue([
+        {
+          id: 'disc-a',
+          notes: [
+            {
+              id: 1,
+              type: 'DiffNote',
+              system: false,
+              author: {username: 'a'},
+              position: {new_path: 'a.ts', new_line: '10'},
+              resolvable: true,
+              resolved: true
+            }
+          ]
+        },
+        {
+          id: 'disc-b',
+          notes: [
+            {
+              id: 2,
+              type: 'DiffNote',
+              system: false,
+              author: {username: 'b'},
+              position: {new_path: 'b.ts', new_line: '20'},
+              resolvable: true,
+              resolved: false
+            }
+          ]
+        }
+      ])
+
+      const map = await platform.fetchThreadStatusMap('g', 'r', 5)
+      expect(map.get('a.ts:10')).toBe(true)
+      expect(map.get('b.ts:20')).toBe(false)
+    })
+
+    test('同位置有未 resolved 的优先标记为 false', async () => {
+      mockMergeRequestDiscussions.all.mockResolvedValue([
+        {
+          id: 'd1',
+          notes: [
+            {
+              id: 1,
+              type: 'DiffNote',
+              system: false,
+              author: {username: 'a'},
+              position: {new_path: 'x.ts', new_line: '5'},
+              resolvable: true,
+              resolved: true
+            }
+          ]
+        },
+        {
+          id: 'd2',
+          notes: [
+            {
+              id: 2,
+              type: 'DiffNote',
+              system: false,
+              author: {username: 'b'},
+              position: {new_path: 'x.ts', new_line: '5'},
+              resolvable: true,
+              resolved: false
+            }
+          ]
+        }
+      ])
+
+      const map = await platform.fetchThreadStatusMap('g', 'r', 5)
+      expect(map.get('x.ts:5')).toBe(false)
+    })
+  })
+
+  // ─── fetchUnresolvedBotThreads（GLAPI-017）─────────────────────────────────
+
+  describe('fetchUnresolvedBotThreads', () => {
+    test('只返回 bot 发起的未 resolved discussion', async () => {
+      mockMergeRequestDiscussions.all.mockResolvedValue([
+        {
+          id: 'disc-bot',
+          notes: [
+            {
+              id: 1,
+              type: 'DiffNote',
+              system: false,
+              author: {username: 'code-bot'},
+              body: 'fix this',
+              position: {new_path: 'a.ts', new_line: '10'},
+              resolvable: true,
+              resolved: false
+            }
+          ]
+        },
+        {
+          id: 'disc-human',
+          notes: [
+            {
+              id: 2,
+              type: 'DiffNote',
+              system: false,
+              author: {username: 'alice'},
+              body: 'nit',
+              position: {new_path: 'b.ts', new_line: '20'},
+              resolvable: true,
+              resolved: false
+            }
+          ]
+        },
+        {
+          id: 'disc-resolved',
+          notes: [
+            {
+              id: 3,
+              type: 'DiffNote',
+              system: false,
+              author: {username: 'code-bot'},
+              body: 'done',
+              position: {new_path: 'c.ts', new_line: '30'},
+              resolvable: true,
+              resolved: true
+            }
+          ]
+        }
+      ])
+
+      const result = await platform.fetchUnresolvedBotThreads('g', 'r', 5, 'code-bot')
+      expect(result).toHaveLength(1)
+      expect(result[0]).toEqual({
+        id: 'disc-bot',
+        isResolved: false,
+        path: 'a.ts',
+        line: 10,
+        firstCommentAuthorLogin: 'code-bot',
+        firstCommentBody: 'fix this'
+      })
+    })
+
+    test('botLogin 大小写不敏感', async () => {
+      mockMergeRequestDiscussions.all.mockResolvedValue([
+        {
+          id: 'disc',
+          notes: [
+            {
+              id: 1,
+              type: 'DiffNote',
+              system: false,
+              author: {username: 'Code-Bot'},
+              body: 'x',
+              position: {new_path: 'a.ts', new_line: '1'},
+              resolvable: true,
+              resolved: false
+            }
+          ]
+        }
+      ])
+
+      const result = await platform.fetchUnresolvedBotThreads('g', 'r', 5, 'code-bot')
+      expect(result).toHaveLength(1)
+    })
+  })
+
+  // ─── resolveThreads（GLAPI-018/019）────────────────────────────────────────
+
+  describe('resolveThreads', () => {
+    test('批量 resolve discussion', async () => {
+      // 先 fetchUnresolvedBotThreads 填充缓存
+      mockMergeRequestDiscussions.all.mockResolvedValue([
+        {
+          id: 'disc-r1',
+          notes: [
+            {
+              id: 1,
+              type: 'DiffNote',
+              system: false,
+              author: {username: 'bot'},
+              body: 'x',
+              position: {new_path: 'a.ts', new_line: '1'},
+              resolvable: true,
+              resolved: false
+            }
+          ]
+        }
+      ])
+      await platform.fetchUnresolvedBotThreads('g', 'r', 5, 'bot')
+
+      mockMergeRequestDiscussions.resolve.mockResolvedValue({})
+      const result = await platform.resolveThreads(['disc-r1'])
+      expect(result).toEqual({ok: 1, failed: 0, errors: []})
+      expect(mockMergeRequestDiscussions.resolve).toHaveBeenCalledWith('g/r', 5, 'disc-r1', true)
+    })
+
+    test('未缓存的 discussionId 标记失败', async () => {
+      mockMergeRequestDiscussions.all.mockResolvedValue([
+        {
+          id: 'disc-ok',
+          notes: [
+            {
+              id: 1,
+              type: 'DiffNote',
+              system: false,
+              author: {username: 'bot'},
+              body: 'x',
+              position: {new_path: 'a.ts', new_line: '1'},
+              resolvable: true,
+              resolved: false
+            }
+          ]
+        }
+      ])
+      await platform.fetchUnresolvedBotThreads('g', 'r', 5, 'bot')
+
+      mockMergeRequestDiscussions.resolve.mockResolvedValue({})
+
+      const result = await platform.resolveThreads(['disc-ok', 'disc-missing'])
+      expect(result.ok).toBe(1)
+      expect(result.failed).toBe(1)
+      expect(result.errors[0].message).toMatch(/No cached context/)
+    })
+
+    test('API 调用失败计入 errors', async () => {
+      mockMergeRequestDiscussions.all.mockResolvedValue([
+        {
+          id: 'disc-fail',
+          notes: [
+            {
+              id: 1,
+              type: 'DiffNote',
+              system: false,
+              author: {username: 'bot'},
+              body: 'x',
+              position: {new_path: 'a.ts', new_line: '1'},
+              resolvable: true,
+              resolved: false
+            }
+          ]
+        }
+      ])
+      await platform.fetchUnresolvedBotThreads('g', 'r', 5, 'bot')
+
+      mockMergeRequestDiscussions.resolve.mockRejectedValue(new Error('403'))
+
+      const result = await platform.resolveThreads(['disc-fail'])
+      expect(result.ok).toBe(0)
+      expect(result.failed).toBe(1)
+    })
+
+    test('无缓存时全部标记失败', async () => {
+      // 新建 platform 实例，无缓存
+      const freshPlatform = new GitLabPlatform({type: 'pat', value: 'token'})
+      const result = await freshPlatform.resolveThreads(['disc-x'])
+      expect(result.ok).toBe(0)
+      expect(result.failed).toBe(1)
     })
   })
 })
