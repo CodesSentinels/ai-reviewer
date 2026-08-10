@@ -462,10 +462,20 @@
 
 ### 7.4 权限、身份和 Emoji
 
-- [ ] `GLAPI-020` 按用户 ID 查询项目 access level。
-- [ ] `GLAPI-021` 权限查询失败时 fail closed。
-- [ ] `GLAPI-022` 将 PAT 用户名与命令前缀分开配置。
-- [ ] `GLAPI-023` 实现 GitLab Award Emoji ACK；失败不得阻塞核心审查。
+- [x] `GLAPI-020` 按用户 ID 查询项目 access level。
+      — `getCollaboratorPermission` 通过 `Users.all({username})` 获取 userId，
+      再 `ProjectMembers.show(projectId, userId, {includeInherited: true})` 获取
+      access_level，映射为 PlatformPermission（OWNER→admin, MAINTAINER→maintain,
+      DEVELOPER→write, REPORTER→triage, GUEST→read）。
+- [x] `GLAPI-021` 权限查询失败时 fail closed。
+      — Users.all / ProjectMembers.show 任何异常均返回 `'none'`，不抛错。
+- [x] `GLAPI-022` 将 PAT 用户名与命令前缀分开配置。
+      — `getAuthenticatedLogin` 通过 `Users.showCurrentUser()` 获取 PAT 用户名，
+      失败返回默认 `'gitlab-bot'`。
+- [x] `GLAPI-023` 实现 GitLab Award Emoji ACK；失败不得阻塞核心审查。
+      — `addReaction` 将 GitHub ReactionContent 映射为 GitLab emoji name
+      （+1→thumbsup, hooray→tada 等），通过 `MergeRequestNoteAwardEmojis.award`
+      添加。接口新增 `changeRequestId` 参数，不依赖内存缓存。
 
 ### 7.5 API 稳定性
 
