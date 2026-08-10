@@ -9,6 +9,7 @@
  * - GLAPI-003/004: compareDiff（diff 比较）
  * - GLAPI-005: getFileContent（文件内容）
  * - GLAPI-006: getChangeRequest 返回 headSha 供调用方做 HEAD 比较
+ * - GLAPI-007~012: Notes CRUD（createComment/updateComment/deleteComment/listComments）
  * - DEP-001/004: listRepositoryTree（仓库文件树）
  */
 
@@ -80,6 +81,13 @@ export interface GitLabCredential {
 
 export class GitLabPlatform implements IGitPlatform {
   private api: InstanceType<typeof Gitlab>
+  /**
+   * noteId → mergerequestIId 映射缓存。
+   * IGitPlatform.updateComment/deleteComment 签名中没有 changeRequestId，
+   * 但 GitLab Notes API 需要 MR IID。通过 createComment/listComments 时
+   * 缓存映射关系，供后续 update/delete 使用。
+   */
+  private noteToMrIid = new Map<number, number>()
 
   constructor(credential: GitLabCredential, host?: string) {
     const h = host || 'https://gitlab.com'
@@ -247,34 +255,92 @@ export class GitLabPlatform implements IGitPlatform {
     }
   }
 
+  // ─── 4. 顶层评论 / MR Notes（GLAPI-007~012）────────────────────────────────
+
   async createComment(
-    _owner: string,
-    _repo: string,
-    _changeRequestId: number,
-    _body: string
+    owner: string,
+    repo: string,
+    changeRequestId: number,
+    body: string
   ): Promise<PlatformComment> {
-    notImplemented('createComment')
+    const projectPath = `${owner}/${repo}`
+    try {
+      const note = (await this.api.MergeRequestNotes.create(
+        projectPath,
+        changeRequestId,
+        body
+      )) as any
+      this.noteToMrIid.set(note.id, changeRequestId)
+      return {
+        id: note.id as number,
+        body: note.body as string,
+        author: note.author?.username ?? '',
+        createdAt: note.created_at as string
+      }
+    } catch (e) {
+      throw toGitPlatformError(e)
+    }
   }
 
-  async updateComment(
-    _owner: string,
-    _repo: string,
-    _commentId: number,
-    _body: string
-  ): Promise<void> {
-    notImplemented('updateComment')
+  async updateComment(owner: string, repo: string, commentId: number, body: string): Promise<void> {
+    const projectPath = `${owner}/${repo}`
+    const mrIid = this.noteToMrIid.get(commentId)
+    if (mrIid == null) {
+      throw new GitPlatformError(
+        `Cannot update note ${commentId}: MR IID unknown (note was not created/listed via this adapter instance)`,
+        'not_found'
+      )
+    }
+    try {
+      await this.api.MergeRequestNotes.edit(projectPath, mrIid, commentId, {body})
+    } catch (e) {
+      throw toGitPlatformError(e)
+    }
   }
 
-  async deleteComment(_owner: string, _repo: string, _commentId: number): Promise<void> {
-    notImplemented('deleteComment')
+  async deleteComment(owner: string, repo: string, commentId: number): Promise<void> {
+    const projectPath = `${owner}/${repo}`
+    const mrIid = this.noteToMrIid.get(commentId)
+    if (mrIid == null) {
+      throw new GitPlatformError(
+        `Cannot delete note ${commentId}: MR IID unknown (note was not created/listed via this adapter instance)`,
+        'not_found'
+      )
+    }
+    try {
+      await this.api.MergeRequestNotes.remove(projectPath, mrIid, commentId)
+      this.noteToMrIid.delete(commentId)
+    } catch (e) {
+      throw toGitPlatformError(e)
+    }
   }
 
   async listComments(
-    _owner: string,
-    _repo: string,
-    _changeRequestId: number
+    owner: string,
+    repo: string,
+    changeRequestId: number
   ): Promise<PlatformComment[]> {
-    notImplemented('listComments')
+    const projectPath = `${owner}/${repo}`
+    try {
+      const notes = await this.api.MergeRequestNotes.all(projectPath, changeRequestId, {
+        sort: 'asc',
+        orderBy: 'created_at'
+      })
+      // 过滤 system note（合并事件、标签变更等自动生成的 note）
+      const userNotes = (notes as any[]).filter(n => !n.system)
+      // 缓存 noteId → mrIid 映射，供 update/delete 使用
+      for (const n of userNotes) {
+        this.noteToMrIid.set(n.id, changeRequestId)
+      }
+      return userNotes.map(n => ({
+        id: n.id,
+        body: n.body ?? '',
+        author: n.author?.username ?? '',
+        createdAt: n.created_at
+      }))
+    } catch (e) {
+      throw toGitPlatformError(e)
+    }
   }
 
   async listReviewComments(

@@ -1,7 +1,7 @@
 /**
  * gitlab-platform.test.ts — GitLabPlatform adapter 单元测试
  *
- * GLAPI-001~006 + DEP-001/004
+ * GLAPI-001~012 + DEP-001/004
  *
  * 测试策略：mock @gitbeaker/rest 的 Gitlab 构造函数，验证 GitLabPlatform
  * 方法正确调用 gitbeaker API 并将结果/错误转换为平台无关类型。
@@ -23,12 +23,19 @@ const mockRepositories = {
 const mockRepositoryFiles = {
   show: jest.fn<any>()
 }
+const mockMergeRequestNotes = {
+  create: jest.fn<any>(),
+  edit: jest.fn<any>(),
+  remove: jest.fn<any>(),
+  all: jest.fn<any>()
+}
 
 jest.mock('@gitbeaker/rest', () => ({
   Gitlab: jest.fn().mockImplementation(() => ({
     MergeRequests: mockMergeRequests,
     Repositories: mockRepositories,
-    RepositoryFiles: mockRepositoryFiles
+    RepositoryFiles: mockRepositoryFiles,
+    MergeRequestNotes: mockMergeRequestNotes
   }))
 }))
 
@@ -407,6 +414,173 @@ describe('GitLabPlatform', () => {
         expect(e).toBeInstanceOf(GitPlatformError)
         expect(e.errorKind).toBe('timeout')
       }
+    })
+  })
+
+  // ─── createComment（GLAPI-007/010）─────────────────────────────────────────
+
+  describe('createComment', () => {
+    test('正常创建 MR note', async () => {
+      mockMergeRequestNotes.create.mockResolvedValue({
+        id: 100,
+        body: 'hello',
+        author: {username: 'bot'},
+        created_at: '2026-08-07T00:00:00Z',
+        system: false
+      })
+
+      const result = await platform.createComment('g', 'r', 5, 'hello')
+      expect(result).toEqual({
+        id: 100,
+        body: 'hello',
+        author: 'bot',
+        createdAt: '2026-08-07T00:00:00Z'
+      })
+      expect(mockMergeRequestNotes.create).toHaveBeenCalledWith('g/r', 5, 'hello')
+    })
+
+    test('API 错误 → GitPlatformError', async () => {
+      const err = new Error('403 Forbidden')
+      ;(err as any).response = {status: 403}
+      mockMergeRequestNotes.create.mockRejectedValue(err)
+
+      await expect(platform.createComment('g', 'r', 5, 'body')).rejects.toThrow(GitPlatformError)
+    })
+  })
+
+  // ─── updateComment（GLAPI-009/011）─────────────────────────────────────────
+
+  describe('updateComment', () => {
+    test('更新已知 note（通过 createComment 缓存 mrIid）', async () => {
+      // 先 create 缓存映射
+      mockMergeRequestNotes.create.mockResolvedValue({
+        id: 200,
+        body: 'old',
+        author: {username: 'bot'},
+        created_at: '2026-08-07T00:00:00Z'
+      })
+      await platform.createComment('g', 'r', 5, 'old')
+
+      mockMergeRequestNotes.edit.mockResolvedValue({})
+      await platform.updateComment('g', 'r', 200, 'new body')
+      expect(mockMergeRequestNotes.edit).toHaveBeenCalledWith('g/r', 5, 200, {body: 'new body'})
+    })
+
+    test('更新已知 note（通过 listComments 缓存 mrIid）', async () => {
+      // 先 list 缓存映射
+      mockMergeRequestNotes.all.mockResolvedValue([
+        {id: 300, body: 'existing', author: {username: 'bot'}, created_at: '2026-08-07', system: false}
+      ])
+      await platform.listComments('g', 'r', 10)
+
+      mockMergeRequestNotes.edit.mockResolvedValue({})
+      await platform.updateComment('g', 'r', 300, 'updated')
+      expect(mockMergeRequestNotes.edit).toHaveBeenCalledWith('g/r', 10, 300, {body: 'updated'})
+    })
+
+    test('未知 noteId → 抛 not_found 错误', async () => {
+      await expect(platform.updateComment('g', 'r', 999, 'body')).rejects.toThrow(GitPlatformError)
+      try {
+        await platform.updateComment('g', 'r', 999, 'body')
+      } catch (e: any) {
+        expect(e.errorKind).toBe('not_found')
+        expect(e.message).toMatch(/MR IID unknown/)
+      }
+    })
+  })
+
+  // ─── deleteComment（GLAPI-011）─────────────────────────────────────────────
+
+  describe('deleteComment', () => {
+    test('删除已知 note', async () => {
+      // 先 create 缓存映射
+      mockMergeRequestNotes.create.mockResolvedValue({
+        id: 400,
+        body: 'to delete',
+        author: {username: 'bot'},
+        created_at: '2026-08-07'
+      })
+      await platform.createComment('g', 'r', 5, 'to delete')
+
+      mockMergeRequestNotes.remove.mockResolvedValue(undefined)
+      await platform.deleteComment('g', 'r', 400)
+      expect(mockMergeRequestNotes.remove).toHaveBeenCalledWith('g/r', 5, 400)
+    })
+
+    test('未知 noteId → 抛 not_found 错误', async () => {
+      await expect(platform.deleteComment('g', 'r', 888)).rejects.toThrow(GitPlatformError)
+    })
+
+    test('删除后缓存清除，再次删除抛 not_found', async () => {
+      mockMergeRequestNotes.create.mockResolvedValue({
+        id: 401,
+        body: 'x',
+        author: {username: 'bot'},
+        created_at: '2026-08-07'
+      })
+      await platform.createComment('g', 'r', 5, 'x')
+
+      mockMergeRequestNotes.remove.mockResolvedValue(undefined)
+      await platform.deleteComment('g', 'r', 401)
+
+      // 删除后缓存已清除
+      await expect(platform.deleteComment('g', 'r', 401)).rejects.toThrow(GitPlatformError)
+    })
+  })
+
+  // ─── listComments（GLAPI-008/012）──────────────────────────────────────────
+
+  describe('listComments', () => {
+    test('正常返回用户 note，过滤 system note', async () => {
+      mockMergeRequestNotes.all.mockResolvedValue([
+        {id: 1, body: 'user note', author: {username: 'alice'}, created_at: '2026-08-07', system: false},
+        {id: 2, body: 'Merged', author: {username: 'system'}, created_at: '2026-08-07', system: true},
+        {id: 3, body: 'another note', author: {username: 'bob'}, created_at: '2026-08-07', system: false}
+      ])
+
+      const result = await platform.listComments('g', 'r', 5)
+      expect(result).toHaveLength(2)
+      expect(result[0]).toEqual({
+        id: 1,
+        body: 'user note',
+        author: 'alice',
+        createdAt: '2026-08-07'
+      })
+      expect(result[1].author).toBe('bob')
+    })
+
+    test('调用参数正确（sort + orderBy）', async () => {
+      mockMergeRequestNotes.all.mockResolvedValue([])
+
+      await platform.listComments('g', 'r', 5)
+      expect(mockMergeRequestNotes.all).toHaveBeenCalledWith('g/r', 5, {
+        sort: 'asc',
+        orderBy: 'created_at'
+      })
+    })
+
+    test('空列表 → 返回空数组', async () => {
+      mockMergeRequestNotes.all.mockResolvedValue([])
+
+      const result = await platform.listComments('g', 'r', 5)
+      expect(result).toEqual([])
+    })
+
+    test('全部是 system note → 返回空数组', async () => {
+      mockMergeRequestNotes.all.mockResolvedValue([
+        {id: 10, body: 'assigned', author: {username: 'sys'}, created_at: '2026-08-07', system: true}
+      ])
+
+      const result = await platform.listComments('g', 'r', 5)
+      expect(result).toEqual([])
+    })
+
+    test('API 错误 → GitPlatformError', async () => {
+      const err = new Error('500')
+      ;(err as any).response = {status: 500}
+      mockMergeRequestNotes.all.mockRejectedValue(err)
+
+      await expect(platform.listComments('g', 'r', 5)).rejects.toThrow(GitPlatformError)
     })
   })
 })
