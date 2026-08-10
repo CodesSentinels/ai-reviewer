@@ -434,13 +434,13 @@ describe('GitHubPlatform', () => {
   describe('addReaction', () => {
     test('issue_comment 使用 createForIssueComment', async () => {
       mockOctokit.reactions.createForIssueComment.mockResolvedValue({})
-      await platform.addReaction('o', 'r', 100, 'eyes', 'issue_comment')
+      await platform.addReaction('o', 'r', 1, 100, 'eyes', 'issue_comment')
       expect(mockOctokit.reactions.createForIssueComment).toHaveBeenCalled()
     })
 
     test('review_comment 使用 createForPullRequestReviewComment', async () => {
       mockOctokit.reactions.createForPullRequestReviewComment.mockResolvedValue({})
-      await platform.addReaction('o', 'r', 200, 'rocket', 'review_comment')
+      await platform.addReaction('o', 'r', 1, 200, 'rocket', 'review_comment')
       expect(mockOctokit.reactions.createForPullRequestReviewComment).toHaveBeenCalled()
     })
   })

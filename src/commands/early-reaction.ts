@@ -70,11 +70,16 @@ export async function tryEarlyReaction(
     // 'none' 分支（未 @bot / 非触发）不打表情，避免打扰真人之间的普通讨论。
     if (outcome.kind !== 'command' && outcome.kind !== 'conversation') return
 
-    const [owner, repo] = execCtx.projectPath.split('/')
+    // GitLab subgroup 项目路径可能含多级 namespace（如 group/subgroup/repo），
+    // 用 lastIndexOf 确保 owner 保留完整 namespace
+    const lastSlash = execCtx.projectPath.lastIndexOf('/')
+    const owner = execCtx.projectPath.substring(0, lastSlash)
+    const repo = execCtx.projectPath.substring(lastSlash + 1)
 
     await addAckReaction({
       owner,
       repo,
+      changeRequestId: execCtx.changeRequestId,
       commentId: comment.id,
       eventName,
       rawReaction

@@ -37,6 +37,16 @@ const mockMergeRequestDiscussions = {
   removeNote: jest.fn<any>(),
   resolve: jest.fn<any>()
 }
+const mockMergeRequestNoteAwardEmojis = {
+  award: jest.fn<any>()
+}
+const mockProjectMembers = {
+  show: jest.fn<any>()
+}
+const mockUsers = {
+  all: jest.fn<any>(),
+  showCurrentUser: jest.fn<any>()
+}
 
 jest.mock('@gitbeaker/rest', () => ({
   Gitlab: jest.fn().mockImplementation(() => ({
@@ -44,7 +54,10 @@ jest.mock('@gitbeaker/rest', () => ({
     Repositories: mockRepositories,
     RepositoryFiles: mockRepositoryFiles,
     MergeRequestNotes: mockMergeRequestNotes,
-    MergeRequestDiscussions: mockMergeRequestDiscussions
+    MergeRequestDiscussions: mockMergeRequestDiscussions,
+    MergeRequestNoteAwardEmojis: mockMergeRequestNoteAwardEmojis,
+    ProjectMembers: mockProjectMembers,
+    Users: mockUsers
   }))
 }))
 
@@ -1221,6 +1234,152 @@ describe('GitLabPlatform', () => {
       const result = await freshPlatform.resolveThreads(['disc-x'])
       expect(result.ok).toBe(0)
       expect(result.failed).toBe(1)
+    })
+  })
+
+  // ─── addReaction（GLAPI-023）─────────────────────────────────────────────
+
+  describe('addReaction', () => {
+    test('正常添加 emoji reaction（+1 → thumbsup），无需预热缓存', async () => {
+      mockMergeRequestNoteAwardEmojis.award.mockResolvedValue({id: 1, name: 'thumbsup'})
+      await platform.addReaction('g', 'r', 5, 100, '+1', 'issue_comment')
+      expect(mockMergeRequestNoteAwardEmojis.award).toHaveBeenCalledWith('g/r', 5, 100, 'thumbsup')
+    })
+
+    test('eyes → eyes 映射', async () => {
+      mockMergeRequestNoteAwardEmojis.award.mockResolvedValue({id: 2, name: 'eyes'})
+      await platform.addReaction('g', 'r', 5, 101, 'eyes', 'review_comment')
+      expect(mockMergeRequestNoteAwardEmojis.award).toHaveBeenCalledWith('g/r', 5, 101, 'eyes')
+    })
+
+    test('hooray → tada 映射', async () => {
+      mockMergeRequestNoteAwardEmojis.award.mockResolvedValue({id: 3, name: 'tada'})
+      await platform.addReaction('g', 'r', 5, 102, 'hooray', 'issue_comment')
+      expect(mockMergeRequestNoteAwardEmojis.award).toHaveBeenCalledWith('g/r', 5, 102, 'tada')
+    })
+
+    test('laugh → laughing 映射', async () => {
+      mockMergeRequestNoteAwardEmojis.award.mockResolvedValue({id: 4, name: 'laughing'})
+      await platform.addReaction('g', 'r', 5, 103, 'laugh', 'issue_comment')
+      expect(mockMergeRequestNoteAwardEmojis.award).toHaveBeenCalledWith('g/r', 5, 103, 'laughing')
+    })
+
+    test('-1 → thumbsdown 映射', async () => {
+      mockMergeRequestNoteAwardEmojis.award.mockResolvedValue({id: 5, name: 'thumbsdown'})
+      await platform.addReaction('g', 'r', 5, 104, '-1', 'issue_comment')
+      expect(mockMergeRequestNoteAwardEmojis.award).toHaveBeenCalledWith(
+        'g/r',
+        5,
+        104,
+        'thumbsdown'
+      )
+    })
+
+    test('API 失败 → GitPlatformError', async () => {
+      mockMergeRequestNoteAwardEmojis.award.mockRejectedValue(
+        Object.assign(new Error('422'), {response: {status: 422}})
+      )
+      await expect(platform.addReaction('g', 'r', 5, 103, '+1', 'issue_comment')).rejects.toThrow(
+        GitPlatformError
+      )
+    })
+  })
+
+  // ─── getCollaboratorPermission（GLAPI-020/021）────────────────────────────
+
+  describe('getCollaboratorPermission', () => {
+    test('OWNER (50) → admin', async () => {
+      mockUsers.all.mockResolvedValue([{id: 42, username: 'alice'}])
+      mockProjectMembers.show.mockResolvedValue({access_level: 50})
+      const perm = await platform.getCollaboratorPermission('g', 'r', 'alice')
+      expect(perm).toBe('admin')
+      expect(mockProjectMembers.show).toHaveBeenCalledWith('g/r', 42, {includeInherited: true})
+    })
+
+    test('MAINTAINER (40) → maintain', async () => {
+      mockUsers.all.mockResolvedValue([{id: 43, username: 'bob'}])
+      mockProjectMembers.show.mockResolvedValue({access_level: 40})
+      expect(await platform.getCollaboratorPermission('g', 'r', 'bob')).toBe('maintain')
+    })
+
+    test('DEVELOPER (30) → write', async () => {
+      mockUsers.all.mockResolvedValue([{id: 44, username: 'carol'}])
+      mockProjectMembers.show.mockResolvedValue({access_level: 30})
+      expect(await platform.getCollaboratorPermission('g', 'r', 'carol')).toBe('write')
+    })
+
+    test('REPORTER (20) → triage', async () => {
+      mockUsers.all.mockResolvedValue([{id: 45, username: 'dave'}])
+      mockProjectMembers.show.mockResolvedValue({access_level: 20})
+      expect(await platform.getCollaboratorPermission('g', 'r', 'dave')).toBe('triage')
+    })
+
+    test('GUEST (10) → read', async () => {
+      mockUsers.all.mockResolvedValue([{id: 46, username: 'eve'}])
+      mockProjectMembers.show.mockResolvedValue({access_level: 10})
+      expect(await platform.getCollaboratorPermission('g', 'r', 'eve')).toBe('read')
+    })
+
+    test('NO_ACCESS (0) → none', async () => {
+      mockUsers.all.mockResolvedValue([{id: 47, username: 'frank'}])
+      mockProjectMembers.show.mockResolvedValue({access_level: 0})
+      expect(await platform.getCollaboratorPermission('g', 'r', 'frank')).toBe('none')
+    })
+
+    test('用户名不存在 → none', async () => {
+      mockUsers.all.mockResolvedValue([])
+      expect(await platform.getCollaboratorPermission('g', 'r', 'ghost')).toBe('none')
+    })
+
+    test('用户名大小写不敏感', async () => {
+      mockUsers.all.mockResolvedValue([{id: 48, username: 'Alice'}])
+      mockProjectMembers.show.mockResolvedValue({access_level: 30})
+      expect(await platform.getCollaboratorPermission('g', 'r', 'alice')).toBe('write')
+    })
+
+    test('Users.all 返回多个用户时精确匹配', async () => {
+      mockUsers.all.mockResolvedValue([
+        {id: 50, username: 'alice-dev'},
+        {id: 51, username: 'alice'}
+      ])
+      mockProjectMembers.show.mockResolvedValue({access_level: 40})
+      await platform.getCollaboratorPermission('g', 'r', 'alice')
+      expect(mockProjectMembers.show).toHaveBeenCalledWith('g/r', 51, {includeInherited: true})
+    })
+
+    test('GLAPI-021: Users.all 失败 → fail closed 返回 none', async () => {
+      mockUsers.all.mockRejectedValue(new Error('Network Error'))
+      expect(await platform.getCollaboratorPermission('g', 'r', 'alice')).toBe('none')
+    })
+
+    test('GLAPI-021: ProjectMembers.show 404（非成员）→ fail closed 返回 none', async () => {
+      mockUsers.all.mockResolvedValue([{id: 42, username: 'alice'}])
+      mockProjectMembers.show.mockRejectedValue(
+        Object.assign(new Error('404'), {response: {status: 404}})
+      )
+      expect(await platform.getCollaboratorPermission('g', 'r', 'alice')).toBe('none')
+    })
+
+    test('GLAPI-021: ProjectMembers.show 500 → fail closed 返回 none', async () => {
+      mockUsers.all.mockResolvedValue([{id: 42, username: 'alice'}])
+      mockProjectMembers.show.mockRejectedValue(
+        Object.assign(new Error('500'), {response: {status: 500}})
+      )
+      expect(await platform.getCollaboratorPermission('g', 'r', 'alice')).toBe('none')
+    })
+  })
+
+  // ─── getAuthenticatedLogin（GLAPI-022）────────────────────────────────────
+
+  describe('getAuthenticatedLogin', () => {
+    test('正常返回 PAT 对应的 username', async () => {
+      mockUsers.showCurrentUser.mockResolvedValue({username: 'review-bot'})
+      expect(await platform.getAuthenticatedLogin()).toBe('review-bot')
+    })
+
+    test('API 失败 → 返回默认 gitlab-bot', async () => {
+      mockUsers.showCurrentUser.mockRejectedValue(new Error('401'))
+      expect(await platform.getAuthenticatedLogin()).toBe('gitlab-bot')
     })
   })
 })

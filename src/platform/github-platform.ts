@@ -653,6 +653,7 @@ export class GitHubPlatform implements IGitPlatform {
   async addReaction(
     owner: string,
     repo: string,
+    _changeRequestId: number,
     commentId: number,
     content: ReactionContent,
     commentKind: 'issue_comment' | 'review_comment'

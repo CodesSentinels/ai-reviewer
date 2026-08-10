@@ -53,13 +53,6 @@ function toGitPlatformError(e: unknown): GitPlatformError {
 
 // ─── 未实现方法的统一错误 ──────────────────────────────────────────────────
 
-function notImplemented(method: string): never {
-  throw new GitPlatformError(
-    `GitLabPlatform.${method}() is not yet implemented (pending GLAPI-* tasks)`,
-    'unknown'
-  )
-}
-
 // ─── GitLab diff 状态映射 ──────────────────────────────────────────────────
 
 function diffStatus(d: {
@@ -71,6 +64,30 @@ function diffStatus(d: {
   if (d.deleted_file) return 'removed'
   if (d.renamed_file) return 'renamed'
   return 'modified'
+}
+
+// ─── GitHub ReactionContent → GitLab Award Emoji name 映射 ──────────────────
+
+const REACTION_TO_EMOJI: Record<ReactionContent, string> = {
+  '+1': 'thumbsup',
+  '-1': 'thumbsdown',
+  laugh: 'laughing',
+  confused: 'confused',
+  heart: 'heart',
+  hooray: 'tada',
+  rocket: 'rocket',
+  eyes: 'eyes'
+}
+
+// ─── GitLab AccessLevel → PlatformPermission 映射 ───────────────────────────
+
+function accessLevelToPermission(level: number): PlatformPermission {
+  if (level >= 50) return 'admin' // OWNER
+  if (level >= 40) return 'maintain' // MAINTAINER
+  if (level >= 30) return 'write' // DEVELOPER
+  if (level >= 20) return 'triage' // REPORTER
+  if (level >= 10) return 'read' // GUEST
+  return 'none'
 }
 
 // ─── GitLabPlatform ────────────────────────────────────────────────────────
@@ -686,25 +703,87 @@ export class GitLabPlatform implements IGitPlatform {
     return {ok, failed: errors.length, errors}
   }
 
+  // ─── 7. Reaction（GLAPI-023）─────────────────────────────────────────────
+
+  /**
+   * GitLab Award Emoji ACK。
+   *
+   * GitHub ReactionContent → GitLab emoji name 映射后，
+   * 通过 MergeRequestNoteAwardEmojis.award 添加。
+   * GitLab 不区分 issue_comment / review_comment，都是 MR note。
+   * 失败不阻塞核心审查（由调用方 reaction.ts 捕获）。
+   */
   async addReaction(
-    _owner: string,
-    _repo: string,
-    _commentId: number,
-    _content: ReactionContent,
+    owner: string,
+    repo: string,
+    changeRequestId: number,
+    commentId: number,
+    content: ReactionContent,
     _commentKind: 'issue_comment' | 'review_comment'
   ): Promise<void> {
-    notImplemented('addReaction')
+    const projectPath = `${owner}/${repo}`
+    const emojiName = REACTION_TO_EMOJI[content]
+    try {
+      await (this.api.MergeRequestNoteAwardEmojis as any).award(
+        projectPath,
+        changeRequestId,
+        commentId,
+        emojiName
+      )
+    } catch (e) {
+      throw toGitPlatformError(e)
+    }
   }
 
+  // ─── 8. 权限（GLAPI-020 / GLAPI-021）──────────────────────────────────────
+
+  /**
+   * 按用户名查询项目 access level。
+   *
+   * 流程：Users.all({username}) 获取 userId → ProjectMembers.show(projectId, userId, {includeInherited})
+   * 获取 access_level → 映射为 PlatformPermission。
+   *
+   * GLAPI-021: 任何环节失败都 fail closed，返回 'none'。
+   */
   async getCollaboratorPermission(
-    _owner: string,
-    _repo: string,
-    _username: string
+    owner: string,
+    repo: string,
+    username: string
   ): Promise<PlatformPermission> {
-    notImplemented('getCollaboratorPermission')
+    const projectPath = `${owner}/${repo}`
+    try {
+      // 1. 用户名 → userId
+      const users = (await this.api.Users.all({username})) as any[]
+      const user = users.find(
+        (u: any) => (u.username as string).toLowerCase() === username.toLowerCase()
+      )
+      if (!user) return 'none'
+
+      // 2. userId → access_level（includeInherited 包含继承的组权限）
+      const member = (await (this.api.ProjectMembers as any).show(projectPath, user.id, {
+        includeInherited: true
+      })) as any
+      const level: number = member.access_level ?? 0
+
+      return accessLevelToPermission(level)
+    } catch {
+      // GLAPI-021: fail closed
+      return 'none'
+    }
   }
 
+  // ─── 9. 用户身份（GLAPI-022）───────────────────────────────────────────────
+
+  /**
+   * 获取当前 PAT / Job Token 对应的用户名。
+   * 用于 bot 自评论过滤（fetchUnresolvedBotThreads 的 botLogin 参数）。
+   */
   async getAuthenticatedLogin(): Promise<string> {
-    notImplemented('getAuthenticatedLogin')
+    try {
+      const user = (await this.api.Users.showCurrentUser()) as any
+      return user.username as string
+    } catch {
+      return 'gitlab-bot'
+    }
   }
 }

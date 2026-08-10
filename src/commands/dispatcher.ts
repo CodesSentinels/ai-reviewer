@@ -188,6 +188,7 @@ export async function dispatchCommentEvent(deps: DispatcherDeps): Promise<Dispat
       await addAckReaction({
         owner,
         repo: repoName,
+        changeRequestId: prNumber,
         commentId: comment.id,
         eventName,
         rawReaction: deps.options.commandAckReaction

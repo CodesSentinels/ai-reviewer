@@ -59,6 +59,7 @@ export function normalizeReaction(raw: string | undefined): ReactionContent | nu
 export interface AckReactionParams {
   owner: string
   repo: string
+  changeRequestId: number
   commentId: number
   eventName: CommandEventName
   /** 原始 options.commandAckReaction 值 */
@@ -81,6 +82,7 @@ export async function addAckReaction(params: AckReactionParams): Promise<void> {
     await getPlatform().addReaction(
       params.owner,
       params.repo,
+      params.changeRequestId,
       params.commentId,
       content,
       commentKind
