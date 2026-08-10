@@ -438,14 +438,27 @@
 
 ### 7.3 Discussions
 
-- [ ] `GLAPI-013` 使用最新 diff version 创建行级 discussion。
-- [ ] `GLAPI-014` 正确映射 `old_path/new_path`、`old_line/new_line` 和新增/删除
+- [x] `GLAPI-013` 使用最新 diff version 创建行级 discussion。
+      — `createReviewComment` 通过 `MergeRequests.show` 获取 `diff_refs`，构造
+      `position` 参数调用 `MergeRequestDiscussions.create`。
+- [x] `GLAPI-014` 正确映射 `old_path/new_path`、`old_line/new_line` 和新增/删除
       文件。
-- [ ] `GLAPI-015` 行级位置无法映射时降级为包含文件/行号的顶层 note。
-- [ ] `GLAPI-016` 回复指定 discussion。
-- [ ] `GLAPI-017` 分页查询 discussions 和 resolved 状态。
-- [ ] `GLAPI-018` 使用 Discussions API resolve discussion。
-- [ ] `GLAPI-019` 处理旧 diff SHA、已删除 discussion 和部分 resolve 失败。
+      — position 使用 `new_path`/`new_line`，`old_path` 设为相同值，
+      `position_type: 'text'`。已知限制：多行评论（startLine）暂降级为单行。
+- [x] `GLAPI-015` 行级位置无法映射时降级为包含文件/行号的顶层 note。
+      — `submitReviewComments` 捕获行级创建异常，降级为
+      `MergeRequestNotes.create` 顶层 note，附带 `**path:line**` 前缀。
+- [x] `GLAPI-016` 回复指定 discussion。
+      — `replyToReviewComment` 通过 `noteToDiscussion` 缓存查找 discussionId，
+      cache miss 时自动调用 `getAllDiffDiscussions` 补缓存（webhook 路径）。
+- [x] `GLAPI-017` 分页查询 discussions 和 resolved 状态。
+      — `fetchThreadStatusMap` 返回 `path:line → resolved` Map；
+      `fetchUnresolvedBotThreads` 过滤 bot 发起的未 resolved discussion。
+- [x] `GLAPI-018` 使用 Discussions API resolve discussion。
+      — `resolveThreads` 通过 `discussionIdToContext` 缓存逐条精确 resolve。
+- [x] `GLAPI-019` 处理旧 diff SHA、已删除 discussion 和部分 resolve 失败。
+      — 未缓存的 discussionId 标记为失败（`No cached context`），API 调用失败
+      计入 errors，返回 `{ok, failed, errors}` 结构。
 
 ### 7.4 权限、身份和 Emoji
 
