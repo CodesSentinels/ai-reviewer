@@ -428,13 +428,13 @@
 
 ### 7.2 Notes
 
-- [ ] `GLAPI-007` 创建 MR 顶层 summary note。
-- [ ] `GLAPI-008` 按平台 marker 查找现有 summary note。
-- [ ] `GLAPI-009` 更新既有 summary note，避免重复创建。
-- [ ] `GLAPI-010` 创建 help、configuration、pause/resume、命令结果和错误回复
+- [x] `GLAPI-007` 创建 MR 顶层 summary note。
+- [x] `GLAPI-008` 按平台 marker 查找现有 summary note。
+- [x] `GLAPI-009` 更新既有 summary note，避免重复创建。
+- [x] `GLAPI-010` 创建 help、configuration、pause/resume、命令结果和错误回复
       note。
-- [ ] `GLAPI-011` 支持 reviewer 自己创建的 note 的更新/删除。
-- [ ] `GLAPI-012` Notes API 覆盖分页、404、权限失败、超时和重试。
+- [x] `GLAPI-011` 支持 reviewer 自己创建的 note 的更新/删除。
+- [x] `GLAPI-012` Notes API 覆盖分页、404、权限失败、超时和重试。
 
 ### 7.3 Discussions
 
