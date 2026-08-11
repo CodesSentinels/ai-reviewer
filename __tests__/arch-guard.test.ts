@@ -136,6 +136,48 @@ describe('ARCH-023: 共享核心不得新增直接平台依赖', () => {
   })
 })
 
+/** 粗粒度剥离注释（块注释/行注释），避免文档里提到 "execCtx.raw" 这几个字触发假阳性 */
+function stripComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+}
+
+describe('ARCH-005: 共享业务层不得新增 execCtx.raw 读取（GitHub Issue #88 P2 复核）', () => {
+  // 已知例外：conversation.ts 需要 review comment 的 diff_hunk/path 等深层 GitHub
+  // 字段，以及完整 PR title/body/base/head sha——这些依赖 Commenter（本身仍直接
+  // import @actions/github，见上方 LEGACY_ALLOWLIST）提供的上下文，是比本次修复
+  // 范围更大的独立迁移任务（尚无 GLAPI-*/REVIEW-* 对应任务落地），暂不消除，
+  // 只冻结在这份 allowlist 里，防止新文件继续蔓延同类读取。
+  const RAW_READ_ALLOWLIST = new Set(['conversation.ts'])
+
+  const allFiles = collectTsFiles(SRC)
+  const coreFiles = allFiles.filter(f => {
+    const rel = path.relative(SRC, f).replace(/\\/g, '/')
+    return !isAdapterOrEntry(rel) && !RAW_READ_ALLOWLIST.has(rel)
+  })
+
+  test('共享核心文件列表非空（防止 glob 误匹配导致假通过）', () => {
+    expect(coreFiles.length).toBeGreaterThan(5)
+  })
+
+  test('execCtx.raw 不应在共享核心中被读取', () => {
+    const violations: string[] = []
+    for (const f of coreFiles) {
+      const content = stripComments(fs.readFileSync(f, 'utf8'))
+      if (/\.raw\b/.test(content)) {
+        violations.push(path.relative(SRC, f))
+      }
+    }
+    expect(violations).toEqual([])
+  })
+
+  test('allowlist 中的文件仍然真实读取 execCtx.raw（防止清单陈旧、掩盖假通过）', () => {
+    for (const rel of RAW_READ_ALLOWLIST) {
+      const content = stripComments(fs.readFileSync(path.join(SRC, rel), 'utf8'))
+      expect(content).toMatch(/\.raw\b/)
+    }
+  })
+})
+
 describe('ARCH-024: @gitbeaker/rest 类型不泄露到 IGitPlatform 或共享核心', () => {
   const gitPlatformContent = fs.readFileSync(path.join(SRC, 'platform/git-platform.ts'), 'utf8')
   const gitlabPlatformContent = fs.readFileSync(

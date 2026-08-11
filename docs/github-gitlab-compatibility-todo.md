@@ -81,10 +81,23 @@
 > [#63](https://github.com/CodesSentinels/ai-reviewer/pull/63) 承载实现
 > ，`feat/execution-context` 分支；PR 本身尚未合并 main，Issue #62 状态仍为
 > open）
-> 。`main.ts`、`command-handler.ts`、`commands/early-reaction.ts`、`review-state.ts`、`repo-tree.ts`、`dependency-analyzer.ts`、`conversation.ts`
+> 。`main.ts`、`command-handler.ts`、`review-state.ts`、`repo-tree.ts`、`dependency-analyzer.ts`
 > 已迁移。`review.ts`、`commands/dispatcher.ts`、`commenter.ts` 仅做了 `execCtx`
 > 签名透传，内部仍保留对 `context`/`repo` 的读取（评估后判定风险过高未随本阶段一
-> 并迁移），延后到阶段四处理。
+> 并迁移），延后到阶段四处理。⚠️ GitHub Issue
+> [#88](https://github.com/CodesSentinels/ai-reviewer/issues/88) P2 复核
+> （2026-08-10）指出：此前声称"已迁移"的 `commands/early-reaction.ts` 和
+> `conversation.ts` 实际仍通过 `execCtx.raw as any` 读取 GitHub webhook 原始字段
+> （`action`、`issue.pull_request`、`comment.body` 等），且当时没有任何架构守卫
+> 拦截这类新增读取。已修复：`createGitHubExecutionContext()` 把"action !=
+> created"和"issue_comment 是否挂在 PR 上"两条判断上移到构造阶段（走
+> `ignorable_event` 优雅跳过），`CommentRef` 新增归一化的 `body` 字段；
+> `commands/early-reaction.ts` 已完全消除 `execCtx.raw` 读取，是真正意义上的
+> "已迁移"。`conversation.ts` 仍需要 `comment.diff_hunk`/`comment.path` 和完整
+> PR `title`/`body`/`base`/`head` sha 等更深层字段（依赖仍未迁移的
+> `Commenter`），保留读取，但已在 `__tests__/arch-guard.test.ts` 新增
+> "ARCH-005: 共享业务层不得新增 execCtx.raw 读取"守卫，把它列为唯一允许项并锁定，
+> 防止再有文件静默劣化成"声称已迁移但实际没有"。
 
 - [x] `ARCH-001` 定义平台无关 `ExecutionContext`。
 - [x] `ARCH-002` 上下文至少包含：平台、项目/仓库、PR/MR 编号、事件类型
@@ -195,8 +208,9 @@
 > 。`src/platform/git-platform.ts`（IGitPlatform 接口 + 共享类型 +
 > GitPlatformError）、`src/platform/github-platform.ts`（GitHubPlatform 实现，含
 > GraphQL review-thread 逻辑）已交付。`__tests__/git-platform.test.ts` 29 项单元
-> 测试覆盖全部 10 组方法 + 错误语义转换；`__tests__/arch-guard.test.ts` 7 项架构
-> 守卫测试。ARCH-018 已完成：9 个遗留文件全部迁移至 `getPlatform()` 调用，
+> 测试覆盖全部 10 组方法 + 错误语义转换；`__tests__/arch-guard.test.ts` 15 项架构
+> 守卫测试（含 Issue #88 P2 复核后新增的 ARCH-005 execCtx.raw 读取守卫）。ARCH-018
+> 已完成：9 个遗留文件全部迁移至 `getPlatform()` 调用，
 > LEGACY_ALLOWLIST 中不再有 octokit 引用项。ESLint 配置已切换至
 > `@typescript-eslint/no-unused-vars`，项目 lint 0 error。
 > `batchResolve` P1 修复：`resolveThreads()` 返回 `{failed>0}` 不再被误计为成功，
@@ -215,7 +229,14 @@
       支持 `GitLabCredential`（PAT / CI job token）认证；其余 21 个方法待
       GLAPI-* 补全）
 - [x] `ARCH-021` 为 PR number、MR IID、comment/note ID、thread node ID 和
-      discussion ID 建立类型边界。
+      discussion ID 建立类型边界。GitHub Issue
+      [#88](https://github.com/CodesSentinels/ai-reviewer/issues/88) P2 复核
+      指出 `github-execution-context.ts` 曾把 `CommentRef.threadId` 填成
+      `comment.node_id`（评论自己的 ID），与 GitLab 侧真正的 thread 级
+      `discussion_id` 语义不一致，且 `resolveReviewThread` mutation 传入会失败。
+      已修复：GitHub 侧构造阶段不再填充 `threadId`（真正的 thread ID 需要单独一次
+      GraphQL 查询，见 `src/github/review-thread.ts`），语义边界回填进
+      `CommentRef` 的类型注释。
 - [x] `ARCH-022` 为分页、429、5xx、超时、404/409 和权限不足定义统一错误语义。
 - [x] `ARCH-023` 增加架构测试，阻止共享核心新增直接平台依赖。
 - [x] `ARCH-024` `@gitbeaker/rest` 的实例、请求参数、响应类型和错误类型只能存在
@@ -335,8 +356,14 @@
 
 - [x] `EVENT-001` 新增 GitLab trigger CLI 源入口。
 - [x] `EVENT-002` CLI 从 file-type `TRIGGER_PAYLOAD` 路径读取原始 payload。
-- [x] `EVENT-003` CLI 校验 project ID、事件类型、source/target project、MR IID
-      和 HEAD SHA。
+- [ ] `EVENT-003` CLI 校验 project ID、事件类型、source/target project、MR IID
+      和 HEAD SHA。`validateTriggerPayload()`（`gitlab-trigger-validation.ts`）
+      只校验 project ID、事件类型、source/target project、MR IID，**未校验任何
+      HEAD SHA 相关字段**；`createGitLabExecutionContext()` 里
+      `baseSha: attrs.oldrev ?? ''`、`headSha: attrs.last_commit?.id ?? ''` 字段
+      缺失时静默兜底成空字符串，不是 fail closed。此前误勾为已完成（GitHub
+      Issue [#88](https://github.com/CodesSentinels/ai-reviewer/issues/88) P1
+      复核指出），已改回未完成。
 - [x] `EVENT-004` 无关事件快速成功退出，不调用模型、不写评论。
 - [x] `EVENT-005` 所有错误日志脱敏，不输出完整 payload 或 Token。
 

@@ -42,7 +42,19 @@ export interface CommentRef {
   kind: CommentKind
   /** GitHub: comment.id（number）；GitLab: note.id（number，两平台均为 number，类型统一） */
   id: number
-  /** GitHub: review thread node ID（GraphQL）；GitLab: discussion_id（string） */
+  /** 评论正文文本。GitHub: comment.body；GitLab: 暂未在构造阶段填充（无消费方，见 GLAPI 系列 / REVIEW-016）。 */
+  body?: string
+  /**
+   * 评论所属"讨论线程"的真正平台 ID，与 comment/note 自身的 ID 是两个不同概念
+   * （ARCH-021 类型边界；GitHub Issue #88 P2 复核指出过混用风险）：
+   * - GitHub: 真正的 thread ID 是 `PullRequestReviewThread` 的 GraphQL node ID，
+   *   构造 ExecutionContext 时（从 webhook payload）拿不到，需要单独一次 GraphQL
+   *   查询才能获得（见 src/github/review-thread.ts）。**不要**用 comment.node_id
+   *   代替——那是评论自己的 ID，`resolveReviewThread` mutation 传入会失败。构造阶段
+   *   故意留空，由需要 resolve 的调用方自行查询真实 thread ID。
+   * - GitLab: `discussion_id` 就是真正的 thread 级 ID，webhook payload 直接给，
+   *   构造阶段即可填充。
+   */
   threadId?: string
 }
 

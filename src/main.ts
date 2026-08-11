@@ -69,12 +69,16 @@ async function run(): Promise<void> {
 }
 
 // 全局异常处理
+// GitHub Issue #88 P2 复核：这三处此前只 warning，不设 exitCode/setFailed——
+// Node 一旦挂了 uncaughtException 监听器就不再默认崩溃退出，事件循环清空后照样
+// 以 0（成功）退出，导致真正的意外异常在 GitHub Action 上显示假成功。改为
+// setFailed()（内部会设 process.exitCode = 1），使这三条路径都 fail closed。
 process
   .on('unhandledRejection', (reason, p) => {
-    warning(`Unhandled Rejection at Promise: ${reason}, promise is ${p}`)
+    setFailed(`Unhandled Rejection at Promise: ${reason}, promise is ${p}`)
   })
   .on('uncaughtException', (e: any) => {
-    warning(`Uncaught Exception thrown: ${e}, backtrace: ${e.stack}`)
+    setFailed(`Uncaught Exception thrown: ${e}, backtrace: ${e.stack}`)
   })
 
 // 启动主流程（不用顶层 await，ts-jest CommonJS 转译不支持）
@@ -82,6 +86,6 @@ void (async (): Promise<void> => {
   try {
     await run()
   } catch (e: any) {
-    warning(`Unhandled error in run(): ${e}`)
+    setFailed(`Unhandled error in run(): ${e}`)
   }
 })()

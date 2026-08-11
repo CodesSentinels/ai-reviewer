@@ -2,7 +2,7 @@
   "eventName": "issue_comment",
   "action": "created",
   "repo": {"owner": "octo", "repo": "demo"},
-  "issue": {"number": 42},
+  "issue": {"number": 42, "pull_request": {"url": "https://api.github.com/repos/octo/demo/pulls/42"}},
   "comment": {
     "id": 9001,
     "node_id": "IC_kwDOtopcomment0001",

@@ -26,15 +26,13 @@ function makeExecCtx(overrides: Partial<ExecutionContext> = {}): ExecutionContex
     projectPath: 'group/repo',
     changeRequestId: 42,
     eventKind: 'comment_created',
-    raw: {
-      action: 'created',
-      issue: {pull_request: {url: 'x'}},
-      comment: {
-        id: 777,
-        body: '@codesentinel help',
-        user: {login: 'alice', type: 'User'}
-      }
+    actor: {login: 'alice', isBot: false},
+    comment: {
+      kind: 'top_level',
+      id: 777,
+      body: '@codesentinel help'
     },
+    raw: {},
     ...overrides
   } as ExecutionContext
 }

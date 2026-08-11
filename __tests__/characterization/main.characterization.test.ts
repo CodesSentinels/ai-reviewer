@@ -122,6 +122,12 @@ const PAYLOAD_BY_EVENT: Record<string, any> = {
 describe('main.ts run() — 改造前事件分发行为基线', () => {
   beforeEach(() => {
     jest.clearAllMocks()
+    // main.ts 每次 import 都会往 process 上挂 unhandledRejection/uncaughtException
+    // 监听器（jest.resetModules() 不会清掉这些全局副作用）；不清理会导致本文件
+    // 后面的用例累积多个监听器，一次 emit 触发多次 setFailed，断言 toHaveBeenCalledTimes
+    // 不稳定。
+    process.removeAllListeners('unhandledRejection')
+    process.removeAllListeners('uncaughtException')
     // 数值字段必须返回有效字符串，否则 validateIntStr/validateFloatStr 会 fail closed
     const numericDefaults: Record<string, string> = {
       max_files: '150',
@@ -269,5 +275,27 @@ describe('main.ts run() — 改造前事件分发行为基线', () => {
     expect(commandHandlerState.handleCommentEvent).not.toHaveBeenCalled()
     expect(coreState.setFailed).toHaveBeenCalledTimes(1)
     expect(coreState.setFailed.mock.calls[0][0]).toContain('Failed to build ExecutionContext')
+  })
+
+  // GitHub Issue #88 P2 复核：这三处此前只 warning，不设 exitCode，意外异常会让
+  // Action 显示假成功。改为 setFailed 后用真实 process.emit 触发监听器验证。
+  test('unhandledRejection → setFailed（不再只是 warning，避免假成功）', async () => {
+    await runMain('pull_request')
+    coreState.setFailed.mockClear()
+
+    process.emit('unhandledRejection', new Error('boom'), Promise.resolve())
+
+    expect(coreState.setFailed).toHaveBeenCalledTimes(1)
+    expect(coreState.setFailed.mock.calls[0][0]).toContain('Unhandled Rejection')
+  })
+
+  test('uncaughtException → setFailed（不再只是 warning，避免假成功）', async () => {
+    await runMain('pull_request')
+    coreState.setFailed.mockClear()
+
+    process.emit('uncaughtException', new Error('boom'))
+
+    expect(coreState.setFailed).toHaveBeenCalledTimes(1)
+    expect(coreState.setFailed.mock.calls[0][0]).toContain('Uncaught Exception')
   })
 })

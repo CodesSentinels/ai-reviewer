@@ -43,9 +43,9 @@ function mapPullRequestAction(payload: any): EventKind {
   }
 }
 
-function makeActor(login: string | undefined | null): ActorInfo {
+function makeActor(login: string | undefined | null, userType?: string | null): ActorInfo {
   const safeLogin = login ?? ''
-  return {login: safeLogin, isBot: /\[bot\]$/.test(safeLogin)}
+  return {login: safeLogin, isBot: userType === 'Bot' || /\[bot\]$/i.test(safeLogin)}
 }
 
 /**
@@ -105,13 +105,31 @@ export function createGitHubExecutionContext(): ExecutionContext {
       'missing_required_field'
     )
   }
+  // 结构合法但业务上不需要处理：优雅跳过（与 GitLab 侧 EVENT-016/017、Issue #66
+  // 同一模式）。这两条此前只在共享核心的 conversation.ts/early-reaction.ts 里各自
+  // 靠读 execCtx.raw 判断（ARCH-005，GitHub Issue #88 P2 复核指出）——现在提到构造
+  // 阶段统一判断，调用方不必再读 raw 就能拿到同样保证。
+  if (payload.action !== 'created') {
+    throw new ExecutionContextError(
+      `comment action is '${payload.action}', not 'created' — ignorable`,
+      'github',
+      'ignorable_event'
+    )
+  }
+  if (eventKind === 'comment_created' && payload.issue?.pull_request == null) {
+    throw new ExecutionContextError(
+      'issue_comment on non-PR issue — ignorable',
+      'github',
+      'ignorable_event'
+    )
+  }
   return {
     platform: 'github',
     projectPath: `${owner}/${repo}`,
     projectId: `${owner}/${repo}`,
     changeRequestId: prNumber,
     eventKind,
-    actor: makeActor(comment.user?.login),
+    actor: makeActor(comment.user?.login, comment.user?.type),
     // PR 事件的 base/head SHA 在评论事件里默认取不到，交由调用方在需要时
     // 另行查询当前 HEAD；此处留空字符串——与现状行为一致（resolve/summary
     // 等命令本就在执行时重新查询 HEAD，不依赖事件 payload 里的 SHA）。
@@ -120,7 +138,8 @@ export function createGitHubExecutionContext(): ExecutionContext {
     comment: {
       kind: eventKind === 'review_comment_created' ? 'review_thread' : 'top_level',
       id: comment.id,
-      threadId: comment.node_id
+      body: typeof comment.body === 'string' ? comment.body : undefined
+      // threadId 故意不填充——见 CommentRef.threadId 的文档注释（ARCH-021/Issue #88 P2）。
     },
     raw: githubContext.payload
   }

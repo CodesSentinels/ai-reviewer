@@ -116,8 +116,8 @@ describe('createGitHubExecutionContext()', () => {
     process.env.GITHUB_EVENT_NAME = 'issue_comment'
     mockContext.payload = {
       action: 'created',
-      issue: {number: 42},
-      comment: {id: 9001, node_id: 'IC_xxx', user: {login: 'alice'}}
+      issue: {number: 42, pull_request: {url: 'https://api.github.com/.../pulls/42'}},
+      comment: {id: 9001, node_id: 'IC_xxx', body: 'hello', user: {login: 'alice'}}
     }
 
     const execCtx = createGitHubExecutionContext()
@@ -130,7 +130,7 @@ describe('createGitHubExecutionContext()', () => {
     expect(execCtx.comment).toEqual({
       kind: 'top_level',
       id: 9001,
-      threadId: 'IC_xxx'
+      body: 'hello'
     })
   })
 
@@ -139,7 +139,7 @@ describe('createGitHubExecutionContext()', () => {
     mockContext.payload = {
       action: 'created',
       pull_request: {number: 42},
-      comment: {id: 9002, node_id: 'PRRC_xxx', user: {login: 'bob'}}
+      comment: {id: 9002, node_id: 'PRRC_xxx', body: 'hi', user: {login: 'bob'}}
     }
 
     const execCtx = createGitHubExecutionContext()
@@ -149,8 +149,59 @@ describe('createGitHubExecutionContext()', () => {
     expect(execCtx.comment).toEqual({
       kind: 'review_thread',
       id: 9002,
-      threadId: 'PRRC_xxx'
+      body: 'hi'
     })
+  })
+
+  test('issue_comment action=edited → ExecutionContextError(ignorable_event)（ARCH-005，Issue #88 P2）', () => {
+    process.env.GITHUB_EVENT_NAME = 'issue_comment'
+    mockContext.payload = {
+      action: 'edited',
+      issue: {number: 42, pull_request: {url: 'x'}},
+      comment: {id: 1, user: {login: 'alice'}}
+    }
+
+    const e = getThrownError(() => createGitHubExecutionContext())
+    expect(e).toBeInstanceOf(ExecutionContextError)
+    expect((e as ExecutionContextError).reason).toBe('ignorable_event')
+  })
+
+  test('pull_request_review_comment action=deleted → ExecutionContextError(ignorable_event)', () => {
+    process.env.GITHUB_EVENT_NAME = 'pull_request_review_comment'
+    mockContext.payload = {
+      action: 'deleted',
+      pull_request: {number: 42},
+      comment: {id: 1, user: {login: 'alice'}}
+    }
+
+    const e = getThrownError(() => createGitHubExecutionContext())
+    expect(e).toBeInstanceOf(ExecutionContextError)
+    expect((e as ExecutionContextError).reason).toBe('ignorable_event')
+  })
+
+  test('issue_comment 但 issue 上没有 pull_request（普通 issue 评论）→ ExecutionContextError(ignorable_event)', () => {
+    process.env.GITHUB_EVENT_NAME = 'issue_comment'
+    mockContext.payload = {
+      action: 'created',
+      issue: {number: 42},
+      comment: {id: 1, user: {login: 'alice'}}
+    }
+
+    const e = getThrownError(() => createGitHubExecutionContext())
+    expect(e).toBeInstanceOf(ExecutionContextError)
+    expect((e as ExecutionContextError).reason).toBe('ignorable_event')
+  })
+
+  test('bot 评论者 user.type=Bot（login 不以 [bot] 结尾）→ actor.isBot=true', () => {
+    process.env.GITHUB_EVENT_NAME = 'pull_request_review_comment'
+    mockContext.payload = {
+      action: 'created',
+      pull_request: {number: 42},
+      comment: {id: 1, user: {login: 'custom-app', type: 'Bot'}}
+    }
+
+    const execCtx = createGitHubExecutionContext()
+    expect(execCtx.actor).toEqual({login: 'custom-app', isBot: true})
   })
 
   test('评论事件缺少 comment 字段 → ExecutionContextError(missing_required_field)', () => {
@@ -175,7 +226,7 @@ describe('createGitHubExecutionContext()', () => {
     process.env.GITHUB_EVENT_NAME = 'issue_comment'
     mockContext.payload = {
       action: 'created',
-      issue: {number: 42},
+      issue: {number: 42, pull_request: {url: 'x'}},
       comment: {id: 1, user: {login: 'github-actions[bot]'}}
     }
 
