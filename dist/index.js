@@ -79801,15 +79801,17 @@ async function addAckReaction(params) {
  * 给用户评论打一个表情反应（默认 👀），让用户知道"已收到"。
  *
  * 只做三件事：
- *   1. 校验事件 + payload
+ *   1. 校验评论正文存在 + 发起人不是 bot
  *   2. 解析评论是否 @bot（命令或对话式追问皆可）
  *   3. 是 → 打表情；不是 → 跳过
  *
  * 不做 Bot 初始化、权限查询、幂等检查等重操作。
  *
- * ARCH-005：不再直接 import `@actions/github`，事件坐标通过调用方传入的
- * ExecutionContext 获取；`issue.pull_request` 存在性等尚未纳入 ExecutionContext
- * 归一化字段的深层 payload 判断，过渡期通过 execCtx.raw 兜底读取。
+ * ARCH-005：不直接 import `@actions/github`，也不读取 `execCtx.raw`——
+ * 事件坐标全部来自调用方传入的 ExecutionContext 归一化字段。"action != created"
+ * 和"issue_comment 是否挂在 PR 上"这两条判断已经上移到 `createGitHubExecutionContext()`
+ * 构造阶段（见该文件），构造失败会走 `ignorable_event` 优雅跳过，本函数根本不会被
+ * 调用，因此不需要在这里重复判断（GitHub Issue #88 P2 复核）。
  */
 
 
@@ -79828,24 +79830,10 @@ async function tryEarlyReaction(execCtx, rawReaction) {
         const eventName = execCtx.eventKind === 'review_comment_created'
             ? 'pull_request_review_comment'
             : 'issue_comment';
-        const payload = execCtx.raw;
-        if (!payload || payload.action !== 'created')
+        const comment = execCtx.comment;
+        if (comment == null || typeof comment.body !== 'string')
             return;
-        let comment;
-        if (eventName === 'issue_comment') {
-            if (!payload.issue?.pull_request)
-                return;
-            comment = payload.comment;
-        }
-        else {
-            if (!payload.pull_request)
-                return;
-            comment = payload.comment;
-        }
-        if (!comment || typeof comment.body !== 'string')
-            return;
-        const actorIsBot = comment.user?.type === 'Bot' || /\[bot\]$/i.test(comment.user?.login ?? '');
-        if (actorIsBot)
+        if (execCtx.actor.isBot)
             return;
         bootstrapCommands();
         const registry = registry_getRegistry();
@@ -82260,9 +82248,9 @@ function mapPullRequestAction(payload) {
             return 'metadata_updated';
     }
 }
-function makeActor(login) {
+function makeActor(login, userType) {
     const safeLogin = login ?? '';
-    return { login: safeLogin, isBot: /\[bot\]$/.test(safeLogin) };
+    return { login: safeLogin, isBot: userType === 'Bot' || /\[bot\]$/i.test(safeLogin) };
 }
 /**
  * 从当前 GitHub Actions 运行时构造 ExecutionContext。
@@ -82305,13 +82293,23 @@ function createGitHubExecutionContext() {
     if (comment == null || prNumber == null) {
         throw new ExecutionContextError('comment payload missing required fields', 'github', 'missing_required_field');
     }
+    // 结构合法但业务上不需要处理：优雅跳过（与 GitLab 侧 EVENT-016/017、Issue #66
+    // 同一模式）。这两条此前只在共享核心的 conversation.ts/early-reaction.ts 里各自
+    // 靠读 execCtx.raw 判断（ARCH-005，GitHub Issue #88 P2 复核指出）——现在提到构造
+    // 阶段统一判断，调用方不必再读 raw 就能拿到同样保证。
+    if (payload.action !== 'created') {
+        throw new ExecutionContextError(`comment action is '${payload.action}', not 'created' — ignorable`, 'github', 'ignorable_event');
+    }
+    if (eventKind === 'comment_created' && payload.issue?.pull_request == null) {
+        throw new ExecutionContextError('issue_comment on non-PR issue — ignorable', 'github', 'ignorable_event');
+    }
     return {
         platform: 'github',
         projectPath: `${owner}/${repo}`,
         projectId: `${owner}/${repo}`,
         changeRequestId: prNumber,
         eventKind,
-        actor: makeActor(comment.user?.login),
+        actor: makeActor(comment.user?.login, comment.user?.type),
         // PR 事件的 base/head SHA 在评论事件里默认取不到，交由调用方在需要时
         // 另行查询当前 HEAD；此处留空字符串——与现状行为一致（resolve/summary
         // 等命令本就在执行时重新查询 HEAD，不依赖事件 payload 里的 SHA）。
@@ -82320,7 +82318,8 @@ function createGitHubExecutionContext() {
         comment: {
             kind: eventKind === 'review_comment_created' ? 'review_thread' : 'top_level',
             id: comment.id,
-            threadId: comment.node_id
+            body: typeof comment.body === 'string' ? comment.body : undefined
+            // threadId 故意不填充——见 CommentRef.threadId 的文档注释（ARCH-021/Issue #88 P2）。
         },
         raw: github.context.payload
     };
@@ -90817,12 +90816,16 @@ async function run() {
     });
 }
 // 全局异常处理
+// GitHub Issue #88 P2 复核：这三处此前只 warning，不设 exitCode/setFailed——
+// Node 一旦挂了 uncaughtException 监听器就不再默认崩溃退出，事件循环清空后照样
+// 以 0（成功）退出，导致真正的意外异常在 GitHub Action 上显示假成功。改为
+// setFailed()（内部会设 process.exitCode = 1），使这三条路径都 fail closed。
 process
     .on('unhandledRejection', (reason, p) => {
-    (0,core.warning)(`Unhandled Rejection at Promise: ${reason}, promise is ${p}`);
+    (0,core.setFailed)(`Unhandled Rejection at Promise: ${reason}, promise is ${p}`);
 })
     .on('uncaughtException', (e) => {
-    (0,core.warning)(`Uncaught Exception thrown: ${e}, backtrace: ${e.stack}`);
+    (0,core.setFailed)(`Uncaught Exception thrown: ${e}, backtrace: ${e.stack}`);
 });
 // 启动主流程（不用顶层 await，ts-jest CommonJS 转译不支持）
 void (async () => {
@@ -90830,7 +90833,7 @@ void (async () => {
         await run();
     }
     catch (e) {
-        (0,core.warning)(`Unhandled error in run(): ${e}`);
+        (0,core.setFailed)(`Unhandled error in run(): ${e}`);
     }
 })();
 
