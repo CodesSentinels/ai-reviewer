@@ -20,24 +20,34 @@ import {type Bot} from './bot'
 import type {ExecutionContext} from './platform/execution-context'
 import {
   Commenter,
+  bodyHasMarker,
+  commentReplyTag,
   getCommentGreeting,
-  COMMENT_REPLY_TAG,
-  COMMENT_TAG,
-  SUMMARIZE_TAG
+  stateMarkerVariantsFor,
+  summarizeTag
 } from './commenter'
 import {BOT_MENTIONS} from './constants'
 import {Inputs} from './inputs'
 import {type Options} from './options'
 import {getPlatform} from './platform/git-platform'
 import {getLogger} from './platform/logger'
+import {buildStateMarker, hasStateMarker, stateMarkerVariants} from './platform/state-namespace'
 import {type Prompts} from './prompts'
 import {getTokenCount} from './tokenizer'
 
 /** 默认的 bot mention 别名（小写匹配，与命令解析器保持一致）。共享自 constants。 */
 export {BOT_MENTIONS}
 
-/** 标识 bot 在对话链中出现过的标签（用于轮次统计 / 意图识别） */
-export const BOT_COMMENT_TAGS = [COMMENT_TAG, COMMENT_REPLY_TAG]
+/**
+ * 标识 bot 在对话链中出现过的标签（用于轮次统计 / 意图识别）。
+ *
+ * 必须是函数：命名空间由入口在运行时设置，模块级常量会在 import 时就固化成
+ * 默认的 github 前缀，GitLab 入口再调 setStateNamespace() 也改不回来。
+ * 同时返回 current + legacy 两种形态，否则升级前发的 bot 评论会被当成人类评论。
+ */
+export function botCommentTagVariants(): string[] {
+  return [...stateMarkerVariantsFor('comment'), ...stateMarkerVariantsFor('commentReply')]
+}
 
 /** 单个 thread 的对话轮次上限（bot 已回复的次数），超过后停止追问 */
 export const MAX_CONVERSATION_TURNS = 10
@@ -58,9 +68,23 @@ const CHAIN_SEPARATOR = '\n---\n'
  */
 export const CONV_REPLY_TAG_PREFIX = '<!-- codesentinel-conv-reply'
 
-/** 组装主评论区对话回复的幂等标签 */
+/** 组装主评论区对话回复的幂等标签（带平台命名空间，用于写入，GH-014） */
 export function buildIssueConvReplyTag(originalCommentId: number): string {
+  return buildStateMarker('conv-reply', originalCommentId)
+}
+
+/** 历史格式的幂等标签（仅用于匹配在途 PR 的旧回复） */
+export function legacyIssueConvReplyTag(originalCommentId: number): string {
   return `${CONV_REPLY_TAG_PREFIX}:${originalCommentId} -->`
+}
+
+/** 匹配时应接受的全部形态：新命名空间格式 + 历史格式 */
+export function issueConvReplyTagVariants(originalCommentId: number): string[] {
+  return stateMarkerVariants(
+    'conv-reply',
+    legacyIssueConvReplyTag(originalCommentId),
+    originalCommentId
+  )
 }
 
 /**
@@ -87,7 +111,7 @@ export function isFollowUpQuestion(opts: {
   }
   const body = commentBody ?? ''
   // bot 自动生成的内容带有专属标签，二次保险，避免把 bot 文案当成追问
-  const botTags = opts.botCommentTags ?? BOT_COMMENT_TAGS
+  const botTags = opts.botCommentTags ?? botCommentTagVariants()
   if (botTags.some(tag => body.includes(tag))) {
     return false
   }
@@ -103,7 +127,7 @@ export function isFollowUpQuestion(opts: {
  */
 export function countBotTurns(
   commentChain: string,
-  botCommentTags: string[] = BOT_COMMENT_TAGS
+  botCommentTags: string[] = botCommentTagVariants()
 ): number {
   if (!commentChain) {
     return 0
@@ -218,8 +242,8 @@ export const handleConversation = async (
   const authorIsBot =
     comment.user?.type === 'Bot' ||
     /\[bot\]$/i.test(comment.user?.login ?? '') ||
-    comment.body.includes(COMMENT_TAG) ||
-    comment.body.includes(COMMENT_REPLY_TAG)
+    bodyHasMarker(comment.body, 'comment') ||
+    bodyHasMarker(comment.body, 'commentReply')
   if (authorIsBot) {
     logger.info('conversation: skip (comment from bot itself)')
     return
@@ -332,7 +356,7 @@ export const handleConversation = async (
   }
 
   // 预算允许时补充 PR 精简摘要
-  const summary = await commenter.findCommentWithTag(SUMMARIZE_TAG, pullNumber)
+  const summary = await commenter.findCommentWithTag(summarizeTag(), pullNumber)
   if (summary) {
     const shortSummary = commenter.getShortSummary(summary.body)
     const shortSummaryTokens = getTokenCount(shortSummary)
@@ -446,8 +470,8 @@ export const handleIssueConversation = async (
   const authorIsBot =
     comment.user?.type === 'Bot' ||
     /\[bot\]$/i.test(comment.user?.login ?? '') ||
-    comment.body.includes(COMMENT_TAG) ||
-    comment.body.includes(COMMENT_REPLY_TAG)
+    bodyHasMarker(comment.body, 'comment') ||
+    bodyHasMarker(comment.body, 'commentReply')
   if (authorIsBot) {
     logger.info('issue-conversation: skip (comment from bot itself)')
     return
@@ -468,10 +492,8 @@ export const handleIssueConversation = async (
 
   // ===== 4. 幂等去重（连续提问不丢/不重复的关键） =====
   const allComments = await commenter.listComments(pullNumber)
-  const replyTag = buildIssueConvReplyTag(comment.id)
-  const alreadyReplied = allComments.some(
-    (c: any) => typeof c.body === 'string' && c.body.includes(replyTag)
-  )
+  const replyTagVariants = issueConvReplyTagVariants(comment.id)
+  const alreadyReplied = allComments.some((c: any) => hasStateMarker(c.body, replyTagVariants))
   if (alreadyReplied) {
     logger.info(`issue-conversation: skip duplicate reply for comment ${comment.id}`)
     return
@@ -545,7 +567,7 @@ export const handleIssueConversation = async (
   }
 
   // 预算允许时补充 PR 精简摘要
-  const summary = await commenter.findCommentWithTag(SUMMARIZE_TAG, pullNumber)
+  const summary = await commenter.findCommentWithTag(summarizeTag(), pullNumber)
   if (summary) {
     const shortSummary = commenter.getShortSummary(summary.body)
     const shortSummaryTokens = getTokenCount(shortSummary)
@@ -590,7 +612,7 @@ ${quotedQuestion}
 
 ${mention}${body}
 
-${COMMENT_REPLY_TAG}
+${commentReplyTag()}
 ${buildIssueConvReplyTag(comment.id)}
 `
   await commenter.create(message, pullNumber)

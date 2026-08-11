@@ -78626,27 +78626,283 @@ function flattenError(message) {
     return message.replace(/\s+/g, ' ').trim();
 }
 
-;// CONCATENATED MODULE: ./lib/review-state.js
+;// CONCATENATED MODULE: ./lib/platform/state-namespace.js
+/**
+ * platform/state-namespace.ts — marker 与幂等键的平台命名空间（GH-014 / STATE-006）
+ *
+ * 双平台同时启用时，marker 和幂等键必须能区分来源，禁止用同一把 key 合并两平台的
+ * 任务状态。做法是给所有**状态类** marker 加 `ai-reviewer:{platform}:` 前缀：
+ *
+ *   <!-- ai-reviewer:github:cmd-reply:12345:help -->
+ *   <!-- ai-reviewer:gitlab:conv-reply:12345 -->
+ *
+ * 两条边界：
+ *
+ * - **命名空间来自入口**：共享核心（commenter / conversation / commands）不读平台
+ *   payload，也不该猜自己跑在哪个平台上。入口（main.ts / gitlab-trigger.ts）在
+ *   setPlatform() 之后调用 setStateNamespace()，共享核心只消费结果。未设置时按
+ *   'github' 处理——这是历史行为，且 GitLab 命令路径尚未接入（CMD-* / STATE-*）。
+ * - **写新读旧**：命名空间是本次新增的，线上在途 PR 里已经存在无前缀的旧 marker。
+ *   写入一律用新格式，匹配则同时接受新旧两种形态，否则升级当天所有在途 PR 会
+ *   「找不到自己写过的 marker」，造成重复回帖或重复审查。旧格式在所有在途 PR
+ *   关闭后即可删除。
+ */
+const MARKER_PREFIX = 'ai-reviewer';
+let _namespace = 'github';
+/** 入口在 setPlatform() 之后调用，声明本次运行的状态命名空间 */
+function setStateNamespace(platform) {
+    _namespace = platform;
+}
+/** 当前状态命名空间；未显式设置时为 'github'（历史行为） */
+function getStateNamespace() {
+    return _namespace;
+}
+/** 重置为默认值（仅供测试使用） */
+function resetStateNamespace() {
+    _namespace = 'github';
+}
+/**
+ * 构造带命名空间的状态 marker。
+ *
+ * @param kind marker 种类，如 'cmd-reply' / 'conv-reply' / 'commit-ids-start'
+ * @param parts 附加标识（评论 ID、命令名等），按顺序拼在 kind 之后
+ */
+function buildStateMarker(kind, ...parts) {
+    const suffix = parts.length > 0 ? `:${parts.join(':')}` : '';
+    return `<!-- ${MARKER_PREFIX}:${_namespace}:${kind}${suffix} -->`;
+}
+/**
+ * 返回匹配时应接受的全部 marker 形态：当前命名空间的新格式 + 传入的历史格式。
+ *
+ * 只用于**读取/匹配**；写入必须只用 buildStateMarker() 的结果。
+ */
+function stateMarkerVariants(kind, legacy, ...parts) {
+    return [buildStateMarker(kind, ...parts), legacy];
+}
+/** 判断正文是否包含某个状态 marker（新旧格式皆可） */
+function hasStateMarker(body, variants) {
+    if (typeof body !== 'string')
+        return false;
+    return variants.some(v => body.includes(v));
+}
 
-const REVIEW_STATE_START_TAG = '<!-- codesentinel-review-state:start -->';
-const REVIEW_STATE_END_TAG = '<!-- codesentinel-review-state:end -->';
+;// CONCATENATED MODULE: ./lib/state-markers.js
+/**
+ * state-markers.ts — 状态 marker 权威清单（GH-014）
+ *
+ * 独立于 commenter.ts：清单是纯数据 + 命名空间逻辑，不依赖 GitHub context，
+ * 这样架构守卫等静态检查可以直接读取它，而不会因为 import 链上的
+ * `context.repo` 而炸掉。commenter.ts 负责 re-export，调用方无需改 import。
+ */
+
+/** 把 kind 包成隐藏 HTML 注释块的开/闭形态（raw/short summary 用） */
+function wrappedStart(kind) {
+    return `${buildStateMarker(kind)}\n<!--\n`;
+}
+function wrappedEnd(kind) {
+    return `-->\n${buildStateMarker(kind)}`;
+}
+/**
+ * 全部状态 marker 的权威清单。
+ *
+ * 新增任何参与查找/去重/状态更新的 marker 都必须登记在此——
+ * `state-marker-inventory.test.ts` 会校验清单完整性与命名空间正确性。
+ */
+const STATE_MARKERS = {
+    comment: {
+        kind: 'comment',
+        legacy: '<!-- This is an auto-generated comment by AI Reviewer -->',
+        current: () => buildStateMarker('comment')
+    },
+    commentReply: {
+        kind: 'comment-reply',
+        legacy: '<!-- This is an auto-generated reply by AI Reviewer -->',
+        current: () => buildStateMarker('comment-reply')
+    },
+    summarize: {
+        kind: 'summarize',
+        legacy: '<!-- This is an auto-generated comment: summarize by AI Reviewer -->',
+        current: () => buildStateMarker('summarize')
+    },
+    inProgressStart: {
+        kind: 'in-progress-start',
+        legacy: '<!-- This is an auto-generated comment: summarize review in progress by AI Reviewer -->',
+        current: () => buildStateMarker('in-progress-start')
+    },
+    inProgressEnd: {
+        kind: 'in-progress-end',
+        legacy: '<!-- end of auto-generated comment: summarize review in progress by AI Reviewer -->',
+        current: () => buildStateMarker('in-progress-end')
+    },
+    descriptionStart: {
+        kind: 'release-notes-start',
+        legacy: '<!-- This is an auto-generated comment: release notes by AI Reviewer -->',
+        current: () => buildStateMarker('release-notes-start')
+    },
+    descriptionEnd: {
+        kind: 'release-notes-end',
+        legacy: '<!-- end of auto-generated comment: release notes by AI Reviewer -->',
+        current: () => buildStateMarker('release-notes-end')
+    },
+    rawSummaryStart: {
+        kind: 'raw-summary-start',
+        legacy: `<!-- This is an auto-generated comment: raw summary by AI Reviewer -->\n<!--\n`,
+        current: () => wrappedStart('raw-summary-start')
+    },
+    rawSummaryEnd: {
+        kind: 'raw-summary-end',
+        legacy: `-->\n<!-- end of auto-generated comment: raw summary by AI Reviewer -->`,
+        current: () => wrappedEnd('raw-summary-end')
+    },
+    shortSummaryStart: {
+        kind: 'short-summary-start',
+        legacy: `<!-- This is an auto-generated comment: short summary by AI Reviewer -->\n<!--\n`,
+        current: () => wrappedStart('short-summary-start')
+    },
+    shortSummaryEnd: {
+        kind: 'short-summary-end',
+        legacy: `-->\n<!-- end of auto-generated comment: short summary by AI Reviewer -->`,
+        current: () => wrappedEnd('short-summary-end')
+    },
+    commitIdsStart: {
+        kind: 'commit-ids-reviewed-start',
+        legacy: '<!-- commit_ids_reviewed_start -->',
+        current: () => buildStateMarker('commit-ids-reviewed-start')
+    },
+    commitIdsEnd: {
+        kind: 'commit-ids-reviewed-end',
+        legacy: '<!-- commit_ids_reviewed_end -->',
+        current: () => buildStateMarker('commit-ids-reviewed-end')
+    },
+    reviewStateStart: {
+        kind: 'review-state-start',
+        legacy: '<!-- codesentinel-review-state:start -->',
+        current: () => buildStateMarker('review-state-start')
+    },
+    reviewStateEnd: {
+        kind: 'review-state-end',
+        legacy: '<!-- codesentinel-review-state:end -->',
+        current: () => buildStateMarker('review-state-end')
+    }
+};
+/** 当前平台命名空间下的 marker（用于写入） */
+function stateMarker(name) {
+    return STATE_MARKERS[name].current();
+}
+/** 匹配时应接受的全部形态：当前命名空间格式 + 历史格式 */
+function stateMarkerVariantsFor(name) {
+    return [STATE_MARKERS[name].current(), STATE_MARKERS[name].legacy];
+}
+/**
+ * 由一个 marker 字符串反查其全部形态。
+ *
+ * `comment()` / `findCommentWithTag()` 接受调用方传入的 tag 字符串，
+ * 这里把它还原成 [新格式, 历史格式] 以便写新读旧。未登记的自定义 tag 原样返回。
+ */
+function variantsForTag(tag) {
+    for (const spec of Object.values(STATE_MARKERS)) {
+        if (tag === spec.current() || tag === spec.legacy) {
+            return [spec.current(), spec.legacy];
+        }
+    }
+    return [tag];
+}
+/**
+ * 由一对（起始、结束）标签反查其新旧两种组合。
+ *
+ * 起止标签必须成对回退：不能用新的起始标签配历史的结束标签，
+ * 否则会截出错误区间、写坏用户正文。
+ */
+function tagPairVariants(startTag, endTag) {
+    for (const spec of Object.values(STATE_MARKERS)) {
+        if (startTag !== spec.current() && startTag !== spec.legacy)
+            continue;
+        const endSpec = Object.values(STATE_MARKERS).find(e => endTag === e.current() || endTag === e.legacy);
+        if (endSpec == null)
+            break;
+        return [
+            [spec.current(), endSpec.current()],
+            [spec.legacy, endSpec.legacy]
+        ];
+    }
+    return [[startTag, endTag]];
+}
+/**
+ * 按 marker 名定位一个成对区块（新格式优先，回退历史格式）。
+ *
+ * 返回命中的标签本身，调用方据此就地改写——历史区块保持历史标签，
+ * 回滚到旧版本时旧版本仍能认出它。
+ */
+function locateMarkerBlock(body, startName, endName) {
+    const pairs = [
+        [STATE_MARKERS[startName].current(), STATE_MARKERS[endName].current()],
+        [STATE_MARKERS[startName].legacy, STATE_MARKERS[endName].legacy]
+    ];
+    for (const [startTag, endTag] of pairs) {
+        const start = body.indexOf(startTag);
+        const end = body.indexOf(endTag);
+        if (start !== -1 && end !== -1)
+            return { start, end, startTag, endTag };
+    }
+    return null;
+}
+/** 判断正文是否含指定 marker（新旧格式皆可） */
+function bodyHasMarker(body, name) {
+    if (typeof body !== 'string')
+        return false;
+    return stateMarkerVariantsFor(name).some(v => body.includes(v));
+}
+
+;// CONCATENATED MODULE: ./lib/review-state.js
+/**
+ * review-state.ts — PR/MR body 中的 pause/resume marker（GH-012）
+ *
+ * marker 带平台命名空间（GH-014）；匹配同时接受历史格式，升级不会把在途 PR 的
+ * 暂停状态读成 active。已存在的历史区块就地保留其标签，只有新建区块用新格式——
+ * 这样即使回滚到旧版本，旧版本仍能读到自己认识的暂停状态。
+ */
+
+
+/** 历史格式起止标签（无平台命名空间），仅用于匹配在途 PR 的旧区块 */
+const REVIEW_STATE_START_TAG = STATE_MARKERS.reviewStateStart.legacy;
+const REVIEW_STATE_END_TAG = STATE_MARKERS.reviewStateEnd.legacy;
+/** 当前平台命名空间下的 pause/resume 区块标签（用于新建区块） */
+function reviewStateTags() {
+    return { start: stateMarker('reviewStateStart'), end: stateMarker('reviewStateEnd') };
+}
+/** 定位 pause/resume 区块，命名空间格式优先，回退历史格式 */
+function locateStateBlock(body) {
+    const namespaced = reviewStateTags();
+    for (const { start: startTag, end: endTag } of [
+        namespaced,
+        { start: REVIEW_STATE_START_TAG, end: REVIEW_STATE_END_TAG }
+    ]) {
+        const start = body.indexOf(startTag);
+        const end = body.indexOf(endTag);
+        if (start !== -1 && end !== -1)
+            return { start, end, startTag, endTag };
+    }
+    return null;
+}
 function getReviewStateFromBody(body = '') {
-    const start = body.indexOf(REVIEW_STATE_START_TAG);
-    const end = body.indexOf(REVIEW_STATE_END_TAG);
-    if (start === -1 || end === -1)
+    const block = locateStateBlock(body);
+    if (block == null)
         return 'active';
-    const block = body.slice(start + REVIEW_STATE_START_TAG.length, end);
-    return block.includes('state: paused') ? 'paused' : 'active';
+    const content = body.slice(block.start + block.startTag.length, block.end);
+    return content.includes('state: paused') ? 'paused' : 'active';
 }
 function writeReviewStateToBody(body, state) {
-    const start = body.indexOf(REVIEW_STATE_START_TAG);
-    const end = body.indexOf(REVIEW_STATE_END_TAG);
-    const stateBlock = `${REVIEW_STATE_START_TAG}
+    const existing = locateStateBlock(body);
+    // 已有区块保持其原有标签（回滚到旧版本仍能读懂），新建区块才用命名空间格式
+    const fresh = reviewStateTags();
+    const startTag = existing?.startTag ?? fresh.start;
+    const endTag = existing?.endTag ?? fresh.end;
+    const stateBlock = `${startTag}
 state: ${state}
-${REVIEW_STATE_END_TAG}`;
-    if (start !== -1 && end !== -1) {
-        const before = body.slice(0, start).trimEnd();
-        const after = body.slice(end + REVIEW_STATE_END_TAG.length).trim();
+${endTag}`;
+    if (existing != null) {
+        const before = body.slice(0, existing.start).trimEnd();
+        const after = body.slice(existing.end + existing.endTag.length).trim();
         return [before, stateBlock, after].filter(Boolean).join('\n\n');
     }
     return [body.trimEnd(), stateBlock].filter(Boolean).join('\n\n');
@@ -78703,38 +78959,84 @@ function getCommentGreeting() {
 function initBotGreeting(icon, name) {
     _commentGreeting = `${icon}   ${name}`;
 }
+// 状态 marker 清单集中在 state-markers.ts（GH-014），此处 re-export 保持调用方 import 不变
+
+
+/** 定位摘要评论里的「审查进行中」区块（新旧格式皆可） */
+function locateInProgressBlock(body) {
+    return locateMarkerBlock(body, 'inProgressStart', 'inProgressEnd');
+}
 /** 标识 bot 自动生成的代码审查评论 */
-const COMMENT_TAG = '<!-- This is an auto-generated comment by AI Reviewer -->';
+function commentTag() {
+    return stateMarker('comment');
+}
 /** 标识 bot 自动生成的回复评论 */
-const COMMENT_REPLY_TAG = '<!-- This is an auto-generated reply by AI Reviewer -->';
+function commentReplyTag() {
+    return stateMarker('commentReply');
+}
 /** 标识 bot 的摘要评论 */
-const SUMMARIZE_TAG = '<!-- This is an auto-generated comment: summarize by AI Reviewer -->';
-/** 标识审查进行中的状态标签（开始） */
-const IN_PROGRESS_START_TAG = '<!-- This is an auto-generated comment: summarize review in progress by AI Reviewer -->';
-/** 标识审查进行中的状态标签（结束） */
-const IN_PROGRESS_END_TAG = '<!-- end of auto-generated comment: summarize review in progress by AI Reviewer -->';
-/** 标识 PR 描述中发布说明区域（开始） */
-const DESCRIPTION_START_TAG = '<!-- This is an auto-generated comment: release notes by AI Reviewer -->';
-/** 标识 PR 描述中发布说明区域（结束） */
-const DESCRIPTION_END_TAG = '<!-- end of auto-generated comment: release notes by AI Reviewer -->';
-/** 标识隐藏的原始摘要区域（开始），存储在摘要评论的 HTML 注释中 */
-const RAW_SUMMARY_START_TAG = `<!-- This is an auto-generated comment: raw summary by AI Reviewer -->
-<!--
-`;
-/** 标识隐藏的原始摘要区域（结束） */
-const RAW_SUMMARY_END_TAG = `-->
-<!-- end of auto-generated comment: raw summary by AI Reviewer -->`;
-/** 标识隐藏的精简摘要区域（开始） */
-const SHORT_SUMMARY_START_TAG = `<!-- This is an auto-generated comment: short summary by AI Reviewer -->
-<!--
-`;
-/** 标识隐藏的精简摘要区域（结束） */
-const SHORT_SUMMARY_END_TAG = `-->
-<!-- end of auto-generated comment: short summary by AI Reviewer -->`;
+function summarizeTag() {
+    return stateMarker('summarize');
+}
+/** 标识审查进行中的状态标签（开始 / 结束） */
+function inProgressStartTag() {
+    return stateMarker('inProgressStart');
+}
+function inProgressEndTag() {
+    return stateMarker('inProgressEnd');
+}
+/** 标识 PR 描述中发布说明区域（开始 / 结束） */
+function descriptionStartTag() {
+    return stateMarker('descriptionStart');
+}
+function descriptionEndTag() {
+    return stateMarker('descriptionEnd');
+}
+/** 标识隐藏的原始摘要区域（开始 / 结束） */
+function rawSummaryStartTag() {
+    return stateMarker('rawSummaryStart');
+}
+function rawSummaryEndTag() {
+    return stateMarker('rawSummaryEnd');
+}
+/** 标识隐藏的精简摘要区域（开始 / 结束） */
+function shortSummaryStartTag() {
+    return stateMarker('shortSummaryStart');
+}
+function shortSummaryEndTag() {
+    return stateMarker('shortSummaryEnd');
+}
 /** 标识已审查的 commit ID 列表（开始） */
-const COMMIT_ID_START_TAG = '<!-- commit_ids_reviewed_start -->';
+/**
+ * 已审查 commit ID 区块的历史起止标签（无平台命名空间）。
+ * 仍用于**匹配**在途 PR 里已存在的旧区块；新写入走 commitIdTags()。
+ */
+const COMMIT_ID_START_TAG = STATE_MARKERS.commitIdsStart.legacy;
 /** 标识已审查的 commit ID 列表（结束） */
-const COMMIT_ID_END_TAG = '<!-- commit_ids_reviewed_end -->';
+const COMMIT_ID_END_TAG = STATE_MARKERS.commitIdsEnd.legacy;
+/** 当前平台命名空间下的已审查 commit ID 区块标签（用于新建区块） */
+function commitIdTags() {
+    return { start: stateMarker('commitIdsStart'), end: stateMarker('commitIdsEnd') };
+}
+/**
+ * 在正文中定位已审查 commit ID 区块，命名空间格式优先，回退历史格式。
+ *
+ * 返回命中的标签本身，调用方据此就地改写，不会把旧区块的标签换成新的——
+ * 升级不需要重写在途 PR 已有的 marker。
+ */
+function locateCommitIdBlock(body) {
+    const namespaced = commitIdTags();
+    for (const { start: startTag, end: endTag } of [
+        namespaced,
+        { start: COMMIT_ID_START_TAG, end: COMMIT_ID_END_TAG }
+    ]) {
+        const start = body.indexOf(startTag);
+        const end = body.indexOf(endTag);
+        if (start !== -1 && end !== -1)
+            return { start, end, startTag, endTag };
+    }
+    return null;
+}
 /**
  * Commenter 类 - GitHub 评论管理器
  *
@@ -78764,7 +79066,7 @@ class Commenter {
             return;
         }
         if (!tag) {
-            tag = COMMENT_TAG;
+            tag = commentTag();
         }
         // 组装评论正文：问候语 + 消息内容 + 标签
         const body = `${getCommentGreeting()}
@@ -78788,42 +79090,47 @@ ${tag}`;
      * 用于从评论正文中提取隐藏的状态数据（如原始摘要、已审查 commit ID 等）
      */
     getContentWithinTags(content, startTag, endTag) {
-        const start = content.indexOf(startTag);
-        const end = content.indexOf(endTag);
-        if (start >= 0 && end >= 0) {
-            return content.slice(start + startTag.length, end);
+        // 写新读旧：先按传入（新格式）标签找，找不到再回退到对应的历史标签
+        for (const [s, e] of tagPairVariants(startTag, endTag)) {
+            const start = content.indexOf(s);
+            const end = content.indexOf(e);
+            if (start >= 0 && end >= 0) {
+                return content.slice(start + s.length, end);
+            }
         }
         return '';
     }
     /** 移除标签对及其包含的内容 */
     removeContentWithinTags(content, startTag, endTag) {
-        const start = content.indexOf(startTag);
-        const end = content.lastIndexOf(endTag);
-        if (start >= 0 && end >= 0) {
-            return content.slice(0, start) + content.slice(end + endTag.length);
+        for (const [s, e] of tagPairVariants(startTag, endTag)) {
+            const start = content.indexOf(s);
+            const end = content.lastIndexOf(e);
+            if (start >= 0 && end >= 0) {
+                return content.slice(0, start) + content.slice(end + e.length);
+            }
         }
         return content;
     }
     /** 从摘要评论中提取原始摘要内容 */
     getRawSummary(summary) {
-        return this.getContentWithinTags(summary, RAW_SUMMARY_START_TAG, RAW_SUMMARY_END_TAG);
+        return this.getContentWithinTags(summary, rawSummaryStartTag(), rawSummaryEndTag());
     }
     /** 从摘要评论中提取精简摘要内容 */
     getShortSummary(summary) {
-        return this.getContentWithinTags(summary, SHORT_SUMMARY_START_TAG, SHORT_SUMMARY_END_TAG);
+        return this.getContentWithinTags(summary, shortSummaryStartTag(), shortSummaryEndTag());
     }
     /** 从 PR 描述中提取用户原始描述（移除 bot 生成的发布说明部分） */
     getDescription(description) {
-        return this.removeContentWithinTags(description, DESCRIPTION_START_TAG, DESCRIPTION_END_TAG);
+        return this.removeContentWithinTags(description, descriptionStartTag(), descriptionEndTag());
     }
     /** 从 PR 描述中提取发布说明内容 */
     getReleaseNotes(description) {
-        const releaseNotes = this.getContentWithinTags(description, DESCRIPTION_START_TAG, DESCRIPTION_END_TAG);
+        const releaseNotes = this.getContentWithinTags(description, descriptionStartTag(), descriptionEndTag());
         return releaseNotes.replace(/(^|\n)> .*/g, '');
     }
     /**
      * 更新 PR 描述，写入 AI 生成的发布说明
-     * 将发布说明嵌入到 DESCRIPTION_START_TAG 和 DESCRIPTION_END_TAG 之间
+     * 将发布说明嵌入到 descriptionStartTag() 和 descriptionEndTag() 之间
      */
     async updateDescription(pullNumber, message) {
         const platform = getPlatform();
@@ -78834,8 +79141,8 @@ ${tag}`;
                 body = cr.body;
             }
             const description = this.getDescription(body);
-            const messageClean = this.removeContentWithinTags(message, DESCRIPTION_START_TAG, DESCRIPTION_END_TAG);
-            const newDescription = `${description}\n${DESCRIPTION_START_TAG}\n${messageClean}\n${DESCRIPTION_END_TAG}`;
+            const messageClean = this.removeContentWithinTags(message, descriptionStartTag(), descriptionEndTag());
+            const newDescription = `${description}\n${descriptionStartTag()}\n${messageClean}\n${descriptionEndTag()}`;
             await platform.updateChangeRequestBody(repo.owner, repo.repo, pullNumber, newDescription);
         }
         catch (e) {
@@ -78854,7 +79161,7 @@ ${tag}`;
 
 ${message}
 
-${COMMENT_TAG}`;
+${commentTag()}`;
         this.reviewCommentsBuffer.push({
             path,
             startLine,
@@ -78904,7 +79211,7 @@ ${statusMsg}
         const commentsToSubmit = [];
         for (const comment of this.reviewCommentsBuffer) {
             const existingComments = await this.getCommentsAtRange(pullNumber, comment.path, comment.startLine, comment.endLine);
-            const existingBotComments = existingComments.filter(c => c.body.includes(COMMENT_TAG));
+            const existingBotComments = existingComments.filter(c => bodyHasMarker(c.body, 'comment'));
             if (existingBotComments.length > 0) {
                 // 检查该位置是否已 resolved
                 const key = `${comment.path}:${comment.endLine}`;
@@ -78965,7 +79272,7 @@ ${statusMsg}
     /**
      * 回复用户的 review comment
      *
-     * 在顶层评论下创建回复，并将顶层评论的标签从 COMMENT_TAG 更新为 COMMENT_REPLY_TAG，
+     * 在顶层评论下创建回复，并将顶层评论的标签从 commentTag() 更新为 commentReplyTag()，
      * 表示该评论链已有 bot 参与回复
      */
     async reviewCommentReply(pullNumber, topLevelComment, message) {
@@ -78975,7 +79282,7 @@ ${statusMsg}
 
 ${message}
 
-${COMMENT_REPLY_TAG}
+${commentReplyTag()}
 `;
         try {
             await platform.replyToReviewComment(repo.owner, repo.repo, pullNumber, topLevelComment.id, reply);
@@ -78990,8 +79297,13 @@ ${COMMENT_REPLY_TAG}
             }
         }
         try {
-            if (topLevelComment.body.includes(COMMENT_TAG)) {
-                const newBody = topLevelComment.body.replace(COMMENT_TAG, COMMENT_REPLY_TAG);
+            const hitTag = stateMarkerVariantsFor('comment').find((v) => topLevelComment.body.includes(v));
+            if (hitTag != null) {
+                // 命中哪种形态就替换哪种：历史评论保持历史格式，新评论用命名空间格式
+                const replacement = hitTag === STATE_MARKERS.comment.legacy
+                    ? STATE_MARKERS.commentReply.legacy
+                    : commentReplyTag();
+                const newBody = topLevelComment.body.replace(hitTag, replacement);
                 await platform.updateReviewComment(repo.owner, repo.repo, topLevelComment.id, newBody);
             }
         }
@@ -79182,7 +79494,8 @@ ${chain}
         const logger = getLogger();
         try {
             const comments = await this.listComments(target);
-            const matchedComments = comments.filter((cmt) => cmt.body && cmt.body.includes(tag));
+            const variants = variantsForTag(tag);
+            const matchedComments = comments.filter((cmt) => cmt.body && variants.some(v => cmt.body.includes(v)));
             if (matchedComments.length > 0) {
                 await platform.updateComment(repo.owner, repo.repo, matchedComments[0].id, body);
                 for (let i = 1; i < matchedComments.length; i++) {
@@ -79207,8 +79520,9 @@ ${chain}
     async findCommentWithTag(tag, target) {
         try {
             const comments = await this.listComments(target);
+            const variants = variantsForTag(tag);
             for (const cmt of comments) {
-                if (cmt.body && cmt.body.includes(tag)) {
+                if (cmt.body && variants.some(v => cmt.body.includes(v))) {
                     return cmt;
                 }
             }
@@ -79253,12 +79567,11 @@ ${chain}
      * @returns commit SHA 字符串数组
      */
     getReviewedCommitIds(commentBody) {
-        const start = commentBody.indexOf(COMMIT_ID_START_TAG);
-        const end = commentBody.indexOf(COMMIT_ID_END_TAG);
-        if (start === -1 || end === -1) {
+        const block = locateCommitIdBlock(commentBody);
+        if (block == null) {
             return [];
         }
-        const ids = commentBody.substring(start + COMMIT_ID_START_TAG.length, end);
+        const ids = commentBody.substring(block.start + block.startTag.length, block.end);
         // 解析 <!-- sha --> 格式的 commit ID
         return ids
             .split('<!--')
@@ -79267,28 +79580,28 @@ ${chain}
     }
     /** 提取已审查 commit ID 的完整区块（包含标签） */
     getReviewedCommitIdsBlock(commentBody) {
-        const start = commentBody.indexOf(COMMIT_ID_START_TAG);
-        const end = commentBody.indexOf(COMMIT_ID_END_TAG);
-        if (start === -1 || end === -1) {
+        const block = locateCommitIdBlock(commentBody);
+        if (block == null) {
             return '';
         }
-        return commentBody.substring(start, end + COMMIT_ID_END_TAG.length);
+        return commentBody.substring(block.start, block.end + block.endTag.length);
     }
     /**
      * 向已审查 commit ID 列表中添加新的 commit ID
      * 如果标签不存在则创建新的区块
      */
     addReviewedCommitId(commentBody, commitId) {
-        const start = commentBody.indexOf(COMMIT_ID_START_TAG);
-        const end = commentBody.indexOf(COMMIT_ID_END_TAG);
-        if (start === -1 || end === -1) {
-            return `${commentBody}\n${COMMIT_ID_START_TAG}\n<!-- ${commitId} -->\n${COMMIT_ID_END_TAG}`;
+        const block = locateCommitIdBlock(commentBody);
+        if (block == null) {
+            // 新建区块用当前平台命名空间；已存在的旧区块保持原标签就地追加
+            const tags = commitIdTags();
+            return `${commentBody}\n${tags.start}\n<!-- ${commitId} -->\n${tags.end}`;
         }
         if (this.getReviewedCommitIds(commentBody).includes(commitId)) {
             return commentBody;
         }
-        const ids = commentBody.substring(start + COMMIT_ID_START_TAG.length, end);
-        return `${commentBody.substring(0, start + COMMIT_ID_START_TAG.length)}${ids}<!-- ${commitId} -->\n${commentBody.substring(end)}`;
+        const ids = commentBody.substring(block.start + block.startTag.length, block.end);
+        return `${commentBody.substring(0, block.start + block.startTag.length)}${ids}<!-- ${commitId} -->\n${commentBody.substring(block.end)}`;
     }
     /**
      * 从 commit 列表中找到最近一次已审查的 commit ID
@@ -79315,29 +79628,30 @@ ${chain}
      * 如果已存在则不重复添加
      */
     addInProgressStatus(commentBody, statusMsg) {
-        const start = commentBody.indexOf(IN_PROGRESS_START_TAG);
-        const end = commentBody.indexOf(IN_PROGRESS_END_TAG);
-        if (start === -1 || end === -1) {
-            return `${IN_PROGRESS_START_TAG}
+        // 写新读旧：已有历史格式的进度块时不重复插入
+        if (locateInProgressBlock(commentBody) != null) {
+            return commentBody;
+        }
+        {
+            return `${inProgressStartTag()}
 
 Currently reviewing new changes in this PR...
 
 ${statusMsg}
 
-${IN_PROGRESS_END_TAG}
+${inProgressEndTag()}
 
 ---
 
 ${commentBody}`;
         }
-        return commentBody;
     }
     /** 从摘要评论中移除"审查进行中"的状态提示 */
     removeInProgressStatus(commentBody) {
-        const start = commentBody.indexOf(IN_PROGRESS_START_TAG);
-        const end = commentBody.indexOf(IN_PROGRESS_END_TAG);
-        if (start !== -1 && end !== -1) {
-            return (commentBody.substring(0, start) + commentBody.substring(end + IN_PROGRESS_END_TAG.length));
+        const block = locateInProgressBlock(commentBody);
+        if (block != null) {
+            return (commentBody.substring(0, block.start) +
+                commentBody.substring(block.end + block.endTag.length));
         }
         return commentBody;
     }
@@ -79347,7 +79661,7 @@ ${commentBody}`;
 
 async function isHeadAlreadyReviewed(prNumber, headSha) {
     const commenter = new Commenter();
-    const comment = await commenter.findCommentWithTag(SUMMARIZE_TAG, prNumber);
+    const comment = await commenter.findCommentWithTag(summarizeTag(), prNumber);
     if (comment == null)
         return false;
     const reviewedIds = commenter.getReviewedCommitIds(comment.body);
@@ -79355,15 +79669,14 @@ async function isHeadAlreadyReviewed(prNumber, headSha) {
 }
 async function clearReviewedCommitIds(prNumber) {
     const commenter = new Commenter();
-    const comment = await commenter.findCommentWithTag(SUMMARIZE_TAG, prNumber);
+    const comment = await commenter.findCommentWithTag(summarizeTag(), prNumber);
     if (comment == null)
         return;
-    const start = comment.body.indexOf(COMMIT_ID_START_TAG);
-    const end = comment.body.indexOf(COMMIT_ID_END_TAG);
-    if (start === -1 || end === -1)
+    const block = locateCommitIdBlock(comment.body);
+    if (block == null)
         return;
-    const newBody = comment.body.substring(0, start) + comment.body.substring(end + COMMIT_ID_END_TAG.length);
-    await commenter.comment(newBody.trim(), SUMMARIZE_TAG, 'replace');
+    const newBody = comment.body.substring(0, block.start) + comment.body.substring(block.end + block.endTag.length);
+    await commenter.comment(newBody.trim(), summarizeTag(), 'replace');
 }
 
 ;// CONCATENATED MODULE: ./lib/commands/handlers/stubs.js
@@ -83487,11 +83800,25 @@ const _RATE_LIMIT_CONSTANTS = { WINDOW_MS, MAX_PER_WINDOW };
 
 
 
-/** 命令回复评论的幂等标签前缀 */
+
+/**
+ * 命令回复评论的幂等标签前缀（历史格式，无平台命名空间）。
+ *
+ * 仍用于**匹配**在途 PR 里已经存在的旧标签；新写入一律走 buildCmdReplyTag()
+ * 的命名空间格式（GH-014）。
+ */
 const CMD_REPLY_TAG_PREFIX = '<!-- codesentinel-cmd-reply';
-/** 组装幂等 tag */
+/** 组装幂等 tag（带平台命名空间，用于写入） */
 function buildCmdReplyTag(originalCommentId, commandName) {
+    return buildStateMarker('cmd-reply', originalCommentId, commandName);
+}
+/** 历史格式的幂等 tag（仅用于匹配在途 PR 的旧回复） */
+function legacyCmdReplyTag(originalCommentId, commandName) {
     return `${CMD_REPLY_TAG_PREFIX}:${originalCommentId}:${commandName} -->`;
+}
+/** 匹配时应接受的全部形态：新命名空间格式 + 历史格式 */
+function cmdReplyTagVariants(originalCommentId, commandName) {
+    return stateMarkerVariants('cmd-reply', legacyCmdReplyTag(originalCommentId, commandName), originalCommentId, commandName);
 }
 /** 错误码 → 用户可读文案 */
 function formatErrorMessage(code, detail) {
@@ -83590,11 +83917,11 @@ class Reply {
  * 用于 dispatcher 的幂等检查。
  */
 async function hasBeenProcessed(owner, repo, issueNumber, originalCommentId, commandName) {
-    const tag = buildCmdReplyTag(originalCommentId, commandName);
+    const variants = cmdReplyTagVariants(originalCommentId, commandName);
     try {
         const comments = await getPlatform().listComments(owner, repo, issueNumber);
         for (const c of comments) {
-            if (typeof c.body === 'string' && c.body.includes(tag)) {
+            if (hasStateMarker(c.body, variants)) {
                 return true;
             }
         }
@@ -88418,7 +88745,7 @@ const codeReview = async (execCtx, lightBot, heavyBot, options, prompts, runOpti
     inputs.systemMessage = options.systemMessage;
     // ==================== 恢复增量审查状态 ====================
     // 从已有的摘要评论中恢复上次审查的状态
-    const existingSummarizeCmt = await commenter.findCommentWithTag(SUMMARIZE_TAG, review_context.payload.pull_request.number);
+    const existingSummarizeCmt = await commenter.findCommentWithTag(summarizeTag(), review_context.payload.pull_request.number);
     let existingCommitIdsBlock = '';
     let existingSummarizeCmtBody = '';
     if (existingSummarizeCmt != null) {
@@ -88640,7 +88967,7 @@ ${filterIgnoredFiles.length > 0
 `;
     // 更新摘要评论为"审查进行中"状态
     const inProgressSummarizeCmt = commenter.addInProgressStatus(existingSummarizeCmtBody, statusMsg);
-    await commenter.comment(`${inProgressSummarizeCmt}`, SUMMARIZE_TAG, 'replace');
+    await commenter.comment(`${inProgressSummarizeCmt}`, summarizeTag(), 'replace');
     // ==================== 阶段一：并行文件摘要 ====================
     const summariesFailed = [];
     /**
@@ -88766,12 +89093,12 @@ ${filename}: ${summary}
     inputs.shortSummary = summarizeShortResponse;
     // 构建最终的摘要评论内容（包含隐藏的状态数据）
     let summarizeComment = `${summarizeFinalResponse}
-${RAW_SUMMARY_START_TAG}
+${rawSummaryStartTag()}
 ${inputs.rawSummary}
-${RAW_SUMMARY_END_TAG}
-${SHORT_SUMMARY_START_TAG}
+${rawSummaryEndTag()}
+${shortSummaryStartTag()}
 ${inputs.shortSummary}
-${SHORT_SUMMARY_END_TAG}
+${shortSummaryEndTag()}
 ${dependencyContext != null ? `\n${formatDependencySummary(dependencyContext)}` : ''}
 ${lintReport != null ? `\n${formatLintSummary(lintReport)}` : ''}
 ---
@@ -88847,7 +89174,7 @@ ${summariesFailed.length > 0
             try {
                 const allReviewComments = await commenter.listReviewComments(review_context.payload.pull_request.number);
                 for (const c of allReviewComments) {
-                    if (!c.body?.includes(COMMENT_TAG))
+                    if (!bodyHasMarker(c.body, 'comment'))
                         continue;
                     const key = `${c.path}:${c.line}`;
                     const isResolved = threadStatusMap.get(key);
@@ -88951,7 +89278,7 @@ ${summariesFailed.length > 0
                 // 获取该 patch 行号范围内已有的评论对话链（提供额外上下文）
                 let commentChain = '';
                 try {
-                    const allChains = await commenter.getCommentChainsWithinRange(review_context.payload.pull_request.number, filename, startLine, endLine, COMMENT_REPLY_TAG, threadStatusMap);
+                    const allChains = await commenter.getCommentChainsWithinRange(review_context.payload.pull_request.number, filename, startLine, endLine, commentReplyTag(), threadStatusMap);
                     if (allChains.length > 0) {
                         getLogger().info(`Found comment chains: ${allChains} for ${filename}`);
                         commentChain = allChains;
@@ -89161,7 +89488,7 @@ ${reviewsSkipped.length > 0
         summarizeComment += `\n${existingCommitIdsBlock}`;
     }
     // 发布最终的摘要评论
-    await commenter.comment(`${summarizeComment}`, SUMMARIZE_TAG, 'replace');
+    await commenter.comment(`${summarizeComment}`, summarizeTag(), 'replace');
 };
 // ==================== Diff 解析辅助函数 ====================
 // ==================== Analysis Chain 格式化 ====================
@@ -89535,10 +89862,19 @@ ${review.comment}`;
 
 
 
+
 /** 默认的 bot mention 别名（小写匹配，与命令解析器保持一致）。共享自 constants。 */
 
-/** 标识 bot 在对话链中出现过的标签（用于轮次统计 / 意图识别） */
-const BOT_COMMENT_TAGS = [COMMENT_TAG, COMMENT_REPLY_TAG];
+/**
+ * 标识 bot 在对话链中出现过的标签（用于轮次统计 / 意图识别）。
+ *
+ * 必须是函数：命名空间由入口在运行时设置，模块级常量会在 import 时就固化成
+ * 默认的 github 前缀，GitLab 入口再调 setStateNamespace() 也改不回来。
+ * 同时返回 current + legacy 两种形态，否则升级前发的 bot 评论会被当成人类评论。
+ */
+function botCommentTagVariants() {
+    return [...stateMarkerVariantsFor('comment'), ...stateMarkerVariantsFor('commentReply')];
+}
 /** 单个 thread 的对话轮次上限（bot 已回复的次数），超过后停止追问 */
 const MAX_CONVERSATION_TURNS = 10;
 /** 对话历史进入 Prompt 时的字符上限（粗粒度预算，token 预算另行精确校验） */
@@ -89554,9 +89890,17 @@ const CHAIN_SEPARATOR = '\n---\n';
  * 这也是「连续快速提问」场景下每条回复能稳定对应到各自问题、且不丢不重的关键。
  */
 const CONV_REPLY_TAG_PREFIX = '<!-- codesentinel-conv-reply';
-/** 组装主评论区对话回复的幂等标签 */
+/** 组装主评论区对话回复的幂等标签（带平台命名空间，用于写入，GH-014） */
 function buildIssueConvReplyTag(originalCommentId) {
+    return buildStateMarker('conv-reply', originalCommentId);
+}
+/** 历史格式的幂等标签（仅用于匹配在途 PR 的旧回复） */
+function legacyIssueConvReplyTag(originalCommentId) {
     return `${CONV_REPLY_TAG_PREFIX}:${originalCommentId} -->`;
+}
+/** 匹配时应接受的全部形态：新命名空间格式 + 历史格式 */
+function issueConvReplyTagVariants(originalCommentId) {
+    return stateMarkerVariants('conv-reply', legacyIssueConvReplyTag(originalCommentId), originalCommentId);
 }
 /**
  * 追问意图识别：判断一条评论是否应触发 bot 对话回复。
@@ -89577,7 +89921,7 @@ function isFollowUpQuestion(opts) {
     }
     const body = commentBody ?? '';
     // bot 自动生成的内容带有专属标签，二次保险，避免把 bot 文案当成追问
-    const botTags = opts.botCommentTags ?? BOT_COMMENT_TAGS;
+    const botTags = opts.botCommentTags ?? botCommentTagVariants();
     if (botTags.some(tag => body.includes(tag))) {
         return false;
     }
@@ -89589,7 +89933,7 @@ function isFollowUpQuestion(opts) {
  * 统计对话链中 bot 已回复的轮次。
  * 以 bot 专属标签出现次数为准（每条 bot 评论都会携带一个标签）。
  */
-function countBotTurns(commentChain, botCommentTags = BOT_COMMENT_TAGS) {
+function countBotTurns(commentChain, botCommentTags = botCommentTagVariants()) {
     if (!commentChain) {
         return 0;
     }
@@ -89684,8 +90028,8 @@ const handleConversation = async (execCtx, heavyBot, options, prompts) => {
     // ===== 2. 过滤 bot 自身评论 =====
     const authorIsBot = comment.user?.type === 'Bot' ||
         /\[bot\]$/i.test(comment.user?.login ?? '') ||
-        comment.body.includes(COMMENT_TAG) ||
-        comment.body.includes(COMMENT_REPLY_TAG);
+        bodyHasMarker(comment.body, 'comment') ||
+        bodyHasMarker(comment.body, 'commentReply');
     if (authorIsBot) {
         logger.info('conversation: skip (comment from bot itself)');
         return;
@@ -89767,7 +90111,7 @@ const handleConversation = async (execCtx, heavyBot, options, prompts) => {
         }
     }
     // 预算允许时补充 PR 精简摘要
-    const summary = await commenter.findCommentWithTag(SUMMARIZE_TAG, pullNumber);
+    const summary = await commenter.findCommentWithTag(summarizeTag(), pullNumber);
     if (summary) {
         const shortSummary = commenter.getShortSummary(summary.body);
         const shortSummaryTokens = getTokenCount(shortSummary);
@@ -89861,8 +90205,8 @@ const handleIssueConversation = async (execCtx, heavyBot, options, prompts) => {
     // ===== 2. 过滤 bot 自身评论 =====
     const authorIsBot = comment.user?.type === 'Bot' ||
         /\[bot\]$/i.test(comment.user?.login ?? '') ||
-        comment.body.includes(COMMENT_TAG) ||
-        comment.body.includes(COMMENT_REPLY_TAG);
+        bodyHasMarker(comment.body, 'comment') ||
+        bodyHasMarker(comment.body, 'commentReply');
     if (authorIsBot) {
         logger.info('issue-conversation: skip (comment from bot itself)');
         return;
@@ -89878,8 +90222,8 @@ const handleIssueConversation = async (execCtx, heavyBot, options, prompts) => {
     const pullNumber = payload.issue.number;
     // ===== 4. 幂等去重（连续提问不丢/不重复的关键） =====
     const allComments = await commenter.listComments(pullNumber);
-    const replyTag = buildIssueConvReplyTag(comment.id);
-    const alreadyReplied = allComments.some((c) => typeof c.body === 'string' && c.body.includes(replyTag));
+    const replyTagVariants = issueConvReplyTagVariants(comment.id);
+    const alreadyReplied = allComments.some((c) => hasStateMarker(c.body, replyTagVariants));
     if (alreadyReplied) {
         logger.info(`issue-conversation: skip duplicate reply for comment ${comment.id}`);
         return;
@@ -89936,7 +90280,7 @@ const handleIssueConversation = async (execCtx, heavyBot, options, prompts) => {
         }
     }
     // 预算允许时补充 PR 精简摘要
-    const summary = await commenter.findCommentWithTag(SUMMARIZE_TAG, pullNumber);
+    const summary = await commenter.findCommentWithTag(summarizeTag(), pullNumber);
     if (summary) {
         const shortSummary = commenter.getShortSummary(summary.body);
         const shortSummaryTokens = getTokenCount(shortSummary);
@@ -89974,7 +90318,7 @@ ${quotedQuestion}
 
 ${mention}${body}
 
-${COMMENT_REPLY_TAG}
+${commentReplyTag()}
 ${buildIssueConvReplyTag(comment.id)}
 `;
     await commenter.create(message, pullNumber);
@@ -90784,6 +91128,7 @@ async function runOrchestrator(deps) {
 
 
 
+
 function createBots(options) {
     let lightBot = null;
     try {
@@ -90807,6 +91152,8 @@ async function run() {
     // 初始化 GitHub Logger（ARCH-013）+ Platform（ARCH-018）
     setLogger(new GitHubLogger());
     setPlatform(new GitHubPlatform());
+    // GH-014：本次运行写入的 marker / 幂等键带 github: 命名空间
+    setStateNamespace('github');
     await runOrchestrator({
         configProvider: new GitHubConfigProvider(),
         createExecCtx: createGitHubExecutionContext,

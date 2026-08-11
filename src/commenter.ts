@@ -16,6 +16,7 @@
 import {context as github_context} from '@actions/github'
 import {getPlatform} from './platform/git-platform'
 import {getLogger} from './platform/logger'
+import {buildStateMarker} from './platform/state-namespace'
 
 // eslint-disable-next-line camelcase
 const context = github_context
@@ -42,53 +43,117 @@ export function initBotGreeting(icon: string, name: string): void {
   _commentGreeting = `${icon}   ${name}`
 }
 
+// 状态 marker 清单集中在 state-markers.ts（GH-014），此处 re-export 保持调用方 import 不变
+export {
+  STATE_MARKERS,
+  stateMarker,
+  stateMarkerVariantsFor,
+  variantsForTag,
+  tagPairVariants,
+  locateMarkerBlock,
+  bodyHasMarker,
+  type StateMarkerSpec,
+  type StateMarkerName
+} from './state-markers'
+import {
+  STATE_MARKERS,
+  stateMarker,
+  bodyHasMarker,
+  locateMarkerBlock,
+  stateMarkerVariantsFor,
+  variantsForTag,
+  tagPairVariants
+} from './state-markers'
+
+/** 定位摘要评论里的「审查进行中」区块（新旧格式皆可） */
+function locateInProgressBlock(
+  body: string
+): {start: number; end: number; startTag: string; endTag: string} | null {
+  return locateMarkerBlock(body, 'inProgressStart', 'inProgressEnd')
+}
+
 /** 标识 bot 自动生成的代码审查评论 */
-export const COMMENT_TAG = '<!-- This is an auto-generated comment by AI Reviewer -->'
+export function commentTag(): string {
+  return stateMarker('comment')
+}
 
 /** 标识 bot 自动生成的回复评论 */
-export const COMMENT_REPLY_TAG = '<!-- This is an auto-generated reply by AI Reviewer -->'
+export function commentReplyTag(): string {
+  return stateMarker('commentReply')
+}
 
 /** 标识 bot 的摘要评论 */
-export const SUMMARIZE_TAG = '<!-- This is an auto-generated comment: summarize by AI Reviewer -->'
+export function summarizeTag(): string {
+  return stateMarker('summarize')
+}
 
-/** 标识审查进行中的状态标签（开始） */
-export const IN_PROGRESS_START_TAG =
-  '<!-- This is an auto-generated comment: summarize review in progress by AI Reviewer -->'
+/** 标识审查进行中的状态标签（开始 / 结束） */
+export function inProgressStartTag(): string {
+  return stateMarker('inProgressStart')
+}
+export function inProgressEndTag(): string {
+  return stateMarker('inProgressEnd')
+}
 
-/** 标识审查进行中的状态标签（结束） */
-export const IN_PROGRESS_END_TAG =
-  '<!-- end of auto-generated comment: summarize review in progress by AI Reviewer -->'
+/** 标识 PR 描述中发布说明区域（开始 / 结束） */
+export function descriptionStartTag(): string {
+  return stateMarker('descriptionStart')
+}
+export function descriptionEndTag(): string {
+  return stateMarker('descriptionEnd')
+}
 
-/** 标识 PR 描述中发布说明区域（开始） */
-export const DESCRIPTION_START_TAG =
-  '<!-- This is an auto-generated comment: release notes by AI Reviewer -->'
+/** 标识隐藏的原始摘要区域（开始 / 结束） */
+export function rawSummaryStartTag(): string {
+  return stateMarker('rawSummaryStart')
+}
+export function rawSummaryEndTag(): string {
+  return stateMarker('rawSummaryEnd')
+}
 
-/** 标识 PR 描述中发布说明区域（结束） */
-export const DESCRIPTION_END_TAG =
-  '<!-- end of auto-generated comment: release notes by AI Reviewer -->'
-
-/** 标识隐藏的原始摘要区域（开始），存储在摘要评论的 HTML 注释中 */
-export const RAW_SUMMARY_START_TAG = `<!-- This is an auto-generated comment: raw summary by AI Reviewer -->
-<!--
-`
-/** 标识隐藏的原始摘要区域（结束） */
-export const RAW_SUMMARY_END_TAG = `-->
-<!-- end of auto-generated comment: raw summary by AI Reviewer -->`
-
-/** 标识隐藏的精简摘要区域（开始） */
-export const SHORT_SUMMARY_START_TAG = `<!-- This is an auto-generated comment: short summary by AI Reviewer -->
-<!--
-`
-
-/** 标识隐藏的精简摘要区域（结束） */
-export const SHORT_SUMMARY_END_TAG = `-->
-<!-- end of auto-generated comment: short summary by AI Reviewer -->`
+/** 标识隐藏的精简摘要区域（开始 / 结束） */
+export function shortSummaryStartTag(): string {
+  return stateMarker('shortSummaryStart')
+}
+export function shortSummaryEndTag(): string {
+  return stateMarker('shortSummaryEnd')
+}
 
 /** 标识已审查的 commit ID 列表（开始） */
-export const COMMIT_ID_START_TAG = '<!-- commit_ids_reviewed_start -->'
+/**
+ * 已审查 commit ID 区块的历史起止标签（无平台命名空间）。
+ * 仍用于**匹配**在途 PR 里已存在的旧区块；新写入走 commitIdTags()。
+ */
+export const COMMIT_ID_START_TAG = STATE_MARKERS.commitIdsStart.legacy
 
 /** 标识已审查的 commit ID 列表（结束） */
-export const COMMIT_ID_END_TAG = '<!-- commit_ids_reviewed_end -->'
+export const COMMIT_ID_END_TAG = STATE_MARKERS.commitIdsEnd.legacy
+
+/** 当前平台命名空间下的已审查 commit ID 区块标签（用于新建区块） */
+export function commitIdTags(): {start: string; end: string} {
+  return {start: stateMarker('commitIdsStart'), end: stateMarker('commitIdsEnd')}
+}
+
+/**
+ * 在正文中定位已审查 commit ID 区块，命名空间格式优先，回退历史格式。
+ *
+ * 返回命中的标签本身，调用方据此就地改写，不会把旧区块的标签换成新的——
+ * 升级不需要重写在途 PR 已有的 marker。
+ */
+export function locateCommitIdBlock(
+  body: string
+): {start: number; end: number; startTag: string; endTag: string} | null {
+  const namespaced = commitIdTags()
+  for (const {start: startTag, end: endTag} of [
+    namespaced,
+    {start: COMMIT_ID_START_TAG, end: COMMIT_ID_END_TAG}
+  ]) {
+    const start = body.indexOf(startTag)
+    const end = body.indexOf(endTag)
+    if (start !== -1 && end !== -1) return {start, end, startTag, endTag}
+  }
+  return null
+}
 
 /**
  * Commenter 类 - GitHub 评论管理器
@@ -120,7 +185,7 @@ export class Commenter {
     }
 
     if (!tag) {
-      tag = COMMENT_TAG
+      tag = commentTag()
     }
 
     // 组装评论正文：问候语 + 消息内容 + 标签
@@ -145,52 +210,57 @@ ${tag}`
    * 用于从评论正文中提取隐藏的状态数据（如原始摘要、已审查 commit ID 等）
    */
   getContentWithinTags(content: string, startTag: string, endTag: string) {
-    const start = content.indexOf(startTag)
-    const end = content.indexOf(endTag)
-    if (start >= 0 && end >= 0) {
-      return content.slice(start + startTag.length, end)
+    // 写新读旧：先按传入（新格式）标签找，找不到再回退到对应的历史标签
+    for (const [s, e] of tagPairVariants(startTag, endTag)) {
+      const start = content.indexOf(s)
+      const end = content.indexOf(e)
+      if (start >= 0 && end >= 0) {
+        return content.slice(start + s.length, end)
+      }
     }
     return ''
   }
 
   /** 移除标签对及其包含的内容 */
   removeContentWithinTags(content: string, startTag: string, endTag: string) {
-    const start = content.indexOf(startTag)
-    const end = content.lastIndexOf(endTag)
-    if (start >= 0 && end >= 0) {
-      return content.slice(0, start) + content.slice(end + endTag.length)
+    for (const [s, e] of tagPairVariants(startTag, endTag)) {
+      const start = content.indexOf(s)
+      const end = content.lastIndexOf(e)
+      if (start >= 0 && end >= 0) {
+        return content.slice(0, start) + content.slice(end + e.length)
+      }
     }
     return content
   }
 
   /** 从摘要评论中提取原始摘要内容 */
   getRawSummary(summary: string) {
-    return this.getContentWithinTags(summary, RAW_SUMMARY_START_TAG, RAW_SUMMARY_END_TAG)
+    return this.getContentWithinTags(summary, rawSummaryStartTag(), rawSummaryEndTag())
   }
 
   /** 从摘要评论中提取精简摘要内容 */
   getShortSummary(summary: string) {
-    return this.getContentWithinTags(summary, SHORT_SUMMARY_START_TAG, SHORT_SUMMARY_END_TAG)
+    return this.getContentWithinTags(summary, shortSummaryStartTag(), shortSummaryEndTag())
   }
 
   /** 从 PR 描述中提取用户原始描述（移除 bot 生成的发布说明部分） */
   getDescription(description: string) {
-    return this.removeContentWithinTags(description, DESCRIPTION_START_TAG, DESCRIPTION_END_TAG)
+    return this.removeContentWithinTags(description, descriptionStartTag(), descriptionEndTag())
   }
 
   /** 从 PR 描述中提取发布说明内容 */
   getReleaseNotes(description: string) {
     const releaseNotes = this.getContentWithinTags(
       description,
-      DESCRIPTION_START_TAG,
-      DESCRIPTION_END_TAG
+      descriptionStartTag(),
+      descriptionEndTag()
     )
     return releaseNotes.replace(/(^|\n)> .*/g, '')
   }
 
   /**
    * 更新 PR 描述，写入 AI 生成的发布说明
-   * 将发布说明嵌入到 DESCRIPTION_START_TAG 和 DESCRIPTION_END_TAG 之间
+   * 将发布说明嵌入到 descriptionStartTag() 和 descriptionEndTag() 之间
    */
   async updateDescription(pullNumber: number, message: string) {
     const platform = getPlatform()
@@ -204,10 +274,10 @@ ${tag}`
 
       const messageClean = this.removeContentWithinTags(
         message,
-        DESCRIPTION_START_TAG,
-        DESCRIPTION_END_TAG
+        descriptionStartTag(),
+        descriptionEndTag()
       )
-      const newDescription = `${description}\n${DESCRIPTION_START_TAG}\n${messageClean}\n${DESCRIPTION_END_TAG}`
+      const newDescription = `${description}\n${descriptionStartTag()}\n${messageClean}\n${descriptionEndTag()}`
       await platform.updateChangeRequestBody(repo.owner, repo.repo, pullNumber, newDescription)
     } catch (e) {
       getLogger().warning(`Failed to get PR: ${e}, skipping adding release notes to description.`)
@@ -233,7 +303,7 @@ ${tag}`
 
 ${message}
 
-${COMMENT_TAG}`
+${commentTag()}`
     this.reviewCommentsBuffer.push({
       path,
       startLine,
@@ -297,7 +367,7 @@ ${statusMsg}
         comment.startLine,
         comment.endLine
       )
-      const existingBotComments = existingComments.filter(c => c.body.includes(COMMENT_TAG))
+      const existingBotComments = existingComments.filter(c => bodyHasMarker(c.body, 'comment'))
       if (existingBotComments.length > 0) {
         // 检查该位置是否已 resolved
         const key = `${comment.path}:${comment.endLine}`
@@ -384,7 +454,7 @@ ${statusMsg}
   /**
    * 回复用户的 review comment
    *
-   * 在顶层评论下创建回复，并将顶层评论的标签从 COMMENT_TAG 更新为 COMMENT_REPLY_TAG，
+   * 在顶层评论下创建回复，并将顶层评论的标签从 commentTag() 更新为 commentReplyTag()，
    * 表示该评论链已有 bot 参与回复
    */
   async reviewCommentReply(pullNumber: number, topLevelComment: any, message: string) {
@@ -394,7 +464,7 @@ ${statusMsg}
 
 ${message}
 
-${COMMENT_REPLY_TAG}
+${commentReplyTag()}
 `
     try {
       await platform.replyToReviewComment(
@@ -419,8 +489,16 @@ ${COMMENT_REPLY_TAG}
       }
     }
     try {
-      if (topLevelComment.body.includes(COMMENT_TAG)) {
-        const newBody = topLevelComment.body.replace(COMMENT_TAG, COMMENT_REPLY_TAG)
+      const hitTag = stateMarkerVariantsFor('comment').find((v: string) =>
+        topLevelComment.body.includes(v)
+      )
+      if (hitTag != null) {
+        // 命中哪种形态就替换哪种：历史评论保持历史格式，新评论用命名空间格式
+        const replacement =
+          hitTag === STATE_MARKERS.comment.legacy
+            ? STATE_MARKERS.commentReply.legacy
+            : commentReplyTag()
+        const newBody = topLevelComment.body.replace(hitTag, replacement)
         await platform.updateReviewComment(repo.owner, repo.repo, topLevelComment.id, newBody)
       }
     } catch (error) {
@@ -644,7 +722,10 @@ ${chain}
     const logger = getLogger()
     try {
       const comments = await this.listComments(target)
-      const matchedComments = comments.filter((cmt: any) => cmt.body && cmt.body.includes(tag))
+      const variants = variantsForTag(tag)
+      const matchedComments = comments.filter(
+        (cmt: any) => cmt.body && variants.some(v => cmt.body.includes(v))
+      )
 
       if (matchedComments.length > 0) {
         await platform.updateComment(repo.owner, repo.repo, matchedComments[0].id, body)
@@ -669,8 +750,9 @@ ${chain}
   async findCommentWithTag(tag: string, target: number) {
     try {
       const comments = await this.listComments(target)
+      const variants = variantsForTag(tag)
       for (const cmt of comments) {
-        if (cmt.body && cmt.body.includes(tag)) {
+        if (cmt.body && variants.some(v => cmt.body.includes(v))) {
           return cmt
         }
       }
@@ -719,12 +801,11 @@ ${chain}
    * @returns commit SHA 字符串数组
    */
   getReviewedCommitIds(commentBody: string): string[] {
-    const start = commentBody.indexOf(COMMIT_ID_START_TAG)
-    const end = commentBody.indexOf(COMMIT_ID_END_TAG)
-    if (start === -1 || end === -1) {
+    const block = locateCommitIdBlock(commentBody)
+    if (block == null) {
       return []
     }
-    const ids = commentBody.substring(start + COMMIT_ID_START_TAG.length, end)
+    const ids = commentBody.substring(block.start + block.startTag.length, block.end)
     // 解析 <!-- sha --> 格式的 commit ID
     return ids
       .split('<!--')
@@ -734,12 +815,11 @@ ${chain}
 
   /** 提取已审查 commit ID 的完整区块（包含标签） */
   getReviewedCommitIdsBlock(commentBody: string): string {
-    const start = commentBody.indexOf(COMMIT_ID_START_TAG)
-    const end = commentBody.indexOf(COMMIT_ID_END_TAG)
-    if (start === -1 || end === -1) {
+    const block = locateCommitIdBlock(commentBody)
+    if (block == null) {
       return ''
     }
-    return commentBody.substring(start, end + COMMIT_ID_END_TAG.length)
+    return commentBody.substring(block.start, block.end + block.endTag.length)
   }
 
   /**
@@ -747,19 +827,20 @@ ${chain}
    * 如果标签不存在则创建新的区块
    */
   addReviewedCommitId(commentBody: string, commitId: string): string {
-    const start = commentBody.indexOf(COMMIT_ID_START_TAG)
-    const end = commentBody.indexOf(COMMIT_ID_END_TAG)
-    if (start === -1 || end === -1) {
-      return `${commentBody}\n${COMMIT_ID_START_TAG}\n<!-- ${commitId} -->\n${COMMIT_ID_END_TAG}`
+    const block = locateCommitIdBlock(commentBody)
+    if (block == null) {
+      // 新建区块用当前平台命名空间；已存在的旧区块保持原标签就地追加
+      const tags = commitIdTags()
+      return `${commentBody}\n${tags.start}\n<!-- ${commitId} -->\n${tags.end}`
     }
     if (this.getReviewedCommitIds(commentBody).includes(commitId)) {
       return commentBody
     }
-    const ids = commentBody.substring(start + COMMIT_ID_START_TAG.length, end)
+    const ids = commentBody.substring(block.start + block.startTag.length, block.end)
     return `${commentBody.substring(
       0,
-      start + COMMIT_ID_START_TAG.length
-    )}${ids}<!-- ${commitId} -->\n${commentBody.substring(end)}`
+      block.start + block.startTag.length
+    )}${ids}<!-- ${commitId} -->\n${commentBody.substring(block.end)}`
   }
 
   /**
@@ -794,31 +875,32 @@ ${chain}
    * 如果已存在则不重复添加
    */
   addInProgressStatus(commentBody: string, statusMsg: string): string {
-    const start = commentBody.indexOf(IN_PROGRESS_START_TAG)
-    const end = commentBody.indexOf(IN_PROGRESS_END_TAG)
-    if (start === -1 || end === -1) {
-      return `${IN_PROGRESS_START_TAG}
+    // 写新读旧：已有历史格式的进度块时不重复插入
+    if (locateInProgressBlock(commentBody) != null) {
+      return commentBody
+    }
+    {
+      return `${inProgressStartTag()}
 
 Currently reviewing new changes in this PR...
 
 ${statusMsg}
 
-${IN_PROGRESS_END_TAG}
+${inProgressEndTag()}
 
 ---
 
 ${commentBody}`
     }
-    return commentBody
   }
 
   /** 从摘要评论中移除"审查进行中"的状态提示 */
   removeInProgressStatus(commentBody: string): string {
-    const start = commentBody.indexOf(IN_PROGRESS_START_TAG)
-    const end = commentBody.indexOf(IN_PROGRESS_END_TAG)
-    if (start !== -1 && end !== -1) {
+    const block = locateInProgressBlock(commentBody)
+    if (block != null) {
       return (
-        commentBody.substring(0, start) + commentBody.substring(end + IN_PROGRESS_END_TAG.length)
+        commentBody.substring(0, block.start) +
+        commentBody.substring(block.end + block.endTag.length)
       )
     }
     return commentBody

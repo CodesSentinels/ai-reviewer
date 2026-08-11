@@ -68,13 +68,13 @@ const commenterState = {
 }
 jest.mock('../src/commenter', () => ({
   Commenter: jest.fn().mockImplementation(() => commenterState),
-  COMMENT_TAG: '<!-- bot-comment -->',
-  COMMENT_REPLY_TAG: '<!-- bot-reply -->',
-  RAW_SUMMARY_START_TAG: '<!-- raw-summary-start -->',
-  RAW_SUMMARY_END_TAG: '<!-- raw-summary-end -->',
-  SHORT_SUMMARY_START_TAG: '<!-- short-summary-start -->',
-  SHORT_SUMMARY_END_TAG: '<!-- short-summary-end -->',
-  SUMMARIZE_TAG: '<!-- summarize -->'
+  commentTag: () => '<!-- bot-comment -->',
+  commentReplyTag: () => '<!-- bot-reply -->',
+  rawSummaryStartTag: () => '<!-- raw-summary-start -->',
+  rawSummaryEndTag: () => '<!-- raw-summary-end -->',
+  shortSummaryStartTag: () => '<!-- short-summary-start -->',
+  shortSummaryEndTag: () => '<!-- short-summary-end -->',
+  summarizeTag: () => '<!-- summarize -->'
 }))
 
 jest.mock('../src/tokenizer', () => ({getTokenCount: () => 0}))

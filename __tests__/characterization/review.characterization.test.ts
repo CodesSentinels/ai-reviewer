@@ -67,13 +67,13 @@ jest.mock('../../src/commenter', () => ({
   Commenter: jest.fn().mockImplementation(() => commenterState),
   getCommentGreeting: () => '🤖 AI Reviewer',
   initBotGreeting: jest.fn(),
-  COMMENT_TAG: '<!-- bot-comment -->',
-  COMMENT_REPLY_TAG: '<!-- bot-reply -->',
-  RAW_SUMMARY_START_TAG: '<!-- raw-summary-start -->',
-  RAW_SUMMARY_END_TAG: '<!-- raw-summary-end -->',
-  SHORT_SUMMARY_START_TAG: '<!-- short-summary-start -->',
-  SHORT_SUMMARY_END_TAG: '<!-- short-summary-end -->',
-  SUMMARIZE_TAG: '<!-- summarize -->'
+  commentTag: () => '<!-- bot-comment -->',
+  commentReplyTag: () => '<!-- bot-reply -->',
+  rawSummaryStartTag: () => '<!-- raw-summary-start -->',
+  rawSummaryEndTag: () => '<!-- raw-summary-end -->',
+  shortSummaryStartTag: () => '<!-- short-summary-start -->',
+  shortSummaryEndTag: () => '<!-- short-summary-end -->',
+  summarizeTag: () => '<!-- summarize -->'
 }))
 
 jest.mock('../../src/tokenizer', () => ({getTokenCount: () => 0}))
@@ -254,7 +254,7 @@ describe('codeReview() — 改造前控制流行为基线', () => {
       expect(call[3]).toBe('head-sha-0001') // head
     }
 
-    // in-progress 摘要 + 最终摘要，各发布一次（commenter.comment 共 2 次，均为 SUMMARIZE_TAG + replace）
+    // in-progress 摘要 + 最终摘要，各发布一次（commenter.comment 共 2 次，均为 summarizeTag() + replace）
     expect(commenterState.comment).toHaveBeenCalledTimes(2)
     for (const call of commenterState.comment.mock.calls) {
       expect(call[1]).toBe('<!-- summarize -->')

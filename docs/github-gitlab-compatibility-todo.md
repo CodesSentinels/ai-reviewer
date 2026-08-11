@@ -318,10 +318,10 @@
 
 ### 5.3 GitHub 状态
 
-- [ ] `GH-012` 保持 PR body 中 pause/resume marker。
-- [ ] `GH-013` 保持 summary comment 中 reviewed SHA marker。
-- [ ] `GH-014` GitHub marker 和幂等键使用 `github:` 命名空间。
-- [ ] `GH-015` GitHub adapter 不读取或写入 GitLab marker。
+- [x] `GH-012` 保持 PR body 中 pause/resume marker。
+- [x] `GH-013` 保持 summary comment 中 reviewed SHA marker。
+- [x] `GH-014` GitHub marker 和幂等键使用 `github:` 命名空间。
+- [x] `GH-015` GitHub adapter 不读取或写入 GitLab marker。
 
 ### 5.4 GitHub-only 回归
 

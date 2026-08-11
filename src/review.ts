@@ -19,13 +19,14 @@ import pLimit from 'p-limit'
 import {type AnalysisStep, type Bot} from './bot'
 import {
   Commenter,
-  COMMENT_REPLY_TAG,
-  COMMENT_TAG,
-  RAW_SUMMARY_END_TAG,
-  RAW_SUMMARY_START_TAG,
-  SHORT_SUMMARY_END_TAG,
-  SHORT_SUMMARY_START_TAG,
-  SUMMARIZE_TAG
+  bodyHasMarker,
+  commentReplyTag,
+  commentTag,
+  rawSummaryEndTag,
+  rawSummaryStartTag,
+  shortSummaryEndTag,
+  shortSummaryStartTag,
+  summarizeTag
 } from './commenter'
 import {buildPatchScans} from './changed-lines'
 import {PRIMARY_BOT_MENTION} from './constants'
@@ -187,7 +188,7 @@ export const codeReview = async (
   // ==================== 恢复增量审查状态 ====================
   // 从已有的摘要评论中恢复上次审查的状态
   const existingSummarizeCmt = await commenter.findCommentWithTag(
-    SUMMARIZE_TAG,
+    summarizeTag(),
     context.payload.pull_request.number
   )
   let existingCommitIdsBlock = ''
@@ -500,7 +501,7 @@ ${
   // 更新摘要评论为"审查进行中"状态
   const inProgressSummarizeCmt = commenter.addInProgressStatus(existingSummarizeCmtBody, statusMsg)
 
-  await commenter.comment(`${inProgressSummarizeCmt}`, SUMMARIZE_TAG, 'replace')
+  await commenter.comment(`${inProgressSummarizeCmt}`, summarizeTag(), 'replace')
 
   // ==================== 阶段一：并行文件摘要 ====================
   const summariesFailed: string[] = []
@@ -649,12 +650,12 @@ ${filename}: ${summary}
 
   // 构建最终的摘要评论内容（包含隐藏的状态数据）
   let summarizeComment = `${summarizeFinalResponse}
-${RAW_SUMMARY_START_TAG}
+${rawSummaryStartTag()}
 ${inputs.rawSummary}
-${RAW_SUMMARY_END_TAG}
-${SHORT_SUMMARY_START_TAG}
+${rawSummaryEndTag()}
+${shortSummaryStartTag()}
 ${inputs.shortSummary}
-${SHORT_SUMMARY_END_TAG}
+${shortSummaryEndTag()}
 ${dependencyContext != null ? `\n${formatDependencySummary(dependencyContext)}` : ''}
 ${lintReport != null ? `\n${formatLintSummary(lintReport)}` : ''}
 ---
@@ -753,7 +754,7 @@ ${
           context.payload.pull_request.number
         )
         for (const c of allReviewComments) {
-          if (!c.body?.includes(COMMENT_TAG)) continue
+          if (!bodyHasMarker(c.body, 'comment')) continue
           const key = `${c.path}:${c.line}`
           const isResolved = threadStatusMap.get(key)
           if (isResolved === true) continue
@@ -886,7 +887,7 @@ ${
             filename,
             startLine,
             endLine,
-            COMMENT_REPLY_TAG,
+            commentReplyTag(),
             threadStatusMap
           )
 
@@ -1150,7 +1151,7 @@ ${
   }
 
   // 发布最终的摘要评论
-  await commenter.comment(`${summarizeComment}`, SUMMARIZE_TAG, 'replace')
+  await commenter.comment(`${summarizeComment}`, summarizeTag(), 'replace')
 }
 
 // ==================== Diff 解析辅助函数 ====================

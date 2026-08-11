@@ -14,6 +14,7 @@ import {GitLabLogger} from './platform/gitlab-logger'
 import {GitLabPlatform} from './platform/gitlab-platform'
 import {describeGitLabClientConfig, resolveGitLabClientConfig} from './platform/gitlab-client'
 import {setPlatform} from './platform/git-platform'
+import {setStateNamespace} from './platform/state-namespace'
 import {setLogger} from './platform/logger'
 import {handleExecCtxError} from './platform/exec-ctx-error-handler'
 import {validateTriggerPayload} from './gitlab-trigger-validation'
@@ -39,6 +40,8 @@ export async function run(): Promise<void> {
   // 走 debug 级别，避免在事件被拒绝（如 fork MR）前产生无关输出
   logger.debug(`GitLab client: ${describeGitLabClientConfig(clientConfig)}`)
   setPlatform(new GitLabPlatform(clientConfig))
+  // GH-014 / STATE-006：本次运行写入的 marker / 幂等键带 gitlab: 命名空间
+  setStateNamespace('gitlab')
 
   const payloadPath = process.env.TRIGGER_PAYLOAD
   if (payloadPath == null || payloadPath === '') {

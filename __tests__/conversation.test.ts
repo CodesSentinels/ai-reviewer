@@ -11,14 +11,29 @@ import {describe, expect, test, jest} from '@jest/globals'
 // 工厂 mock，避免加载真实 commenter / octokit / tokenizer 的副作用
 jest.mock('../src/commenter', () => ({
   Commenter: class {},
-  COMMENT_TAG: '<!-- BOT_COMMENT -->',
-  COMMENT_REPLY_TAG: '<!-- BOT_REPLY -->',
-  SUMMARIZE_TAG: '<!-- SUMMARY -->'
+  commentTag: () => '<!-- BOT_COMMENT -->',
+  commentReplyTag: () => '<!-- BOT_REPLY -->',
+  summarizeTag: () => '<!-- SUMMARY -->',
+  // 写新读旧：variants 同时含新旧两种形态（GH-014）
+  stateMarkerVariantsFor: (name: string) =>
+    name === 'comment'
+      ? ['<!-- BOT_COMMENT -->', '<!-- LEGACY_BOT_COMMENT -->']
+      : ['<!-- BOT_REPLY -->', '<!-- LEGACY_BOT_REPLY -->'],
+  bodyHasMarker: (body: unknown, name: string) =>
+    typeof body === 'string' &&
+    (name === 'comment'
+      ? body.includes('<!-- BOT_COMMENT -->') || body.includes('<!-- LEGACY_BOT_COMMENT -->')
+      : body.includes('<!-- BOT_REPLY -->') || body.includes('<!-- LEGACY_BOT_REPLY -->'))
 }))
 jest.mock('../src/octokit', () => ({octokit: {}}))
 jest.mock('../src/tokenizer', () => ({getTokenCount: () => 0}))
 
-import {isFollowUpQuestion, countBotTurns, truncateConversationChain} from '../src/conversation'
+import {
+  botCommentTagVariants,
+  countBotTurns,
+  isFollowUpQuestion,
+  truncateConversationChain
+} from '../src/conversation'
 
 const BOT_REPLY = '<!-- BOT_REPLY -->'
 const BOT_COMMENT = '<!-- BOT_COMMENT -->'
@@ -73,6 +88,36 @@ describe('isFollowUpQuestion — 意图识别（必须 @bot）', () => {
     expect(
       isFollowUpQuestion({
         commentBody: `回复内容 ${BOT_COMMENT}`,
+        authorIsBot: false
+      })
+    ).toBe(false)
+  })
+})
+
+describe('GH-014: bot 标签在运行时解析且含历史形态', () => {
+  test('botCommentTagVariants 返回 current + legacy 四种形态', () => {
+    expect(botCommentTagVariants()).toEqual([
+      '<!-- BOT_COMMENT -->',
+      '<!-- LEGACY_BOT_COMMENT -->',
+      '<!-- BOT_REPLY -->',
+      '<!-- LEGACY_BOT_REPLY -->'
+    ])
+  })
+
+  test('countBotTurns 统计到升级前发的 bot 评论（历史形态）', () => {
+    const chain = [
+      'bot: 回复一 <!-- LEGACY_BOT_REPLY -->',
+      'user: 追问',
+      'bot: 回复二 <!-- BOT_REPLY -->'
+    ].join('\n---\n')
+
+    expect(countBotTurns(chain)).toBe(2)
+  })
+
+  test('isFollowUpQuestion 把带历史标签的评论识别为 bot 自评论', () => {
+    expect(
+      isFollowUpQuestion({
+        commentBody: '@ai-reviewer 这样改行吗 <!-- LEGACY_BOT_REPLY -->',
         authorIsBot: false
       })
     ).toBe(false)

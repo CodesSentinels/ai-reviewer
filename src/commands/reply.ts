@@ -15,9 +15,15 @@
 import {getCommentGreeting} from '../commenter'
 import {getPlatform} from '../platform/git-platform'
 import {getLogger} from '../platform/logger'
+import {buildStateMarker, hasStateMarker, stateMarkerVariants} from '../platform/state-namespace'
 import type {ErrorCode, Reply as IReply} from './types'
 
-/** 命令回复评论的幂等标签前缀 */
+/**
+ * 命令回复评论的幂等标签前缀（历史格式，无平台命名空间）。
+ *
+ * 仍用于**匹配**在途 PR 里已经存在的旧标签；新写入一律走 buildCmdReplyTag()
+ * 的命名空间格式（GH-014）。
+ */
 export const CMD_REPLY_TAG_PREFIX = '<!-- codesentinel-cmd-reply'
 
 export interface ReplyContext {
@@ -33,9 +39,24 @@ export interface ReplyContext {
   eventName?: 'issue_comment' | 'pull_request_review_comment'
 }
 
-/** 组装幂等 tag */
+/** 组装幂等 tag（带平台命名空间，用于写入） */
 export function buildCmdReplyTag(originalCommentId: number, commandName: string): string {
+  return buildStateMarker('cmd-reply', originalCommentId, commandName)
+}
+
+/** 历史格式的幂等 tag（仅用于匹配在途 PR 的旧回复） */
+export function legacyCmdReplyTag(originalCommentId: number, commandName: string): string {
   return `${CMD_REPLY_TAG_PREFIX}:${originalCommentId}:${commandName} -->`
+}
+
+/** 匹配时应接受的全部形态：新命名空间格式 + 历史格式 */
+export function cmdReplyTagVariants(originalCommentId: number, commandName: string): string[] {
+  return stateMarkerVariants(
+    'cmd-reply',
+    legacyCmdReplyTag(originalCommentId, commandName),
+    originalCommentId,
+    commandName
+  )
 }
 
 /** 错误码 → 用户可读文案 */
@@ -162,11 +183,11 @@ export async function hasBeenProcessed(
   originalCommentId: number,
   commandName: string
 ): Promise<boolean> {
-  const tag = buildCmdReplyTag(originalCommentId, commandName)
+  const variants = cmdReplyTagVariants(originalCommentId, commandName)
   try {
     const comments = await getPlatform().listComments(owner, repo, issueNumber)
     for (const c of comments) {
-      if (typeof c.body === 'string' && c.body.includes(tag)) {
+      if (hasStateMarker(c.body, variants)) {
         return true
       }
     }

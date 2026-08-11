@@ -33,7 +33,7 @@ jest.mock('../../src/octokit', () => ({
   }
 }))
 
-import {Commenter, COMMIT_ID_START_TAG, COMMIT_ID_END_TAG} from '../../src/commenter'
+import {Commenter, COMMIT_ID_START_TAG, COMMIT_ID_END_TAG, commitIdTags} from '../../src/commenter'
 
 const commenter = new Commenter()
 
@@ -88,13 +88,27 @@ describe('1.2.2 — 添加新的已审查 commit ID', () => {
     expect(ids).toContain('def456')
   })
 
-  test('无区块时创建新区块', () => {
+  test('无区块时创建新区块，使用带平台命名空间的标签（GH-013/GH-014）', () => {
     const body = '无 commit 标签的内容'
     const result = commenter.addReviewedCommitId(body, 'first-commit')
-    expect(result).toContain(COMMIT_ID_START_TAG)
-    expect(result).toContain(COMMIT_ID_END_TAG)
+    const tags = commitIdTags()
+    expect(result).toContain(tags.start)
+    expect(result).toContain(tags.end)
+    expect(tags.start).toContain(':github:')
     expect(result).toContain('<!-- first-commit -->')
     expect(result).toContain('无 commit 标签的内容')
+  })
+
+  test('在途 PR 的历史区块（无命名空间）仍可读取并就地追加，不改写其标签', () => {
+    const legacyBody = `内容\n${COMMIT_ID_START_TAG}\n<!-- old-sha -->\n${COMMIT_ID_END_TAG}`
+
+    expect(commenter.getReviewedCommitIds(legacyBody)).toEqual(['old-sha'])
+
+    const result = commenter.addReviewedCommitId(legacyBody, 'new-sha')
+    expect(commenter.getReviewedCommitIds(result)).toEqual(['old-sha', 'new-sha'])
+    // 旧区块保持旧标签，升级不重写在途 PR 已有的 marker
+    expect(result).toContain(COMMIT_ID_START_TAG)
+    expect(result).not.toContain(commitIdTags().start)
   })
 
   test('多次添加不丢失先前的 ID', () => {

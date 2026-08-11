@@ -63,9 +63,19 @@ jest.mock('../src/commenter', () => ({
   },
   getCommentGreeting: () => '🤖 AI Reviewer',
   initBotGreeting: jest.fn(),
-  COMMENT_TAG: '<!-- BOT_COMMENT -->',
-  COMMENT_REPLY_TAG: '<!-- BOT_REPLY -->',
-  SUMMARIZE_TAG: '<!-- SUMMARY -->'
+  commentTag: () => '<!-- BOT_COMMENT -->',
+  commentReplyTag: () => '<!-- BOT_REPLY -->',
+  summarizeTag: () => '<!-- SUMMARY -->',
+  // 写新读旧：variants 同时含新旧两种形态（GH-014）
+  stateMarkerVariantsFor: (name: string) =>
+    name === 'comment'
+      ? ['<!-- BOT_COMMENT -->', '<!-- LEGACY_BOT_COMMENT -->']
+      : ['<!-- BOT_REPLY -->', '<!-- LEGACY_BOT_REPLY -->'],
+  bodyHasMarker: (body: unknown, name: string) =>
+    typeof body === 'string' &&
+    (name === 'comment'
+      ? body.includes('<!-- BOT_COMMENT -->') || body.includes('<!-- LEGACY_BOT_COMMENT -->')
+      : body.includes('<!-- BOT_REPLY -->') || body.includes('<!-- LEGACY_BOT_REPLY -->'))
 }))
 
 jest.mock('../src/tokenizer', () => ({getTokenCount: () => 0}))
@@ -74,6 +84,7 @@ import {
   composeIssueCommentChain,
   handleIssueConversation,
   buildIssueConvReplyTag,
+  legacyIssueConvReplyTag,
   MAX_CONVERSATION_TURNS
 } from '../src/conversation'
 
@@ -181,6 +192,19 @@ describe('handleIssueConversation — 编排', () => {
   test('未 @bot → 跳过', async () => {
     setPayload('这是一条普通评论，没有提及机器人')
     await handleIssueConversation(mockExecCtx, makeBot(), stubOptions, stubPrompts)
+    expect(commenterState.create).not.toHaveBeenCalled()
+  })
+
+  // GH-014：升级前写下的历史标签没有平台命名空间，必须仍能命中，
+  // 否则升级当天所有在途 PR 的已回复提问会被重复回帖
+  test('历史格式幂等标签（无命名空间）同样命中 → 跳过', async () => {
+    setPayload('@ai-reviewer 这个问题好改吗')
+    commenterState.listComments.mockResolvedValue([
+      {id: 3001, body: `已回复 ${legacyIssueConvReplyTag(2001)}`}
+    ])
+    const bot = makeBot()
+    await handleIssueConversation(mockExecCtx, bot, stubOptions, stubPrompts)
+    expect(bot.chat).not.toHaveBeenCalled()
     expect(commenterState.create).not.toHaveBeenCalled()
   })
 

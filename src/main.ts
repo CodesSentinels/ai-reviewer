@@ -14,6 +14,7 @@ import {createGitHubExecutionContext} from './platform/github-execution-context'
 import {GitHubConfigProvider} from './platform/github-config-provider'
 import {GitHubLogger} from './platform/github-logger'
 import {setPlatform} from './platform/git-platform'
+import {setStateNamespace} from './platform/state-namespace'
 import {GitHubPlatform} from './platform/github-platform'
 import {setLogger} from './platform/logger'
 import {runOrchestrator} from './platform/orchestrator'
@@ -57,6 +58,8 @@ async function run(): Promise<void> {
   // 初始化 GitHub Logger（ARCH-013）+ Platform（ARCH-018）
   setLogger(new GitHubLogger())
   setPlatform(new GitHubPlatform())
+  // GH-014：本次运行写入的 marker / 幂等键带 github: 命名空间
+  setStateNamespace('github')
 
   await runOrchestrator({
     configProvider: new GitHubConfigProvider(),

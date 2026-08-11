@@ -277,3 +277,130 @@ describe('GLAPI-031: GitLab HTTP 调用只走统一 client', () => {
     expect(violations.map(f => path.relative(SRC, f))).toEqual([])
   })
 })
+
+describe('GH-015: 平台状态 marker 不跨平台读写', () => {
+  const allFiles = collectTsFiles(SRC)
+
+  /**
+   * 硬编码平台前缀的规则：
+   * - 共享核心：一律不得硬编码，必须经 state-namespace 按运行平台生成
+   * - 平台 adapter：只允许硬编码**自己**平台的前缀（如 GitLab 写幂等 marker），
+   *   绝不允许出现对方平台的前缀
+   */
+  test('共享核心不硬编码平台 marker 前缀，adapter 只能硬编码自己的', () => {
+    const violations: string[] = []
+    for (const f of allFiles) {
+      const rel = path.relative(SRC, f).replace(/\\/g, '/')
+      // state-namespace.ts 是前缀的定义处
+      if (rel === 'platform/state-namespace.ts') continue
+      // 去掉注释后再匹配，避免命中文档性说明
+      const code = fs.readFileSync(f, 'utf8').replace(/\/\/.*|\/\*[\s\S]*?\*\//g, '')
+      const own = rel.startsWith('platform/gitlab-')
+        ? 'gitlab'
+        : rel.startsWith('platform/github-')
+        ? 'github'
+        : null
+      for (const platform of ['github', 'gitlab']) {
+        if (platform === own) continue
+        if (new RegExp(`['"\`][^'"\`]*ai-reviewer:${platform}:`).test(code)) {
+          violations.push(`${rel} → ai-reviewer:${platform}:`)
+        }
+      }
+    }
+    expect(violations).toEqual([])
+  })
+
+  /**
+   * 上一版门禁只查「硬编码的 ai-reviewer:{platform}:」，查不出「压根没有平台前缀」
+   * 的漏网 marker——COMMENT_TAG / SUMMARIZE_TAG 当时就是这样躲过去的。
+   * 这里正面兜底：src 里出现的 marker 字面量只允许在已登记的 legacy 白名单里。
+   */
+  test('src 中不存在未登记的无命名空间 marker 字面量', () => {
+    // 直接读清单模块：它不依赖 GitHub context，静态检查可安全 require
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const {STATE_MARKERS} = require('../src/state-markers')
+
+    const allowed = new Set<string>()
+    for (const spec of Object.values(STATE_MARKERS) as Array<{legacy: string}>) {
+      for (const line of spec.legacy.split('\n')) {
+        if (line.startsWith('<!--')) allowed.add(line)
+      }
+    }
+
+    const violations: string[] = []
+    for (const f of allFiles) {
+      const rel = path.relative(SRC, f).replace(/\\/g, '/')
+      const code = fs
+        .readFileSync(f, 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/\/\/.*/g, '')
+      for (const m of code.matchAll(/(<!--[^'"`\n]*?-->)/g)) {
+        const lit = m[1]
+        // 解析用片段、模板插值的数据包装、已带命名空间的 marker 都不算
+        if (lit.replace(/<!--|-->/g, '').trim() === '') continue
+        if (lit.includes('${') || lit.includes('ai-reviewer:')) continue
+        if (allowed.has(lit)) continue
+        violations.push(`${rel} → ${lit}`)
+      }
+    }
+    expect(violations).toEqual([])
+  })
+
+  /**
+   * 命名空间由入口在运行时设置，模块级常量会在 import 时固化成默认前缀，
+   * GitLab 入口之后再调 setStateNamespace() 也改不回来
+   * （BOT_COMMENT_TAGS 就踩过这个坑）。
+   */
+  test('不得在模块级把 marker 固化为常量', () => {
+    const markerCalls =
+      '(commentTag|commentReplyTag|summarizeTag|inProgressStartTag|inProgressEndTag' +
+      '|descriptionStartTag|descriptionEndTag|rawSummaryStartTag|rawSummaryEndTag' +
+      '|shortSummaryStartTag|shortSummaryEndTag|stateMarker|stateMarkerVariantsFor' +
+      '|commitIdTags|reviewStateTags|buildStateMarker)'
+    // 模块级 = 行首没有缩进的 const 声明
+    const pattern = new RegExp(
+      `^(?:export )?const\\s+\\w+[^\\n=]*=[^\\n]*\\b${markerCalls}\\(`,
+      'm'
+    )
+
+    const violations: string[] = []
+    for (const f of allFiles) {
+      const code = fs
+        .readFileSync(f, 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/\/\/.*/g, '')
+      if (pattern.test(code)) violations.push(path.relative(SRC, f).replace(/\\/g, '/'))
+    }
+    expect(violations).toEqual([])
+  })
+
+  test('GitHub adapter 不引用 GitLab 的 marker 模块', () => {
+    const githubFiles = allFiles.filter(f =>
+      /platform\/github-/.test(path.relative(SRC, f).replace(/\\/g, '/'))
+    )
+    const violations = githubFiles.filter(f =>
+      /gitlab-(write-marker|mr-hook-rules|note-hook-rules)/.test(fs.readFileSync(f, 'utf8'))
+    )
+    expect(violations.map(f => path.relative(SRC, f))).toEqual([])
+  })
+
+  test('GitLab adapter 不引用 GitHub 侧 marker 常量', () => {
+    const gitlabFiles = allFiles.filter(f =>
+      /platform\/gitlab-/.test(path.relative(SRC, f).replace(/\\/g, '/'))
+    )
+    const violations = gitlabFiles.filter(f => {
+      const code = fs.readFileSync(f, 'utf8').replace(/\/\/.*|\/\*[\s\S]*?\*\//g, '')
+      return /commentTag()|summarizeTag()|COMMIT_ID_(START|END)_TAG|REVIEW_STATE_(START|END)_TAG/.test(
+        code
+      )
+    })
+    expect(violations.map(f => path.relative(SRC, f))).toEqual([])
+  })
+
+  test('入口文件各自声明状态命名空间（否则共享核心会写错前缀）', () => {
+    const main = fs.readFileSync(path.join(SRC, 'main.ts'), 'utf8')
+    const gitlabTrigger = fs.readFileSync(path.join(SRC, 'gitlab-trigger.ts'), 'utf8')
+    expect(main).toMatch(/setStateNamespace\(\s*'github'\s*\)/)
+    expect(gitlabTrigger).toMatch(/setStateNamespace\(\s*'gitlab'\s*\)/)
+  })
+})

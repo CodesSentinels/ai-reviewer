@@ -44,7 +44,7 @@ const platform = {
 }
 jest.mock('../src/platform/git-platform', () => ({getPlatform: () => platform}))
 
-import {Commenter, COMMENT_TAG, COMMENT_REPLY_TAG, SUMMARIZE_TAG} from '../src/commenter'
+import {Commenter, STATE_MARKERS, commentTag, commentReplyTag, summarizeTag} from '../src/commenter'
 
 /** 平台返回的 issue comment 形状 */
 function issueComment(id: number, body: string): any {
@@ -83,23 +83,23 @@ beforeEach(() => {
 
 describe('GH-006: PR 顶层 summary 评论的查找、创建与更新', () => {
   test('mode=create → 直接创建，正文含问候语、消息与标签', async () => {
-    await new Commenter().comment('summary body', SUMMARIZE_TAG, 'create')
+    await new Commenter().comment('summary body', summarizeTag(), 'create')
 
     expect(platform.createComment).toHaveBeenCalledTimes(1)
     const [owner, repo, target, body] = platform.createComment.mock.calls[0] as any[]
     expect([owner, repo, target]).toEqual(['o', 'r', 7])
     expect(body).toContain('summary body')
-    expect(body).toContain(SUMMARIZE_TAG)
+    expect(body).toContain(summarizeTag())
     expect(platform.updateComment).not.toHaveBeenCalled()
   })
 
   test('mode=replace 且已存在同标签评论 → 更新而非重复创建', async () => {
     platform.listComments.mockResolvedValue([
       issueComment(1, 'unrelated'),
-      issueComment(2, `old summary\n\n${SUMMARIZE_TAG}`)
+      issueComment(2, `old summary\n\n${summarizeTag()}`)
     ])
 
-    await new Commenter().comment('new summary', SUMMARIZE_TAG, 'replace')
+    await new Commenter().comment('new summary', summarizeTag(), 'replace')
 
     expect(platform.updateComment).toHaveBeenCalledTimes(1)
     const [, , commentId, body] = platform.updateComment.mock.calls[0] as any[]
@@ -111,7 +111,7 @@ describe('GH-006: PR 顶层 summary 评论的查找、创建与更新', () => {
   test('mode=replace 但不存在同标签评论 → 退化为创建', async () => {
     platform.listComments.mockResolvedValue([issueComment(1, 'unrelated')])
 
-    await new Commenter().comment('first summary', SUMMARIZE_TAG, 'replace')
+    await new Commenter().comment('first summary', summarizeTag(), 'replace')
 
     expect(platform.createComment).toHaveBeenCalledTimes(1)
     expect(platform.updateComment).not.toHaveBeenCalled()
@@ -119,12 +119,12 @@ describe('GH-006: PR 顶层 summary 评论的查找、创建与更新', () => {
 
   test('并发产生多条同标签评论 → 更新第一条并删除其余', async () => {
     platform.listComments.mockResolvedValue([
-      issueComment(2, `dup A\n\n${SUMMARIZE_TAG}`),
-      issueComment(5, `dup B\n\n${SUMMARIZE_TAG}`),
-      issueComment(9, `dup C\n\n${SUMMARIZE_TAG}`)
+      issueComment(2, `dup A\n\n${summarizeTag()}`),
+      issueComment(5, `dup B\n\n${summarizeTag()}`),
+      issueComment(9, `dup C\n\n${summarizeTag()}`)
     ])
 
-    await new Commenter().comment('merged summary', SUMMARIZE_TAG, 'replace')
+    await new Commenter().comment('merged summary', summarizeTag(), 'replace')
 
     expect((platform.updateComment.mock.calls[0] as any[])[2]).toBe(2)
     expect(platform.deleteComment.mock.calls.map((c: any[]) => c[2])).toEqual([5, 9])
@@ -132,38 +132,38 @@ describe('GH-006: PR 顶层 summary 评论的查找、创建与更新', () => {
 
   test('删除重复评论失败 → 只 warning，不影响主流程', async () => {
     platform.listComments.mockResolvedValue([
-      issueComment(2, SUMMARIZE_TAG),
-      issueComment(5, SUMMARIZE_TAG)
+      issueComment(2, summarizeTag()),
+      issueComment(5, summarizeTag())
     ])
     platform.deleteComment.mockRejectedValue(new Error('403 Forbidden'))
 
     await expect(
-      new Commenter().comment('merged', SUMMARIZE_TAG, 'replace')
+      new Commenter().comment('merged', summarizeTag(), 'replace')
     ).resolves.toBeUndefined()
     expect(platform.updateComment).toHaveBeenCalledTimes(1)
     expect(logs.warning).toHaveBeenCalledWith(expect.stringContaining('Failed to delete duplicate'))
   })
 
   test('未知 mode → 按 replace 处理并 warning', async () => {
-    platform.listComments.mockResolvedValue([issueComment(2, SUMMARIZE_TAG)])
+    platform.listComments.mockResolvedValue([issueComment(2, summarizeTag())])
 
-    await new Commenter().comment('body', SUMMARIZE_TAG, 'upsert')
+    await new Commenter().comment('body', summarizeTag(), 'upsert')
 
     expect(logs.warning).toHaveBeenCalledWith(expect.stringContaining('Unknown mode: upsert'))
     expect(platform.updateComment).toHaveBeenCalledTimes(1)
   })
 
-  test('空 tag → 回退到默认 COMMENT_TAG', async () => {
+  test('空 tag → 回退到默认 commentTag()', async () => {
     await new Commenter().comment('body', '', 'create')
 
     const [, , , body] = platform.createComment.mock.calls[0] as any[]
-    expect(body).toContain(COMMENT_TAG)
+    expect(body).toContain(commentTag())
   })
 
   test('issue 事件 → target 取 issue.number', async () => {
     mockContext.payload = {issue: {number: 33}}
 
-    await new Commenter().comment('body', SUMMARIZE_TAG, 'create')
+    await new Commenter().comment('body', summarizeTag(), 'create')
 
     expect((platform.createComment.mock.calls[0] as any[])[2]).toBe(33)
   })
@@ -171,7 +171,7 @@ describe('GH-006: PR 顶层 summary 评论的查找、创建与更新', () => {
   test('payload 既无 pull_request 也无 issue → 跳过且不调用平台（fail closed）', async () => {
     mockContext.payload = {}
 
-    await new Commenter().comment('body', SUMMARIZE_TAG, 'create')
+    await new Commenter().comment('body', summarizeTag(), 'create')
 
     expect(platform.createComment).not.toHaveBeenCalled()
     expect(platform.updateComment).not.toHaveBeenCalled()
@@ -181,11 +181,11 @@ describe('GH-006: PR 顶层 summary 评论的查找、创建与更新', () => {
   test('findCommentWithTag：命中返回评论，未命中返回 null', async () => {
     platform.listComments.mockResolvedValue([
       issueComment(1, 'noise'),
-      issueComment(4, `x\n\n${SUMMARIZE_TAG}`)
+      issueComment(4, `x\n\n${summarizeTag()}`)
     ])
     const commenter = new Commenter()
 
-    expect((await commenter.findCommentWithTag(SUMMARIZE_TAG, 7))?.id).toBe(4)
+    expect((await commenter.findCommentWithTag(summarizeTag(), 7))?.id).toBe(4)
     expect(await commenter.findCommentWithTag('<!-- absent -->', 7)).toBeNull()
   })
 
@@ -194,6 +194,68 @@ describe('GH-006: PR 顶层 summary 评论的查找、创建与更新', () => {
 
     await expect(new Commenter().listComments(7)).resolves.toEqual([])
     expect(logs.warning).toHaveBeenCalledWith(expect.stringContaining('Failed to list comments'))
+  })
+})
+
+describe('GH-014: 迁移后的 marker 写新读旧', () => {
+  test('replace 能命中历史格式的摘要评论（升级当天不重复发摘要）', async () => {
+    platform.listComments.mockResolvedValue([
+      issueComment(2, `旧摘要\n\n${STATE_MARKERS.summarize.legacy}`)
+    ])
+
+    await new Commenter().comment('新摘要', summarizeTag(), 'replace')
+
+    expect(platform.updateComment).toHaveBeenCalledTimes(1)
+    expect((platform.updateComment.mock.calls[0] as any[])[2]).toBe(2)
+    expect(platform.createComment).not.toHaveBeenCalled()
+    // 更新后的正文用新格式
+    expect((platform.updateComment.mock.calls[0] as any[])[3]).toContain(summarizeTag())
+  })
+
+  test('findCommentWithTag 能命中历史格式', async () => {
+    platform.listComments.mockResolvedValue([
+      issueComment(4, `x\n\n${STATE_MARKERS.summarize.legacy}`)
+    ])
+
+    expect((await new Commenter().findCommentWithTag(summarizeTag(), 7))?.id).toBe(4)
+  })
+
+  test('行级评论去重能命中历史格式的 bot 评论（不重复发同位置评论）', async () => {
+    platform.listReviewComments.mockResolvedValue([
+      reviewComment(50, 'src/a.ts', 10, `旧发现\n\n${STATE_MARKERS.comment.legacy}`)
+    ])
+    const commenter = new Commenter()
+    await commenter.bufferReviewComment('src/a.ts', 10, 10, 'same spot')
+
+    await commenter.submitReview(7, 'sha1', 'status')
+
+    expect(platform.submitReviewComments).not.toHaveBeenCalled()
+  })
+
+  test('回复历史格式的顶层评论 → 标签替换为历史回复格式，不混搭', async () => {
+    const legacyTopLevel = {id: 900, body: `发现\n\n${STATE_MARKERS.comment.legacy}`}
+
+    await new Commenter().reviewCommentReply(7, legacyTopLevel, 'answer')
+
+    const [, , , newBody] = platform.updateReviewComment.mock.calls[0] as any[]
+    expect(newBody).toContain(STATE_MARKERS.commentReply.legacy)
+    expect(newBody).not.toContain(STATE_MARKERS.comment.legacy)
+  })
+
+  test('隐藏摘要区块：历史格式仍能被提取', () => {
+    const commenter = new Commenter()
+    const legacyBody = `${STATE_MARKERS.rawSummaryStart.legacy}raw content${STATE_MARKERS.rawSummaryEnd.legacy}`
+
+    expect(commenter.getRawSummary(legacyBody)).toBe('raw content')
+  })
+
+  test('发布说明区块：历史格式仍能被移除，不残留在描述里', () => {
+    const commenter = new Commenter()
+    const legacyBody = `用户描述\n${STATE_MARKERS.descriptionStart.legacy}\nnotes\n${STATE_MARKERS.descriptionEnd.legacy}`
+
+    const result = commenter.getDescription(legacyBody)
+    expect(result).toContain('用户描述')
+    expect(result).not.toContain('notes')
   })
 })
 
@@ -210,11 +272,11 @@ describe('GH-011: Commenter 层的评论缓存', () => {
 
   test('新建评论写回缓存，后续查找无需再次请求平台', async () => {
     platform.listComments.mockResolvedValue([])
-    platform.createComment.mockResolvedValue(issueComment(101, `fresh\n\n${SUMMARIZE_TAG}`))
+    platform.createComment.mockResolvedValue(issueComment(101, `fresh\n\n${summarizeTag()}`))
     const commenter = new Commenter()
 
-    await commenter.comment('fresh', SUMMARIZE_TAG, 'replace')
-    const found = await commenter.findCommentWithTag(SUMMARIZE_TAG, 7)
+    await commenter.comment('fresh', summarizeTag(), 'replace')
+    const found = await commenter.findCommentWithTag(summarizeTag(), 7)
 
     expect(found?.id).toBe(101)
     expect(platform.listComments).toHaveBeenCalledTimes(1)
@@ -228,6 +290,45 @@ describe('GH-011: Commenter 层的评论缓存', () => {
     await commenter.listReviewComments(7)
 
     expect(platform.listReviewComments).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('GH-014: 审查进度块（in-progress）写新读旧', () => {
+  test('无进度块时插入新格式', () => {
+    const result = new Commenter().addInProgressStatus('摘要正文', 'status')
+
+    expect(result).toContain(STATE_MARKERS.inProgressStart.current())
+    expect(result).toContain('摘要正文')
+  })
+
+  test('已有历史格式进度块 → 不重复插入', () => {
+    const legacy = `${STATE_MARKERS.inProgressStart.legacy}\n进行中\n${STATE_MARKERS.inProgressEnd.legacy}\n\n摘要正文`
+
+    expect(new Commenter().addInProgressStatus(legacy, 'status')).toBe(legacy)
+  })
+
+  test('已有新格式进度块 → 不重复插入', () => {
+    const commenter = new Commenter()
+    const once = commenter.addInProgressStatus('摘要正文', 'status')
+
+    expect(commenter.addInProgressStatus(once, 'status')).toBe(once)
+  })
+
+  test('历史格式进度块可以被移除（否则旧进度块永远留在摘要里）', () => {
+    const legacy = `${STATE_MARKERS.inProgressStart.legacy}\n进行中\n${STATE_MARKERS.inProgressEnd.legacy}\n\n摘要正文`
+
+    const result = new Commenter().removeInProgressStatus(legacy)
+    expect(result).not.toContain(STATE_MARKERS.inProgressStart.legacy)
+    expect(result).toContain('摘要正文')
+  })
+
+  test('新格式进度块同样可以被移除', () => {
+    const commenter = new Commenter()
+    const withBlock = commenter.addInProgressStatus('摘要正文', 'status')
+
+    const result = commenter.removeInProgressStatus(withBlock)
+    expect(result).not.toContain(STATE_MARKERS.inProgressStart.current())
+    expect(result).toContain('摘要正文')
   })
 })
 
@@ -275,7 +376,7 @@ describe('GH-007: 行级 review comment 的缓冲、定位与提交', () => {
 
   test('同位置已有未 resolved 的 bot 评论 → 跳过，不重复发布', async () => {
     platform.listReviewComments.mockResolvedValue([
-      reviewComment(50, 'src/a.ts', 10, `old finding\n\n${COMMENT_TAG}`)
+      reviewComment(50, 'src/a.ts', 10, `old finding\n\n${commentTag()}`)
     ])
     const commenter = new Commenter()
     await commenter.bufferReviewComment('src/a.ts', 10, 10, 'same spot')
@@ -288,7 +389,7 @@ describe('GH-007: 行级 review comment 的缓冲、定位与提交', () => {
 
   test('同位置旧评论已 resolved → 删除后重新发布', async () => {
     platform.listReviewComments.mockResolvedValue([
-      reviewComment(50, 'src/a.ts', 10, `old finding\n\n${COMMENT_TAG}`)
+      reviewComment(50, 'src/a.ts', 10, `old finding\n\n${commentTag()}`)
     ])
     const commenter = new Commenter()
     await commenter.bufferReviewComment('src/a.ts', 10, 10, 'fresh finding')
@@ -341,7 +442,7 @@ describe('GH-007: 行级 review comment 的缓冲、定位与提交', () => {
 })
 
 describe('GH-008: review comment 回复', () => {
-  const topLevel = {id: 900, body: `bot finding\n\n${COMMENT_TAG}`}
+  const topLevel = {id: 900, body: `bot finding\n\n${commentTag()}`}
 
   test('在顶层评论下创建回复，正文带回复标签', async () => {
     await new Commenter().reviewCommentReply(7, topLevel, 'answer text')
@@ -351,19 +452,19 @@ describe('GH-008: review comment 回复', () => {
       .calls[0] as any[]
     expect([owner, repo, pullNumber, commentId]).toEqual(['o', 'r', 7, 900])
     expect(body).toContain('answer text')
-    expect(body).toContain(COMMENT_REPLY_TAG)
+    expect(body).toContain(commentReplyTag())
   })
 
-  test('顶层评论含 COMMENT_TAG → 标签就地换成 COMMENT_REPLY_TAG', async () => {
+  test('顶层评论含 commentTag() → 标签就地换成 commentReplyTag()', async () => {
     await new Commenter().reviewCommentReply(7, {...topLevel}, 'answer')
 
     const [, , commentId, newBody] = platform.updateReviewComment.mock.calls[0] as any[]
     expect(commentId).toBe(900)
-    expect(newBody).toContain(COMMENT_REPLY_TAG)
-    expect(newBody).not.toContain(COMMENT_TAG)
+    expect(newBody).toContain(commentReplyTag())
+    expect(newBody).not.toContain(commentTag())
   })
 
-  test('顶层评论不含 COMMENT_TAG（用户评论）→ 不改写其正文', async () => {
+  test('顶层评论不含 commentTag()（用户评论）→ 不改写其正文', async () => {
     await new Commenter().reviewCommentReply(7, {id: 901, body: 'user question'}, 'answer')
 
     expect(platform.updateReviewComment).not.toHaveBeenCalled()

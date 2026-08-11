@@ -20457,6 +20457,66 @@ class GitLabPlatform {
     }
 }
 
+;// CONCATENATED MODULE: ./lib/platform/state-namespace.js
+/**
+ * platform/state-namespace.ts — marker 与幂等键的平台命名空间（GH-014 / STATE-006）
+ *
+ * 双平台同时启用时，marker 和幂等键必须能区分来源，禁止用同一把 key 合并两平台的
+ * 任务状态。做法是给所有**状态类** marker 加 `ai-reviewer:{platform}:` 前缀：
+ *
+ *   <!-- ai-reviewer:github:cmd-reply:12345:help -->
+ *   <!-- ai-reviewer:gitlab:conv-reply:12345 -->
+ *
+ * 两条边界：
+ *
+ * - **命名空间来自入口**：共享核心（commenter / conversation / commands）不读平台
+ *   payload，也不该猜自己跑在哪个平台上。入口（main.ts / gitlab-trigger.ts）在
+ *   setPlatform() 之后调用 setStateNamespace()，共享核心只消费结果。未设置时按
+ *   'github' 处理——这是历史行为，且 GitLab 命令路径尚未接入（CMD-* / STATE-*）。
+ * - **写新读旧**：命名空间是本次新增的，线上在途 PR 里已经存在无前缀的旧 marker。
+ *   写入一律用新格式，匹配则同时接受新旧两种形态，否则升级当天所有在途 PR 会
+ *   「找不到自己写过的 marker」，造成重复回帖或重复审查。旧格式在所有在途 PR
+ *   关闭后即可删除。
+ */
+const state_namespace_MARKER_PREFIX = 'ai-reviewer';
+let _namespace = 'github';
+/** 入口在 setPlatform() 之后调用，声明本次运行的状态命名空间 */
+function setStateNamespace(platform) {
+    _namespace = platform;
+}
+/** 当前状态命名空间；未显式设置时为 'github'（历史行为） */
+function getStateNamespace() {
+    return _namespace;
+}
+/** 重置为默认值（仅供测试使用） */
+function resetStateNamespace() {
+    _namespace = 'github';
+}
+/**
+ * 构造带命名空间的状态 marker。
+ *
+ * @param kind marker 种类，如 'cmd-reply' / 'conv-reply' / 'commit-ids-start'
+ * @param parts 附加标识（评论 ID、命令名等），按顺序拼在 kind 之后
+ */
+function buildStateMarker(kind, ...parts) {
+    const suffix = parts.length > 0 ? `:${parts.join(':')}` : '';
+    return `<!-- ${state_namespace_MARKER_PREFIX}:${_namespace}:${kind}${suffix} -->`;
+}
+/**
+ * 返回匹配时应接受的全部 marker 形态：当前命名空间的新格式 + 传入的历史格式。
+ *
+ * 只用于**读取/匹配**；写入必须只用 buildStateMarker() 的结果。
+ */
+function stateMarkerVariants(kind, legacy, ...parts) {
+    return [buildStateMarker(kind, ...parts), legacy];
+}
+/** 判断正文是否包含某个状态 marker（新旧格式皆可） */
+function hasStateMarker(body, variants) {
+    if (typeof body !== 'string')
+        return false;
+    return variants.some(v => body.includes(v));
+}
+
 ;// CONCATENATED MODULE: ./lib/platform/exec-ctx-error-handler.js
 /**
  * platform/exec-ctx-error-handler.ts — ExecutionContextError 统一处理（ARCH-026）
@@ -20599,6 +20659,7 @@ function buildMrIdempotencyKey(projectId, mrIid, headSha) {
 
 
 
+
 const logger = new GitLabLogger();
 async function run() {
     // 初始化 GitLab Logger（ARCH-014）+ Platform（ARCH-018/020）
@@ -20617,6 +20678,8 @@ async function run() {
     // 走 debug 级别，避免在事件被拒绝（如 fork MR）前产生无关输出
     logger.debug(`GitLab client: ${describeGitLabClientConfig(clientConfig)}`);
     setPlatform(new GitLabPlatform(clientConfig));
+    // GH-014 / STATE-006：本次运行写入的 marker / 幂等键带 gitlab: 命名空间
+    setStateNamespace('gitlab');
     const payloadPath = process.env.TRIGGER_PAYLOAD;
     if (payloadPath == null || payloadPath === '') {
         logger.error('TRIGGER_PAYLOAD is not set');

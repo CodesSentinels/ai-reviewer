@@ -131,13 +131,13 @@ jest.mock('../src/commenter', () => ({
   Commenter: jest.fn().mockImplementation(() => commenterState),
   getCommentGreeting: () => '🤖 AI Reviewer',
   initBotGreeting: jest.fn(),
-  COMMENT_TAG: '<!-- bot-comment -->',
-  COMMENT_REPLY_TAG: '<!-- bot-reply -->',
-  RAW_SUMMARY_START_TAG: '<!-- raw-summary-start -->',
-  RAW_SUMMARY_END_TAG: '<!-- raw-summary-end -->',
-  SHORT_SUMMARY_START_TAG: '<!-- short-summary-start -->',
-  SHORT_SUMMARY_END_TAG: '<!-- short-summary-end -->',
-  SUMMARIZE_TAG: '<!-- summarize -->'
+  commentTag: () => '<!-- bot-comment -->',
+  commentReplyTag: () => '<!-- bot-reply -->',
+  rawSummaryStartTag: () => '<!-- raw-summary-start -->',
+  rawSummaryEndTag: () => '<!-- raw-summary-end -->',
+  shortSummaryStartTag: () => '<!-- short-summary-start -->',
+  shortSummaryEndTag: () => '<!-- short-summary-end -->',
+  summarizeTag: () => '<!-- summarize -->'
 }))
 
 jest.mock('../src/tokenizer', () => ({getTokenCount: () => 0}))
@@ -198,14 +198,14 @@ describe('I1: main.ts → ExecutionContext → codeReview/handleCommentEvent 全
     await new Promise(resolve => setImmediate(resolve))
   }
 
-  test('pull_request(opened) → 真实 codeReview 跑完全流程，最终发布带 SUMMARIZE_TAG 的摘要评论', async () => {
+  test('pull_request(opened) → 真实 codeReview 跑完全流程，最终发布带 summarizeTag() 的摘要评论', async () => {
     process.env.GITHUB_EVENT_NAME = 'pull_request'
     mockContext.eventName = 'pull_request'
     mockContext.payload = {action: 'opened', pull_request: makePullRequestPayload()}
 
     await runMain()
 
-    // in-progress 状态 + 最终摘要，两次 comment 调用，均带 SUMMARIZE_TAG + replace
+    // in-progress 状态 + 最终摘要，两次 comment 调用，均带 summarizeTag() + replace
     expect(commenterState.comment).toHaveBeenCalledTimes(2)
     for (const call of commenterState.comment.mock.calls) {
       expect(call[1]).toBe('<!-- summarize -->')
