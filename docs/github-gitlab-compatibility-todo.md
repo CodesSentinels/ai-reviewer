@@ -309,12 +309,12 @@
 
 ### 5.2 GitHub 评论功能
 
-- [ ] `GH-006` 保持 PR 顶层 summary comment 的查找、创建和更新。
-- [ ] `GH-007` 保持行级 review comment 的创建和定位。
-- [ ] `GH-008` 保持 review comment reply。
-- [ ] `GH-009` 保持 GitHub GraphQL `resolveReviewThread`。
-- [ ] `GH-010` 保持 GitHub Reactions API 的 ACK/early reaction。
-- [ ] `GH-011` 覆盖 resolved/unresolved thread、分页和部分失败。
+- [x] `GH-006` 保持 PR 顶层 summary comment 的查找、创建和更新。
+- [x] `GH-007` 保持行级 review comment 的创建和定位。
+- [x] `GH-008` 保持 review comment reply。
+- [x] `GH-009` 保持 GitHub GraphQL `resolveReviewThread`。
+- [x] `GH-010` 保持 GitHub Reactions API 的 ACK/early reaction。
+- [x] `GH-011` 覆盖 resolved/unresolved thread、分页和部分失败。
 
 ### 5.3 GitHub 状态
 

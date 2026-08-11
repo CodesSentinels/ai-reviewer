@@ -69,6 +69,38 @@ jest.mock('../src/platform/logger', () => ({
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const {GitHubPlatform} = require('../src/platform/github-platform')
 
+/** 构造一页 GraphQL reviewThreads 响应（GH-011 分页用） */
+function threadPage(nodes: any[], endCursor: string | null) {
+  return {
+    repository: {
+      pullRequest: {
+        reviewThreads: {
+          pageInfo: {hasNextPage: endCursor != null, endCursor},
+          nodes
+        }
+      }
+    }
+  }
+}
+
+/** 构造一个 reviewThread 节点 */
+function threadNode(
+  id: string,
+  isResolved: boolean,
+  path: string,
+  line: number,
+  authorLogin = 'github-actions',
+  body = 'comment'
+) {
+  return {
+    id,
+    isResolved,
+    path,
+    line,
+    comments: {nodes: [{author: {login: authorLogin}, body}]}
+  }
+}
+
 describe('GitHubPlatform', () => {
   let platform: IGitPlatform
 
@@ -350,6 +382,32 @@ describe('GitHubPlatform', () => {
       expect(map.get('a.ts:10')).toBe(true)
       expect(map.get('b.ts:20')).toBe(false)
     })
+
+    // GH-011：GraphQL reviewThreads 每页 100 条，超过一页必须沿 endCursor 继续取，
+    // 否则大 PR 上「后面的 thread」会被当成不存在，导致重复发布或漏 resolve
+    test('多页 thread：沿 endCursor 翻页并合并结果', async () => {
+      mockOctokit.graphql
+        .mockResolvedValueOnce(threadPage([threadNode('t1', true, 'a.ts', 10)], 'cursor-1'))
+        .mockResolvedValueOnce(threadPage([threadNode('t2', false, 'b.ts', 20)], null))
+
+      const map = await platform.fetchThreadStatusMap('o', 'r', 1)
+
+      expect(mockOctokit.graphql).toHaveBeenCalledTimes(2)
+      // 第一页不带 after，第二页带上一页的 endCursor
+      expect((mockOctokit.graphql.mock.calls[0] as any[])[1].after).toBeUndefined()
+      expect((mockOctokit.graphql.mock.calls[1] as any[])[1].after).toBe('cursor-1')
+      expect(map.get('a.ts:10')).toBe(true)
+      expect(map.get('b.ts:20')).toBe(false)
+    })
+
+    test('同一位置多条 thread：未 resolved 优先（保守策略）', async () => {
+      mockOctokit.graphql
+        .mockResolvedValueOnce(threadPage([threadNode('t1', true, 'a.ts', 10)], 'cursor-1'))
+        .mockResolvedValueOnce(threadPage([threadNode('t2', false, 'a.ts', 10)], null))
+
+      const map = await platform.fetchThreadStatusMap('o', 'r', 1)
+      expect(map.get('a.ts:10')).toBe(false)
+    })
   })
 
   describe('fetchUnresolvedBotThreads', () => {
@@ -403,6 +461,27 @@ describe('GitHubPlatform', () => {
       expect(result[0].id).toBe('t1')
       expect(result[0].firstCommentBody).toBe('fix this')
     })
+
+    // GH-011：resolve 命令依赖这里拿全量未解决 thread，漏页 = 漏 resolve
+    test('多页 thread：跨页收集 bot 的未 resolved thread', async () => {
+      mockOctokit.graphql
+        .mockResolvedValueOnce(
+          threadPage([threadNode('t1', false, 'a.ts', 10, 'github-actions', 'first')], 'cursor-1')
+        )
+        .mockResolvedValueOnce(
+          threadPage([threadNode('t2', false, 'b.ts', 20, 'github-actions', 'second')], null)
+        )
+
+      const result: ReviewThreadInfo[] = await platform.fetchUnresolvedBotThreads(
+        'o',
+        'r',
+        1,
+        'github-actions'
+      )
+
+      expect(mockOctokit.graphql).toHaveBeenCalledTimes(2)
+      expect(result.map(t => t.id)).toEqual(['t1', 't2'])
+    })
   })
 
   describe('resolveThreads', () => {
@@ -414,6 +493,23 @@ describe('GitHubPlatform', () => {
       const result = await platform.resolveThreads(['t1', 't2'])
       expect(result.ok).toBe(2)
       expect(result.failed).toBe(0)
+    })
+
+    // GH-009：resolve 只有 GraphQL 有对应能力，REST 无等价 endpoint，
+    // 这里钉住「走的是 resolveReviewThread mutation 且逐个传 threadId」
+    test('使用 GraphQL resolveReviewThread mutation，逐个传入 threadId', async () => {
+      mockOctokit.graphql.mockResolvedValue({resolveReviewThread: {thread: {isResolved: true}}})
+
+      await platform.resolveThreads(['t1', 't2'])
+
+      for (const [query, vars] of mockOctokit.graphql.mock.calls as any[]) {
+        expect(query).toContain('resolveReviewThread')
+        expect(vars).toHaveProperty('threadId')
+      }
+      expect((mockOctokit.graphql.mock.calls as any[]).map(([, vars]) => vars.threadId)).toEqual([
+        't1',
+        't2'
+      ])
     })
 
     test('部分失败', async () => {
