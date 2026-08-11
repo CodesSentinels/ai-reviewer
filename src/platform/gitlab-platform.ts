@@ -11,10 +11,31 @@
  * - GLAPI-006: getChangeRequest 返回 headSha 供调用方做 HEAD 比较
  * - GLAPI-007~012: Notes CRUD（createComment/updateComment/deleteComment/listComments）
  * - GLAPI-013~019: Discussions（行级评论 + resolve）
+ * - GLAPI-020~023: 权限 / 身份 / Award Emoji
+ * - GLAPI-024: 所有 list API 走 listOptions() 的显式分页契约
+ * - GLAPI-025/026: 所有 API 调用经 withGitLabRetry（429/5xx/超时重试，401/403 不重试）
+ * - GLAPI-027: 写操作带隐藏 marker，重试前先探测上一次是否已写入成功
+ * - GLAPI-029/030: 客户端统一由 createGitLabClient 构造
  * - DEP-001/004: listRepositoryTree（仓库文件树）
  */
 
-import {Gitlab} from '@gitbeaker/rest'
+import {
+  createGitLabClient,
+  listOptions,
+  PAGINATION_DEFAULTS,
+  type GitLabApi,
+  type GitLabClientConfig
+} from './gitlab-client'
+import {normalizeGitLabError} from './gitlab-errors'
+import {withGitLabRetry} from './gitlab-retry'
+import {getLogger} from './logger'
+import {
+  appendWriteMarker,
+  buildWriteMarker,
+  hasWriteMarker,
+  newWriteOperationId,
+  stripWriteMarkers
+} from './gitlab-write-marker'
 import {
   type IGitPlatform,
   type ChangeRequestInfo,
@@ -27,31 +48,10 @@ import {
   type TreeResult,
   type PlatformPermission,
   type ReactionContent,
-  GitPlatformError,
-  type GitPlatformErrorKind
+  GitPlatformError
 } from './git-platform'
 
-// ─── gitbeaker 错误 → GitPlatformError 转换 ────────────────────────────────
-
-function toGitPlatformError(e: unknown): GitPlatformError {
-  if (e instanceof GitPlatformError) return e
-  const msg = e instanceof Error ? e.message : String(e)
-  const status = (e as any)?.cause?.response?.status ?? (e as any)?.response?.status ?? undefined
-
-  let kind: GitPlatformErrorKind = 'unknown'
-  if (status === 404) kind = 'not_found'
-  else if (status === 403) kind = 'forbidden'
-  else if (status === 409) kind = 'conflict'
-  else if (status === 429) kind = 'rate_limited'
-  else if (status != null && status >= 500) kind = 'server_error'
-  else if (/ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|timed?\s?out/i.test(msg)) {
-    kind = 'timeout'
-  }
-
-  return new GitPlatformError(msg, kind, status, e)
-}
-
-// ─── 未实现方法的统一错误 ──────────────────────────────────────────────────
+export type {GitLabCredential} from './gitlab-client'
 
 // ─── GitLab diff 状态映射 ──────────────────────────────────────────────────
 
@@ -90,15 +90,20 @@ function accessLevelToPermission(level: number): PlatformPermission {
   return 'none'
 }
 
-// ─── GitLabPlatform ────────────────────────────────────────────────────────
-
-export interface GitLabCredential {
-  type: 'pat' | 'job_token'
-  value: string
+/** GitLab note → 平台无关 PlatformComment（GLAPI-032：snake_case → camelCase） */
+function toPlatformComment(note: any): PlatformComment {
+  return {
+    id: note.id as number,
+    body: stripWriteMarkers(note.body),
+    author: note.author?.username ?? '',
+    createdAt: note.created_at as string
+  }
 }
 
+// ─── GitLabPlatform ────────────────────────────────────────────────────────
+
 export class GitLabPlatform implements IGitPlatform {
-  private api: InstanceType<typeof Gitlab>
+  private api: GitLabApi
   /**
    * noteId → mergerequestIId 映射缓存。
    * IGitPlatform.updateComment/deleteComment 签名中没有 changeRequestId，
@@ -123,12 +128,56 @@ export class GitLabPlatform implements IGitPlatform {
    */
   private discussionIdToContext = new Map<string, {projectPath: string; mrIid: number}>()
 
-  constructor(credential: GitLabCredential, host?: string) {
-    const h = host || 'https://gitlab.com'
-    this.api =
-      credential.type === 'job_token'
-        ? new Gitlab({host: h, jobToken: credential.value})
-        : new Gitlab({host: h, token: credential.value})
+  /**
+   * 只接受受信任配置构造（GLAPI-029）：host/凭据/timeout 全部来自
+   * resolveGitLabClientConfig()，adapter 不再自己拼 host 或读环境变量。
+   */
+  constructor(config: GitLabClientConfig) {
+    this.api = createGitLabClient(config)
+  }
+
+  // ─── 写幂等探测（GLAPI-027）──────────────────────────────────────────────
+
+  /** 按 marker 查找已存在的 MR note；命中说明上一次写入其实已成功 */
+  private async findNoteByMarker(
+    projectPath: string,
+    changeRequestId: number,
+    marker: string
+  ): Promise<PlatformComment | null> {
+    const notes = (await this.api.MergeRequestNotes.all(
+      projectPath,
+      changeRequestId,
+      listOptions({sort: 'desc', orderBy: 'created_at'} as const)
+    )) as any[]
+    const hit = notes.find(n => hasWriteMarker(n.body, marker))
+    if (!hit) return null
+    this.noteToMrIid.set(hit.id, changeRequestId)
+    return toPlatformComment(hit)
+  }
+
+  /** 按 marker 查找已存在的 discussion；命中时补齐缓存 */
+  private async findDiscussionByMarker(
+    projectPath: string,
+    changeRequestId: number,
+    marker: string
+  ): Promise<boolean> {
+    const discussions = (await this.api.MergeRequestDiscussions.all(
+      projectPath,
+      changeRequestId,
+      listOptions()
+    )) as any[]
+    for (const disc of discussions) {
+      const hit = (disc.notes ?? []).find((n: any) => hasWriteMarker(n.body, marker))
+      if (!hit) continue
+      this.discussionIdToContext.set(disc.id, {projectPath, mrIid: changeRequestId})
+      this.noteToDiscussion.set(hit.id, {
+        discussionId: disc.id,
+        mrIid: changeRequestId,
+        projectPath
+      })
+      return true
+    }
+    return false
   }
 
   // ─── 10. 仓库文件树（DEP-001 / DEP-004）─────────────────────────────────
@@ -136,33 +185,35 @@ export class GitLabPlatform implements IGitPlatform {
   /**
    * 获取 GitLab 仓库文件树。
    *
-   * 使用 Repository Tree API (recursive) + keyset 分页（由 gitbeaker 自动处理）。
+   * 使用 Repository Tree API (recursive) + 显式分页契约（GLAPI-024）。
    *
    * DEP-004 边界处理：
    * - 空仓库 → 返回空数组（正常状态，不抛错）
    * - subgroup 项目 → owner 含 `/`（如 "group/subgroup"），与 repo 拼接成完整 projectPath
-   * - 超大仓库 → gitbeaker allRepositoryTrees 自动分页合并
+   * - 超大仓库 → 翻页到 perPage × maxPages 上限后标记 truncated
    * - Unicode 路径 → gitbeaker 内部做 URL 编码
    * - API 部分失败 → 抛 GitPlatformError（不静默返回空数组）
    */
   async listRepositoryTree(owner: string, repo: string, ref: string): Promise<TreeResult> {
     const projectPath = `${owner}/${repo}`
     try {
-      const trees = await this.api.Repositories.allRepositoryTrees(projectPath, {
-        ref,
-        recursive: true
-      })
-      // gitbeaker allRepositoryTrees 自动处理 keyset 分页，不存在截断
+      const trees = await withGitLabRetry('listRepositoryTree', async () =>
+        this.api.Repositories.allRepositoryTrees(
+          projectPath,
+          listOptions({ref, recursive: true}) as any
+        )
+      )
       const entries = trees.map(t => ({type: t.type, path: t.path}))
-      return {entries, truncated: false}
+      // 达到分页上限时明确标记截断，不谎报完整（GLAPI-024）
+      const limit = PAGINATION_DEFAULTS.perPage * PAGINATION_DEFAULTS.maxPages
+      return {entries, truncated: entries.length >= limit}
     } catch (e) {
       // 空仓库返回 404 "404 Tree Not Found"，视为合法的空树
-      const status = (e as any)?.cause?.response?.status ?? (e as any)?.response?.status
-      if (status === 404) {
-        const msg = e instanceof Error ? e.message : String(e)
-        if (/tree not found/i.test(msg)) return {entries: [], truncated: false}
+      const err = normalizeGitLabError(e, 'listRepositoryTree')
+      if (err.errorKind === 'not_found' && /tree not found/i.test(err.message)) {
+        return {entries: [], truncated: false}
       }
-      throw toGitPlatformError(e)
+      throw err
     }
   }
 
@@ -176,12 +227,15 @@ export class GitLabPlatform implements IGitPlatform {
   ): Promise<string | null> {
     const projectPath = `${owner}/${repo}`
     try {
-      const file = await this.api.RepositoryFiles.show(projectPath, path, ref)
+      // gitbeaker 对 path/ref 做 URL 编码，subgroup、Unicode、含空格路径均可直传
+      const file = await withGitLabRetry('getFileContent', async () =>
+        this.api.RepositoryFiles.show(projectPath, path, ref)
+      )
       return Buffer.from(file.content, 'base64').toString('utf8')
     } catch (e) {
-      const status = (e as any)?.cause?.response?.status ?? (e as any)?.response?.status
-      if (status === 404) return null
-      throw toGitPlatformError(e)
+      const err = normalizeGitLabError(e, 'getFileContent')
+      if (err.errorKind === 'not_found') return null
+      throw err
     }
   }
 
@@ -193,33 +247,31 @@ export class GitLabPlatform implements IGitPlatform {
     changeRequestId: number
   ): Promise<ChangeRequestInfo> {
     const projectPath = `${owner}/${repo}`
-    try {
-      const mr = await this.api.MergeRequests.show(projectPath, changeRequestId)
-      const state: 'open' | 'closed' | 'merged' =
-        mr.state === 'merged' ? 'merged' : mr.state === 'opened' ? 'open' : 'closed'
-      // gitbeaker 返回 Camelize<unknown> 联合类型，需要 as any 断言
-      const diffRefs = mr.diff_refs as any
-      // GitLab 新建 MR 时 diff_refs 可能暂时为空（异步计算），需显式校验
-      if (!diffRefs?.base_sha || !diffRefs?.head_sha) {
-        throw new GitPlatformError(
-          `MR !${changeRequestId} diff_refs not yet available (GitLab is still computing diffs)`,
-          'conflict',
-          undefined
-        )
-      }
-      return {
-        number: mr.iid,
-        title: mr.title,
-        body: mr.description ?? '',
-        state,
-        baseSha: diffRefs.base_sha as string,
-        headSha: diffRefs.head_sha as string,
-        baseRef: mr.target_branch as string,
-        headRef: mr.source_branch as string,
-        author: mr.author.username
-      }
-    } catch (e) {
-      throw toGitPlatformError(e)
+    const mr = await withGitLabRetry('getChangeRequest', async () =>
+      this.api.MergeRequests.show(projectPath, changeRequestId)
+    )
+    const state: 'open' | 'closed' | 'merged' =
+      mr.state === 'merged' ? 'merged' : mr.state === 'opened' ? 'open' : 'closed'
+    // gitbeaker 返回 Camelize<unknown> 联合类型，需要 as any 断言
+    const diffRefs = mr.diff_refs as any
+    // GitLab 新建 MR 时 diff_refs 可能暂时为空（异步计算），需显式校验
+    if (!diffRefs?.base_sha || !diffRefs?.head_sha) {
+      throw new GitPlatformError(
+        `MR !${changeRequestId} diff_refs not yet available (GitLab is still computing diffs)`,
+        'conflict',
+        undefined
+      )
+    }
+    return {
+      number: mr.iid,
+      title: mr.title,
+      body: mr.description ?? '',
+      state,
+      baseSha: diffRefs.base_sha as string,
+      headSha: diffRefs.head_sha as string,
+      baseRef: mr.target_branch as string,
+      headRef: mr.source_branch as string,
+      author: mr.author.username
     }
   }
 
@@ -230,11 +282,9 @@ export class GitLabPlatform implements IGitPlatform {
     body: string
   ): Promise<void> {
     const projectPath = `${owner}/${repo}`
-    try {
-      await this.api.MergeRequests.edit(projectPath, changeRequestId, {description: body})
-    } catch (e) {
-      throw toGitPlatformError(e)
-    }
+    await withGitLabRetry('updateChangeRequestBody', async () =>
+      this.api.MergeRequests.edit(projectPath, changeRequestId, {description: body})
+    )
   }
 
   async listChangeRequestCommits(
@@ -243,12 +293,10 @@ export class GitLabPlatform implements IGitPlatform {
     changeRequestId: number
   ): Promise<string[]> {
     const projectPath = `${owner}/${repo}`
-    try {
-      const commits = await this.api.MergeRequests.allCommits(projectPath, changeRequestId)
-      return commits.map(c => c.id)
-    } catch (e) {
-      throw toGitPlatformError(e)
-    }
+    const commits = await withGitLabRetry('listChangeRequestCommits', async () =>
+      this.api.MergeRequests.allCommits(projectPath, changeRequestId, listOptions() as any)
+    )
+    return commits.map(c => c.id)
   }
 
   // ─── 2. Diff（GLAPI-003/004）──────────────────────────────────────────────
@@ -261,31 +309,29 @@ export class GitLabPlatform implements IGitPlatform {
   ): Promise<DiffResult> {
     // 使用 Repositories.compare API 比较两个 ref/SHA 的 diff
     const projectPath = `${owner}/${repo}`
-    try {
-      const diff = await this.api.Repositories.compare(projectPath, _base, _head)
-      // GitLab compare_timeout=true 时 diffs 可能不完整，fail closed 不审查残缺内容
-      if ((diff as any).compare_timeout) {
-        throw new GitPlatformError(
-          `GitLab compare timed out for ${_base}..${_head} — diff may be incomplete`,
-          'timeout',
-          undefined
-        )
-      }
-      // gitbeaker 返回 Camelize<unknown> 联合类型，需要 as any 断言
-      const diffs = (diff.diffs ?? []) as any[]
-      const files: DiffFile[] = diffs.map(d => ({
-        filename: d.new_path,
-        status: diffStatus(d),
-        patch: d.diff ?? undefined,
-        previousFilename: d.old_path !== d.new_path ? d.old_path : undefined
-      }))
-      const commits = (diff.commits ?? []) as any[]
-      return {
-        files,
-        commits: commits.map(c => ({sha: c.id as string}))
-      }
-    } catch (e) {
-      throw toGitPlatformError(e)
+    const diff = await withGitLabRetry('compareDiff', async () =>
+      this.api.Repositories.compare(projectPath, _base, _head)
+    )
+    // GitLab compare_timeout=true 时 diffs 可能不完整，fail closed 不审查残缺内容
+    if ((diff as any).compare_timeout) {
+      throw new GitPlatformError(
+        `GitLab compare timed out for ${_base}..${_head} — diff may be incomplete`,
+        'timeout',
+        undefined
+      )
+    }
+    // gitbeaker 返回 Camelize<unknown> 联合类型，需要 as any 断言
+    const diffs = (diff.diffs ?? []) as any[]
+    const files: DiffFile[] = diffs.map(d => ({
+      filename: d.new_path,
+      status: diffStatus(d),
+      patch: d.diff ?? undefined,
+      previousFilename: d.old_path !== d.new_path ? d.old_path : undefined
+    }))
+    const commits = (diff.commits ?? []) as any[]
+    return {
+      files,
+      commits: commits.map(c => ({sha: c.id as string}))
     }
   }
 
@@ -298,22 +344,31 @@ export class GitLabPlatform implements IGitPlatform {
     body: string
   ): Promise<PlatformComment> {
     const projectPath = `${owner}/${repo}`
-    try {
+    // GLAPI-027：正文带幂等 marker，重试前先探测是否已写入。
+    // operationId 每次调用新生成 → marker 只在本次调用的重试之间复用，
+    // 不会命中同 MR 里正文相同的历史评论。
+    const marker = buildWriteMarker({
+      projectPath,
+      changeRequestId,
+      op: 'note',
+      operationId: newWriteOperationId(),
+      body
+    })
+    const markedBody = appendWriteMarker(body, marker)
+
+    return withGitLabRetry('createComment', async attempt => {
+      if (attempt > 1) {
+        const existing = await this.findNoteByMarker(projectPath, changeRequestId, marker)
+        if (existing != null) return existing
+      }
       const note = (await this.api.MergeRequestNotes.create(
         projectPath,
         changeRequestId,
-        body
+        markedBody
       )) as any
       this.noteToMrIid.set(note.id, changeRequestId)
-      return {
-        id: note.id as number,
-        body: note.body as string,
-        author: note.author?.username ?? '',
-        createdAt: note.created_at as string
-      }
-    } catch (e) {
-      throw toGitPlatformError(e)
-    }
+      return toPlatformComment(note)
+    })
   }
 
   async updateComment(owner: string, repo: string, commentId: number, body: string): Promise<void> {
@@ -325,11 +380,10 @@ export class GitLabPlatform implements IGitPlatform {
         'not_found'
       )
     }
-    try {
-      await this.api.MergeRequestNotes.edit(projectPath, mrIid, commentId, {body})
-    } catch (e) {
-      throw toGitPlatformError(e)
-    }
+    // 更新是覆盖写，天然幂等，不需要 marker 探测
+    await withGitLabRetry('updateComment', async () =>
+      this.api.MergeRequestNotes.edit(projectPath, mrIid, commentId, {body})
+    )
   }
 
   async deleteComment(owner: string, repo: string, commentId: number): Promise<void> {
@@ -342,11 +396,15 @@ export class GitLabPlatform implements IGitPlatform {
       )
     }
     try {
-      await this.api.MergeRequestNotes.remove(projectPath, mrIid, commentId)
-      this.noteToMrIid.delete(commentId)
+      await withGitLabRetry('deleteComment', async () =>
+        this.api.MergeRequestNotes.remove(projectPath, mrIid, commentId)
+      )
     } catch (e) {
-      throw toGitPlatformError(e)
+      const err = normalizeGitLabError(e, 'deleteComment')
+      // 重试期间上一次删除其实已成功 → 404 视为达成目标（GLAPI-027）
+      if (err.errorKind !== 'not_found') throw err
     }
+    this.noteToMrIid.delete(commentId)
   }
 
   async listComments(
@@ -355,26 +413,21 @@ export class GitLabPlatform implements IGitPlatform {
     changeRequestId: number
   ): Promise<PlatformComment[]> {
     const projectPath = `${owner}/${repo}`
-    try {
-      const notes = await this.api.MergeRequestNotes.all(projectPath, changeRequestId, {
-        sort: 'asc',
-        orderBy: 'created_at'
-      })
-      // 过滤 system note（合并事件、标签变更等自动生成的 note）
-      const userNotes = (notes as any[]).filter(n => !n.system)
-      // 缓存 noteId → mrIid 映射，供 update/delete 使用
-      for (const n of userNotes) {
-        this.noteToMrIid.set(n.id, changeRequestId)
-      }
-      return userNotes.map(n => ({
-        id: n.id,
-        body: n.body ?? '',
-        author: n.author?.username ?? '',
-        createdAt: n.created_at
-      }))
-    } catch (e) {
-      throw toGitPlatformError(e)
+    // GLAPI-024：显式分页，不依赖 SDK 默认 perPage
+    const notes = await withGitLabRetry('listComments', async () =>
+      this.api.MergeRequestNotes.all(
+        projectPath,
+        changeRequestId,
+        listOptions({sort: 'asc', orderBy: 'created_at'} as const)
+      )
+    )
+    // 过滤 system note（合并事件、标签变更等自动生成的 note）
+    const userNotes = (notes as any[]).filter(n => !n.system)
+    // 缓存 noteId → mrIid 映射，供 update/delete 使用
+    for (const n of userNotes) {
+      this.noteToMrIid.set(n.id, changeRequestId)
     }
+    return userNotes.map(toPlatformComment)
   }
 
   // ─── 5. 行级评论 / Discussions（GLAPI-013~019）─────────────────────────────
@@ -388,9 +441,8 @@ export class GitLabPlatform implements IGitPlatform {
     projectPath: string,
     changeRequestId: number
   ): Promise<{discussions: any[]; reviewComments: ReviewComment[]}> {
-    const discussions = (await this.api.MergeRequestDiscussions.all(
-      projectPath,
-      changeRequestId
+    const discussions = (await withGitLabRetry('listDiscussions', async () =>
+      this.api.MergeRequestDiscussions.all(projectPath, changeRequestId, listOptions())
     )) as any[]
     const reviewComments: ReviewComment[] = []
     for (const disc of discussions) {
@@ -408,7 +460,7 @@ export class GitLabPlatform implements IGitPlatform {
         const replyToId = disc.notes[0].id !== note.id ? disc.notes[0].id : undefined
         reviewComments.push({
           id: note.id,
-          body: note.body ?? '',
+          body: stripWriteMarkers(note.body),
           path: pos?.new_path ?? pos?.old_path ?? '',
           line: pos?.new_line != null ? Number(pos.new_line) : null,
           startLine: null,
@@ -429,12 +481,8 @@ export class GitLabPlatform implements IGitPlatform {
     changeRequestId: number
   ): Promise<ReviewComment[]> {
     const projectPath = `${owner}/${repo}`
-    try {
-      const {reviewComments} = await this.getAllDiffDiscussions(projectPath, changeRequestId)
-      return reviewComments
-    } catch (e) {
-      throw toGitPlatformError(e)
-    }
+    const {reviewComments} = await this.getAllDiffDiscussions(projectPath, changeRequestId)
+    return reviewComments
   }
 
   async submitReviewComments(
@@ -452,10 +500,11 @@ export class GitLabPlatform implements IGitPlatform {
         await this.createReviewComment(owner, repo, changeRequestId, commitSha, comment)
         submitted++
       } catch {
-        // GLAPI-015: 行级位置无法映射时降级为顶层 note
+        // GLAPI-015: 行级位置无法映射时降级为顶层 note（同样带幂等 marker）
         try {
-          await this.api.MergeRequestNotes.create(
-            `${owner}/${repo}`,
+          await this.createComment(
+            owner,
+            repo,
             changeRequestId,
             `**${comment.path}** (line ${comment.line})\n\n${comment.body}`
           )
@@ -476,14 +525,31 @@ export class GitLabPlatform implements IGitPlatform {
     comment: ReviewCommentDraft
   ): Promise<void> {
     const projectPath = `${owner}/${repo}`
-    try {
+    // 文件路径只参与摘要（opDetail），不进 marker 文本：
+    // Git 文件名允许 `>` 甚至 `-->`，原样拼接会提前闭合 HTML 注释
+    const marker = buildWriteMarker({
+      projectPath,
+      changeRequestId,
+      op: 'discussion',
+      opDetail: `${comment.path}:${comment.line}`,
+      operationId: newWriteOperationId(),
+      body: comment.body
+    })
+    const markedBody = appendWriteMarker(comment.body, marker)
+
+    await withGitLabRetry('createReviewComment', async attempt => {
+      // GLAPI-027：重试前先确认上一次是否已经建出 discussion
+      if (attempt > 1) {
+        const exists = await this.findDiscussionByMarker(projectPath, changeRequestId, marker)
+        if (exists) return
+      }
       // 需要 base_sha / head_sha / start_sha 构造 position
       const mr = await this.api.MergeRequests.show(projectPath, changeRequestId)
       const diffRefs = mr.diff_refs as any
       const discussion = (await this.api.MergeRequestDiscussions.create(
         projectPath,
         changeRequestId,
-        comment.body,
+        markedBody,
         {
           commitId: commitSha,
           position: {
@@ -506,9 +572,7 @@ export class GitLabPlatform implements IGitPlatform {
           projectPath
         })
       }
-    } catch (e) {
-      throw toGitPlatformError(e)
-    }
+    })
   }
 
   async replyToReviewComment(
@@ -519,40 +583,50 @@ export class GitLabPlatform implements IGitPlatform {
     body: string
   ): Promise<PlatformComment> {
     const projectPath = `${owner}/${repo}`
-    try {
-      let cached = this.noteToDiscussion.get(commentId)
-      // cache miss fallback: webhook 路径下触发评论的 noteId 可能未缓存，
-      // 此时 fetch 所有 discussions 补充缓存
-      if (!cached) {
-        await this.getAllDiffDiscussions(projectPath, changeRequestId)
-        cached = this.noteToDiscussion.get(commentId)
-      }
-      if (!cached) {
-        throw new GitPlatformError(
-          `Cannot reply to note ${commentId}: discussion ID unknown`,
-          'not_found'
-        )
+    let cached = this.noteToDiscussion.get(commentId)
+    // cache miss fallback: webhook 路径下触发评论的 noteId 可能未缓存，
+    // 此时 fetch 所有 discussions 补充缓存
+    if (!cached) {
+      await this.getAllDiffDiscussions(projectPath, changeRequestId)
+      cached = this.noteToDiscussion.get(commentId)
+    }
+    if (!cached) {
+      throw new GitPlatformError(
+        `Cannot reply to note ${commentId}: discussion ID unknown`,
+        'not_found'
+      )
+    }
+    const discussionId = cached.discussionId
+    const marker = buildWriteMarker({
+      projectPath,
+      changeRequestId,
+      op: 'reply',
+      opDetail: discussionId,
+      operationId: newWriteOperationId(),
+      body
+    })
+    const markedBody = appendWriteMarker(body, marker)
+
+    return withGitLabRetry('replyToReviewComment', async attempt => {
+      if (attempt > 1) {
+        const {discussions} = await this.getAllDiffDiscussions(projectPath, changeRequestId)
+        const disc = discussions.find(d => d.id === discussionId)
+        const hit = (disc?.notes ?? []).find((n: any) => hasWriteMarker(n.body, marker))
+        if (hit != null) return toPlatformComment(hit)
       }
       const note = (await this.api.MergeRequestDiscussions.addNote(
         projectPath,
         changeRequestId,
-        cached.discussionId,
-        body
+        discussionId,
+        markedBody
       )) as any
       this.noteToDiscussion.set(note.id, {
-        discussionId: cached.discussionId,
+        discussionId,
         mrIid: changeRequestId,
         projectPath
       })
-      return {
-        id: note.id as number,
-        body: note.body as string,
-        author: note.author?.username ?? '',
-        createdAt: note.created_at as string
-      }
-    } catch (e) {
-      throw toGitPlatformError(e)
-    }
+      return toPlatformComment(note)
+    })
   }
 
   async updateReviewComment(
@@ -569,17 +643,15 @@ export class GitLabPlatform implements IGitPlatform {
         'not_found'
       )
     }
-    try {
-      await this.api.MergeRequestDiscussions.editNote(
+    await withGitLabRetry('updateReviewComment', async () =>
+      this.api.MergeRequestDiscussions.editNote(
         projectPath,
         cached.mrIid,
         cached.discussionId,
         commentId,
         {body} as any
       )
-    } catch (e) {
-      throw toGitPlatformError(e)
-    }
+    )
   }
 
   async deleteReviewComment(owner: string, repo: string, commentId: number): Promise<void> {
@@ -592,16 +664,20 @@ export class GitLabPlatform implements IGitPlatform {
       )
     }
     try {
-      await this.api.MergeRequestDiscussions.removeNote(
-        projectPath,
-        cached.mrIid,
-        cached.discussionId,
-        commentId
+      await withGitLabRetry('deleteReviewComment', async () =>
+        this.api.MergeRequestDiscussions.removeNote(
+          projectPath,
+          cached.mrIid,
+          cached.discussionId,
+          commentId
+        )
       )
-      this.noteToDiscussion.delete(commentId)
     } catch (e) {
-      throw toGitPlatformError(e)
+      const err = normalizeGitLabError(e, 'deleteReviewComment')
+      // 重试期间上一次删除其实已成功 → 404 视为达成目标（GLAPI-027）
+      if (err.errorKind !== 'not_found') throw err
     }
+    this.noteToDiscussion.delete(commentId)
   }
 
   async deletePendingReview(
@@ -621,27 +697,23 @@ export class GitLabPlatform implements IGitPlatform {
   ): Promise<Map<string, boolean>> {
     const projectPath = `${owner}/${repo}`
     // discussionIdToContext 在 getAllDiffDiscussions 中自动填充
-    try {
-      const {discussions} = await this.getAllDiffDiscussions(projectPath, changeRequestId)
-      const map = new Map<string, boolean>()
-      for (const disc of discussions) {
-        const firstNote = disc.notes?.[0]
-        if (!firstNote || firstNote.type !== 'DiffNote') continue
-        const pos = firstNote.position
-        const path = pos?.new_path ?? pos?.old_path
-        const line = pos?.new_line != null ? Number(pos.new_line) : null
-        if (path && line != null) {
-          const key = `${path}:${line}`
-          const resolved = disc.notes.every((n: any) => !n.resolvable || n.resolved)
-          if (!map.has(key) || !resolved) {
-            map.set(key, resolved)
-          }
+    const {discussions} = await this.getAllDiffDiscussions(projectPath, changeRequestId)
+    const map = new Map<string, boolean>()
+    for (const disc of discussions) {
+      const firstNote = disc.notes?.[0]
+      if (!firstNote || firstNote.type !== 'DiffNote') continue
+      const pos = firstNote.position
+      const path = pos?.new_path ?? pos?.old_path
+      const line = pos?.new_line != null ? Number(pos.new_line) : null
+      if (path && line != null) {
+        const key = `${path}:${line}`
+        const resolved = disc.notes.every((n: any) => !n.resolvable || n.resolved)
+        if (!map.has(key) || !resolved) {
+          map.set(key, resolved)
         }
       }
-      return map
-    } catch (e) {
-      throw toGitPlatformError(e)
     }
+    return map
   }
 
   async fetchUnresolvedBotThreads(
@@ -652,31 +724,27 @@ export class GitLabPlatform implements IGitPlatform {
   ): Promise<ReviewThreadInfo[]> {
     const projectPath = `${owner}/${repo}`
     // discussionIdToContext 在 getAllDiffDiscussions 中自动填充
-    try {
-      const {discussions} = await this.getAllDiffDiscussions(projectPath, changeRequestId)
-      const results: ReviewThreadInfo[] = []
-      const normalizedBot = botLogin.toLowerCase()
-      for (const disc of discussions) {
-        const firstNote = disc.notes?.[0]
-        if (!firstNote) continue
-        const authorLogin = firstNote.author?.username ?? ''
-        const isResolved = disc.notes.every((n: any) => !n.resolvable || n.resolved)
-        if (!isResolved && authorLogin.toLowerCase() === normalizedBot) {
-          const pos = firstNote.position
-          results.push({
-            id: disc.id,
-            isResolved: false,
-            path: pos?.new_path ?? pos?.old_path ?? null,
-            line: pos?.new_line != null ? Number(pos.new_line) : null,
-            firstCommentAuthorLogin: authorLogin,
-            firstCommentBody: firstNote.body ?? null
-          })
-        }
+    const {discussions} = await this.getAllDiffDiscussions(projectPath, changeRequestId)
+    const results: ReviewThreadInfo[] = []
+    const normalizedBot = botLogin.toLowerCase()
+    for (const disc of discussions) {
+      const firstNote = disc.notes?.[0]
+      if (!firstNote) continue
+      const authorLogin = firstNote.author?.username ?? ''
+      const isResolved = disc.notes.every((n: any) => !n.resolvable || n.resolved)
+      if (!isResolved && authorLogin.toLowerCase() === normalizedBot) {
+        const pos = firstNote.position
+        results.push({
+          id: disc.id,
+          isResolved: false,
+          path: pos?.new_path ?? pos?.old_path ?? null,
+          line: pos?.new_line != null ? Number(pos.new_line) : null,
+          firstCommentAuthorLogin: authorLogin,
+          firstCommentBody: firstNote.body == null ? null : stripWriteMarkers(firstNote.body)
+        })
       }
-      return results
-    } catch (e) {
-      throw toGitPlatformError(e)
     }
+    return results
   }
 
   async resolveThreads(
@@ -693,7 +761,9 @@ export class GitLabPlatform implements IGitPlatform {
           return
         }
         try {
-          await this.api.MergeRequestDiscussions.resolve(ctx.projectPath, ctx.mrIid, threadId, true)
+          await withGitLabRetry('resolveThread', async () =>
+            this.api.MergeRequestDiscussions.resolve(ctx.projectPath, ctx.mrIid, threadId, true)
+          )
           ok++
         } catch (e) {
           errors.push(e instanceof Error ? e : new Error(String(e)))
@@ -724,18 +794,24 @@ export class GitLabPlatform implements IGitPlatform {
     const projectPath = `${owner}/${repo}`
     const emojiName = REACTION_TO_EMOJI[content]
     try {
-      await (this.api.MergeRequestNoteAwardEmojis as any).award(
-        projectPath,
-        changeRequestId,
-        commentId,
-        emojiName
+      await withGitLabRetry('addReaction', async () =>
+        (this.api.MergeRequestNoteAwardEmojis as any).award(
+          projectPath,
+          changeRequestId,
+          commentId,
+          emojiName
+        )
       )
     } catch (e) {
-      throw toGitPlatformError(e)
+      const err = normalizeGitLabError(e, 'addReaction')
+      // 重复 award 同一 emoji 是这个 endpoint 唯一的冲突场景（GitLab 各版本返回的
+      // 409 文案不一致，故按状态码而非文案判定）。ACK 已经在了，视为达成目标。
+      if (err.errorKind !== 'conflict') throw err
+      getLogger().debug(`addReaction: ${emojiName} already awarded on note ${commentId}`)
     }
   }
 
-  // ─── 8. 权限（GLAPI-020 / GLAPI-021）──────────────────────────────────────
+  // ─── 8. 权限（GLAPI-020 / GLAPI-021 / GLAPI-026）──────────────────────────
 
   /**
    * 按用户名查询项目 access level。
@@ -744,6 +820,7 @@ export class GitLabPlatform implements IGitPlatform {
    * 获取 access_level → 映射为 PlatformPermission。
    *
    * GLAPI-021: 任何环节失败都 fail closed，返回 'none'。
+   * GLAPI-026: 401/403 时把权限诊断写进日志，避免 fail closed 变成无法排查的静默拒绝。
    */
   async getCollaboratorPermission(
     owner: string,
@@ -753,20 +830,28 @@ export class GitLabPlatform implements IGitPlatform {
     const projectPath = `${owner}/${repo}`
     try {
       // 1. 用户名 → userId
-      const users = (await this.api.Users.all({username})) as any[]
+      const users = (await withGitLabRetry('getCollaboratorPermission.users', async () =>
+        this.api.Users.all(listOptions({username}))
+      )) as any[]
       const user = users.find(
         (u: any) => (u.username as string).toLowerCase() === username.toLowerCase()
       )
       if (!user) return 'none'
 
       // 2. userId → access_level（includeInherited 包含继承的组权限）
-      const member = (await (this.api.ProjectMembers as any).show(projectPath, user.id, {
-        includeInherited: true
-      })) as any
+      const member = (await withGitLabRetry('getCollaboratorPermission.member', async () =>
+        (this.api.ProjectMembers as any).show(projectPath, user.id, {
+          includeInherited: true
+        })
+      )) as any
       const level: number = member.access_level ?? 0
 
       return accessLevelToPermission(level)
-    } catch {
+    } catch (e) {
+      const err = normalizeGitLabError(e, 'getCollaboratorPermission')
+      if (err.errorKind !== 'not_found') {
+        getLogger().warning(`Permission lookup failed, denying access: ${err.message}`)
+      }
       // GLAPI-021: fail closed
       return 'none'
     }
@@ -780,9 +865,13 @@ export class GitLabPlatform implements IGitPlatform {
    */
   async getAuthenticatedLogin(): Promise<string> {
     try {
-      const user = (await this.api.Users.showCurrentUser()) as any
+      const user = (await withGitLabRetry('getAuthenticatedLogin', async () =>
+        this.api.Users.showCurrentUser()
+      )) as any
       return user.username as string
-    } catch {
+    } catch (e) {
+      const err = normalizeGitLabError(e, 'getAuthenticatedLogin')
+      getLogger().warning(`Failed to resolve PAT username: ${err.message}`)
       return 'gitlab-bot'
     }
   }

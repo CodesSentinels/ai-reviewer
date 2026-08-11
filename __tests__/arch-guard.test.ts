@@ -242,3 +242,38 @@ describe('ARCH-024: @gitbeaker/rest 类型不泄露到 IGitPlatform 或共享核
     expect(fs.existsSync(path.join(SRC, 'platform/gitlab-platform.ts'))).toBe(true)
   })
 })
+
+describe('GLAPI-031: GitLab HTTP 调用只走统一 client', () => {
+  const allFiles = collectTsFiles(SRC)
+
+  test('共享核心不直接 fetch，也不引用 GitLab client factory', () => {
+    const coreFiles = allFiles.filter(f => !isExempt(path.relative(SRC, f).replace(/\\/g, '/')))
+    const violations: string[] = []
+    for (const f of coreFiles) {
+      const content = fs.readFileSync(f, 'utf8')
+      if (/\bfetch\s*\(/.test(content) || /from ['"].*gitlab-client['"]/.test(content)) {
+        violations.push(path.relative(SRC, f))
+      }
+    }
+    expect(violations).toEqual([])
+  })
+
+  test('GitLab adapter 内没有绕过 client factory 的原生 fetch', () => {
+    const gitlabFiles = allFiles.filter(f =>
+      /platform\/gitlab-/.test(path.relative(SRC, f).replace(/\\/g, '/'))
+    )
+    expect(gitlabFiles.length).toBeGreaterThan(0)
+    const violations = gitlabFiles.filter(f => /\bfetch\s*\(/.test(fs.readFileSync(f, 'utf8')))
+    expect(violations.map(f => path.relative(SRC, f))).toEqual([])
+  })
+
+  test('GitHub adapter 不引用 GitLab client（adapter 不跨平台）', () => {
+    const githubFiles = allFiles.filter(f =>
+      /platform\/github-/.test(path.relative(SRC, f).replace(/\\/g, '/'))
+    )
+    const violations = githubFiles.filter(f =>
+      /gitlab/i.test(fs.readFileSync(f, 'utf8').replace(/\/\/.*|\/\*[\s\S]*?\*\//g, ''))
+    )
+    expect(violations.map(f => path.relative(SRC, f))).toEqual([])
+  })
+})

@@ -11,7 +11,8 @@
 import {readFileSync} from 'fs'
 import {createGitLabExecutionContext} from './platform/gitlab-execution-context'
 import {GitLabLogger} from './platform/gitlab-logger'
-import {GitLabPlatform, type GitLabCredential} from './platform/gitlab-platform'
+import {GitLabPlatform} from './platform/gitlab-platform'
+import {describeGitLabClientConfig, resolveGitLabClientConfig} from './platform/gitlab-client'
 import {setPlatform} from './platform/git-platform'
 import {setLogger} from './platform/logger'
 import {handleExecCtxError} from './platform/exec-ctx-error-handler'
@@ -25,14 +26,19 @@ export async function run(): Promise<void> {
   // 初始化 GitLab Logger（ARCH-014）+ Platform（ARCH-018/020）
   setLogger(logger)
 
-  const credential = resolveGitLabCredential()
-  if (credential == null) {
-    logger.error('GITLAB_PAT or CI_JOB_TOKEN is required')
+  // GLAPI-029：host / 凭据 / timeout 统一从受信任配置解析并校验，非法即 fail closed
+  let clientConfig
+  try {
+    clientConfig = resolveGitLabClientConfig()
+  } catch (e) {
+    logger.error(redact(e instanceof Error ? e.message : String(e)))
     process.exitCode = 1
     return
   }
-  const gitlabHost = process.env.CI_SERVER_URL ?? 'https://gitlab.com'
-  setPlatform(new GitLabPlatform(credential, gitlabHost))
+  // 摘要只含 host/凭据类型/timeout，不含 token（GLAPI-029）；
+  // 走 debug 级别，避免在事件被拒绝（如 fork MR）前产生无关输出
+  logger.debug(`GitLab client: ${describeGitLabClientConfig(clientConfig)}`)
+  setPlatform(new GitLabPlatform(clientConfig))
 
   const payloadPath = process.env.TRIGGER_PAYLOAD
   if (payloadPath == null || payloadPath === '') {
@@ -92,17 +98,6 @@ export async function run(): Promise<void> {
     `GitLab event validated: platform=${execCtx.platform} eventKind=${execCtx.eventKind} project=${execCtx.projectPath} mr=${execCtx.changeRequestId}`
   )
   // TODO: 待 GLAPI-* 补全后，此处调用 runOrchestrator 或 dispatchEvent 执行审查。
-}
-
-/** PAT 优先；PAT 为空或未设置时 fallback 到 CI_JOB_TOKEN（使用 job-token header） */
-function resolveGitLabCredential(): GitLabCredential | null {
-  const pat = (process.env.GITLAB_PAT ?? '').trim()
-  if (pat !== '') return {type: 'pat', value: pat}
-
-  const jobToken = (process.env.CI_JOB_TOKEN ?? '').trim()
-  if (jobToken !== '') return {type: 'job_token', value: jobToken}
-
-  return null
 }
 
 // 不用顶层 await（同 main.ts 的既有原因）

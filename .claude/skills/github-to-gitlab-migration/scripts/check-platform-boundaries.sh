@@ -46,25 +46,31 @@ check \
   "GITHUB_EVENT_NAME|github_context|context[.]payload|get(Boolean|Multiline)?Input[(]" \
   "${shared_paths[@]}"
 
+# 只匹配真实的 import/require，避免命中文档注释里对 SDK 的说明性提及。
+# 本仓库的 GitLab adapter/client 层是 src/platform/gitlab-*.ts（GLAPI-029/031）。
 check \
   "@gitbeaker/rest is imported outside the GitLab adapter/client layer" \
-  "@gitbeaker/rest" \
+  "(from|require\()\s*['\"]@gitbeaker/" \
   src \
-  --glob '!src/gitlab/**'
+  --glob '!src/gitlab/**' \
+  --glob '!src/platform/gitlab-*.ts'
 
-if [[ -d src/github ]]; then
-  check \
-    "GitHub adapter imports GitLab implementation" \
-    "@gitbeaker/rest|from ['\"][^'\"]*gitlab[^'\"]*['\"]" \
-    src/github
-fi
+# adapter 层文件按路径直接列出（rg 的多个正向 --glob 是 OR 关系，不能用来收窄范围）。
+check \
+  "GitHub adapter imports GitLab implementation" \
+  "@gitbeaker/rest|from ['\"][^'\"]*gitlab[^'\"]*['\"]" \
+  src/platform/github-*.ts
 
-if [[ -d src/gitlab ]]; then
-  check \
-    "GitLab adapter imports GitHub runtime or implementation" \
-    "@actions/(core|github)|@octokit/|from ['\"][^'\"]*octokit[^'\"]*['\"]|from ['\"][^'\"]*github[^'\"]*['\"]" \
-    src/gitlab
-fi
+check \
+  "GitLab adapter imports GitHub runtime or implementation" \
+  "(from|require\()\s*['\"](@actions/(core|github)|@octokit/[^'\"]*|[^'\"]*octokit[^'\"]*|[^'\"]*github-[^'\"]*)['\"]" \
+  src/platform/gitlab-*.ts
+
+# GLAPI-031：GitLab HTTP 调用只能经统一 client factory，adapter 不得绕过去裸 fetch。
+check \
+  "GitLab adapter calls native fetch instead of the unified client" \
+  "\\bfetch\\(" \
+  src/platform/gitlab-*.ts src/gitlab-trigger.ts
 
 if ((status != 0)); then
   exit "$status"

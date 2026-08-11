@@ -6,7 +6,7 @@
  * 测试策略：mock @gitbeaker/rest 的 Gitlab 构造函数，验证 GitLabPlatform
  * 方法正确调用 gitbeaker API 并将结果/错误转换为平台无关类型。
  */
-import {describe, expect, test, jest, beforeEach} from '@jest/globals'
+import {describe, expect, test, jest, beforeEach, afterEach} from '@jest/globals'
 import {GitPlatformError} from '../src/platform/git-platform'
 
 // ─── mock gitbeaker ──────────────────────────────────────────────────────────
@@ -63,13 +63,36 @@ jest.mock('@gitbeaker/rest', () => ({
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const {GitLabPlatform} = require('../src/platform/gitlab-platform')
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const {PAGINATION_DEFAULTS} = require('../src/platform/gitlab-client')
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const {configureGitLabRetry, resetGitLabRetryPolicy} = require('../src/platform/gitlab-retry')
+
+/** GLAPI-029：adapter 只接受受信任配置构造 */
+const TEST_CLIENT_CONFIG = {
+  host: 'https://gitlab.example.com',
+  credential: {type: 'pat', value: 'glpat-test-token'},
+  timeoutMS: 30_000
+}
+
+/** GLAPI-024：所有 list API 都带显式分页参数 */
+const PAGINATION_ARGS = {
+  perPage: PAGINATION_DEFAULTS.perPage,
+  maxPages: PAGINATION_DEFAULTS.maxPages
+}
 
 describe('GitLabPlatform', () => {
   let platform: InstanceType<typeof GitLabPlatform>
 
   beforeEach(() => {
     jest.clearAllMocks()
-    platform = new GitLabPlatform({type: 'pat', value: 'test-token'})
+    // 重试逻辑照常执行，只是不真的等待（GLAPI-025）
+    configureGitLabRetry({sleep: async () => {}})
+    platform = new GitLabPlatform(TEST_CLIENT_CONFIG)
+  })
+
+  afterEach(() => {
+    resetGitLabRetryPolicy()
   })
 
   // ─── getChangeRequest（GLAPI-001/002/006）──────────────────────────────────
@@ -207,7 +230,7 @@ describe('GitLabPlatform', () => {
 
       const result = await platform.listChangeRequestCommits('g', 'r', 10)
       expect(result).toEqual(['sha1', 'sha2'])
-      expect(mockMergeRequests.allCommits).toHaveBeenCalledWith('g/r', 10)
+      expect(mockMergeRequests.allCommits).toHaveBeenCalledWith('g/r', 10, PAGINATION_ARGS)
     })
   })
 
@@ -362,7 +385,8 @@ describe('GitLabPlatform', () => {
       })
       expect(mockRepositories.allRepositoryTrees).toHaveBeenCalledWith('g/r', {
         ref: 'main',
-        recursive: true
+        recursive: true,
+        ...PAGINATION_ARGS
       })
     })
 
@@ -389,7 +413,8 @@ describe('GitLabPlatform', () => {
       await platform.listRepositoryTree('group/subgroup', 'repo', 'main')
       expect(mockRepositories.allRepositoryTrees).toHaveBeenCalledWith('group/subgroup/repo', {
         ref: 'main',
-        recursive: true
+        recursive: true,
+        ...PAGINATION_ARGS
       })
     })
   })
@@ -454,7 +479,11 @@ describe('GitLabPlatform', () => {
         author: 'bot',
         createdAt: '2026-08-07T00:00:00Z'
       })
-      expect(mockMergeRequestNotes.create).toHaveBeenCalledWith('g/r', 5, 'hello')
+      expect(mockMergeRequestNotes.create).toHaveBeenCalledWith(
+        'g/r',
+        5,
+        expect.stringContaining('hello')
+      )
     })
 
     test('API 错误 → GitPlatformError', async () => {
@@ -597,7 +626,8 @@ describe('GitLabPlatform', () => {
       await platform.listComments('g', 'r', 5)
       expect(mockMergeRequestNotes.all).toHaveBeenCalledWith('g/r', 5, {
         sort: 'asc',
-        orderBy: 'created_at'
+        orderBy: 'created_at',
+        ...PAGINATION_ARGS
       })
     })
 
@@ -753,18 +783,23 @@ describe('GitLabPlatform', () => {
         line: 42
       })
 
-      expect(mockMergeRequestDiscussions.create).toHaveBeenCalledWith('g/r', 5, 'fix this', {
-        commitId: 'commit-sha',
-        position: {
-          baseSha: 'base',
-          headSha: 'head',
-          startSha: 'start',
-          positionType: 'text',
-          newPath: 'src/a.ts',
-          oldPath: 'src/a.ts',
-          newLine: '42'
+      expect(mockMergeRequestDiscussions.create).toHaveBeenCalledWith(
+        'g/r',
+        5,
+        expect.stringContaining('fix this'),
+        {
+          commitId: 'commit-sha',
+          position: {
+            baseSha: 'base',
+            headSha: 'head',
+            startSha: 'start',
+            positionType: 'text',
+            newPath: 'src/a.ts',
+            oldPath: 'src/a.ts',
+            newLine: '42'
+          }
         }
-      })
+      )
     })
   })
 
@@ -803,7 +838,7 @@ describe('GitLabPlatform', () => {
       expect(mockMergeRequestNotes.create).toHaveBeenCalledWith(
         'g/r',
         5,
-        '**x.ts** (line 10)\n\ncomment'
+        expect.stringContaining('**x.ts** (line 10)\n\ncomment')
       )
     })
   })
@@ -845,7 +880,7 @@ describe('GitLabPlatform', () => {
         'g/r',
         5,
         'disc-reply',
-        'reply text'
+        expect.stringContaining('reply text')
       )
     })
 
@@ -878,12 +913,12 @@ describe('GitLabPlatform', () => {
       const result = await platform.replyToReviewComment('g', 'r', 5, 8888, 'reply')
       expect(result.body).toBe('reply')
       // 应先 fetch all discussions 补缓存，再 addNote
-      expect(mockMergeRequestDiscussions.all).toHaveBeenCalledWith('g/r', 5)
+      expect(mockMergeRequestDiscussions.all).toHaveBeenCalledWith('g/r', 5, PAGINATION_ARGS)
       expect(mockMergeRequestDiscussions.addNote).toHaveBeenCalledWith(
         'g/r',
         5,
         'disc-webhook',
-        'reply'
+        expect.stringContaining('reply')
       )
     })
 
@@ -1230,7 +1265,7 @@ describe('GitLabPlatform', () => {
 
     test('无缓存时全部标记失败', async () => {
       // 新建 platform 实例，无缓存
-      const freshPlatform = new GitLabPlatform({type: 'pat', value: 'token'})
+      const freshPlatform = new GitLabPlatform(TEST_CLIENT_CONFIG)
       const result = await freshPlatform.resolveThreads(['disc-x'])
       expect(result.ok).toBe(0)
       expect(result.failed).toBe(1)

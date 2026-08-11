@@ -45,12 +45,20 @@ check() {
   fi
 }
 
+# GITHUB_REPOSITORY 在 GitHub Actions 里总是存在，本地则没有；显式给一个占位值，
+# 让断言落在"缺 GITHUB_ACTION"这个真正想验证的分支上，而不是随环境漂移。
 check "GitHub bundle (dist/index.js)" \
-  "node dist/index.js" \
+  "env -u GITHUB_ACTION GITHUB_REPOSITORY=owner/repo node dist/index.js" \
   "GITHUB_ACTION"
 
-check "GitLab bundle (dist/gitlab-trigger/index.js)" \
-  "node dist/gitlab-trigger/index.js" \
+# GitLab 入口先解析受信任 client 配置（GLAPI-029），再读事件 payload，
+# 因此两个 fail closed 分支分别验证。
+check "GitLab bundle (dist/gitlab-trigger/index.js) — 缺凭据" \
+  "env -u GITLAB_PAT -u CI_JOB_TOKEN node dist/gitlab-trigger/index.js" \
+  "GITLAB_PAT or CI_JOB_TOKEN is required"
+
+check "GitLab bundle (dist/gitlab-trigger/index.js) — 缺事件 payload" \
+  "env -u TRIGGER_PAYLOAD GITLAB_PAT=glpat-smoke-placeholder node dist/gitlab-trigger/index.js" \
   "TRIGGER_PAYLOAD is not set"
 
 if [ "$FAIL" -ne 0 ]; then
