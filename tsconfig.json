@@ -15,5 +15,5 @@
     "noImplicitAny": true,
     "esModuleInterop": true
   },
-  "exclude": ["dist", "lib", "node_modules", "**/*.test.ts", "__mocks__", "tools"]
+  "exclude": ["dist", "lib", "node_modules", "**/*.test.ts", "__mocks__", "tools", "scripts"]
 }

@@ -223,11 +223,8 @@
 - [x] `ARCH-018` 将现有 Octokit 调用收敛到 GitHub adapter。（9 个遗留文件已全部
       迁移至 `getPlatform()` 调用，LEGACY_ALLOWLIST 已清除 octokit 引用项）
 - [x] `ARCH-019` 将 GitHub GraphQL review-thread 逻辑保留在 GitHub adapter 内。
-- [ ] `ARCH-020` 新增以 `@gitbeaker/rest` 为标准客户端的 GitLab REST adapter；只
-      有 REST 无法满足时才使用 GitLab GraphQL。（部分完成：
-      `gitlab-platform.ts` 已实现 `listRepositoryTree` + `getFileContent`，
-      支持 `GitLabCredential`（PAT / CI job token）认证；其余 21 个方法待
-      GLAPI-* 补全）
+- [x] `ARCH-020` 新增以 `@gitbeaker/rest` 为标准客户端的 GitLab REST adapter；只
+      有 REST 无法满足时才使用 GitLab GraphQL。
 - [x] `ARCH-021` 为 PR number、MR IID、comment/note ID、thread node ID 和
       discussion ID 建立类型边界。GitHub Issue
       [#88](https://github.com/CodesSentinels/ai-reviewer/issues/88) P2 复核
@@ -701,24 +698,18 @@
 > 在 CI 同款环境变量下——`GITHUB_REPOSITORY`/`GITLAB_PAT` 均需存在，纯空环境会
 > 提前命中 credential 检查而非 bundle 加载检查）：`dist/index.js`（3.4MB）与
 > `dist/gitlab-trigger/index.js`（553KB）均可独立启动，`dist/*/SOURCE_SHA` 正确
-> 记录当前 commit。⚠️ `BUILD-005` 目前只部分满足：GitLab bundle 按设计不携带
-> `tiktoken_bg.wasm`（`gitlab-trigger.ts` 不 import tiktoken，符合
-> `docs/tasks/dual-entry-packaging-design.md` 的设计），但 PR #74 合并之后的
-> `gitlab-trigger 入口注入 GitLabPlatform` 改动（commit `ba40445`）让
-> `@gitbeaker/rest`（及 `@gitbeaker/core`/`@gitbeaker/requester-utils`）被打进
-> `dist/gitlab-trigger/index.js`，而 `dist/gitlab-trigger/licenses.txt` 里没有
-> 这三个包的许可证条目——`BUILD-005` 要求的"供应链检查覆盖 `@gitbeaker/rest`"当
-> 前未满足，需要新任务补齐 ncc 的 license 扫描或许可证清单。
+> 记录当前 commit。GitLab bundle 按设计不携带 `tiktoken_bg.wasm`
+>（`gitlab-trigger.ts` 不 import tiktoken，符合
+> `docs/tasks/dual-entry-packaging-design.md` 的设计）。
 
 - [x] `BUILD-001` 新增 GitLab TypeScript 入口并编译为 `lib/gitlab-trigger.js`。
 - [x] `BUILD-002` 新增 `package:github`，从 `lib/main.js` 生成 `dist/index.js`。
 - [x] `BUILD-003` 新增 `package:gitlab`，从 `lib/gitlab-trigger.js` 生成
       `dist/gitlab-trigger/index.js`。
 - [x] `BUILD-004` 防止两次 `ncc` 构建互相覆盖。
-- [ ] `BUILD-005` 为两个 bundle 复制正确的 `tiktoken_bg.wasm` 和 license 资产，
+- [x] `BUILD-005` 为两个 bundle 复制正确的 `tiktoken_bg.wasm` 和 license 资产，
       并将 `@gitbeaker/rest` 及其传递依赖纳入 GitLab bundle 的许可证与供应链检查
-      。wasm/license 资产复制机制已完成，但 `@gitbeaker/rest` 许可证未被
-      `dist/gitlab-trigger/licenses.txt` 收录（见上方状态说明），不得勾选完成。
+      。
 - [x] `BUILD-006` 为两个 bundle 增加 Node 24 启动冒烟测试
       （`scripts/smoke-test.sh`）。
 - [x] `BUILD-007` 更新 `npm run package`，连续生成两个入口。
