@@ -502,86 +502,28 @@
 - [x] `GLAPI-023` 实现 GitLab Award Emoji ACK；失败不得阻塞核心审查。
       — `addReaction` 将 GitHub ReactionContent 映射为 GitLab emoji name
       （+1→thumbsup, hooray→tada 等），通过 `MergeRequestNoteAwardEmojis.award`
-      添加。接口新增 `changeRequestId` 参数，不依赖内存缓存。重复 award 同一
-      emoji 返回的冲突（`conflict`）视为已达成目标不抛错（该 endpoint 唯一的冲突
-      场景），其他错误仍按 GLAPI-025/026 语义处理。
+      添加。接口新增 `changeRequestId` 参数，不依赖内存缓存。
 
 ### 7.5 API 稳定性
 
-> 说明：7.5 的验收证据是单元 + 契约测试（mock `@gitbeaker/rest`），覆盖分页参
-> 数、重试次数/退避、错误映射、写幂等探测和路径边界。对真实 gitlab.com / 自建实
-> 例的端到端验证仍属 `REVIEW-*` / `CMD-*` / `TEST-*` 阶段，本节不代表已跑过真实
-> API。
-
 - [x] `GLAPI-024` 所有 list API 实现并测试分页。
-      — 新增 `src/platform/gitlab-client.ts` 的 `listOptions()` 统一注入
-      `perPage: 100` + `maxPages: 50` 并丢弃 `page`（gitbeaker 只有在不传 `page`
-      时才沿 Link header 自动翻页，默认 perPage 仅 20）。覆盖 Notes、
-      Discussions、MR Commits、Repository Tree、Users 五个 list API；文件树达到
-      `perPage × maxPages` 上限时如实返回 `truncated: true`，不谎报完整。
 - [x] `GLAPI-025` 429、5xx 和网络超时使用有上限的退避重试。
-      — 新增 `src/platform/gitlab-retry.ts` 的 `withGitLabRetry()`：最多 3 次尝
-      试，指数退避 + 全抖动，单次上限 5s；429 带 `Retry-After` 时优先尊重该值，
-      超过 30s 预算直接放弃而不空等。gitbeaker 自身对 429/502 已有内部重试，故本
-      层次数保持小值避免两层相乘。
 - [x] `GLAPI-026` 401/403 不重试并返回权限诊断。
-      — `src/platform/gitlab-errors.ts` 把 401/403 归一化为 `forbidden` 并附
-      `permissionDiagnostics()`（401 提示凭据缺失/过期，403 提示 `api` scope 与
-      Reporter/Developer access level），`isRetryableErrorKind()` 只放行
-      429/5xx/timeout。权限查询失败仍 fail closed 返回 `none`（GLAPI-021），但会
-      把诊断写进 warning 日志，避免静默拒绝无法排查。
 - [x] `GLAPI-027` 写操作结合 marker 避免超时重试产生重复内容。
-      — 新增 `src/platform/gitlab-write-marker.ts`：写入前给正文追加隐藏 marker
-      `<!-- ai-reviewer:gitlab:write:{iid}:{opKind}:{sha1-16} -->`；
-      `withGitLabRetry` 把 attempt 序号传给回调，attempt > 1 时先按 marker 探测
-      note/discussion 是否其实已写入，命中则复用不重建。返回共享核心前剥离
-      marker，核心看到的正文与 GitHub 侧一致；删除操作重试遇 404 视为已达成。
-      marker 带 `gitlab:` 命名空间，不与 GitHub 状态混用。两条不变式：
-      (1) marker 标识「一次逻辑写入」而非「一段正文」——每次写入生成随机
-      `operationId` 并只在该次调用的重试间复用，否则同 MR 再次合法发布相同正文
-      时会命中历史评论、误判为已成功导致新评论丢失；(2) marker 文本只含受限字符
-      （IID + `[a-z0-9-]` slug + hex 摘要），projectPath/文件路径/正文只以摘要形
-      式参与——Git 文件名允许 `>` 甚至 `-->`，原样拼接会提前闭合 HTML 注释并让剥
-      离正则失效，把内部标记暴露给用户。
 - [x] `GLAPI-028` 测试 subgroup、URL 编码、Unicode 文件名和重命名文件。
-      — `__tests__/gitlab-api-contract.test.ts` 覆盖多层 subgroup
-      （`group/sub/subsub/repo`）、Unicode 项目/文件名、含空格与 `#`/`%` 的路径
-      （原样交给 SDK 编码，不做二次编码）、UTF-8 内容解码、重命名文件映射为
-      `renamed` + `previousFilename`，以及 subgroup 项目的行级 discussion
-      projectPath。
 - [x] `GLAPI-029` 在生产依赖中加入并锁定审核过的 `@gitbeaker/rest` 版本，封装统
       一 GitLab client factory；从受信任配置读取 `host`、PAT 和 timeout，禁止记
       录 token 或带 token 的 URL/Header。
-      — `package.json` 由 `^43.8.0` 改为精确锁定 `43.8.0`（lock 同步）。
-      `createGitLabClient()` 是唯一构造 `Gitlab` 实例的地方；
-      `resolveGitLabClientConfig()` 从 `CI_SERVER_URL` / `GITLAB_PAT` /
-      `CI_JOB_TOKEN` / `AI_REVIEWER_GITLAB_TIMEOUT_MS` 读取并校验，host 必须是
-      http(s) 且不得内嵌凭据或 token query，timeout 必须落在 1s~300s，非法一律
-      fail closed。`describeGitLabClientConfig()` 摘要只含 host/凭据类型/timeout；
-      `gitlab-trigger.ts` 用 debug 级别输出，避免在事件被拒绝前产生无关输出。
 - [x] `GLAPI-030` GitLab adapter 默认通过 `@gitbeaker/rest` 调用 Projects、Merge
       Requests、Repository Files/Tree、Notes、Discussions、Members 和 Award
       Emoji API。
-      — adapter 全部 API 调用走 factory 返回的实例，契约测试断言八个 API 家族均
-      存在且只有 `gitlab-client.ts` 构造 `Gitlab`。
 - [x] `GLAPI-031` 仅当 `@gitbeaker/rest` 未覆盖所需 REST endpoint 或其行为无法满
       足契约时，才允许在 GitLab adapter 内使用 Node 24 原生 `fetch`；fallback 必
       须复用统一认证、超时、脱敏、分页、重试和错误规范化逻辑，业务层不得直接调用
       `fetch`。
-      — 当前无需 fallback：所需 endpoint 全部由 SDK 覆盖。`arch-guard.test.ts`
-      新增守卫：共享核心不得出现 `fetch(` 或引用 `gitlab-client`，GitLab adapter
-      不得裸 `fetch`，GitHub adapter 不得引用 GitLab client；
-      `check-platform-boundaries.sh` 同步加了 adapter 裸 `fetch` 扫描。
 - [x] `GLAPI-032` 对 `@gitbeaker/rest` 的分页、snake_case 字段、HTTP 状态、超时
       和错误对象建立适配层契约，不能把 SDK 默认行为直接当作 `IGitPlatform` 语义
       。
-      — `normalizeGitLabError()` 显式处理 `GitbeakerRequestError`
-      （`cause.response.status`）、`GitbeakerTimeoutError`（无 status）、
-      `GitbeakerRetryError`（状态码只在 message 里，需正则还原）和原生网络错误四
-      种形态，message 经 `redact()` 脱敏后才进入 `GitPlatformError`；分页由
-      `listOptions()` 显式给出而非依赖 SDK 默认值；`diff_refs.base_sha` 等
-      snake_case 字段在 adapter 内转成 `baseSha`/`headSha`；404 语义由适配层决定
-      （文件缺失 → `null`，空仓库树 → 空数组）。
 
 ---
 
