@@ -301,11 +301,11 @@
 
 ### 5.1 Action 入口和输入
 
-- [ ] `GH-001` 保留 `action.yml` 和 `dist/index.js` 入口。
-- [ ] `GH-002` 为每个 Action input 建立名称、默认值、类型和敏感性快照测试。
-- [ ] `GH-003` 保持 PR opened/synchronize/reopened 自动审查语义。
-- [ ] `GH-004` 保持 `issue_comment` 和 `pull_request_review_comment` 入口。
-- [ ] `GH-005` 保持 GitHub concurrency/cancel 策略，旧任务不得写入新 PR 状态。
+- [x] `GH-001` 保留 `action.yml` 和 `dist/index.js` 入口。
+- [x] `GH-002` 为每个 Action input 建立名称、默认值、类型和敏感性快照测试。
+- [x] `GH-003` 保持 PR opened/synchronize/reopened 自动审查语义。
+- [x] `GH-004` 保持 `issue_comment` 和 `pull_request_review_comment` 入口。
+- [x] `GH-005` 保持 GitHub concurrency/cancel 策略，旧任务不得写入新 PR 状态。
 
 ### 5.2 GitHub 评论功能
 

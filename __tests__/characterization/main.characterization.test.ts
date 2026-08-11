@@ -22,6 +22,8 @@
  */
 import {describe, expect, test, jest, beforeEach} from '@jest/globals'
 import prOpenedFixture from './fixtures/pr-opened.json'
+import prSynchronizeFixture from './fixtures/pr-synchronize.json'
+import prReopenedFixture from './fixtures/pr-reopened.json'
 import issueCommentFixture from './fixtures/issue-comment.json'
 import pullRequestReviewCommentFixture from './fixtures/pull-request-review-comment.json'
 
@@ -119,6 +121,13 @@ const PAYLOAD_BY_EVENT: Record<string, any> = {
   push: {}
 }
 
+/** GH-003：三种 PR action 各自的 payload 与预期 eventKind */
+const PR_ACTION_CASES: Array<{action: string; fixture: any; eventKind: string}> = [
+  {action: 'opened', fixture: prOpenedFixture, eventKind: 'pr_opened'},
+  {action: 'synchronize', fixture: prSynchronizeFixture, eventKind: 'pr_synchronize'},
+  {action: 'reopened', fixture: prReopenedFixture, eventKind: 'pr_reopened'}
+]
+
 describe('main.ts run() — 改造前事件分发行为基线', () => {
   beforeEach(() => {
     jest.clearAllMocks()
@@ -179,6 +188,28 @@ describe('main.ts run() — 改造前事件分发行为基线', () => {
     expect(reviewState.codeReview).toHaveBeenCalledTimes(1)
     expect(commandHandlerState.handleCommentEvent).not.toHaveBeenCalled()
   })
+
+  // GH-003：workflow 声明的三种 PR action 都必须触发自动审查，
+  // 且 eventKind 各自区分（增量审查依赖 synchronize 与 opened 的区别）
+  test.each(PR_ACTION_CASES)(
+    'pull_request($action) → 调用 codeReview，eventKind=$eventKind',
+    async ({action, fixture, eventKind}) => {
+      PAYLOAD_BY_EVENT.pull_request = {...fixture, action}
+      try {
+        await runMain('pull_request')
+
+        expect(reviewState.codeReview).toHaveBeenCalledTimes(1)
+        expect(commandHandlerState.handleCommentEvent).not.toHaveBeenCalled()
+        expect(earlyReactionState.tryEarlyReaction).not.toHaveBeenCalled()
+
+        const [execCtx] = reviewState.codeReview.mock.calls[0] as any[]
+        expect(execCtx.eventKind).toBe(eventKind)
+      } finally {
+        // 复原共享的 payload 表，避免污染后续用例
+        PAYLOAD_BY_EVENT.pull_request = {...prOpenedFixture, action: 'opened'}
+      }
+    }
+  )
 
   test('issue_comment → 先 tryEarlyReaction 再 handleCommentEvent，不调用 codeReview', async () => {
     await runMain('issue_comment')

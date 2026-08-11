@@ -358,6 +358,14 @@ inputs:
       "Semgrep version (semver range) installed into ai-reviewer's sandbox via
       pip. This default IS the pinned version; override to match your project."
     default: '^1.95.0'
+  semgrep_config:
+    required: false
+    description:
+      'Semgrep ruleset passed to `semgrep --config`. Accepts a registry
+      shorthand (p/default, p/security-audit, p/owasp-top-ten), a registry URL,
+      or a path to a rules file in the repository. Only takes effect when
+      enable_semgrep is true.'
+    default: 'p/default'
   command_ack_reaction:
     required: false
     description:

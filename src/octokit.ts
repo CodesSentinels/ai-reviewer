@@ -6,15 +6,16 @@
  * - @octokit/plugin-retry: 自动重试失败的 API 请求
  * - @octokit/plugin-throttling: 处理 GitHub API 速率限制
  *
- * 认证方式：通过 GITHUB_TOKEN 环境变量或 action 输入参数获取令牌
+ * 认证方式：只从 GITHUB_TOKEN 环境变量获取令牌。
+ * 不接受 Action 输入——密钥不作为公开输入暴露（GH-002 敏感性约束）。
  */
-import {getInput, warning} from '@actions/core'
+import {warning} from '@actions/core'
 import {Octokit} from '@octokit/action'
 import {retry} from '@octokit/plugin-retry'
 import {throttling} from '@octokit/plugin-throttling'
 
-// 获取 GitHub 认证令牌（优先使用 action 输入参数，其次使用环境变量）
-const token = getInput('token') || process.env.GITHUB_TOKEN
+// 获取 GitHub 认证令牌（只走环境变量，由 workflow 的 env 注入）
+const token = process.env.GITHUB_TOKEN
 
 // 组合 Octokit 基础类与 throttling、retry 插件
 // @ts-ignore - throttling 插件与 @octokit/action 的类型版本不兼容，运行时正常
