@@ -34,6 +34,15 @@ export interface RepoTreeProject {
 }
 
 /**
+ * 平台无关的 tree 查询结果（与 platform 层 TreeResult 同形，此处独立声明避免反向依赖）。
+ * `truncated=true` 表示平台 API 返回的条目不完整。
+ */
+export interface TreeFetchResult {
+  entries: Array<{type?: string; path?: string}>
+  truncated: boolean
+}
+
+/**
  * 平台无关的仓库文件树获取接口（DEP-005）。
  * GitHub adapter 调用 Git Tree API，GitLab adapter 调用 Repository Tree API。
  */
@@ -44,11 +53,23 @@ export interface TreeFetcher {
     repo: string,
 
     treeSha: string
-  ): Promise<Array<{type?: string; path?: string}>>
+  ): Promise<TreeFetchResult>
 }
 
-/** 文件树缓存（同一次运行中避免重复调用 API） */
-let cachedTree: string[] | null = null
+/**
+ * 仓库文件树查询结果。
+ *
+ * `truncated=true` 时 `files` 只是仓库的一部分（GitHub 超过 API 上限、
+ * GitLab 翻页到上限），调用方必须把它当作「不完整」处理，
+ * 不能因为某个路径不在 files 里就断定该文件不存在。
+ */
+export interface RepoFileTree {
+  files: string[]
+  truncated: boolean
+}
+
+/** 文件树缓存（同一次运行中避免重复调用 API），连同截断状态一起缓存 */
+let cachedTree: RepoFileTree | null = null
 let cachedTreeKey: string | null = null
 
 /**
@@ -57,22 +78,25 @@ let cachedTreeKey: string | null = null
  * 通过注入的 TreeFetcher 获取指定 ref 下的所有文件路径。
  * 结果会缓存，同一 platform + project + ref 的重复调用直接返回缓存。
  *
+ * 截断状态随结果一起返回并缓存：平台 API 截断时不能谎报完整，
+ * 否则下游 resolveImportPath 会把「文件不在列表里」误判成「不是仓库内导入」。
+ *
  * @param ref - Git 引用（commit SHA / branch / tag）
  * @param project - 目标项目（owner/repo，可选 platform）
  * @param fetcher - 平台相关的 tree 获取实现
- * @returns 仓库中所有文件的路径列表
+ * @returns 文件路径列表 + 是否被平台 API 截断
  */
 export async function getRepoFileTree(
   ref: string,
   project: RepoTreeProject,
   fetcher: TreeFetcher
-): Promise<string[]> {
+): Promise<RepoFileTree> {
   const logger = getLogger()
   const cacheKey = `${project.platform ?? 'github'}:${project.owner}/${project.repo}@${ref}`
 
   // 如果缓存命中，直接返回
   if (cachedTree != null && cachedTreeKey === cacheKey) {
-    logger.info(`repo tree cache hit for: ${cacheKey}`)
+    logger.info(`repo tree cache hit for: ${cacheKey}${cachedTree.truncated ? ' (truncated)' : ''}`)
     return cachedTree
   }
 
@@ -80,17 +104,23 @@ export async function getRepoFileTree(
   const tree = await fetcher.getTree(project.owner, project.repo, ref)
 
   // 仅保留 blob 类型（文件），排除 tree 类型（目录）
-  const files = tree
+  const files = tree.entries
     .filter(item => item.type === 'blob' && item.path != null)
     .map(item => item.path as string)
 
   logger.info(`repo tree fetched: ${files.length} files`)
+  if (tree.truncated) {
+    logger.warning(
+      `repo tree for ${cacheKey} was truncated by the platform API — ` +
+        `only ${files.length} files are visible, cross-file dependency analysis may be incomplete`
+    )
+  }
 
-  // 更新缓存
-  cachedTree = files
+  // 更新缓存（含截断状态，避免后续调用把半棵树当完整树）
+  cachedTree = {files, truncated: tree.truncated}
   cachedTreeKey = cacheKey
 
-  return files
+  return cachedTree
 }
 
 /**

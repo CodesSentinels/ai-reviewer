@@ -35,6 +35,7 @@ import {
   type FileContentFetcher,
   formatCrossFileContext,
   formatDependencySummary,
+  TREE_TRUNCATED_NOTICE,
   type DependencyContext
 } from './dependency-analyzer'
 import {
@@ -69,13 +70,8 @@ const context = github_context
 /** 平台无关的 TreeFetcher 实现（DEP-005 → ARCH-018） */
 const platformTreeFetcher: TreeFetcher = {
   async getTree(owner, repoName, treeSha) {
-    const result = await getPlatform().listRepositoryTree(owner, repoName, treeSha)
-    if (result.truncated) {
-      getLogger().warning(
-        `repo tree for ${owner}/${repoName}@${treeSha} was truncated by the API — dependency analysis may be incomplete`
-      )
-    }
-    return result.entries
+    // 原样透传截断状态：截断告警与降级提示由 repo-tree / review 统一处理
+    return getPlatform().listRepositoryTree(owner, repoName, treeSha)
   }
 }
 
@@ -434,11 +430,13 @@ ${hunks.oldHunk}
 
   // ==================== 阶段零：跨文件依赖分析 ====================
   let dependencyContext: DependencyContext | null = null
+  // 独立于 dependencyContext 记录：分析本身抛错时仍要向用户说明树不完整
+  let repoTreeTruncated = false
   if (options.enableDependencyAnalysis) {
     try {
       getLogger().info('Phase 0: starting cross-file dependency analysis')
       // 获取仓库文件树（1 次 API 调用，结果缓存）
-      const repoFiles = await getRepoFileTree(
+      const {files: repoFiles, truncated} = await getRepoFileTree(
         execCtx.headSha || context.payload.pull_request.head.sha,
         {
           platform: execCtx.platform,
@@ -447,6 +445,7 @@ ${hunks.oldHunk}
         },
         platformTreeFetcher
       )
+      repoTreeTruncated = truncated
       // 分析依赖关系：解析导入、提取被修改的导出符号、搜索引用
       dependencyContext = await analyzeDependencies(
         filesAndChanges,
@@ -456,7 +455,8 @@ ${hunks.oldHunk}
         {owner: repo.owner, repo: repo.repo},
         execCtx.headSha || context.payload.pull_request.head.sha,
         platformContentFetcher,
-        patchScans
+        patchScans,
+        truncated
       )
       getLogger().info('Phase 0: dependency analysis completed')
     } catch (e: any) {
@@ -471,6 +471,7 @@ Files that changed from the base of the PR and between ${highestReviewedCommitId
     context.payload.pull_request.head.sha
   } commits.
 </details>
+${repoTreeTruncated ? `\n${TREE_TRUNCATED_NOTICE}\n` : ''}
 ${
   filesAndChanges.length > 0
     ? `

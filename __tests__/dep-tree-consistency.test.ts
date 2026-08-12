@@ -73,9 +73,9 @@ const EXPECTED_FILES = [
   'src/data/名前.ts'
 ]
 
-function makeFetcher(entries: Array<{type: string; path: string}>): TreeFetcher {
+function makeFetcher(entries: Array<{type: string; path: string}>, truncated = false): TreeFetcher {
   return {
-    getTree: jest.fn<TreeFetcher['getTree']>().mockResolvedValue(entries)
+    getTree: jest.fn<TreeFetcher['getTree']>().mockResolvedValue({entries, truncated})
   }
 }
 
@@ -92,8 +92,8 @@ describe('DEP-002: 两平台产出相同的文件树', () => {
     const ghFetcher = makeFetcher(FIXTURE_TREE)
     const glFetcher = makeFetcher(FIXTURE_TREE)
 
-    const ghFiles = await getRepoFileTree('abc123', uniqueProject('github'), ghFetcher)
-    const glFiles = await getRepoFileTree('abc123', uniqueProject('gitlab'), glFetcher)
+    const {files: ghFiles} = await getRepoFileTree('abc123', uniqueProject('github'), ghFetcher)
+    const {files: glFiles} = await getRepoFileTree('abc123', uniqueProject('gitlab'), glFetcher)
 
     expect(ghFiles).toEqual(glFiles)
     expect(ghFiles).toEqual(EXPECTED_FILES)
@@ -134,7 +134,7 @@ describe('DEP-002: 两平台产出相同的文件树', () => {
 describe('DEP-004: tree 边界处理', () => {
   test('空仓库 → 返回空数组（不抛错）', async () => {
     const fetcher = makeFetcher([])
-    const files = await getRepoFileTree('abc', uniqueProject('gitlab'), fetcher)
+    const {files} = await getRepoFileTree('abc', uniqueProject('gitlab'), fetcher)
     expect(files).toEqual([])
   })
 
@@ -145,7 +145,7 @@ describe('DEP-004: tree 边界处理', () => {
       owner: 'group/subgroup',
       repo: 'myproject'
     }
-    const files = await getRepoFileTree('main', project, fetcher)
+    const {files} = await getRepoFileTree('main', project, fetcher)
     expect(files).toEqual(['main.go'])
     // 验证 fetcher 被调用时传入的 owner/repo
     expect(fetcher.getTree).toHaveBeenCalledWith('group/subgroup', 'myproject', 'main')
@@ -156,7 +156,7 @@ describe('DEP-004: tree 边界处理', () => {
       {type: 'blob', path: 'src/数据/模型.ts'},
       {type: 'blob', path: 'docs/日本語/README.md'}
     ])
-    const files = await getRepoFileTree('main', uniqueProject('gitlab'), fetcher)
+    const {files} = await getRepoFileTree('main', uniqueProject('gitlab'), fetcher)
     expect(files).toContain('src/数据/模型.ts')
     expect(files).toContain('docs/日本語/README.md')
   })
@@ -175,7 +175,7 @@ describe('DEP-004: tree 边界处理', () => {
       {type: 'commit', path: 'vendor/lib'},
       {type: 'blob', path: 'README.md'}
     ])
-    const files = await getRepoFileTree('main', uniqueProject('github'), fetcher)
+    const {files} = await getRepoFileTree('main', uniqueProject('github'), fetcher)
     expect(files).toEqual(['src/main.ts', 'README.md'])
   })
 
@@ -231,15 +231,15 @@ describe('DEP-008: 同一 fixture 在两平台产生一致的分析结果', () =
     const ghFetcher = makeFetcher(fixtureTree)
     const glFetcher = makeFetcher(fixtureTree)
 
-    const ghFiles = await getRepoFileTree('sha1', uniqueProject('github'), ghFetcher)
-    const glFiles = await getRepoFileTree('sha1', uniqueProject('gitlab'), glFetcher)
+    const {files: ghFiles} = await getRepoFileTree('sha1', uniqueProject('github'), ghFetcher)
+    const {files: glFiles} = await getRepoFileTree('sha1', uniqueProject('gitlab'), glFetcher)
 
     expect(ghFiles).toEqual(glFiles)
   })
 
   test('两平台的 import 解析完全一致', async () => {
     const ghFetcher = makeFetcher(fixtureTree)
-    const ghFiles = await getRepoFileTree('sha2', uniqueProject('github'), ghFetcher)
+    const {files: ghFiles} = await getRepoFileTree('sha2', uniqueProject('github'), ghFetcher)
     const repoSet = new Set(ghFiles)
 
     // 这些解析结果不依赖平台
@@ -252,7 +252,7 @@ describe('DEP-008: 同一 fixture 在两平台产生一致的分析结果', () =
 
   test('两平台的候选优先级排序一致', async () => {
     const ghFetcher = makeFetcher(fixtureTree)
-    const ghFiles = await getRepoFileTree('sha3', uniqueProject('github'), ghFetcher)
+    const {files: ghFiles} = await getRepoFileTree('sha3', uniqueProject('github'), ghFetcher)
 
     const modified = ['src/api/login.ts']
     const candidates = ghFiles.filter(f => f.endsWith('.ts') && !f.includes('.test.'))
@@ -264,7 +264,7 @@ describe('DEP-008: 同一 fixture 在两平台产生一致的分析结果', () =
 
   test('两平台的扩展名过滤和截断一致', async () => {
     const ghFetcher = makeFetcher(fixtureTree)
-    const ghFiles = await getRepoFileTree('sha4', uniqueProject('github'), ghFetcher)
+    const {files: ghFiles} = await getRepoFileTree('sha4', uniqueProject('github'), ghFetcher)
 
     const tsFiles = filterByExtension(ghFiles, ['.ts'])
     expect(tsFiles).not.toContain('lib/legacy.js')

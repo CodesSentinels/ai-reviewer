@@ -84,7 +84,9 @@ jest.mock('../src/github/review-thread', () => ({
 }))
 
 const repoTreeState = {
-  getRepoFileTree: jest.fn<(...a: any[]) => Promise<string[]>>().mockResolvedValue([])
+  getRepoFileTree: jest
+    .fn<(...a: any[]) => Promise<{files: string[]; truncated: boolean}>>()
+    .mockResolvedValue({files: [], truncated: false})
 }
 jest.mock('../src/repo-tree', () => ({
   getRepoFileTree: (...a: any[]) => repoTreeState.getRepoFileTree(...a)
@@ -93,12 +95,13 @@ jest.mock('../src/repo-tree', () => ({
 const dependencyAnalyzerState = {
   analyzeDependencies: jest
     .fn<(...a: any[]) => Promise<any>>()
-    .mockResolvedValue({fileAnalyses: new Map()})
+    .mockResolvedValue({fileAnalyses: new Map(), treeTruncated: false})
 }
 jest.mock('../src/dependency-analyzer', () => ({
   analyzeDependencies: (...a: any[]) => dependencyAnalyzerState.analyzeDependencies(...a),
   formatCrossFileContext: jest.fn().mockReturnValue(''),
-  formatDependencySummary: jest.fn().mockReturnValue('')
+  formatDependencySummary: jest.fn().mockReturnValue(''),
+  TREE_TRUNCATED_NOTICE: '> tree-truncated'
 }))
 
 import {codeReview} from '../src/review'
@@ -182,9 +185,10 @@ describe('review.ts 双轨一致性（execCtx vs context，Phase 0 依赖分析�
     })
     platformState.getFileContent.mockResolvedValue('line1\nline2\nline3')
 
-    repoTreeState.getRepoFileTree.mockResolvedValue([])
+    repoTreeState.getRepoFileTree.mockResolvedValue({files: [], truncated: false})
     dependencyAnalyzerState.analyzeDependencies.mockResolvedValue({
-      fileAnalyses: new Map()
+      fileAnalyses: new Map(),
+      treeTruncated: false
     })
   })
 
@@ -259,5 +263,46 @@ describe('review.ts 双轨一致性（execCtx vs context，Phase 0 依赖分析�
 
     const depArgs = dependencyAnalyzerState.analyzeDependencies.mock.calls[0] as any[]
     expect(depArgs[5]).toBe('head-sha-0001')
+  })
+
+  // ─── DEP-004: 文件树截断的降级提示 ─────────────────────────────────────────
+
+  describe('DEP-004: 文件树被截断时状态消息里必须有降级提示', () => {
+    const runReview = async (): Promise<string> => {
+      await codeReview(
+        createGitHubExecutionContext(),
+        makeBot('[TRIAGE]: APPROVED\nLGTM'),
+        makeBot(),
+        makeOptions(),
+        new Prompts('', '')
+      )
+      // addInProgressStatus(existingBody, statusMsg) 的第二参就是状态消息
+      const calls = commenterState.addInProgressStatus.mock.calls as any[]
+      expect(calls.length).toBeGreaterThan(0)
+      return calls[0][1] as string
+    }
+
+    test('truncated=true → statusMsg 含降级提示', async () => {
+      repoTreeState.getRepoFileTree.mockResolvedValue({files: ['src/foo.ts'], truncated: true})
+      expect(await runReview()).toContain('> tree-truncated')
+    })
+
+    test('truncated=false → statusMsg 不含降级提示', async () => {
+      repoTreeState.getRepoFileTree.mockResolvedValue({files: ['src/foo.ts'], truncated: false})
+      expect(await runReview()).not.toContain('> tree-truncated')
+    })
+
+    test('截断状态传给 analyzeDependencies（第 9 个参数）', async () => {
+      repoTreeState.getRepoFileTree.mockResolvedValue({files: ['src/foo.ts'], truncated: true})
+      await runReview()
+      const depArgs = dependencyAnalyzerState.analyzeDependencies.mock.calls[0] as any[]
+      expect(depArgs[8]).toBe(true)
+    })
+
+    test('依赖分析本身抛错时，截断提示仍然出现（不因分析失败而丢信号）', async () => {
+      repoTreeState.getRepoFileTree.mockResolvedValue({files: ['src/foo.ts'], truncated: true})
+      dependencyAnalyzerState.analyzeDependencies.mockRejectedValue(new Error('boom'))
+      expect(await runReview()).toContain('> tree-truncated')
+    })
   })
 })

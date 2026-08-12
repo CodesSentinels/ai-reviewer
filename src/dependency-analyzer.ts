@@ -84,6 +84,11 @@ export interface FileDependencyInfo {
 /** 完整的依赖分析上下文 */
 export interface DependencyContext {
   fileAnalyses: Map<string, FileDependencyInfo>
+  /**
+   * 仓库文件树被平台 API 截断（DEP-004）。
+   * 为 true 时本次分析基于不完整的文件列表，缺失的依赖边不代表不存在。
+   */
+  treeTruncated: boolean
 }
 
 // ==================== Vue SFC 解析 ====================
@@ -1148,6 +1153,8 @@ function hasReExportFrom(
  * @param patchScans - （可选）由 review.ts 预先扫描的 PatchScanMap。
  *   传入后避免对每个 fileDiff 重新 walk 提取 modifiedLines。
  *   未传入时会按需就地扫描（兼容直接调用此函数的单元测试与早期调用方）。
+ * @param treeTruncated - （可选）repoFiles 是否被平台 API 截断（DEP-004）。
+ *   为 true 时结果不完整，会透传到 DependencyContext 供上层向用户提示降级。
  * @returns 完整的依赖分析上下文
  */
 export async function analyzeDependencies(
@@ -1158,14 +1165,22 @@ export async function analyzeDependencies(
   project: RepoTreeProject,
   headSha: string,
   contentFetcher: FileContentFetcher,
-  patchScans?: PatchScanMap
+  patchScans?: PatchScanMap,
+  treeTruncated = false
 ): Promise<DependencyContext> {
   const fileAnalyses = new Map<string, FileDependencyInfo>()
 
   // 空文件树时跳过分析（getRepoFileTree 失败返回空数组）
   if (repoFiles.length === 0) {
     getLogger().warning('dependency analysis: repo file tree is empty, skipping analysis')
-    return {fileAnalyses}
+    return {fileAnalyses, treeTruncated}
+  }
+
+  if (treeTruncated) {
+    getLogger().warning(
+      `dependency analysis: repo file tree is truncated (${repoFiles.length} files visible) — ` +
+        'unresolved imports may point to files outside the visible tree'
+    )
   }
 
   // ===== 步骤 1: 提取所有修改文件的导出符号 =====
@@ -1219,7 +1234,7 @@ export async function analyzeDependencies(
     getLogger().info(
       `dependency analysis [step 1]: ✓ no modified exports found across all files, skipping dependency scan (saved ~${options.maxDependencyFiles} API calls)`
     )
-    return {fileAnalyses}
+    return {fileAnalyses, treeTruncated}
   }
 
   // ===== 步骤 1.5: 智能过滤 — 排除不太可能被导入的文件 =====
@@ -1247,7 +1262,7 @@ export async function analyzeDependencies(
     getLogger().info(
       `dependency analysis [step 1.5]: ✓ all ${preFilterCount} files with modified exports are entry/test files, skipping dependency scan`
     )
-    return {fileAnalyses}
+    return {fileAnalyses, treeTruncated}
   }
   if (preFilterCount !== allModifiedSymbols.size) {
     getLogger().info(
@@ -1623,7 +1638,7 @@ export async function analyzeDependencies(
     `dependency analysis [summary]: ${filesWithRefs} files have external references, ${filesWithoutRefs} files have no references (API calls used: ${candidateFiles.length})`
   )
 
-  return {fileAnalyses}
+  return {fileAnalyses, treeTruncated}
 }
 
 // ==================== 格式化输出 ====================
@@ -1783,25 +1798,37 @@ function isTestFile(filename: string): boolean {
   )
 }
 
+/** 文件树被截断时向用户展示的降级提示（DEP-004） */
+export const TREE_TRUNCATED_NOTICE =
+  '> ⚠️ The repository file tree was truncated by the platform API. ' +
+  'Cross-file dependency analysis ran on a partial file list and may have missed references.'
+
 /**
  * 将依赖分析结果格式化为 PR 评论中的摘要区块（Markdown）
  *
  * 即使没有发现跨文件影响，也会显示分析结果，让用户了解分析覆盖范围。
+ * 文件树被截断时始终输出降级提示 —— 「没找到引用」和「树不完整导致没找到」
+ * 对用户是完全不同的结论，不能只写进日志。
  */
 export function formatDependencySummary(ctx: DependencyContext): string {
+  const truncationNote = ctx.treeTruncated ? `\n${TREE_TRUNCATED_NOTICE}\n` : ''
   const entries = Array.from(ctx.fileAnalyses.entries())
   if (entries.length === 0) {
-    return ''
+    return truncationNote
   }
 
   // 如果所有文件都没有外部引用，则不输出依赖分析区块
   const hasAnyReference = entries.some(([, info]) => info.references.length > 0)
   if (!hasAnyReference) {
-    return ''
+    return truncationNote
   }
 
   const lines: string[] = []
   lines.push('')
+  if (ctx.treeTruncated) {
+    lines.push(TREE_TRUNCATED_NOTICE)
+    lines.push('')
+  }
   lines.push('<details>')
   lines.push(
     `<summary>Cross-file dependency analysis (${entries.length} file${
