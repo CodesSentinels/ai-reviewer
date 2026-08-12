@@ -80056,7 +80056,11 @@ const configurationStub = {
     description: '显示当前仓库的审查配置',
     usage: `${PRIMARY_BOT_MENTION} configuration`,
     needsAck: false,
-    minPermission: 'read',
+    // CMD-012：Reporter+。GitLab 的 REPORTER(20) 映射为 'triage'，
+    // 与运行差异文档的权限基线一致（见 docs/github-vs-gitlab-runtime-differences.md
+    // 「configuration | 显示 Action inputs | ... | Reporter+」）。
+    // 此前是 'read'，等于放行 GitLab GUEST，比基线宽一级。
+    minPermission: 'triage',
     async execute(ctx) {
         const state = await getReviewState(ctx.owner, ctx.repo, ctx.prNumber);
         const o = ctx.options;
@@ -83981,34 +83985,42 @@ function permissionAtLeast(actual, required) {
 
 
 
-/** 进程内缓存: `${owner}/${repo}/${username}` → permission */
+/** 进程内缓存: `${owner}/${repo}/${username}` → 查询结果 */
 const cache = new Map();
 /**
  * 查询评论者权限，带缓存。
- * 查询失败时回退为 'none'，并记录 warning（不抛异常）。
+ * 查询失败时回退为 'none' 并标记 queryFailed，记录 warning（不抛异常）。
  */
-async function getPermission(q) {
+async function getPermissionResult(q) {
     const key = `${q.owner}/${q.repo}/${q.username}`;
     const cached = cache.get(key);
     if (cached)
         return cached;
     try {
-        const perm = (await getPlatform().getCollaboratorPermission(q.owner, q.repo, q.username));
-        cache.set(key, perm);
-        return perm;
+        const level = (await getPlatform().getCollaboratorPermission(q.owner, q.repo, q.username));
+        const result = { level, queryFailed: false };
+        cache.set(key, result);
+        return result;
     }
     catch (e) {
-        getLogger().warning(`getCollaboratorPermissionLevel failed for ${key}: ${String(e)} — falling back to 'none'`);
-        cache.set(key, 'none');
-        return 'none';
+        getLogger().warning(`getCollaboratorPermissionLevel failed for ${key}: ${String(e)} — fail closed`);
+        const result = { level: 'none', queryFailed: true };
+        cache.set(key, result);
+        return result;
     }
+}
+/** 只取权限等级的便捷入口；需要区分「查询失败」时用 getPermissionResult() */
+async function getPermission(q) {
+    return (await getPermissionResult(q)).level;
 }
 /**
  * 命令级权限检查
  *
  * @param handler    要检查的命令
  * @param actual     评论者权限等级
- * @param isPrAuthor 是否 PR 作者（作者对自己 PR 有部分豁免）
+ * @param isPrAuthor 是否**已确认**的 PR 作者豁免资格。权限查询失败时调用方必须
+ *                   传 false——CMD-016 要求 fail closed，不能因为「看起来是作者」
+ *                   就在权限未知的情况下放行（见 dispatcher.ts 的调用点）
  */
 function canExecute(handler, actual, isPrAuthor) {
     const required = handler.minPermission ?? 'write';
@@ -84427,14 +84439,19 @@ async function dispatchCommentEvent(deps) {
     }
     // [权限校验] 查询操作者在仓库的权限等级，结合"是否为 PR 作者"判断能否执行该命令；
     // 不满足则回帖 FORBIDDEN 并结束。
-    const permission = await getPermission({
+    const { level: permission, queryFailed } = await getPermissionResult({
         owner,
         repo: repoName,
         username: actorLogin
     });
-    const isPrAuthor = actorLogin === prAuthor;
+    // CMD-016：权限查询失败时 fail closed——此时不认作者豁免，
+    // 否则 API 故障期间任何 PR 作者都能触发 review/full review/summary（fail open）
+    const isPrAuthor = actorLogin === prAuthor && !queryFailed;
     if (!canExecute(handler, permission, isPrAuthor)) {
-        await reply.error('FORBIDDEN', `用户 \`${actorLogin}\` 当前权限: \`${permission}\``);
+        const detail = queryFailed
+            ? `无法确认用户 \`${actorLogin}\` 的权限（查询失败），已按最严格策略拒绝`
+            : `用户 \`${actorLogin}\` 当前权限: \`${permission}\``;
+        await reply.error('FORBIDDEN', detail);
         return {
             kind: 'executed',
             command: parsed.name,

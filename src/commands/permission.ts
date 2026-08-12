@@ -16,8 +16,21 @@ import {getLogger} from '../platform/logger'
 import type {PermissionLevel, CommandHandler} from './types'
 import {permissionAtLeast} from './types'
 
-/** 进程内缓存: `${owner}/${repo}/${username}` → permission */
-const cache = new Map<string, PermissionLevel>()
+/**
+ * 权限查询结果。
+ *
+ * `queryFailed` 必须与「确认为 none」区分开：CMD-016 要求权限查询失败时
+ * fail closed，而作者豁免是建立在「已确认权限」之上的放行。把 API 故障折叠成
+ * none 之后，PR 作者仍能触发 review/full review/summary——那是 fail open。
+ */
+export interface PermissionResult {
+  level: PermissionLevel
+  /** true 表示查询本身失败（API 错误），而不是确认了对方没有权限 */
+  queryFailed: boolean
+}
+
+/** 进程内缓存: `${owner}/${repo}/${username}` → 查询结果 */
+const cache = new Map<string, PermissionResult>()
 
 export interface PermissionQuery {
   owner: string
@@ -27,28 +40,35 @@ export interface PermissionQuery {
 
 /**
  * 查询评论者权限，带缓存。
- * 查询失败时回退为 'none'，并记录 warning（不抛异常）。
+ * 查询失败时回退为 'none' 并标记 queryFailed，记录 warning（不抛异常）。
  */
-export async function getPermission(q: PermissionQuery): Promise<PermissionLevel> {
+export async function getPermissionResult(q: PermissionQuery): Promise<PermissionResult> {
   const key = `${q.owner}/${q.repo}/${q.username}`
   const cached = cache.get(key)
   if (cached) return cached
 
   try {
-    const perm = (await getPlatform().getCollaboratorPermission(
+    const level = (await getPlatform().getCollaboratorPermission(
       q.owner,
       q.repo,
       q.username
     )) as PermissionLevel
-    cache.set(key, perm)
-    return perm
+    const result: PermissionResult = {level, queryFailed: false}
+    cache.set(key, result)
+    return result
   } catch (e) {
     getLogger().warning(
-      `getCollaboratorPermissionLevel failed for ${key}: ${String(e)} — falling back to 'none'`
+      `getCollaboratorPermissionLevel failed for ${key}: ${String(e)} — fail closed`
     )
-    cache.set(key, 'none')
-    return 'none'
+    const result: PermissionResult = {level: 'none', queryFailed: true}
+    cache.set(key, result)
+    return result
   }
+}
+
+/** 只取权限等级的便捷入口；需要区分「查询失败」时用 getPermissionResult() */
+export async function getPermission(q: PermissionQuery): Promise<PermissionLevel> {
+  return (await getPermissionResult(q)).level
 }
 
 /**
@@ -56,7 +76,9 @@ export async function getPermission(q: PermissionQuery): Promise<PermissionLevel
  *
  * @param handler    要检查的命令
  * @param actual     评论者权限等级
- * @param isPrAuthor 是否 PR 作者（作者对自己 PR 有部分豁免）
+ * @param isPrAuthor 是否**已确认**的 PR 作者豁免资格。权限查询失败时调用方必须
+ *                   传 false——CMD-016 要求 fail closed，不能因为「看起来是作者」
+ *                   就在权限未知的情况下放行（见 dispatcher.ts 的调用点）
  */
 export function canExecute(
   handler: CommandHandler,

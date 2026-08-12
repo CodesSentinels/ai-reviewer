@@ -596,14 +596,14 @@
 `LOCAL-*` 负责 secret-bearing 执行面的本地工具策略和 API-only 降级；`LINT-*` 负
 责 lint 子系统的检测、安装、网络、缓存和扫描行为。
 
-- [ ] `LOCAL-001` GitLab secret-bearing trigger 强制 `enable_shell=false`。
-- [ ] `LOCAL-002` GitLab secret-bearing trigger 强制 `enable_lint_tools=false`。
-- [ ] `LOCAL-003` 禁用本地工具时仍能完成 API-only 审查。
-- [ ] `LINT-001` **高**：`enable_lint_tools=false` 时不得执行 lint adapter 检测
+- [x] `LOCAL-001` GitLab secret-bearing trigger 强制 `enable_shell=false`。
+- [x] `LOCAL-002` GitLab secret-bearing trigger 强制 `enable_lint_tools=false`。
+- [x] `LOCAL-003` 禁用本地工具时仍能完成 API-only 审查。
+- [x] `LINT-001` **高**：`enable_lint_tools=false` 时不得执行 lint adapter 检测
       、网络下载、动态安装、缓存恢复或扫描。
 - [ ] `LINT-002` 在无外网、空工具缓存和未安装 lint 工具的 GitLab trigger 测试环
       境中，API-only 审查仍须通过。
-- [ ] `LINT-003` 当前 MVP 不为 secret-bearing trigger 实现 lint 工具网络、缓存或
+- [x] `LINT-003` 当前 MVP 不为 secret-bearing trigger 实现 lint 工具网络、缓存或
       离线镜像安装策略；未来启用时必须使用独立无密钥执行面重新设计。
 
 ---
@@ -622,16 +622,16 @@
 
 ### 9.2 权限
 
-- [ ] `CMD-007` `review`：Developer+；MR 作者允许。
-- [ ] `CMD-008` `full review`：Developer+；MR 作者允许。
-- [ ] `CMD-009` `summary`：Developer+；MR 作者允许。
-- [ ] `CMD-010` `pause`：Developer+；MR 作者不豁免。
-- [ ] `CMD-011` `resume`：Developer+；MR 作者不豁免。
-- [ ] `CMD-012` `configuration`：Reporter+。
-- [ ] `CMD-013` `help`：可见项目成员。
-- [ ] `CMD-014` `resolve`：Developer+；MR 作者不豁免。
-- [ ] `CMD-015` 权限比较使用 GitLab access level，不按角色名称字符串猜测。
-- [ ] `CMD-016` 权限查询失败、用户不存在或项目不可见时 fail closed。
+- [x] `CMD-007` `review`：Developer+；MR 作者允许。
+- [x] `CMD-008` `full review`：Developer+；MR 作者允许。
+- [x] `CMD-009` `summary`：Developer+；MR 作者允许。
+- [x] `CMD-010` `pause`：Developer+；MR 作者不豁免。
+- [x] `CMD-011` `resume`：Developer+；MR 作者不豁免。
+- [x] `CMD-012` `configuration`：Reporter+。
+- [x] `CMD-013` `help`：可见项目成员。
+- [x] `CMD-014` `resolve`：Developer+；MR 作者不豁免。
+- [x] `CMD-015` 权限比较使用 GitLab access level，不按角色名称字符串猜测。
+- [x] `CMD-016` 权限查询失败、用户不存在或项目不可见时 fail closed。
 
 ### 9.3 命令行为
 

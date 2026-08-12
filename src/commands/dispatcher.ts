@@ -29,7 +29,7 @@ import {getLogger} from '../platform/logger'
 import type {Options} from '../options'
 import {getRegistry} from './registry'
 import {parse, type ParserOptions, DEFAULT_BOT_MENTIONS} from './parser'
-import {getPermission, canExecute} from './permission'
+import {getPermissionResult, canExecute} from './permission'
 import {checkRateLimit} from './rate-limit'
 import {hasBeenProcessed, Reply} from './reply'
 import {addAckReaction} from './reaction'
@@ -249,14 +249,19 @@ export async function dispatchCommentEvent(deps: DispatcherDeps): Promise<Dispat
 
   // [权限校验] 查询操作者在仓库的权限等级，结合"是否为 PR 作者"判断能否执行该命令；
   // 不满足则回帖 FORBIDDEN 并结束。
-  const permission = await getPermission({
+  const {level: permission, queryFailed} = await getPermissionResult({
     owner,
     repo: repoName,
     username: actorLogin
   })
-  const isPrAuthor = actorLogin === prAuthor
+  // CMD-016：权限查询失败时 fail closed——此时不认作者豁免，
+  // 否则 API 故障期间任何 PR 作者都能触发 review/full review/summary（fail open）
+  const isPrAuthor = actorLogin === prAuthor && !queryFailed
   if (!canExecute(handler, permission, isPrAuthor)) {
-    await reply.error('FORBIDDEN', `用户 \`${actorLogin}\` 当前权限: \`${permission}\``)
+    const detail = queryFailed
+      ? `无法确认用户 \`${actorLogin}\` 的权限（查询失败），已按最严格策略拒绝`
+      : `用户 \`${actorLogin}\` 当前权限: \`${permission}\``
+    await reply.error('FORBIDDEN', detail)
     return {
       kind: 'executed',
       command: parsed.name,

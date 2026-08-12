@@ -114,7 +114,11 @@ export const configurationStub: CommandHandler = {
   description: '显示当前仓库的审查配置',
   usage: `${PRIMARY_BOT_MENTION} configuration`,
   needsAck: false,
-  minPermission: 'read',
+  // CMD-012：Reporter+。GitLab 的 REPORTER(20) 映射为 'triage'，
+  // 与运行差异文档的权限基线一致（见 docs/github-vs-gitlab-runtime-differences.md
+  // 「configuration | 显示 Action inputs | ... | Reporter+」）。
+  // 此前是 'read'，等于放行 GitLab GUEST，比基线宽一级。
+  minPermission: 'triage',
   async execute(ctx: CommandContext): Promise<CommandResult> {
     const state = await getReviewState(ctx.owner, ctx.repo, ctx.prNumber)
     const o = ctx.options
