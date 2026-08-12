@@ -292,11 +292,20 @@ describe('review.ts 双轨一致性（execCtx vs context，Phase 0 依赖分析�
       expect(await runReview()).not.toContain('> tree-truncated')
     })
 
-    test('截断状态传给 analyzeDependencies（第 9 个参数）', async () => {
+    test('截断状态与目录回填器一起传给 analyzeDependencies（第 9 个参数）', async () => {
       repoTreeState.getRepoFileTree.mockResolvedValue({files: ['src/foo.ts'], truncated: true})
       await runReview()
       const depArgs = dependencyAnalyzerState.analyzeDependencies.mock.calls[0] as any[]
-      expect(depArgs[8]).toBe(true)
+      expect(depArgs[8].truncated).toBe(true)
+      // 截断时必须给出回填能力，否则第三层等于没接上
+      expect(typeof depArgs[8].dirLister.listDirectory).toBe('function')
+    })
+
+    test('未截断时不传目录回填器（不为正常仓库付额外 API）', async () => {
+      repoTreeState.getRepoFileTree.mockResolvedValue({files: ['src/foo.ts'], truncated: false})
+      await runReview()
+      const depArgs = dependencyAnalyzerState.analyzeDependencies.mock.calls[0] as any[]
+      expect(depArgs[8]).toEqual({truncated: false, dirLister: undefined})
     })
 
     test('依赖分析本身抛错时，截断提示仍然出现（不因分析失败而丢信号）', async () => {

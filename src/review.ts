@@ -59,7 +59,7 @@ import {type ExecutionContext} from './platform/execution-context'
 import {type Prompts} from './prompts'
 import {mergeReviewsByTopic, type Review} from './review-dedup'
 import {ensureFixSuggestionHeaders} from './fix-suggestion-header'
-import {getRepoFileTree, type TreeFetcher} from './repo-tree'
+import {getRepoFileTree, type DirectoryLister, type TreeFetcher} from './repo-tree'
 import {getReviewStateFromBody} from './review-state'
 import {getTokenCount} from './tokenizer'
 import {fetchThreadStatusMap, type ThreadStatusMap} from './github/review-thread'
@@ -72,6 +72,21 @@ const platformTreeFetcher: TreeFetcher = {
   async getTree(owner, repoName, treeSha) {
     // 原样透传截断状态：截断告警与降级提示由 repo-tree / review 统一处理
     return getPlatform().listRepositoryTree(owner, repoName, treeSha)
+  }
+}
+
+/**
+ * 平台无关的 DirectoryLister 实现（DEP-004 按需回填）。
+ * 只列举单个目录下一层，用于全量文件树被截断后补回 import 指向的路径。
+ */
+function makeDirectoryLister(owner: string, repoName: string, ref: string): DirectoryLister {
+  return {
+    async listDirectory(dirPath) {
+      const result = await getPlatform().listRepositoryTree(owner, repoName, ref, dirPath)
+      return result.entries
+        .filter(item => item.type === 'blob' && item.path != null)
+        .map(item => item.path as string)
+    }
   }
 }
 
@@ -456,7 +471,17 @@ ${hunks.oldHunk}
         execCtx.headSha || context.payload.pull_request.head.sha,
         platformContentFetcher,
         patchScans,
-        truncated
+        // 截断时把解析不到的 import 所在目录按需补回来，而不是只提示降级
+        {
+          truncated,
+          dirLister: truncated
+            ? makeDirectoryLister(
+                repo.owner,
+                repo.repo,
+                execCtx.headSha || context.payload.pull_request.head.sha
+              )
+            : undefined
+        }
       )
       getLogger().info('Phase 0: dependency analysis completed')
     } catch (e: any) {

@@ -306,8 +306,12 @@ export interface IGitPlatform {
   /**
    * 获取仓库文件树（所有文件路径）。
    * GitHub: Git Tree API (recursive)；GitLab: Repository Tree API (recursive + paginated)。
+   *
+   * @param path - 可选，只列举该目录下一层（非递归），用于全量树被截断时
+   *   按需回填（DEP-004）。返回的 `entries[].path` 一律是仓库根相对的完整路径。
+   *   目录不存在时返回空 entries，不抛错 —— 这是投机查询，不是失败。
    */
-  listRepositoryTree(owner: string, repo: string, ref: string): Promise<TreeResult>
+  listRepositoryTree(owner: string, repo: string, ref: string, path?: string): Promise<TreeResult>
 }
 
 // ─── 平台单例（ARCH-018）────────────────────────────────────────────────

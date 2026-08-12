@@ -423,6 +423,33 @@ describe('GitLabPlatform', () => {
         ...TREE_PAGINATION_ARGS
       })
     })
+
+    // DEP-004：截断后按需回填只列举单个目录
+    test('传 path → 非递归列举该目录', async () => {
+      mockRepositories.allRepositoryTrees.mockResolvedValue([
+        {type: 'blob', path: 'src/utils/hash.ts'}
+      ])
+
+      const result = await platform.listRepositoryTree('g', 'r', 'main', 'src/utils')
+      expect(mockRepositories.allRepositoryTrees).toHaveBeenCalledWith('g/r', {
+        ref: 'main',
+        recursive: false,
+        path: 'src/utils',
+        ...TREE_PAGINATION_ARGS
+      })
+      // GitLab 的 path 本身就是根相对路径，不需要再拼前缀
+      expect(result.entries).toEqual([{type: 'blob', path: 'src/utils/hash.ts'}])
+      expect(result.truncated).toBe(false)
+    })
+
+    test('目录探查打到不存在的路径 → 返回空树而不是抛错', async () => {
+      const err = new Error('404 Not Found')
+      ;(err as any).response = {status: 404}
+      mockRepositories.allRepositoryTrees.mockRejectedValue(err)
+
+      const result = await platform.listRepositoryTree('g', 'r', 'main', 'src/nope')
+      expect(result).toEqual({entries: [], truncated: false})
+    })
   })
 
   // ─── toGitPlatformError 透传 ──────────────────────────────────────────────

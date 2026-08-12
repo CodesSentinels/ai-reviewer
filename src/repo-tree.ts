@@ -192,32 +192,40 @@ export function resolveImportPath(
   importPath: string,
   repoFilesSet: Set<string>
 ): string | null {
+  for (const basePath of importBasePaths(importingFile, importPath)) {
+    const resolved = tryResolveWithExtensions(basePath, repoFilesSet)
+    if (resolved != null) return resolved
+  }
+  return null
+}
+
+/**
+ * 推导 import 可能对应的仓库内基础路径（未补扩展名），按优先级排列。
+ *
+ * 纯路径推导，不查文件树 —— 因此在文件树被截断时也能用来决定
+ * 「该去列举哪些目录」（DEP-004 按需回填）。
+ * 非相对、非别名路径（如 npm 包）返回空数组。
+ */
+export function importBasePaths(importingFile: string, importPath: string): string[] {
   if (importPath.startsWith('.')) {
-    // 相对路径解析
-    return resolveRelativePath(importingFile, importPath, repoFilesSet)
+    return [normalizeRelativePath(importingFile, importPath)]
   }
 
   // 尝试常见路径别名（@/, ~/, #/）
+  const bases: string[] = []
   for (const rule of PATH_ALIAS_RULES) {
     if (importPath.startsWith(rule.prefix)) {
       const stripped = importPath.substring(rule.prefix.length)
       for (const dir of rule.candidates) {
-        const resolved = tryResolveWithExtensions(dir + stripped, repoFilesSet)
-        if (resolved != null) return resolved
+        bases.push(dir + stripped)
       }
     }
   }
-
-  // 非相对、非别名路径（如 npm 包）不尝试解析
-  return null
+  return bases
 }
 
-/** 解析相对路径（./xxx, ../xxx） */
-function resolveRelativePath(
-  importingFile: string,
-  importPath: string,
-  repoFilesSet: Set<string>
-): string | null {
+/** 把相对路径（./xxx, ../xxx）拼成仓库根相对路径 */
+function normalizeRelativePath(importingFile: string, importPath: string): string {
   // 获取导入方文件所在目录
   const dir = importingFile.substring(0, importingFile.lastIndexOf('/'))
 
@@ -232,9 +240,38 @@ function resolveRelativePath(
       resolved.push(part)
     }
   }
-  const basePath = resolved.join('/')
+  return resolved.join('/')
+}
 
-  return tryResolveWithExtensions(basePath, repoFilesSet)
+/**
+ * 列举单个目录内容的接口（DEP-004 按需回填）。
+ *
+ * 全量文件树被截断时，用它只把「PR 真正 import 到的目录」补回来，
+ * 而不是重拉整棵树：一个目录一次请求，就能解掉该目录下所有候选扩展名。
+ */
+export interface DirectoryLister {
+  /** 列举目录下一层的文件路径（仓库根相对）。目录不存在返回空数组 */
+  listDirectory(dirPath: string): Promise<string[]>
+}
+
+/**
+ * 推导为解析某个 import 需要列举哪些目录（DEP-004）。
+ *
+ * 每个基础路径对应两个可能位置：
+ * - 父目录 —— 放 `xxx.ts` / `xxx.vue` 这类补扩展名的候选
+ * - 基础路径自身 —— 放 `xxx/index.ts` / `xxx/__init__.py` 这类目录入口
+ *
+ * @returns 去重后的目录路径；仓库根（空字符串）会被保留为 ''，调用方自行决定是否列举
+ */
+export function importProbeDirectories(importingFile: string, importPath: string): string[] {
+  const dirs = new Set<string>()
+  for (const basePath of importBasePaths(importingFile, importPath)) {
+    if (basePath === '') continue
+    const slash = basePath.lastIndexOf('/')
+    if (slash > 0) dirs.add(basePath.substring(0, slash))
+    dirs.add(basePath)
+  }
+  return [...dirs]
 }
 
 /** 尝试直接匹配、补全扩展名、补全 index 文件 */

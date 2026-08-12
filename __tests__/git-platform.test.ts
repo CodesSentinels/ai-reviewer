@@ -622,6 +622,51 @@ describe('GitHubPlatform', () => {
 
       await expect(platform.listRepositoryTree('o', 'r', 'sha')).rejects.toThrow(GitPlatformError)
     })
+
+    // DEP-004：截断后按需回填只列举单个目录
+    test('传 path → 用 <ref>:<path> 取子树且不 recursive', async () => {
+      mockOctokit.git.getTree.mockResolvedValue({data: {tree: [], truncated: false}})
+
+      await platform.listRepositoryTree('o', 'r', 'sha', 'src/utils')
+      const args = mockOctokit.git.getTree.mock.calls[0][0] as any
+      expect(args.tree_sha).toBe('sha:src/utils')
+      expect(args.recursive).toBeUndefined()
+    })
+
+    test('子树条目补回根相对路径（否则和全量树的路径对不上）', async () => {
+      mockOctokit.git.getTree.mockResolvedValue({
+        data: {
+          tree: [
+            {type: 'blob', path: 'hash.ts'},
+            {type: 'tree', path: 'nested'}
+          ],
+          truncated: false
+        }
+      })
+
+      const result = await platform.listRepositoryTree('o', 'r', 'sha', 'src/utils')
+      expect(result.entries.map((e: any) => e.path)).toEqual([
+        'src/utils/hash.ts',
+        'src/utils/nested'
+      ])
+    })
+
+    test('目录探查打到不存在的路径 → 返回空树而不是抛错（投机查询）', async () => {
+      const err: any = new Error('Not Found')
+      err.status = 404
+      mockOctokit.git.getTree.mockRejectedValue(err)
+
+      const result = await platform.listRepositoryTree('o', 'r', 'sha', 'src/nope')
+      expect(result).toEqual({entries: [], truncated: false})
+    })
+
+    test('全量树的 404 仍然抛错（不被目录探查的宽松处理波及）', async () => {
+      const err: any = new Error('Not Found')
+      err.status = 404
+      mockOctokit.git.getTree.mockRejectedValue(err)
+
+      await expect(platform.listRepositoryTree('o', 'r', 'sha')).rejects.toThrow(GitPlatformError)
+    })
   })
 
   // ─── ARCH-022: 错误语义转换 ────────────────────────────────────────

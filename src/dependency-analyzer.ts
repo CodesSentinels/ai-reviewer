@@ -18,11 +18,13 @@ import {scanPatch, type PatchScanMap} from './changed-lines'
 import {type Options} from './options'
 import {getLogger} from './platform/logger'
 import {
+  type DirectoryLister,
   type Language,
   type RepoTreeProject,
   detectLanguage,
   filterByExtension,
   getExtensionsForLanguage,
+  importProbeDirectories,
   resolveImportPath,
   sortByProximity
 } from './repo-tree'
@@ -1133,6 +1135,109 @@ function hasReExportFrom(
   return false
 }
 
+// ==================== 文件树截断后的按需回填（DEP-004）====================
+
+/** 一次运行最多额外列举的目录数，防止在超大仓库里把预算打光 */
+const DEFAULT_MAX_DIR_FETCHES = 40
+
+/** 文件树截断后的按需回填配置 */
+export interface TreeRecoveryOptions {
+  /** repoFiles 是否被平台 API 截断 */
+  truncated: boolean
+  /** 目录列举接口；不传则只透传截断状态，不做回填 */
+  dirLister?: DirectoryLister
+  /** 最多额外列举的目录数（默认 40） */
+  maxDirFetches?: number
+}
+
+/** 回填过程中的共享状态：目录去重 + 预算 */
+interface RecoveryState {
+  lister: DirectoryLister
+  /** 已列举过的目录（成功或失败都记，避免重复打同一个洞） */
+  listed: Set<string>
+  remaining: number
+}
+
+function createRecoveryState(opts: TreeRecoveryOptions): RecoveryState | null {
+  if (!opts.truncated || opts.dirLister == null) return null
+  return {
+    lister: opts.dirLister,
+    listed: new Set<string>(),
+    remaining: opts.maxDirFetches ?? DEFAULT_MAX_DIR_FETCHES
+  }
+}
+
+/**
+ * 把「解析不到的 import」所在目录补进 repoFilesSet（DEP-004 第三层）。
+ *
+ * 截断的文件树里查不到某个路径，只说明它不在可见范围内，不代表文件不存在。
+ * 这里对每个解析失败的 import 推导出候选目录，一个目录一次请求就能解掉
+ * 该目录下所有扩展名候选，比逐个候选路径探测省一个数量级的 API 调用。
+ *
+ * @returns 新发现的文件路径（已并入 repoFilesSet）
+ */
+async function recoverPathsForImports(
+  contents: Iterable<[string, string]>,
+  repoFilesSet: Set<string>,
+  state: RecoveryState,
+  concurrencyLimit: ReturnType<typeof pLimit>,
+  stage: string
+): Promise<string[]> {
+  if (state.remaining <= 0) return []
+
+  const wanted = new Set<string>()
+  for (const [file, content] of contents) {
+    for (const imp of parseImports(content, file)) {
+      // 能解析出来的不用回填；npm 包等非仓库内路径推导结果为空，自然跳过
+      if (resolveImportPath(file, imp.importPath, repoFilesSet) != null) continue
+      for (const dir of importProbeDirectories(file, imp.importPath)) {
+        if (dir === '' || state.listed.has(dir)) continue
+        wanted.add(dir)
+      }
+    }
+  }
+  if (wanted.size === 0) return []
+
+  const dirs = [...wanted].slice(0, state.remaining)
+  if (dirs.length < wanted.size) {
+    getLogger().warning(
+      `dependency analysis [${stage}]: directory probe budget exhausted — ` +
+        `${wanted.size - dirs.length} unresolved import director${
+          wanted.size - dirs.length > 1 ? 'ies' : 'y'
+        } left unprobed`
+    )
+  }
+  state.remaining -= dirs.length
+  for (const dir of dirs) state.listed.add(dir)
+
+  const discovered: string[] = []
+  await Promise.all(
+    dirs.map(async dir =>
+      concurrencyLimit(async () => {
+        try {
+          for (const f of await state.lister.listDirectory(dir)) {
+            if (repoFilesSet.has(f)) continue
+            repoFilesSet.add(f)
+            discovered.push(f)
+          }
+        } catch (e: any) {
+          // 回填是尽力而为，失败只降级为「解析不到」，不影响主流程
+          getLogger().warning(
+            `dependency analysis [${stage}]: directory probe failed for ${dir}: ${e.message}`
+          )
+        }
+      })
+    )
+  )
+
+  if (discovered.length > 0) {
+    getLogger().info(
+      `dependency analysis [${stage}]: recovered ${discovered.length} file(s) from ${dirs.length} directory probe(s)`
+    )
+  }
+  return discovered
+}
+
 // ==================== 依赖分析编排 ====================
 
 /**
@@ -1153,8 +1258,9 @@ function hasReExportFrom(
  * @param patchScans - （可选）由 review.ts 预先扫描的 PatchScanMap。
  *   传入后避免对每个 fileDiff 重新 walk 提取 modifiedLines。
  *   未传入时会按需就地扫描（兼容直接调用此函数的单元测试与早期调用方）。
- * @param treeTruncated - （可选）repoFiles 是否被平台 API 截断（DEP-004）。
- *   为 true 时结果不完整，会透传到 DependencyContext 供上层向用户提示降级。
+ * @param treeRecovery - （可选）文件树截断信息与按需回填配置（DEP-004）。
+ *   truncated 会透传到 DependencyContext 供上层向用户提示降级；
+ *   带 dirLister 时还会把解析不到的 import 所在目录补回来。
  * @returns 完整的依赖分析上下文
  */
 export async function analyzeDependencies(
@@ -1166,9 +1272,10 @@ export async function analyzeDependencies(
   headSha: string,
   contentFetcher: FileContentFetcher,
   patchScans?: PatchScanMap,
-  treeTruncated = false
+  treeRecovery: TreeRecoveryOptions = {truncated: false}
 ): Promise<DependencyContext> {
   const fileAnalyses = new Map<string, FileDependencyInfo>()
+  const treeTruncated = treeRecovery.truncated
 
   // 空文件树时跳过分析（getRepoFileTree 失败返回空数组）
   if (repoFiles.length === 0) {
@@ -1176,10 +1283,15 @@ export async function analyzeDependencies(
     return {fileAnalyses, treeTruncated}
   }
 
+  // 截断时准备按需回填：只补 PR 真正 import 到的目录，不重拉整棵树
+  const recovery = createRecoveryState(treeRecovery)
   if (treeTruncated) {
+    const fallback =
+      recovery != null
+        ? `unresolved imports will be probed on demand (budget: ${recovery.remaining} directories)`
+        : 'unresolved imports may point to files outside the visible tree'
     getLogger().warning(
-      `dependency analysis: repo file tree is truncated (${repoFiles.length} files visible) — ` +
-        'unresolved imports may point to files outside the visible tree'
+      `dependency analysis: repo file tree is truncated (${repoFiles.length} files visible) — ${fallback}`
     )
   }
 
@@ -1288,6 +1400,23 @@ export async function analyzeDependencies(
   const fileContents = new Map<string, string>()
   const repoFilesSet = new Set(repoFiles)
 
+  // 截断时先把 PR 自己的变更文件补进可见集合：这些路径在 headSha 上一定存在，
+  // 零 API 成本。少了这一步，指向被修改文件本身的 import 会解析失败——
+  // 而那恰恰是依赖分析唯一关心的目标（allModifiedSymbols 的键）。
+  if (treeTruncated) {
+    let seeded = 0
+    for (const [filename] of filesAndChanges) {
+      if (repoFilesSet.has(filename)) continue
+      repoFilesSet.add(filename)
+      seeded++
+    }
+    if (seeded > 0) {
+      getLogger().info(
+        `dependency analysis: seeded ${seeded} PR file(s) missing from the truncated tree`
+      )
+    }
+  }
+
   for (const [modifiedFile] of allModifiedSymbols) {
     dependencyGraph.set(modifiedFile, [])
   }
@@ -1304,6 +1433,19 @@ export async function analyzeDependencies(
     })
   )
   await Promise.all(prFetchPromises)
+
+  // 截断回填（第一轮）：PR 内文件的 import 里解析不到的，把目录补回来。
+  // 必须在解析循环之前完成，否则这一轮的依赖边照样丢。
+  let recoveredFiles: string[] = []
+  if (recovery != null) {
+    recoveredFiles = await recoverPathsForImports(
+      fileContents,
+      repoFilesSet,
+      recovery,
+      concurrencyLimit,
+      'step 2'
+    )
+  }
 
   let prInternalHits = 0
   for (const candidateFile of prCandidates) {
@@ -1346,7 +1488,9 @@ export async function analyzeDependencies(
   // 按扩展名过滤仓库文件，排除 PR 中已处理的文件和测试文件
   const modifiedFileSet = new Set(modifiedFileNames)
   const prCandidatesSet = new Set(prCandidates)
-  let candidateFiles = filterByExtension(repoFiles, extensions).filter(
+  // 回填出来的文件同样是合法候选，不能只从截断后的原始列表里挑
+  const visibleRepoFiles = recoveredFiles.length > 0 ? [...repoFilesSet] : repoFiles
+  let candidateFiles = filterByExtension(visibleRepoFiles, extensions).filter(
     f => !modifiedFileSet.has(f) && !prCandidatesSet.has(f) && !isTestFile(f)
   )
 
@@ -1383,6 +1527,13 @@ export async function analyzeDependencies(
   getLogger().info(
     `dependency analysis [step 4]: fetched ${candidateFiles.length} external file contents (${fileContents.size} total in cache including ${prCandidates.length} PR files from step 2)`
   )
+
+  // 截断回填（第二轮）：外部候选文件的 import 同样可能指向不可见目录。
+  // 候选集已定，这一轮只为让步骤 5/5.5 的路径解析拿到完整依据；
+  // 已列举过的目录不会重复请求，预算由 RecoveryState 统一扣减。
+  if (recovery != null) {
+    await recoverPathsForImports(fileContents, repoFilesSet, recovery, concurrencyLimit, 'step 4')
+  }
 
   // ===== 步骤 5: 解析外部文件的导入语句，扩充依赖图 =====
   const prFileSet = new Set(filesAndChanges.map(([f]) => f))

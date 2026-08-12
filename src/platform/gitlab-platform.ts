@@ -194,17 +194,34 @@ export class GitLabPlatform implements IGitPlatform {
    *   条目数正好卡在上限时再探一页确认，而不是猜「满了就是截断」
    * - Unicode 路径 → gitbeaker 内部做 URL 编码
    * - API 部分失败 → 抛 GitPlatformError（不静默返回空数组）
+   * - 传入 path → 只列举该目录下一层（截断后按需回填），目录不存在返回空树
    */
-  async listRepositoryTree(owner: string, repo: string, ref: string): Promise<TreeResult> {
+  async listRepositoryTree(
+    owner: string,
+    repo: string,
+    ref: string,
+    path?: string
+  ): Promise<TreeResult> {
     const projectPath = `${owner}/${repo}`
+    const scoped = path != null && path !== ''
     try {
-      const trees = await withGitLabRetry('listRepositoryTree', async () =>
-        this.api.Repositories.allRepositoryTrees(
-          projectPath,
-          listOptions({ref, recursive: true}, TREE_PAGINATION_DEFAULTS) as any
-        )
+      const trees = await withGitLabRetry(
+        scoped ? 'listRepositoryTree(dir)' : 'listRepositoryTree',
+        async () =>
+          this.api.Repositories.allRepositoryTrees(
+            projectPath,
+            listOptions(
+              scoped ? {ref, recursive: false, path} : {ref, recursive: true},
+              TREE_PAGINATION_DEFAULTS
+            ) as any
+          )
       )
+      // GitLab 的 tree 条目 path 本身就是仓库根相对路径，无需拼接
       const entries = trees.map(t => ({type: t.type, path: t.path}))
+      // 目录探查只有一层，不参与整树的截断判定
+      if (scoped) {
+        return {entries, truncated: false}
+      }
       const limit = TREE_PAGINATION_DEFAULTS.perPage * TREE_PAGINATION_DEFAULTS.maxPages
       // 没到上限说明翻页自然结束，一定是完整的
       if (entries.length < limit) {
@@ -214,9 +231,10 @@ export class GitLabPlatform implements IGitPlatform {
       // 避免「恰好 5 万个文件的仓库」被误报成截断（GLAPI-024 / DEP-004）
       return {entries, truncated: await this.hasMoreTreePages(projectPath, ref)}
     } catch (e) {
-      // 空仓库返回 404 "404 Tree Not Found"，视为合法的空树
+      // 空仓库返回 404 "404 Tree Not Found"，视为合法的空树；
+      // 目录探查打到不存在的路径同理（投机查询，不是失败）
       const err = normalizeGitLabError(e, 'listRepositoryTree')
-      if (err.errorKind === 'not_found' && /tree not found/i.test(err.message)) {
+      if (err.errorKind === 'not_found' && (scoped || /tree not found/i.test(err.message))) {
         return {entries: [], truncated: false}
       }
       throw err

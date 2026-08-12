@@ -713,18 +713,38 @@ export class GitHubPlatform implements IGitPlatform {
 
   // ─── 10. 仓库文件树（DEP-001 / DEP-003）──────────────────────────────────
 
-  async listRepositoryTree(owner: string, repo: string, ref: string): Promise<TreeResult> {
+  async listRepositoryTree(
+    owner: string,
+    repo: string,
+    ref: string,
+    path?: string
+  ): Promise<TreeResult> {
     try {
       const {data} = await octokit.git.getTree({
         owner,
         repo,
+        // `<ref>:<path>` 是 Git Tree API 指定子树的写法
         // eslint-disable-next-line camelcase
-        tree_sha: ref,
-        recursive: 'true'
+        tree_sha: path != null && path !== '' ? `${ref}:${path}` : ref,
+        // 目录探查只要一层，全量树才需要 recursive
+        ...(path != null && path !== '' ? {} : {recursive: 'true'})
       })
-      return {entries: data.tree, truncated: data.truncated === true}
+      // 子树返回的 path 是相对该目录的，补回根相对路径以统一接口契约
+      const entries =
+        path != null && path !== ''
+          ? data.tree.map(item => ({
+              ...item,
+              path: item.path != null ? `${path}/${item.path}` : item.path
+            }))
+          : data.tree
+      return {entries, truncated: data.truncated === true}
     } catch (e) {
-      throw toGitPlatformError(e)
+      const err = toGitPlatformError(e)
+      // 目录探查命中不存在的路径是正常结果，不是错误
+      if (path != null && path !== '' && err.errorKind === 'not_found') {
+        return {entries: [], truncated: false}
+      }
+      throw err
     }
   }
 }
