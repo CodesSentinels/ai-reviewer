@@ -41,25 +41,25 @@
 
 ## 3. P0：GitHub Workflow 安全修复
 
-- [ ] `SEC-001` 重构 `.github/workflows/openai-review.yml`，禁止
+- [x] `SEC-001` 重构 `.github/workflows/openai-review.yml`，禁止
       `pull_request_target` checkout 并执行 PR head 中的
       Action、`dist/index.js`、依赖或脚本。
 - [ ] `SEC-002` 将无密钥 PR head 验证与有评论写权限/模型密钥的 reviewer 执行面分
       离。
-- [ ] `SEC-003` 有密钥 reviewer 固定执行 GitHub 默认分支中的可信代码，只把 PR
+- [x] `SEC-003` 有密钥 reviewer 固定执行 GitHub 默认分支中的可信代码，只把 PR
       diff 和文件内容作为数据读取。
-- [ ] `SEC-004` 普通 PR head job 不得获得 `OPENAI_API_KEY`、写权限 PAT、GitLab
+- [x] `SEC-004` 普通 PR head job 不得获得 `OPENAI_API_KEY`、写权限 PAT、GitLab
       同步 Token 或其他业务密钥。
-- [ ] `SEC-005` 有密钥 job 不得执行 PR job 产生的脚本、依赖、插件或可执行
+- [x] `SEC-005` 有密钥 job 不得执行 PR job 产生的脚本、依赖、插件或可执行
       artifact。
-- [ ] `SEC-006` 在 workflow/job 中显式声明最小 `permissions:`。
+- [x] `SEC-006` 在 workflow/job 中显式声明最小 `permissions:`。
 - [ ] `SEC-007` 为 fork PR、同项目 PR、机器人 PR 和恶意 PR 增加 workflow 安全测
       试。
-- [ ] `SEC-008` 增加日志脱敏工具和测试，覆盖 HTTP Header、URL query、异常对象、
+- [x] `SEC-008` 增加日志脱敏工具和测试，覆盖 HTTP Header、URL query、异常对象、
       环境变量和 debug 输出。
-- [ ] `SEC-009` 将 `Actions-R-Us/actions-tagger@latest` 固定到审核过的 commit
+- [x] `SEC-009` 将 `Actions-R-Us/actions-tagger@latest` 固定到审核过的 commit
       SHA，或改为仓库内受控脚本。
-- [ ] `SEC-010` 盘点并固定除 `SEC-009` 单列项之外的其余外部 GitHub Action 引用：
+- [x] `SEC-010` 盘点并固定除 `SEC-009` 单列项之外的其余外部 GitHub Action 引用：
       优先固定到审核过的 commit SHA；无法固定 SHA 的引用必须有等价的供应链校验和
       升级流程。
 

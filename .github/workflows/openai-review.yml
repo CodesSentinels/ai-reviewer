@@ -1,5 +1,19 @@
+# OpenAI Reviewer
+#
+# 安全不变式（SEC-001~005，改动本文件前必读）：
+#
+#   本 workflow 由 pull_request_target 触发，因此持有 base 仓库的写权限 token
+#   和 OPENAI_API_KEY。任何能开 PR 的人（包括 fork）都能控制 PR head 的内容。
+#   所以本 job 绝不能 checkout 或执行 PR head 中的任何东西——Action 代码、
+#   dist/index.js、依赖、package script、lint 配置都不行。
+#
+#   PR 的 diff 与文件内容由 Action 通过 GitHub API 以「数据」方式读取
+#   （见 src/review.ts 的 listRepositoryTree / getFileContent），
+#   工作区里不需要、也不允许出现 PR 代码。
 name: OpenAI Reviewer
 
+# SEC-006：最小权限。contents 只读用于 checkout 默认分支，
+# pull-requests 写用于发布摘要、行级评论和命令回复。
 permissions:
   contents: read
   pull-requests: write
@@ -26,17 +40,26 @@ concurrency:
 jobs:
   review:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
-      - uses: actions/checkout@v3
+      # SEC-001 / SEC-003：固定 checkout 默认分支的可信代码。
+      #
+      # 绝不能加回 `repository: ${{ github.event.pull_request.head.repo.full_name }}`
+      # 或 `ref: ${{ github.event.pull_request.head.ref }}`——那等于把本 job 的
+      # 密钥交给任何能开 PR 的人。default_branch 对三种触发事件都可用
+      # （pull_request_target / issue_comment / pull_request_review_comment）。
+      #
+      # 附带影响：修改 reviewer 自身的 PR，其审查由默认分支上的版本执行，
+      # 不会用 PR 里的新版本自审——这是 SEC-003 要求的结果，不是缺陷。
+      - uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26 # v3
         with:
-          repository: ${{github.event.pull_request.head.repo.full_name}}
-          ref: ${{github.event.pull_request.head.ref}}
+          ref: ${{ github.event.repository.default_branch }}
+          # 不把 token 写进 .git/config，避免后续步骤意外拿到凭据
+          persist-credentials: false
           submodules: false
-      - name: Install ripgrep
-        run: |
-          if ! command -v rg &>/dev/null; then
-            sudo apt-get update && sudo apt-get install -y ripgrep
-          fi
+
       - uses: ./
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -45,6 +68,17 @@ jobs:
           debug: true
           review_comment_lgtm: false
           openai_heavy_model: gpt-5.4-mini
+          # SEC-004 / SEC-005：这两个功能都要求工作区里存在 PR 代码，
+          # 而本 job 持有密钥，不能执行 PR 代码，因此在此关闭。
+          #
+          # lint 尤其危险：eslint 适配器会探测并让 eslint require() 仓库里的
+          # eslint.config.js / .eslintrc.js（src/lint/adapters/eslint.ts），
+          # 这些是可执行 JS——在有密钥的 job 里跑等同于任意代码执行。
+          #
+          # 恢复 lint 属于第二步：由无密钥 job 跑出报告，可信 job 经严格
+          # schema 校验后消费。在那之前保持 false。
+          enable_shell: false
+          enable_lint_tools: false
           path_filters: |
             !dist/**
             !**/*.lock

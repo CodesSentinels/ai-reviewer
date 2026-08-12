@@ -90,6 +90,8 @@ const BARE_CITATION_AT_BOUNDARY_RE = new RegExp(
  * @param text LLM 原始返回的文本
  * @returns 剥离引用标记后的文本；输入是空串/null 时原样返回
  */
+import {getLogger} from './platform/logger'
+
 export function sanitizeModelOutput(text: string): string {
   if (text == null || text.length === 0) return text
 
@@ -105,8 +107,12 @@ export function sanitizeModelOutput(text: string): string {
   // 第三步：清掉任何残留的孤立分隔符字符
   out = out.replace(SEPARATOR_RE, '')
 
-  console.log('输入文本：', JSON.stringify(text))
-  console.log('输出文本：', JSON.stringify(out))
+  // SEC-008：原先是无条件 console.log 整段模型输入/输出——既绕过脱敏，
+  // 又把 PR 内容和模型返回原样打进日志。改走 Logger 的 debug 级：
+  // GitHub 侧经 redactForLog 脱敏，且只有开启 debug 时才输出。
+  const logger = getLogger()
+  logger.debug(`sanitize input: ${JSON.stringify(text)}`)
+  logger.debug(`sanitize output: ${JSON.stringify(out)}`)
 
   return out
 }

@@ -1,5 +1,11 @@
 name: 'Combine PRs'
 
+# SEC-006：显式最小权限。本 workflow 创建合并分支并开 PR，
+# 因此需要 contents/pull-requests 写权限；其余一律不给。
+permissions:
+  contents: write
+  pull-requests: write
+
 # Controls when the action will run - in this case triggered manually
 on:
   workflow_dispatch:
@@ -42,7 +48,7 @@ jobs:
           echo "COMBINE_BRANCH_NAME=${{ github.event.inputs.combineBranchName || env.DEFAULT_COMBINE_BRANCH_NAME }}" >> $GITHUB_ENV
           echo "IGNORE_LABEL=${{ github.event.inputs.ignoreLabel || env.DEFAULT_IGNORE_LABEL }}" >> $GITHUB_ENV
 
-      - uses: actions/github-script@v6
+      - uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
         id: fetch-branch-names
         name: Fetch branch names
         with:
@@ -122,7 +128,7 @@ jobs:
 
             return "ok"
       # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26 # v3
         with:
           fetch-depth: 0
       # Creates a branch with other PR branches merged together

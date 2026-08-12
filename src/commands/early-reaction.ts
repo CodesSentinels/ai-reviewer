@@ -17,7 +17,7 @@
  * 构造阶段（见该文件），构造失败会走 `ignorable_event` 优雅跳过，本函数根本不会被
  * 调用，因此不需要在这里重复判断（GitHub Issue #88 P2 复核）。
  */
-import {info} from '@actions/core'
+import {info} from '../actions-log'
 import {bootstrapCommands} from './bootstrap'
 import {getRegistry} from './registry'
 import {parse, DEFAULT_BOT_MENTIONS} from './parser'

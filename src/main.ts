@@ -6,7 +6,7 @@
  * 2. 调用共享编排层（ARCH-025）完成配置 → 上下文 → 事件分发
  * 3. 全局异常处理
  */
-import {setFailed, warning} from '@actions/core'
+import {setFailed, warning} from './actions-log'
 import {Bot} from './bot'
 import {tryEarlyReaction} from './commands/early-reaction'
 import {OpenAIOptions, type Options} from './options'

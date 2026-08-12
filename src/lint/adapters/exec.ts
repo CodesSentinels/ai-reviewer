@@ -9,7 +9,7 @@
  * 注意：使用 execFile（不是 exec）避免 shell 注入风险。
  */
 
-import {info, warning} from '@actions/core'
+import {info, warning} from '../../actions-log'
 import {execFile} from 'child_process'
 
 /** 单个命令执行的最大输出（字节）— 防止 10 万级问题文件撑爆内存 */

@@ -17,7 +17,7 @@
  * 为 lint-filter.ts。
  */
 
-import {info} from '@actions/core'
+import {info} from '../actions-log'
 import {type ChangedLineMap} from '../changed-lines'
 import {type LintResult} from './types'
 

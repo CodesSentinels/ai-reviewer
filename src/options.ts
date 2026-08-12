@@ -6,7 +6,7 @@
  * - PathFilter: 文件路径过滤器，根据 glob 规则决定哪些文件需要审查
  * - OpenAIOptions: OpenAI 模型配置，关联模型名称与其 token 限制
  */
-import {info} from '@actions/core'
+import {info} from './actions-log'
 import {minimatch} from 'minimatch'
 import {TokenLimits} from './limits'
 

@@ -262,6 +262,72 @@ describe('GH-003/GH-004: workflow 触发事件保持不变', () => {
   })
 })
 
+describe('SEC-001~006: pull_request_target 执行面不得接触 PR head', () => {
+  const reviewJob = reviewWorkflow.jobs.review
+  const rawWorkflow = fs.readFileSync(
+    path.join(ROOT, '.github/workflows/openai-review.yml'),
+    'utf8'
+  )
+
+  const checkoutStep = reviewJob.steps.find((s: any) =>
+    String(s.uses ?? '').startsWith('actions/checkout')
+  )
+
+  test('review job 存在 checkout 步骤（用于取可信代码，不是取 PR）', () => {
+    expect(checkoutStep).toBeDefined()
+  })
+
+  test('checkout 固定默认分支，绝不指向 PR head 的 repo/ref', () => {
+    expect(checkoutStep.with.ref).toBe('${{ github.event.repository.default_branch }}')
+    // repository 一旦出现就意味着可能切到 fork 仓库
+    expect(checkoutStep.with.repository).toBeUndefined()
+  })
+
+  test('workflow 全文不出现任何 PR head 引用（防止以别的写法绕回来）', () => {
+    // 注释里为了说明「绝不能加回来」会提到这些表达式，先剥掉注释再查
+    const code = rawWorkflow
+      .split('\n')
+      .filter(line => !line.trim().startsWith('#'))
+      .join('\n')
+
+    for (const forbidden of [
+      'pull_request.head.repo',
+      'pull_request.head.ref',
+      'pull_request.head.sha',
+      'github.head_ref'
+    ]) {
+      // concurrency group 里的 github.head_ref 只用于分组键，不用于 checkout
+      if (forbidden === 'github.head_ref') {
+        const usedOutsideConcurrency = code
+          .split('\n')
+          .some(line => line.includes(forbidden) && !line.includes('${{ github.repository }}'))
+        expect(usedOutsideConcurrency).toBe(false)
+        continue
+      }
+      expect(code).not.toContain(forbidden)
+    }
+  })
+
+  test('checkout 不保留凭据', () => {
+    expect(checkoutStep.with['persist-credentials']).toBe(false)
+  })
+
+  test('持有密钥的步骤关闭 shell 与 lint（二者都需要工作区里的 PR 代码）', () => {
+    const actionStep = reviewJob.steps.find((s: any) => s.uses === './')
+    expect(actionStep).toBeDefined()
+    // 确认这一步确实拿着密钥——否则下面的断言就失去意义
+    expect(actionStep.env.OPENAI_API_KEY).toBeDefined()
+    expect(actionStep.env.GITHUB_TOKEN).toBeDefined()
+
+    expect(actionStep.with.enable_shell).toBe(false)
+    expect(actionStep.with.enable_lint_tools).toBe(false)
+  })
+
+  test('job 级显式声明最小权限（SEC-006）', () => {
+    expect(reviewJob.permissions).toEqual({contents: 'read', 'pull-requests': 'write'})
+  })
+})
+
 describe('GH-005: 并发与取消策略保持不变', () => {
   const concurrency = reviewWorkflow.concurrency
 

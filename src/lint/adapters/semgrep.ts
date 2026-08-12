@@ -40,7 +40,7 @@
  * 这样在 PR 摘要 / 评论里能与 lint findings 形成鲜明对照。
  */
 
-import {info, warning} from '@actions/core'
+import {info, warning} from '../../actions-log'
 import {dirname} from 'path'
 import {ensureToolInstalled} from '../tool-installer'
 import {type InstallSpec, type LintResult, type ToolAdapter, type ToolDetection} from '../types'

@@ -14,7 +14,7 @@
  *   - 单个工具 scan 抛异常 → 记录警告，记入 ToolSummary，不阻塞总流程
  */
 
-import {info, warning} from '@actions/core'
+import {info, warning} from '../actions-log'
 import {buildPatchScans, toAddedLineMap, type PatchScanMap} from '../changed-lines'
 import {EslintAdapter} from './adapters/eslint'
 import {BiomeAdapter} from './adapters/biome'

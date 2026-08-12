@@ -1,6 +1,250 @@
 /******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
 
+/***/ 380:
+/***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
+
+"use strict";
+__nccwpck_require__.r(__webpack_exports__);
+/* harmony export */ __nccwpck_require__.d(__webpack_exports__, {
+/* harmony export */   "debug": () => (/* binding */ debug),
+/* harmony export */   "error": () => (/* binding */ error),
+/* harmony export */   "info": () => (/* binding */ info),
+/* harmony export */   "setFailed": () => (/* binding */ setFailed),
+/* harmony export */   "warning": () => (/* binding */ warning)
+/* harmony export */ });
+/* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(2186);
+/* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__nccwpck_require__.n(_actions_core__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var _redact__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(1173);
+/**
+ * actions-log.ts — @actions/core 日志出口的脱敏包装（SEC-008）
+ *
+ * 只把脱敏做在 `GitHubLogger` 里是不够的：仓库里有 17 个文件、上百个调用点
+ * 直接 `import {info, warning} from '@actions/core'`，完全绕过 Logger 抽象。
+ * 其中风险最高的是 `bot.ts` —— 它会打印 `${e}, backtrace: ${e.stack}`，
+ * OpenAI SDK 的错误对象里可能带着请求头和请求体。
+ *
+ * 全量迁移到 `getLogger()` 是 ARCH-018 的收尾工作，涉及面大；在那之前，
+ * 本模块提供**同签名**的替代品：调用方只需把 import 源从 `@actions/core`
+ * 换成 `./actions-log`，行为不变，但所有输出先过 `redactForLog()`。
+ *
+ * `arch-guard.test.ts` 会守住这条边界：除本文件和 `platform/github-logger.ts`
+ * 外，任何文件都不得再从 `@actions/core` 导入日志函数。
+ */
+
+
+function info(message) {
+    _actions_core__WEBPACK_IMPORTED_MODULE_0__.info((0,_redact__WEBPACK_IMPORTED_MODULE_1__/* .redactForLog */ .vS)(message));
+}
+function warning(message) {
+    _actions_core__WEBPACK_IMPORTED_MODULE_0__.warning((0,_redact__WEBPACK_IMPORTED_MODULE_1__/* .redactForLog */ .vS)(message));
+}
+function error(message) {
+    _actions_core__WEBPACK_IMPORTED_MODULE_0__.error((0,_redact__WEBPACK_IMPORTED_MODULE_1__/* .redactForLog */ .vS)(message));
+}
+function debug(message) {
+    _actions_core__WEBPACK_IMPORTED_MODULE_0__.debug((0,_redact__WEBPACK_IMPORTED_MODULE_1__/* .redactForLog */ .vS)(message));
+}
+/**
+ * setFailed 同时写日志并把 job 标记为失败——失败路径恰恰最可能带上
+ * 异常详情，因此同样必须脱敏。
+ */
+function setFailed(message) {
+    _actions_core__WEBPACK_IMPORTED_MODULE_0__.setFailed((0,_redact__WEBPACK_IMPORTED_MODULE_1__/* .redactForLog */ .vS)(message));
+}
+
+
+/***/ }),
+
+/***/ 1173:
+/***/ ((__unused_webpack_module, __webpack_exports__, __nccwpck_require__) => {
+
+"use strict";
+/* harmony export */ __nccwpck_require__.d(__webpack_exports__, {
+/* harmony export */   "vS": () => (/* binding */ redactForLog)
+/* harmony export */ });
+/* unused harmony exports REDACTED, collectSecretValues, redactString, redactValue */
+/**
+ * redact.ts — 通用日志脱敏（SEC-008）
+ *
+ * `gitlab-trigger-redact.ts` 只处理字符串形态的三种 GitLab token，覆盖面不够：
+ * 密钥同样会从 HTTP Header、URL query、异常对象的嵌套字段、环境变量快照和
+ * debug 输出里漏出去。这里做统一实现，两条主线：
+ *
+ * 1. **按值脱敏**：把 `process.env` 里敏感变量的**实际值**当作字面量屏蔽。
+ *    这是最强的一层——不管密钥经过多少层包装、出现在什么字段，只要值本身
+ *    出现在输出里就会被打掉。
+ * 2. **按形态脱敏**：token 前缀（glpat- / ghp_ / sk- 等）、Authorization 头、
+ *    URL 里的内嵌凭据与 token query、敏感字段名。用于覆盖不来自本进程 env
+ *    的密钥（例如 API 响应里回显的凭据）。
+ *
+ * 设计约束：
+ * - 只做遮蔽，不改结构——调用方拿到的仍是可读的同形对象，便于排错
+ * - 不抛异常。脱敏函数自己失败会把原始内容直接漏出去，因此全程兜底
+ * - 幂等：对已脱敏内容再跑一次结果不变
+ */
+const REDACTED = '***';
+/**
+ * 值被认为是密钥的环境变量名片段。
+ *
+ * 按 `_` / `-` / `.` 切分后做**整段精确匹配**，不是子串匹配——
+ * 子串匹配会把 `PATH` 当成 `pat`、把 `KEYWORD` 当成 `key`，
+ * 于是整条 PATH 被打成 `***`，日志直接不可读。
+ * 反过来，整段匹配才能认出 `GITLAB_PAT` 这种本仓库实际在用的命名。
+ */
+const SECRET_ENV_SEGMENTS = new Set([
+    'token',
+    'tokens',
+    'pat',
+    'key',
+    'keys',
+    'apikey',
+    'secret',
+    'secrets',
+    'password',
+    'passwd',
+    'credential',
+    'credentials'
+]);
+/** 环境变量名是否指向一个密钥值 */
+function isSecretEnvName(name) {
+    return name
+        .toLowerCase()
+        .split(/[_\-.]/)
+        .some(segment => SECRET_ENV_SEGMENTS.has(segment));
+}
+/** 对象字段名一旦命中就直接遮蔽其值 */
+const SENSITIVE_KEY_PATTERN = /(^|[_-])(authorization|cookie|token|api[_-]?key|secret|password|passwd|credential|private[_-]?token|session)([_-]|$)/i;
+/** URL query 中需要遮蔽的参数名 */
+const SENSITIVE_QUERY_PARAMS = [
+    'token',
+    'private_token',
+    'access_token',
+    'api_key',
+    'apikey',
+    'key',
+    'password',
+    'sig',
+    'signature'
+];
+/** 短于该长度的 env 值不做全局字面量替换，避免把常见短词打成 *** */
+const MIN_LITERAL_LENGTH = 8;
+function escapeRegExp(value) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+/** 从环境变量里收集需要按字面量屏蔽的密钥值 */
+function collectSecretValues(env = process.env) {
+    const values = [];
+    for (const [name, value] of Object.entries(env)) {
+        if (value == null || value.length < MIN_LITERAL_LENGTH)
+            continue;
+        if (!isSecretEnvName(name))
+            continue;
+        values.push(value);
+    }
+    // 长值优先，避免短值先替换后把长值切碎
+    return values.sort((a, b) => b.length - a.length);
+}
+/** 按形态脱敏一段字符串 */
+function redactString(input, secretValues = collectSecretValues()) {
+    let out = input;
+    // 1) 已知密钥的字面量
+    for (const secret of secretValues) {
+        out = out.split(secret).join(REDACTED);
+    }
+    // 2) URL 内嵌凭据：https://user:pass@host
+    out = out.replace(/(\b[a-z][a-z0-9+.-]*:\/\/)([^/\s:@]+):([^/\s@]+)@/gi, `$1$2:${REDACTED}@`);
+    // 3) URL query 参数
+    for (const param of SENSITIVE_QUERY_PARAMS) {
+        out = out.replace(new RegExp(`([?&]${escapeRegExp(param)}=)[^&\\s"']+`, 'gi'), `$1${REDACTED}`);
+    }
+    // 4) HTTP 头部写法。
+    //    4a 先处理「头名: [方案] 凭据」，方案关键字保留、只打后面的凭据；
+    //    4b 再兜底没有头名、只有方案的写法（如 curl -H "Bearer xxx"）。
+    //
+    //    注意不能把裸词 `token` 当认证方案：日志里 `token count: 12345`
+    //    这类正常诊断信息会被打成 `token ***`，把可读性毁掉。
+    //    真正的 `Authorization: token xxx` 由 4a 的可选方案分组覆盖。
+    out = out.replace(/\b(authorization|private-token|x-api-key|cookie)\b(\s*[:=]\s*)((?:bearer|basic|token)\s+)?([^\s,;"']+)/gi, (match, name, sep, scheme, value) => {
+        if (value === REDACTED)
+            return match;
+        return `${name}${sep}${scheme ?? ''}${REDACTED}`;
+    });
+    //    4b 兜底没有头名、只有方案关键字的写法。只认首字母大写形式
+    //    （真实 header 如此），小写形态由 4a 的头名规则覆盖。
+    //
+    //    Bearer 是无歧义的认证方案，后面跟什么都按凭据处理；
+    //    Basic 同时是常用英文词（"Basic review completed"），因此要求凭据长度
+    //    >= 16——base64 凭据本来就长，正常句子里的单词不会这么长。
+    out = out.replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{3,}/g, `Bearer ${REDACTED}`);
+    out = out.replace(/\bBasic\s+[A-Za-z0-9._~+/=-]{16,}/g, `Basic ${REDACTED}`);
+    // 5) 常见 token 前缀（不依赖本进程 env，覆盖回显场景）
+    out = out.replace(/\bglpat-[A-Za-z0-9_-]{6,}/g, `glpat-${REDACTED}`);
+    out = out.replace(/\bglrt-[A-Za-z0-9_-]{6,}/g, `glrt-${REDACTED}`);
+    out = out.replace(/\bgh[pousr]_[A-Za-z0-9]{16,}/g, `gh*_${REDACTED}`);
+    out = out.replace(/\bgithub_pat_[A-Za-z0-9_]{16,}/g, `github_pat_${REDACTED}`);
+    out = out.replace(/\bsk-[A-Za-z0-9_-]{16,}/g, `sk-${REDACTED}`);
+    return out;
+}
+/**
+ * 深度脱敏任意值：字符串、对象、数组、Error（含 message/stack/cause）。
+ *
+ * 循环引用会被替换为 '[Circular]'，不会栈溢出。
+ */
+function redactValue(value, secretValues) {
+    const secrets = secretValues ?? collectSecretValues();
+    const seen = new WeakSet();
+    function walk(node) {
+        if (typeof node === 'string')
+            return redactString(node, secrets);
+        if (node == null || typeof node !== 'object')
+            return node;
+        if (seen.has(node))
+            return '[Circular]';
+        seen.add(node);
+        if (node instanceof Error) {
+            const out = {
+                name: node.name,
+                message: redactString(node.message, secrets)
+            };
+            if (node.stack != null)
+                out.stack = redactString(node.stack, secrets);
+            if (node.cause != null) {
+                out.cause = walk(node.cause);
+            }
+            return out;
+        }
+        if (Array.isArray(node))
+            return node.map(walk);
+        const out = {};
+        for (const [key, val] of Object.entries(node)) {
+            out[key] = SENSITIVE_KEY_PATTERN.test(key) ? REDACTED : walk(val);
+        }
+        return out;
+    }
+    return walk(value);
+}
+/**
+ * 把任意值转成可直接写日志的脱敏字符串。
+ *
+ * 自身绝不抛错：脱敏失败就退回到一个不含内容的占位符——
+ * 宁可丢日志，也不能因为格式化异常把原文漏出去。
+ */
+function redactForLog(value) {
+    try {
+        if (typeof value === 'string')
+            return redactString(value);
+        const redacted = redactValue(value);
+        return typeof redacted === 'string' ? redacted : JSON.stringify(redacted);
+    }
+    catch {
+        return '[unloggable value redacted]';
+    }
+}
+
+
+/***/ }),
+
 /***/ 7351:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
@@ -68916,6 +69160,35 @@ module.exports = JSON.parse('[[[0,44],"disallowed_STD3_valid"],[[45,46],"valid"]
 /******/ 	}
 /******/ 	
 /************************************************************************/
+/******/ 	/* webpack/runtime/compat get default export */
+/******/ 	(() => {
+/******/ 		// getDefaultExport function for compatibility with non-harmony modules
+/******/ 		__nccwpck_require__.n = (module) => {
+/******/ 			var getter = module && module.__esModule ?
+/******/ 				() => (module['default']) :
+/******/ 				() => (module);
+/******/ 			__nccwpck_require__.d(getter, { a: getter });
+/******/ 			return getter;
+/******/ 		};
+/******/ 	})();
+/******/ 	
+/******/ 	/* webpack/runtime/define property getters */
+/******/ 	(() => {
+/******/ 		// define getter functions for harmony exports
+/******/ 		__nccwpck_require__.d = (exports, definition) => {
+/******/ 			for(var key in definition) {
+/******/ 				if(__nccwpck_require__.o(definition, key) && !__nccwpck_require__.o(exports, key)) {
+/******/ 					Object.defineProperty(exports, key, { enumerable: true, get: definition[key] });
+/******/ 				}
+/******/ 			}
+/******/ 		};
+/******/ 	})();
+/******/ 	
+/******/ 	/* webpack/runtime/hasOwnProperty shorthand */
+/******/ 	(() => {
+/******/ 		__nccwpck_require__.o = (obj, prop) => (Object.prototype.hasOwnProperty.call(obj, prop))
+/******/ 	})();
+/******/ 	
 /******/ 	/* webpack/runtime/make namespace object */
 /******/ 	(() => {
 /******/ 		// define __esModule on exports
@@ -68948,8 +69221,8 @@ var __webpack_exports__ = {};
 // ESM COMPAT FLAG
 __nccwpck_require__.r(__webpack_exports__);
 
-// EXTERNAL MODULE: ./node_modules/@actions/core/lib/core.js
-var core = __nccwpck_require__(2186);
+// EXTERNAL MODULE: ./lib/actions-log.js
+var actions_log = __nccwpck_require__(380);
 // EXTERNAL MODULE: external "child_process"
 var external_child_process_ = __nccwpck_require__(2081);
 ;// CONCATENATED MODULE: ./node_modules/openai/internal/tslib.mjs
@@ -77476,6 +77749,45 @@ async function pRetry(input, options) {
 	});
 }
 
+;// CONCATENATED MODULE: ./lib/platform/logger.js
+/**
+ * platform/logger.ts - 平台无关 Logger 接口（ARCH-012）
+ *
+ * 定义统一的日志接口，替换共享核心中对 @actions/core info/warning/error 的直接依赖。
+ * 入口文件（main.ts / gitlab-trigger.ts）在启动时调用 setLogger() 设置平台实现，
+ * 共享核心通过 getLogger() 或便捷函数（logger.info 等）输出日志。
+ *
+ * ARCH-015：GitLab-only 启动不得初始化 @actions/core，因此 GitLabLogger
+ * 不 import @actions/core，只使用 console。
+ */
+/**
+ * 控制台 Logger（默认 fallback）。
+ * 在 setLogger() 调用前或未初始化时使用，保证日志不会丢失。
+ */
+const consoleLogger = {
+    // eslint-disable-next-line no-console
+    info: (msg) => console.log(msg),
+    // eslint-disable-next-line no-console
+    warning: (msg) => console.warn(msg),
+    // eslint-disable-next-line no-console
+    error: (msg) => console.error(msg),
+    // eslint-disable-next-line no-console
+    debug: (msg) => console.log(`[DEBUG] ${msg}`)
+};
+let _logger = consoleLogger;
+/** 设置全局 Logger 实例（入口文件调用） */
+function setLogger(logger) {
+    _logger = logger;
+}
+/** 获取当前 Logger 实例 */
+function getLogger() {
+    return _logger;
+}
+/** 重置为默认 console logger（仅供测试使用） */
+function resetLogger() {
+    _logger = consoleLogger;
+}
+
 ;// CONCATENATED MODULE: ./lib/sanitize-model-output.js
 /**
  * sanitize-model-output.ts - 清理 LLM 文本输出中的"引用标记"
@@ -77553,6 +77865,7 @@ const BARE_CITATION_AT_BOUNDARY_RE = new RegExp(`cite[a-z]{0,12}turn\\d+(?:${SOU
  * @param text LLM 原始返回的文本
  * @returns 剥离引用标记后的文本；输入是空串/null 时原样返回
  */
+
 function sanitizeModelOutput(text) {
     if (text == null || text.length === 0)
         return text;
@@ -77564,8 +77877,12 @@ function sanitizeModelOutput(text) {
     out = out.replace(BARE_CITATION_AT_BOUNDARY_RE, '');
     // 第三步：清掉任何残留的孤立分隔符字符
     out = out.replace(SEPARATOR_RE, '');
-    console.log('输入文本：', JSON.stringify(text));
-    console.log('输出文本：', JSON.stringify(out));
+    // SEC-008：原先是无条件 console.log 整段模型输入/输出——既绕过脱敏，
+    // 又把 PR 内容和模型返回原样打进日志。改走 Logger 的 debug 级：
+    // GitHub 侧经 redactForLog 脱敏，且只有开启 debug 时才输出。
+    const logger = getLogger();
+    logger.debug(`sanitize input: ${JSON.stringify(text)}`);
+    logger.debug(`sanitize output: ${JSON.stringify(out)}`);
     return out;
 }
 
@@ -77703,7 +78020,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
         }
         catch (e) {
             if (e instanceof APIError) {
-                (0,core.warning)(`Failed to chat: ${e}, backtrace: ${e.stack}`);
+                (0,actions_log.warning)(`Failed to chat: ${e}, backtrace: ${e.stack}`);
             }
             return res;
         }
@@ -77727,7 +78044,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
         }
         if (this.client != null) {
             const tools = this.buildTools();
-            (0,core.info)(`[web_search_debug] model=${this.model}, enableWebSearch=${this.enableWebSearch}, enableShell=${this.enableShell} , tools=${JSON.stringify(tools)}`);
+            (0,actions_log.info)(`[web_search_debug] model=${this.model}, enableWebSearch=${this.enableWebSearch}, enableShell=${this.enableShell} , tools=${JSON.stringify(tools)}`);
             let responseText = '';
             const analysisSteps = [];
             let response = await this.createResponse(this.buildParams(message, ids.previousResponseId, tools));
@@ -77736,17 +78053,17 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
                     break;
                 }
                 if (response.output == null) {
-                    (0,core.warning)('openai response is null');
+                    (0,actions_log.warning)('openai response is null');
                     break;
                 }
                 const pendingShellCalls = [];
                 const outputTypes = response.output.map((item) => item.type);
-                (0,core.info)(`[web_search_debug] response output types: ${JSON.stringify(outputTypes)}`);
+                (0,actions_log.info)(`[web_search_debug] response output types: ${JSON.stringify(outputTypes)}`);
                 for (let i = 0; i < response.output.length; i++) {
                     const item = response.output[i];
-                    (0,core.info)(`[analysis_chain_debug] output[${i}] type="${item.type}", keys=${JSON.stringify(Object.keys(item))}`);
+                    (0,actions_log.info)(`[analysis_chain_debug] output[${i}] type="${item.type}", keys=${JSON.stringify(Object.keys(item))}`);
                     if (item.type === 'web_search_call') {
-                        (0,core.info)(`[web_search] executed, id: ${item.id}, status: ${item.status}`);
+                        (0,actions_log.info)(`[web_search] executed, id: ${item.id}, status: ${item.status}`);
                         analysisSteps.push({
                             type: 'web_search',
                             status: item.status
@@ -77754,13 +78071,13 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
                     }
                     if (item.type === 'shell_call') {
                         const shellItem = item;
-                        (0,core.info)(`[analysis_chain_debug] shell_call found! id=${shellItem.id}, commands=${JSON.stringify(shellItem.action?.commands)}, status=${shellItem.status}`);
+                        (0,actions_log.info)(`[analysis_chain_debug] shell_call found! id=${shellItem.id}, commands=${JSON.stringify(shellItem.action?.commands)}, status=${shellItem.status}`);
                         this.ensureShellAnalysisStep(analysisSteps, shellItem);
                         pendingShellCalls.push(shellItem);
                     }
                     if (item.type === 'shell_call_output') {
                         const shellOutput = item;
-                        (0,core.info)(`[analysis_chain_debug] shell_call_output found! call_id=${shellOutput.call_id}, output_count=${shellOutput.output?.length ?? 0}`);
+                        (0,actions_log.info)(`[analysis_chain_debug] shell_call_output found! call_id=${shellOutput.call_id}, output_count=${shellOutput.output?.length ?? 0}`);
                         this.attachShellOutput(analysisSteps, shellOutput.call_id, shellOutput.output);
                     }
                     if (item.type === 'message') {
@@ -77769,7 +78086,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
                                 responseText += content.text;
                             }
                             if (content.type === 'reasoning') {
-                                (0,core.info)(`[reasoning] model thinking: ${JSON.stringify(content)}`);
+                                (0,actions_log.info)(`[reasoning] model thinking: ${JSON.stringify(content)}`);
                             }
                         }
                     }
@@ -77778,7 +78095,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
                     break;
                 }
                 if (turn === MAX_LOCAL_SHELL_TURNS - 1) {
-                    (0,core.warning)(`Reached local shell turn limit (${MAX_LOCAL_SHELL_TURNS}) for response ${response.id}`);
+                    (0,actions_log.warning)(`Reached local shell turn limit (${MAX_LOCAL_SHELL_TURNS}) for response ${response.id}`);
                     break;
                 }
                 const shellOutputs = await this.executeShellCalls(pendingShellCalls, analysisSteps);
@@ -77801,7 +78118,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
             const beforeLen = responseText.length;
             responseText = sanitizeModelOutput(responseText);
             if (responseText.length !== beforeLen) {
-                (0,core.info)(`[sanitize] stripped citation markers: ${beforeLen} → ${responseText.length} chars`);
+                (0,actions_log.info)(`[sanitize] stripped citation markers: ${beforeLen} → ${responseText.length} chars`);
             }
             if (this.options.debug) {
                 // info(`openai responses: ${responseText}`)
@@ -77813,7 +78130,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
             return [responseText, newIds, analysisSteps];
         }
         else {
-            (0,core.setFailed)('The OpenAI API is not initialized');
+            (0,actions_log.setFailed)('The OpenAI API is not initialized');
         }
         return ['', {}, []];
     };
@@ -77846,13 +78163,13 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
             const response = await pRetry(() => this.client.responses.create(params), {
                 retries: this.options.openaiRetries
             });
-            (0,core.info)(`openai sendMessage (including retries) response time: ${Date.now() - start} ms`);
+            (0,actions_log.info)(`openai sendMessage (including retries) response time: ${Date.now() - start} ms`);
             return response;
         }
         catch (e) {
-            (0,core.info)(`openai sendMessage (including retries) response time: ${Date.now() - start} ms`);
+            (0,actions_log.info)(`openai sendMessage (including retries) response time: ${Date.now() - start} ms`);
             if (e instanceof APIError) {
-                (0,core.warning)(`Failed to send message to openai: ${e}, backtrace: ${e.stack}`);
+                (0,actions_log.warning)(`Failed to send message to openai: ${e}, backtrace: ${e.stack}`);
             }
             return undefined;
         }
@@ -77878,7 +78195,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
             .reverse()
             .find(step => step.type === 'shell' && step.callId === callId);
         if (shellStep == null || output.length === 0) {
-            (0,core.info)('[analysis_chain_debug] shell_call_output but no matching shell step found or no output');
+            (0,actions_log.info)('[analysis_chain_debug] shell_call_output but no matching shell step found or no output');
             return;
         }
         const commandOutputs = [];
@@ -77887,7 +78204,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
         let timedOut = false;
         let exitCode;
         for (const out of output) {
-            (0,core.info)(`[analysis_chain_debug] shell output chunk: stdout_len=${out.stdout?.length ?? 0}, stderr_len=${out.stderr?.length ?? 0}, outcome=${JSON.stringify(out.outcome)}`);
+            (0,actions_log.info)(`[analysis_chain_debug] shell output chunk: stdout_len=${out.stdout?.length ?? 0}, stderr_len=${out.stderr?.length ?? 0}, outcome=${JSON.stringify(out.outcome)}`);
             const stdoutChunkLength = out.stdout?.length ?? 0;
             const stderrChunkLength = out.stderr?.length ?? 0;
             stdoutLength += stdoutChunkLength;
@@ -77932,7 +78249,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
         const output = [];
         for (let i = 0; i < commands.length; i++) {
             const command = commands[i];
-            (0,core.info)(`[local_shell] executing command ${i + 1}/${commands.length} for call ${shellCall.call_id}: ${command}`);
+            (0,actions_log.info)(`[local_shell] executing command ${i + 1}/${commands.length} for call ${shellCall.call_id}: ${command}`);
             const result = await this.runLocalShellCommand(command, timeoutMs, effectiveMaxOutputLength);
             const commandsRemaining = commands.length - i;
             const commandBudget = remainingOutputBudget > 0
@@ -78004,45 +78321,6 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
             };
         }
     };
-}
-
-;// CONCATENATED MODULE: ./lib/platform/logger.js
-/**
- * platform/logger.ts - 平台无关 Logger 接口（ARCH-012）
- *
- * 定义统一的日志接口，替换共享核心中对 @actions/core info/warning/error 的直接依赖。
- * 入口文件（main.ts / gitlab-trigger.ts）在启动时调用 setLogger() 设置平台实现，
- * 共享核心通过 getLogger() 或便捷函数（logger.info 等）输出日志。
- *
- * ARCH-015：GitLab-only 启动不得初始化 @actions/core，因此 GitLabLogger
- * 不 import @actions/core，只使用 console。
- */
-/**
- * 控制台 Logger（默认 fallback）。
- * 在 setLogger() 调用前或未初始化时使用，保证日志不会丢失。
- */
-const consoleLogger = {
-    // eslint-disable-next-line no-console
-    info: (msg) => console.log(msg),
-    // eslint-disable-next-line no-console
-    warning: (msg) => console.warn(msg),
-    // eslint-disable-next-line no-console
-    error: (msg) => console.error(msg),
-    // eslint-disable-next-line no-console
-    debug: (msg) => console.log(`[DEBUG] ${msg}`)
-};
-let _logger = consoleLogger;
-/** 设置全局 Logger 实例（入口文件调用） */
-function setLogger(logger) {
-    _logger = logger;
-}
-/** 获取当前 Logger 实例 */
-function getLogger() {
-    return _logger;
-}
-/** 重置为默认 console logger（仅供测试使用） */
-function resetLogger() {
-    _logger = consoleLogger;
 }
 
 ;// CONCATENATED MODULE: ./lib/commands/registry.js
@@ -80172,10 +80450,10 @@ async function tryEarlyReaction(execCtx, rawReaction) {
             eventName,
             rawReaction
         });
-        (0,core.info)(`early ack reaction sent for commentId=${comment.id}`);
+        (0,actions_log.info)(`early ack reaction sent for commentId=${comment.id}`);
     }
     catch (e) {
-        (0,core.info)(`early ack reaction skipped: ${String(e)}`);
+        (0,actions_log.info)(`early ack reaction skipped: ${String(e)}`);
     }
 }
 
@@ -82364,35 +82642,35 @@ class Options {
     }
     /** 打印所有配置项到日志，方便调试 */
     print() {
-        (0,core.info)(`debug: ${this.debug}`);
-        (0,core.info)(`disable_review: ${this.disableReview}`);
-        (0,core.info)(`disable_release_notes: ${this.disableReleaseNotes}`);
-        (0,core.info)(`max_files: ${this.maxFiles}`);
-        (0,core.info)(`review_simple_changes: ${this.reviewSimpleChanges}`);
-        (0,core.info)(`review_comment_lgtm: ${this.reviewCommentLGTM}`);
-        (0,core.info)(`path_filters: ${this.pathFilters}`);
-        (0,core.info)(`system_message: ${this.systemMessage}`);
-        (0,core.info)(`openai_light_model: ${this.openaiLightModel}`);
-        (0,core.info)(`openai_heavy_model: ${this.openaiHeavyModel}`);
-        (0,core.info)(`openai_model_temperature: ${this.openaiModelTemperature}`);
-        (0,core.info)(`openai_retries: ${this.openaiRetries}`);
-        (0,core.info)(`openai_timeout_ms: ${this.openaiTimeoutMS}`);
-        (0,core.info)(`openai_concurrency_limit: ${this.openaiConcurrencyLimit}`);
-        (0,core.info)(`github_concurrency_limit: ${this.githubConcurrencyLimit}`);
-        (0,core.info)(`summary_token_limits: ${this.lightTokenLimits.string()}`);
-        (0,core.info)(`review_token_limits: ${this.heavyTokenLimits.string()}`);
-        (0,core.info)(`api_base_url: ${this.apiBaseUrl}`);
-        (0,core.info)(`language: ${this.language}`);
-        (0,core.info)(`enable_dependency_analysis: ${this.enableDependencyAnalysis}`);
-        (0,core.info)(`max_dependency_files: ${this.maxDependencyFiles}`);
-        (0,core.info)(`enable_web_search: ${this.enableWebSearch}`);
-        (0,core.info)(`enable_shell: ${this.enableShell}`);
-        (0,core.info)(`enable_lint_tools: ${this.enableLintTools}`);
-        (0,core.info)(`tool_enable_overrides: ${JSON.stringify(this.toolEnableOverrides)}`);
-        (0,core.info)(`tool_version_overrides: ${JSON.stringify(this.toolVersionOverrides)}`);
-        (0,core.info)(`semgrep_config: ${this.semgrepConfig}`);
-        (0,core.info)(`command_ack_reaction: ${this.commandAckReaction}`);
-        (0,core.info)(`max_review_comments: ${this.maxReviewComments}`);
+        (0,actions_log.info)(`debug: ${this.debug}`);
+        (0,actions_log.info)(`disable_review: ${this.disableReview}`);
+        (0,actions_log.info)(`disable_release_notes: ${this.disableReleaseNotes}`);
+        (0,actions_log.info)(`max_files: ${this.maxFiles}`);
+        (0,actions_log.info)(`review_simple_changes: ${this.reviewSimpleChanges}`);
+        (0,actions_log.info)(`review_comment_lgtm: ${this.reviewCommentLGTM}`);
+        (0,actions_log.info)(`path_filters: ${this.pathFilters}`);
+        (0,actions_log.info)(`system_message: ${this.systemMessage}`);
+        (0,actions_log.info)(`openai_light_model: ${this.openaiLightModel}`);
+        (0,actions_log.info)(`openai_heavy_model: ${this.openaiHeavyModel}`);
+        (0,actions_log.info)(`openai_model_temperature: ${this.openaiModelTemperature}`);
+        (0,actions_log.info)(`openai_retries: ${this.openaiRetries}`);
+        (0,actions_log.info)(`openai_timeout_ms: ${this.openaiTimeoutMS}`);
+        (0,actions_log.info)(`openai_concurrency_limit: ${this.openaiConcurrencyLimit}`);
+        (0,actions_log.info)(`github_concurrency_limit: ${this.githubConcurrencyLimit}`);
+        (0,actions_log.info)(`summary_token_limits: ${this.lightTokenLimits.string()}`);
+        (0,actions_log.info)(`review_token_limits: ${this.heavyTokenLimits.string()}`);
+        (0,actions_log.info)(`api_base_url: ${this.apiBaseUrl}`);
+        (0,actions_log.info)(`language: ${this.language}`);
+        (0,actions_log.info)(`enable_dependency_analysis: ${this.enableDependencyAnalysis}`);
+        (0,actions_log.info)(`max_dependency_files: ${this.maxDependencyFiles}`);
+        (0,actions_log.info)(`enable_web_search: ${this.enableWebSearch}`);
+        (0,actions_log.info)(`enable_shell: ${this.enableShell}`);
+        (0,actions_log.info)(`enable_lint_tools: ${this.enableLintTools}`);
+        (0,actions_log.info)(`tool_enable_overrides: ${JSON.stringify(this.toolEnableOverrides)}`);
+        (0,actions_log.info)(`tool_version_overrides: ${JSON.stringify(this.toolVersionOverrides)}`);
+        (0,actions_log.info)(`semgrep_config: ${this.semgrepConfig}`);
+        (0,actions_log.info)(`command_ack_reaction: ${this.commandAckReaction}`);
+        (0,actions_log.info)(`max_review_comments: ${this.maxReviewComments}`);
     }
     /**
      * 检查文件路径是否通过过滤规则
@@ -82401,7 +82679,7 @@ class Options {
      */
     checkPath(path) {
         const ok = this.pathFilters.check(path);
-        (0,core.info)(`checking path: ${path} => ${ok}`);
+        (0,actions_log.info)(`checking path: ${path} => ${ok}`);
         return ok;
     }
 }
@@ -82638,6 +82916,8 @@ function createGitHubExecutionContext() {
     };
 }
 
+// EXTERNAL MODULE: ./node_modules/@actions/core/lib/core.js
+var core = __nccwpck_require__(2186);
 ;// CONCATENATED MODULE: ./lib/platform/config-provider.js
 /**
  * platform/config-provider.ts - 平台无关配置提供者接口（ARCH-007）
@@ -82981,26 +83261,32 @@ class GitHubConfigProvider {
     }
 }
 
+// EXTERNAL MODULE: ./lib/redact.js
+var redact = __nccwpck_require__(1173);
 ;// CONCATENATED MODULE: ./lib/platform/github-logger.js
 /**
  * platform/github-logger.ts - GitHub Actions Logger（ARCH-013）
  *
  * 委托 @actions/core 的 info/warning/error/debug，
  * 保留 Actions annotation 能力（warning/error 会在 PR check 页面显示注解）。
+ *
+ * SEC-008：所有输出经 redactForLog() 脱敏。放在 Logger 这一层而不是各调用点，
+ * 是因为调用点有几百处，漏一处就等于没做——debug 输出尤其容易被忽略。
  */
+
 
 class GitHubLogger {
     info(msg) {
-        (0,core.info)(msg);
+        (0,core.info)((0,redact/* redactForLog */.vS)(msg));
     }
     warning(msg) {
-        (0,core.warning)(msg);
+        (0,core.warning)((0,redact/* redactForLog */.vS)(msg));
     }
     error(msg) {
-        (0,core.error)(msg);
+        (0,core.error)((0,redact/* redactForLog */.vS)(msg));
     }
     debug(msg) {
-        (0,core.debug)(msg);
+        (0,core.debug)((0,redact/* redactForLog */.vS)(msg));
     }
 }
 
@@ -83037,19 +83323,19 @@ const octokit = new RetryAndThrottlingOctokit({
     throttle: {
         // 主要速率限制回调：当 API 配额耗尽时触发
         onRateLimit: (retryAfter, options, _o, retryCount) => {
-            (0,core.warning)(`Request quota exhausted for request ${options.method} ${options.url}
+            (0,actions_log.warning)(`Request quota exhausted for request ${options.method} ${options.url}
 Retry after: ${retryAfter} seconds
 Retry count: ${retryCount}
 `);
             // 最多重试 3 次
             if (retryCount <= 3) {
-                (0,core.warning)(`Retrying after ${retryAfter} seconds!`);
+                (0,actions_log.warning)(`Retrying after ${retryAfter} seconds!`);
                 return true;
             }
         },
         // 次要速率限制回调：当触发 GitHub 的二级速率限制时
         onSecondaryRateLimit: (retryAfter, options) => {
-            (0,core.warning)(`SecondaryRateLimit detected for request ${options.method} ${options.url} ; retry after ${retryAfter} seconds`);
+            (0,actions_log.warning)(`SecondaryRateLimit detected for request ${options.method} ${options.url} ; retry after ${retryAfter} seconds`);
             // 对于提交 PR Review 的 POST 请求不重试（避免重复提交审查）
             if (options.method === 'POST' && options.url.match(/\/repos\/.*\/.*\/pulls\/.*\/reviews/)) {
                 return false;
@@ -86041,8 +86327,8 @@ function parseJsonSafe(raw, context) {
         return JSON.parse(raw);
     }
     catch (e) {
-        (0,core.warning)(`lint: failed to parse JSON output from ${context}: ${e instanceof Error ? e.message : String(e)}`);
-        (0,core.info)(`lint: raw output (first 500 chars): ${raw.substring(0, 500)}`);
+        (0,actions_log.warning)(`lint: failed to parse JSON output from ${context}: ${e instanceof Error ? e.message : String(e)}`);
+        (0,actions_log.info)(`lint: raw output (first 500 chars): ${raw.substring(0, 500)}`);
         return null;
     }
 }
@@ -86125,7 +86411,7 @@ async function installViaNpm(spec) {
     // 1) 缓存命中：同一 runner job 内 ai-reviewer 多次调用、或多个 adapter
     //    碰巧依赖同一工具时直接返回
     if ((0,external_fs_.existsSync)(binPath)) {
-        (0,core.info)(`lint/installer: cache hit for ${spec.binName} → ${binPath}`);
+        (0,actions_log.info)(`lint/installer: cache hit for ${spec.binName} → ${binPath}`);
         return { ok: true, binPath };
     }
     // 2) 沙箱目录初始化（首次调用）
@@ -86153,7 +86439,7 @@ async function installViaNpm(spec) {
     // version 缺省时不带 `@<range>`，npm 安装 latest。真实 Action 运行里 version 总会
     // 由 action.yml 的 *_version default 注入；缺省仅出现在未经 Action 的直接调用。
     const installTarget = spec.version ? `${spec.package}@${spec.version}` : spec.package;
-    (0,core.info)(`lint/installer: installing ${installTarget} → ${root}`);
+    (0,actions_log.info)(`lint/installer: installing ${installTarget} → ${root}`);
     const result = await runCommand({
         command: 'npm',
         args: [
@@ -86186,13 +86472,13 @@ async function installViaNpm(spec) {
         };
     }
     if (!(0,external_fs_.existsSync)(binPath)) {
-        (0,core.warning)(`lint/installer: ${installTarget} installed but bin not at ${binPath}`);
+        (0,actions_log.warning)(`lint/installer: ${installTarget} installed but bin not at ${binPath}`);
         return {
             ok: false,
             reason: `package installed but bin not at ${binPath} (unexpected layout)`
         };
     }
-    (0,core.info)(`lint/installer: ${spec.binName} ready at ${binPath}`);
+    (0,actions_log.info)(`lint/installer: ${spec.binName} ready at ${binPath}`);
     return { ok: true, binPath };
 }
 /**
@@ -86261,7 +86547,7 @@ async function installViaPip(spec) {
     const binPath = (0,external_path_.join)(targetDir, 'bin', spec.binName);
     // 1) 缓存命中
     if ((0,external_fs_.existsSync)(binPath)) {
-        (0,core.info)(`lint/installer[pip]: cache hit for ${spec.binName} → ${binPath}`);
+        (0,actions_log.info)(`lint/installer[pip]: cache hit for ${spec.binName} → ${binPath}`);
         return { ok: true, binPath };
     }
     // 2) 沙箱目录初始化
@@ -86280,7 +86566,7 @@ async function installViaPip(spec) {
     // 3) 跑 pip install
     const pipSpecifier = npmRangeToPipSpecifier(spec.version);
     const pkgArg = pipSpecifier.length > 0 ? `${spec.package}${pipSpecifier}` : spec.package;
-    (0,core.info)(`lint/installer[pip]: installing ${spec.package} (range "${spec.version}" → pip "${pipSpecifier}") → ${targetDir}`);
+    (0,actions_log.info)(`lint/installer[pip]: installing ${spec.package} (range "${spec.version}" → pip "${pipSpecifier}") → ${targetDir}`);
     const result = await runCommand({
         command: 'python3',
         args: [
@@ -86303,7 +86589,7 @@ async function installViaPip(spec) {
     });
     const elapsed = Date.now() - startedAt;
     if (result.spawnError) {
-        (0,core.warning)(`lint/installer[pip]: spawn failed after ${elapsed}ms — ${result.spawnErrorMessage ?? ''}`);
+        (0,actions_log.warning)(`lint/installer[pip]: spawn failed after ${elapsed}ms — ${result.spawnErrorMessage ?? ''}`);
         return {
             ok: false,
             reason: result.spawnErrorMessage != null && result.spawnErrorMessage.includes('python3')
@@ -86318,21 +86604,21 @@ async function installViaPip(spec) {
             .split('\n')
             .find(l => l.trim().length > 0)
             ?.substring(0, 200) ?? '';
-        (0,core.warning)(`lint/installer[pip]: pip exit=${result.exitCode} after ${elapsed}ms, stderr_first="${stderrSnippet}", stderr_len=${result.stderr.length}`);
+        (0,actions_log.warning)(`lint/installer[pip]: pip exit=${result.exitCode} after ${elapsed}ms, stderr_first="${stderrSnippet}", stderr_len=${result.stderr.length}`);
         return {
             ok: false,
             reason: `pip install ${pkgArg} failed (exit=${result.exitCode}): ${stderrSnippet}`
         };
     }
     if (!(0,external_fs_.existsSync)(binPath)) {
-        (0,core.warning)(`lint/installer[pip]: ${spec.package} installed (exit=0, ${elapsed}ms) but console script not at ${binPath}`);
+        (0,actions_log.warning)(`lint/installer[pip]: ${spec.package} installed (exit=0, ${elapsed}ms) but console script not at ${binPath}`);
         return {
             ok: false,
             reason: `package ${spec.package} installed but console script not at ${binPath} ` +
                 `(unexpected pip --target layout; check that the package declares a console_scripts entry for "${spec.binName}")`
         };
     }
-    (0,core.info)(`lint/installer[pip]: ${spec.binName} ready at ${binPath} after ${elapsed}ms ` +
+    (0,actions_log.info)(`lint/installer[pip]: ${spec.binName} ready at ${binPath} after ${elapsed}ms ` +
         `(stdout_len=${result.stdout.length}, stderr_len=${result.stderr.length})`);
     return { ok: true, binPath };
 }
@@ -86487,7 +86773,7 @@ class EslintAdapter {
                 reason: 'no ESLint config found in repo (looked for eslint.config.{js,mjs,cjs,ts,mts,cts}, .eslintrc.*, package.json#eslintConfig)'
             };
         }
-        (0,core.info)(`lint/eslint: bundled bin=${this.resolvedBinPath}, project config=${configFile}`);
+        (0,actions_log.info)(`lint/eslint: bundled bin=${this.resolvedBinPath}, project config=${configFile}`);
         this.resolvedVersion = version;
         return { available: true, version };
     }
@@ -86497,20 +86783,20 @@ class EslintAdapter {
         // 始终使用项目自带的 eslint config（早期支持的 useProjectConfig=false 已移除，
         // 因 ESLint 9 不内置规则集，关掉项目配置会让扫描必败）
         const args = ['--format', 'json', '--no-error-on-unmatched-pattern', ...files];
-        (0,core.info)(`lint/eslint: scanning ${files.length} files via ${this.resolvedBinPath}`);
+        (0,actions_log.info)(`lint/eslint: scanning ${files.length} files via ${this.resolvedBinPath}`);
         const result = await runCommand({
             command: this.resolvedBinPath,
             args,
             cwd: repoRoot
         });
         if (result.spawnError) {
-            (0,core.info)(`lint/eslint: spawn failed: ${result.spawnErrorMessage ?? ''}`);
+            (0,actions_log.info)(`lint/eslint: spawn failed: ${result.spawnErrorMessage ?? ''}`);
             return [];
         }
         // ESLint 在发现问题时返回 1，发现错误时返回 2，但 stdout 仍是合法 JSON
         const parsed = parseJsonSafe(result.stdout, 'eslint');
         if (parsed == null) {
-            (0,core.info)(`lint/eslint: no parseable output (stderr: ${result.stderr.substring(0, 200)})`);
+            (0,actions_log.info)(`lint/eslint: no parseable output (stderr: ${result.stderr.substring(0, 200)})`);
             return [];
         }
         const results = [];
@@ -86669,13 +86955,13 @@ class BiomeAdapter {
             };
         }
         this.resolvedVersion = extractVersion(versionResult.stdout);
-        (0,core.info)(`lint/biome: bundled bin=${this.resolvedBinPath}, zero-config OK`);
+        (0,actions_log.info)(`lint/biome: bundled bin=${this.resolvedBinPath}, zero-config OK`);
         return { available: true, version: this.resolvedVersion };
     }
     async scan(files, repoRoot) {
         if (files.length === 0)
             return [];
-        (0,core.info)(`lint/biome: scanning ${files.length} files via ${this.resolvedBinPath}`);
+        (0,actions_log.info)(`lint/biome: scanning ${files.length} files via ${this.resolvedBinPath}`);
         // --reporter=github 输出 GitHub Actions 标注格式（一行一条诊断），
         // --max-diagnostics=999 防止默认 20 条上限把发现截断
         const result = await runCommand({
@@ -86684,13 +86970,13 @@ class BiomeAdapter {
             cwd: repoRoot
         });
         if (result.spawnError) {
-            (0,core.info)(`lint/biome: spawn failed: ${result.spawnErrorMessage ?? ''}`);
+            (0,actions_log.info)(`lint/biome: spawn failed: ${result.spawnErrorMessage ?? ''}`);
             return [];
         }
         // Biome 把诊断写到 stdout（不是 stderr）；exit 非零仅代表"有发现"，不算异常
         const output = result.stdout || result.stderr;
         if (output.trim().length === 0) {
-            (0,core.info)(`lint/biome: no output (exit=${result.exitCode}); 0 findings`);
+            (0,actions_log.info)(`lint/biome: no output (exit=${result.exitCode}); 0 findings`);
             return [];
         }
         const results = [];
@@ -86726,7 +87012,7 @@ class BiomeAdapter {
                 category: categoryToType(ruleId)
             });
         }
-        (0,core.info)(`lint/biome: parsed ${results.length} finding(s) from --reporter=github output`);
+        (0,actions_log.info)(`lint/biome: parsed ${results.length} finding(s) from --reporter=github output`);
         return results;
     }
 }
@@ -86810,20 +87096,20 @@ class PrettierAdapter {
             };
         }
         this.resolvedVersion = extractVersion(versionResult.stdout);
-        (0,core.info)(`lint/prettier: bundled bin=${this.resolvedBinPath}`);
+        (0,actions_log.info)(`lint/prettier: bundled bin=${this.resolvedBinPath}`);
         return { available: true, version: this.resolvedVersion };
     }
     async scan(files, repoRoot) {
         if (files.length === 0)
             return [];
-        (0,core.info)(`lint/prettier: checking ${files.length} files via ${this.resolvedBinPath}`);
+        (0,actions_log.info)(`lint/prettier: checking ${files.length} files via ${this.resolvedBinPath}`);
         const result = await runCommand({
             command: this.resolvedBinPath,
             args: ['--check', '--no-error-on-unmatched-pattern', ...files],
             cwd: repoRoot
         });
         if (result.spawnError) {
-            (0,core.info)(`lint/prettier: spawn failed: ${result.spawnErrorMessage ?? ''}`);
+            (0,actions_log.info)(`lint/prettier: spawn failed: ${result.spawnErrorMessage ?? ''}`);
             return [];
         }
         // Prettier 把不符合格式的文件名输出到 stderr，每行一个：
@@ -86972,15 +87258,15 @@ class SemgrepAdapter {
     }
     async detect(repoRoot, versionOverride) {
         const detectStart = Date.now();
-        (0,core.info)(`lint/semgrep[detect]: start repoRoot=${repoRoot}, versionOverride=${versionOverride ?? '(default)'}, config=${this.config}`);
+        (0,actions_log.info)(`lint/semgrep[detect]: start repoRoot=${repoRoot}, versionOverride=${versionOverride ?? '(default)'}, config=${this.config}`);
         // 1) pip 装包
         const spec = versionOverride != null && versionOverride.length > 0
             ? { ...this.installSpec, version: versionOverride }
             : this.installSpec;
-        (0,core.info)(`lint/semgrep[detect]: ensureToolInstalled(kind=pip, package=semgrep, version=${spec.version})`);
+        (0,actions_log.info)(`lint/semgrep[detect]: ensureToolInstalled(kind=pip, package=semgrep, version=${spec.version})`);
         const install = await ensureToolInstalled(spec);
         if (!install.ok) {
-            (0,core.warning)(`lint/semgrep[detect]: install failed after ${Date.now() - detectStart}ms — ${install.reason ?? 'unknown'}`);
+            (0,actions_log.warning)(`lint/semgrep[detect]: install failed after ${Date.now() - detectStart}ms — ${install.reason ?? 'unknown'}`);
             return {
                 available: false,
                 reason: `bundled Semgrep install failed: ${install.reason ?? 'unknown'}`
@@ -86996,9 +87282,9 @@ class SemgrepAdapter {
         // 也兼容 Windows 路径分隔符
         this.binDir = (0,external_path_.dirname)(this.resolvedBinPath);
         this.pythonPath = (0,external_path_.dirname)(this.binDir);
-        (0,core.info)(`lint/semgrep[detect]: install ok — binPath=${this.resolvedBinPath}, pythonPath=${this.pythonPath}, binDir=${this.binDir}`);
+        (0,actions_log.info)(`lint/semgrep[detect]: install ok — binPath=${this.resolvedBinPath}, pythonPath=${this.pythonPath}, binDir=${this.binDir}`);
         // 2) `semgrep --version` 校验
-        (0,core.info)(`lint/semgrep[detect]: invoking ${this.resolvedBinPath} --version (with PYTHONPATH + PATH-prepend injected)`);
+        (0,actions_log.info)(`lint/semgrep[detect]: invoking ${this.resolvedBinPath} --version (with PYTHONPATH + PATH-prepend injected)`);
         const versionResult = await runCommand({
             command: this.resolvedBinPath,
             args: ['--version'],
@@ -87011,7 +87297,7 @@ class SemgrepAdapter {
                 .split('\n')
                 .find(l => l.trim().length > 0)
                 ?.substring(0, 120) ?? '';
-            (0,core.warning)(`lint/semgrep[detect]: --version failed exit=${versionResult.exitCode}, ` +
+            (0,actions_log.warning)(`lint/semgrep[detect]: --version failed exit=${versionResult.exitCode}, ` +
                 `spawnError=${versionResult.spawnError}, stderr="${stderrSnippet}"`);
             return {
                 available: false,
@@ -87024,7 +87310,7 @@ class SemgrepAdapter {
         //    这一步与后续 scan 解耦：即使代码 0 finding，也能从日志里看到"加载了 N 条规则"
         //    的证据，避免"参数传对了但规则没生效"型的隐性失败。失败仅 warn，不影响 detect 结果。
         await this.probeRulePack(repoRoot);
-        (0,core.info)(`lint/semgrep[detect]: ready in ${Date.now() - detectStart}ms — bin=${this.resolvedBinPath}, version=${version}, config=${this.config}`);
+        (0,actions_log.info)(`lint/semgrep[detect]: ready in ${Date.now() - detectStart}ms — bin=${this.resolvedBinPath}, version=${version}, config=${this.config}`);
         return { available: true, version };
     }
     /**
@@ -87044,7 +87330,7 @@ class SemgrepAdapter {
      */
     async probeRulePack(repoRoot) {
         const probeStart = Date.now();
-        (0,core.info)(`lint/semgrep[probe]: validating rule pack "${this.config}" via semgrep scan --validate ` +
+        (0,actions_log.info)(`lint/semgrep[probe]: validating rule pack "${this.config}" via semgrep scan --validate ` +
             `(no targets needed — just confirms rules can be loaded & parsed)`);
         const probe = await runCommand({
             command: this.resolvedBinPath,
@@ -87069,7 +87355,7 @@ class SemgrepAdapter {
                 .split('\n')
                 .find(l => l.trim().length > 0)
                 ?.substring(0, 200) ?? '';
-            (0,core.warning)(`lint/semgrep[probe]: --validate failed (exit=${probe.exitCode}, timedOut=${probe.timedOut}, ` +
+            (0,actions_log.warning)(`lint/semgrep[probe]: --validate failed (exit=${probe.exitCode}, timedOut=${probe.timedOut}, ` +
                 `elapsed=${elapsed}ms). Rule pack "${this.config}" may NOT be loaded. ` +
                 `Common causes: (1) config name typo (2) cannot reach semgrep.dev to fetch ` +
                 `the ruleset (3) invalid yaml in a custom config file. ` +
@@ -87084,7 +87370,7 @@ class SemgrepAdapter {
         const combined = `${probe.stderr}\n${probe.stdout}`;
         const ruleCountMatch = combined.match(/(\d+)\s+(?:valid\s+)?rule/i);
         const ruleCount = ruleCountMatch?.[1] ?? '?';
-        (0,core.info)(`lint/semgrep[probe]: ✅ "${this.config}" validates — ${ruleCount} rule(s) loaded in ${elapsed}ms${ruleCount === '?'
+        (0,actions_log.info)(`lint/semgrep[probe]: ✅ "${this.config}" validates — ${ruleCount} rule(s) loaded in ${elapsed}ms${ruleCount === '?'
             ? " (semgrep didn't print a rule count; exit=0 still proves config loaded)"
             : ''}`);
         // 把 stderr 头几行也打出来 —— semgrep 在 validate 时偶尔会附带规则来源 / 警告
@@ -87097,22 +87383,22 @@ class SemgrepAdapter {
             .slice(0, 5)
             .map(l => l.substring(0, 200));
         if (stderrLines.length > 0) {
-            (0,core.info)(`lint/semgrep[probe]: validate stderr (first 5 non-empty lines): ${stderrLines.join(' | ')}`);
+            (0,actions_log.info)(`lint/semgrep[probe]: validate stderr (first 5 non-empty lines): ${stderrLines.join(' | ')}`);
         }
     }
     async scan(files, repoRoot) {
         if (this.resolvedBinPath === '') {
             // 防御：orchestrator 保证 detect 成功才会调 scan；这里仅锁住"绕过 orchestrator
             // 直接 new SemgrepAdapter().scan(...)"的误用，避免给 runCommand 传空 command
-            (0,core.warning)('lint/semgrep[scan]: called before successful detect() — bin path empty, skipping');
+            (0,actions_log.warning)('lint/semgrep[scan]: called before successful detect() — bin path empty, skipping');
             return [];
         }
         if (files.length === 0) {
-            (0,core.info)('lint/semgrep[scan]: targets is empty (no matching file extensions in changed set) — skip');
+            (0,actions_log.info)('lint/semgrep[scan]: targets is empty (no matching file extensions in changed set) — skip');
             return [];
         }
         const scanStart = Date.now();
-        (0,core.info)(`lint/semgrep[scan]: start config=${this.config}, files=${files.length} — sample: ${files
+        (0,actions_log.info)(`lint/semgrep[scan]: start config=${this.config}, files=${files.length} — sample: ${files
             .slice(0, 5)
             .join(', ')}${files.length > 5 ? ', ...' : ''}`);
         const args = [
@@ -87124,7 +87410,7 @@ class SemgrepAdapter {
             `--config=${this.config}`,
             ...files
         ];
-        (0,core.info)(`lint/semgrep[scan]: invoking ${this.resolvedBinPath} ${args.slice(0, 6).join(' ')} ... [${files.length} file arg(s)]`);
+        (0,actions_log.info)(`lint/semgrep[scan]: invoking ${this.resolvedBinPath} ${args.slice(0, 6).join(' ')} ... [${files.length} file arg(s)]`);
         const result = await runCommand({
             command: this.resolvedBinPath,
             args,
@@ -87137,16 +87423,16 @@ class SemgrepAdapter {
             .split('\n')
             .find(l => l.trim().length > 0)
             ?.substring(0, 200) ?? '';
-        (0,core.info)(`lint/semgrep[scan]: returned in ${elapsed}ms — exit=${result.exitCode}, ` +
+        (0,actions_log.info)(`lint/semgrep[scan]: returned in ${elapsed}ms — exit=${result.exitCode}, ` +
             `timedOut=${result.timedOut}, spawnError=${result.spawnError}, ` +
             `stdout_len=${result.stdout.length}, stderr_len=${result.stderr.length}${stderrFirstLine.length > 0 ? `, stderr_first="${stderrFirstLine}"` : ''}`);
         if (result.spawnError) {
-            (0,core.warning)(`lint/semgrep[scan]: spawn failed — ${result.spawnErrorMessage ?? ''}. ` +
+            (0,actions_log.warning)(`lint/semgrep[scan]: spawn failed — ${result.spawnErrorMessage ?? ''}. ` +
                 `This usually means the semgrep console script lost its PYTHONPATH or python3 disappeared.`);
             return [];
         }
         if (result.timedOut) {
-            (0,core.warning)(`lint/semgrep[scan]: timed out after ${elapsed}ms (limit 120000ms). ` +
+            (0,actions_log.warning)(`lint/semgrep[scan]: timed out after ${elapsed}ms (limit 120000ms). ` +
                 `Reduce file count or switch to a smaller --config (e.g. p/security-audit).`);
             return [];
         }
@@ -87157,7 +87443,7 @@ class SemgrepAdapter {
         // 仅当 stdout 无可解析 JSON 时才视为失败
         const parsed = parseJsonSafe(result.stdout, 'semgrep');
         if (parsed == null) {
-            (0,core.warning)(`lint/semgrep[scan]: no parseable JSON in stdout (exit=${result.exitCode}). ` +
+            (0,actions_log.warning)(`lint/semgrep[scan]: no parseable JSON in stdout (exit=${result.exitCode}). ` +
                 `stderr first line: "${stderrFirstLine}". ` +
                 `Common causes: (a) semgrep can't reach semgrep.dev to fetch "${this.config}" rules — ` +
                 `try a self-contained config like p/ci or pre-cache rules; ` +
@@ -87170,17 +87456,17 @@ class SemgrepAdapter {
         if (errCount > 0) {
             // semgrep 把"无法解析的文件 / 规则加载错误"放在 errors 数组里 —— 重要诊断信号
             const firstErr = JSON.stringify(parsed.errors?.[0] ?? {}).substring(0, 300);
-            (0,core.warning)(`lint/semgrep[scan]: ${errCount} semgrep-level error(s) reported (this is separate from "findings"); ` +
+            (0,actions_log.warning)(`lint/semgrep[scan]: ${errCount} semgrep-level error(s) reported (this is separate from "findings"); ` +
                 `first: ${firstErr}`);
         }
         // 扫描覆盖面：semgrep 自己上报"实际扫了哪些文件 / 跳过了哪些"。0 finding 多半
         // 不是规则没生效，而是文件被 skipped（语言不匹配 / 大文件 / 二进制等）—— 把它显式打出来。
         const scannedPaths = parsed.paths?.scanned ?? [];
         const skippedPaths = parsed.paths?.skipped ?? [];
-        (0,core.info)(`lint/semgrep[scan]: coverage — scanned=${scannedPaths.length}/${files.length} input file(s), ` +
+        (0,actions_log.info)(`lint/semgrep[scan]: coverage — scanned=${scannedPaths.length}/${files.length} input file(s), ` +
             `skipped=${skippedPaths.length}`);
         if (scannedPaths.length > 0) {
-            (0,core.info)(`lint/semgrep[scan]: scanned files: ${scannedPaths.slice(0, 5).join(', ')}${scannedPaths.length > 5 ? ', ...' : ''}`);
+            (0,actions_log.info)(`lint/semgrep[scan]: scanned files: ${scannedPaths.slice(0, 5).join(', ')}${scannedPaths.length > 5 ? ', ...' : ''}`);
         }
         if (skippedPaths.length > 0) {
             // 只取前 3 条，附带 reason；常见 reason: "too_big" / "wrong_language" / "always_skipped"
@@ -87188,7 +87474,7 @@ class SemgrepAdapter {
                 .slice(0, 3)
                 .map(s => `${s.path ?? '?'}(${s.reason ?? '?'})`)
                 .join(', ');
-            (0,core.info)(`lint/semgrep[scan]: skipped sample: ${skipSample}`);
+            (0,actions_log.info)(`lint/semgrep[scan]: skipped sample: ${skipSample}`);
         }
         const findings = [];
         for (const r of parsed.results ?? []) {
@@ -87223,7 +87509,7 @@ class SemgrepAdapter {
         }
         if (rawCount === 0) {
             // 0 findings 本身不是错误（代码可能真的没问题），但在测试场景里多半是"规则没匹配上"
-            (0,core.info)(`lint/semgrep[scan]: 0 findings. ` +
+            (0,actions_log.info)(`lint/semgrep[scan]: 0 findings. ` +
                 `If you expected findings on these files, check: ` +
                 `(1) does "${this.config}" cover the languages of the scanned files? ` +
                 `(2) is the project behind a corporate firewall blocking semgrep.dev? ` +
@@ -87243,14 +87529,14 @@ class SemgrepAdapter {
                 .sort((a, b) => b[1] - a[1])
                 .map(([k, v]) => `${k}:${v}`)
                 .join(', ');
-            (0,core.info)(`lint/semgrep[scan]: finding rule_id prefix breakdown = { ${fmtMap(findingPrefixes)} }`);
-            (0,core.info)(`lint/semgrep[scan]: finding severity breakdown = { ${fmtMap(findingSeverities)} }`);
-            (0,core.info)(`lint/semgrep[scan]: first 3 finding rule_ids: ${findings
+            (0,actions_log.info)(`lint/semgrep[scan]: finding rule_id prefix breakdown = { ${fmtMap(findingPrefixes)} }`);
+            (0,actions_log.info)(`lint/semgrep[scan]: finding severity breakdown = { ${fmtMap(findingSeverities)} }`);
+            (0,actions_log.info)(`lint/semgrep[scan]: first 3 finding rule_ids: ${findings
                 .slice(0, 3)
                 .map(f => f.ruleId)
                 .join(' | ')}`);
         }
-        (0,core.info)(`lint/semgrep[scan]: parsed ${findings.length} finding(s) from ${rawCount} raw result(s) ` +
+        (0,actions_log.info)(`lint/semgrep[scan]: parsed ${findings.length} finding(s) from ${rawCount} raw result(s) ` +
             `across ${files.length} input file(s) in ${elapsed}ms`);
         return findings;
     }
@@ -87456,14 +87742,14 @@ class TscAdapter {
                 reason: 'no tsconfig.json found in repo (looked for tsconfig.json, tsconfig.base.json, tsconfig.app.json)'
             };
         }
-        (0,core.info)(`lint/tsc: bundled bin=${this.resolvedBinPath}, project tsconfig=${tsconfig}`);
+        (0,actions_log.info)(`lint/tsc: bundled bin=${this.resolvedBinPath}, project tsconfig=${tsconfig}`);
         this.resolvedVersion = version;
         return { available: true, version };
     }
     async scan(files, repoRoot) {
         // 注意：files 参数被忽略 —— tsc 必须扫整个项目（types 跨文件传递），
         // 无法只 type-check 指定文件。orchestrator 会按 addedLines 后过滤到变更行。
-        (0,core.info)(`lint/tsc: type-checking project at ${repoRoot} (${files.length} changed TS file(s))`);
+        (0,actions_log.info)(`lint/tsc: type-checking project at ${repoRoot} (${files.length} changed TS file(s))`);
         const result = await runCommand({
             command: this.resolvedBinPath,
             args: ['--noEmit', '--pretty', 'false'],
@@ -87471,7 +87757,7 @@ class TscAdapter {
             timeoutMs: 90_000 // 比其他工具略长 — tsc 在大项目上耗时
         });
         if (result.spawnError) {
-            (0,core.info)(`lint/tsc: spawn failed: ${result.spawnErrorMessage ?? ''}`);
+            (0,actions_log.info)(`lint/tsc: spawn failed: ${result.spawnErrorMessage ?? ''}`);
             return [];
         }
         // tsc 把诊断信息输出到 stdout（不是 stderr）；exitCode 非零仅表示"有错误"，不算异常
@@ -87500,7 +87786,7 @@ class TscAdapter {
                 category: 'quality'
             });
         }
-        (0,core.info)(`lint/tsc: ${findings.length} type-check finding(s) before changed-line filter`);
+        (0,actions_log.info)(`lint/tsc: ${findings.length} type-check finding(s) before changed-line filter`);
         return findings;
     }
 }
@@ -87557,7 +87843,7 @@ function filterByChangedLines(results, changedLineMap, tolerance = DEFAULT_CONTE
             filtered.push(r);
     }
     if (results.length !== filtered.length) {
-        (0,core.info)(`lint: post-filter kept ${filtered.length}/${results.length} findings (tolerance=${tolerance})`);
+        (0,actions_log.info)(`lint: post-filter kept ${filtered.length}/${results.length} findings (tolerance=${tolerance})`);
     }
     return filtered;
 }
@@ -87717,7 +88003,7 @@ function defaultAdapters(options) {
 async function runLintTools(options, adaptersOverride) {
     const startedAt = Date.now();
     if (options.disabled === true) {
-        (0,core.info)('lint: orchestrator disabled, skipping');
+        (0,actions_log.info)('lint: orchestrator disabled, skipping');
         return emptyReport(startedAt);
     }
     const adapters = adaptersOverride ?? defaultAdapters(options);
@@ -87734,7 +88020,7 @@ async function runLintTools(options, adaptersOverride) {
         if (enabled)
             enabledAdapters.push(a);
     }
-    (0,core.info)(`lint: ${enabledAdapters.length}/${adapters.length} adapters enabled — [${decisions.join(', ')}]`);
+    (0,actions_log.info)(`lint: ${enabledAdapters.length}/${adapters.length} adapters enabled — [${decisions.join(', ')}]`);
     if (enabledAdapters.length === 0) {
         return emptyReport(startedAt);
     }
@@ -87756,7 +88042,7 @@ async function runLintTools(options, adaptersOverride) {
     await Promise.all(detections.map(async ({ adapter, detection }) => {
         const toolStart = Date.now();
         if (!detection.available) {
-            (0,core.warning)(`lint/${adapter.name}: not available — ${detection.reason ?? 'unknown'}, skipping`);
+            (0,actions_log.warning)(`lint/${adapter.name}: not available — ${detection.reason ?? 'unknown'}, skipping`);
             toolSummaries.push({
                 tool: adapter.displayName,
                 toolVersion: '',
@@ -87776,7 +88062,7 @@ async function runLintTools(options, adaptersOverride) {
         // 文件过滤：扩展名必须在适配器支持列表内
         const targets = changedFiles.filter(f => adapter.fileExtensions.some(ext => f.toLowerCase().endsWith(ext)));
         if (targets.length === 0) {
-            (0,core.info)(`lint/${adapter.name}: no matching files, skipping`);
+            (0,actions_log.info)(`lint/${adapter.name}: no matching files, skipping`);
             toolSummaries.push({
                 tool: adapter.displayName,
                 toolVersion: detection.version ?? '',
@@ -87797,7 +88083,7 @@ async function runLintTools(options, adaptersOverride) {
             results = await adapter.scan(targets, options.repoRoot);
         }
         catch (e) {
-            (0,core.warning)(`lint/${adapter.name}: scan threw: ${e instanceof Error ? e.message : String(e)}, treating as no findings`);
+            (0,actions_log.warning)(`lint/${adapter.name}: scan threw: ${e instanceof Error ? e.message : String(e)}, treating as no findings`);
         }
         const counts = countSeverities(results);
         toolSummaries.push({
@@ -87814,7 +88100,7 @@ async function runLintTools(options, adaptersOverride) {
             filesScanned: targets.length,
             durationMs: Date.now() - toolStart
         });
-        (0,core.info)(`lint/${adapter.name}: ${results.length} raw findings (${counts.error}E/${counts.warning}W/${counts.info}I) on ${targets.length} files in ${Date.now() - toolStart}ms`);
+        (0,actions_log.info)(`lint/${adapter.name}: ${results.length} raw findings (${counts.error}E/${counts.warning}W/${counts.info}I) on ${targets.length} files in ${Date.now() - toolStart}ms`);
         allResults.push(...results);
     }));
     // 4) 变更行过滤 → 同行同款去重 → 跨行相邻同款合并
@@ -88307,7 +88593,7 @@ class Inputs {
         const hadPlaceholder = content.includes('$analysis_chain');
         content = content.replace('$analysis_chain', analysisChainValue);
         if (hadPlaceholder) {
-            (0,core.info)(`[render] $analysis_chain replaced: hasValue=${!!this.analysisChain}, valueLen=${analysisChainValue.length}, preview="${analysisChainValue.substring(0, 100).replace(/\n/g, '\\n')}"`);
+            (0,actions_log.info)(`[render] $analysis_chain replaced: hasValue=${!!this.analysisChain}, valueLen=${analysisChainValue.length}, preview="${analysisChainValue.substring(0, 100).replace(/\n/g, '\\n')}"`);
         }
         // 静态分析工具结果：仅在 lintContext 非空时替换。
         // 杠杆 A：当无 finding 时，prompts.renderReviewFileDiff 已整体移除
@@ -88400,8 +88686,10 @@ function shareAnyRuleId(a, b) {
  * @returns 合并后的数组，保持原始顺序（每个 group 用第一条 review 的位置）
  */
 function mergeReviewsByTopic(reviews, filename, toolFindings) {
-    // 仅在测试环境之外 require @actions/core，避免 jest 启动时直接拉起 GitHub runtime
-    const { info } = __nccwpck_require__(2186);
+    // 保持惰性 require（避免 jest 启动时直接拉起 GitHub runtime），
+    // 但必须走 actions-log 的脱敏包装而不是直接拿 @actions/core（SEC-008）
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { info } = __nccwpck_require__(380);
     // Step 1: 为每条 review 计算其重叠的 ruleId 集合
     const entries = reviews.map(r => {
         const ruleIds = new Set();
@@ -88583,7 +88871,7 @@ function ensureFixSuggestionHeaders(commentBody) {
         }
     }
     if (wrappedCount > 0) {
-        (0,core.info)(`[fix-header] wrapped ${wrappedCount} diff block(s) in <details>`);
+        (0,actions_log.info)(`[fix-header] wrapped ${wrappedCount} diff block(s) in <details>`);
     }
     return out.join('\n');
 }
@@ -90366,12 +90654,12 @@ async function handleCommentEvent(deps) {
         options: deps.options,
         triggerReview
     });
-    (0,core.info)(`commentEvent dispatcher outcome: ${JSON.stringify(outcome)}`);
+    (0,actions_log.info)(`commentEvent dispatcher outcome: ${JSON.stringify(outcome)}`);
     if (outcome.kind === 'fallback_conversation') {
         // 行级评论与主评论区对话共用 heavyBot；仅在需要时构造。
         const bots = deps.heavyBot != null ? { heavyBot: deps.heavyBot } : deps.getReviewBots?.();
         if (bots == null) {
-            (0,core.info)('commentEvent: conversation fallback skipped (OpenAI bot unavailable)');
+            (0,actions_log.info)('commentEvent: conversation fallback skipped (OpenAI bot unavailable)');
             return;
         }
         if (deps.execCtx.eventKind === 'review_comment_created') {
@@ -90385,7 +90673,7 @@ async function handleCommentEvent(deps) {
             await handleIssueConversation(deps.execCtx, bots.heavyBot, deps.options, deps.prompts);
         }
         else {
-            (0,core.info)(`commentEvent: conversation fallback skipped (unsupported eventKind ${deps.execCtx.eventKind})`);
+            (0,actions_log.info)(`commentEvent: conversation fallback skipped (unsupported eventKind ${deps.execCtx.eventKind})`);
         }
     }
 }
@@ -91135,7 +91423,7 @@ function createBots(options) {
         lightBot = new Bot(options, new OpenAIOptions(options.openaiLightModel, options.lightTokenLimits, false, false));
     }
     catch (e) {
-        (0,core.warning)(`Skipped: failed to create summary bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`);
+        (0,actions_log.warning)(`Skipped: failed to create summary bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`);
         return null;
     }
     let heavyBot = null;
@@ -91143,7 +91431,7 @@ function createBots(options) {
         heavyBot = new Bot(options, new OpenAIOptions(options.openaiHeavyModel, options.heavyTokenLimits, options.enableWebSearch, options.enableShell));
     }
     catch (e) {
-        (0,core.warning)(`Skipped: failed to create review bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`);
+        (0,actions_log.warning)(`Skipped: failed to create review bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`);
         return null;
     }
     return { lightBot, heavyBot };
@@ -91158,7 +91446,7 @@ async function run() {
         configProvider: new GitHubConfigProvider(),
         createExecCtx: createGitHubExecutionContext,
         logger: new GitHubLogger(),
-        onFailed: core.setFailed,
+        onFailed: actions_log.setFailed,
         createBots,
         earlyReaction: tryEarlyReaction
     });
@@ -91170,10 +91458,10 @@ async function run() {
 // setFailed()（内部会设 process.exitCode = 1），使这三条路径都 fail closed。
 process
     .on('unhandledRejection', (reason, p) => {
-    (0,core.setFailed)(`Unhandled Rejection at Promise: ${reason}, promise is ${p}`);
+    (0,actions_log.setFailed)(`Unhandled Rejection at Promise: ${reason}, promise is ${p}`);
 })
     .on('uncaughtException', (e) => {
-    (0,core.setFailed)(`Uncaught Exception thrown: ${e}, backtrace: ${e.stack}`);
+    (0,actions_log.setFailed)(`Uncaught Exception thrown: ${e}, backtrace: ${e.stack}`);
 });
 // 启动主流程（不用顶层 await，ts-jest CommonJS 转译不支持）
 void (async () => {
@@ -91181,7 +91469,7 @@ void (async () => {
         await run();
     }
     catch (e) {
-        (0,core.setFailed)(`Unhandled error in run(): ${e}`);
+        (0,actions_log.setFailed)(`Unhandled error in run(): ${e}`);
     }
 })();
 

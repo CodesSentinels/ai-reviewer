@@ -11,7 +11,7 @@
  *   2+ → 配置错误或其他失败
  */
 
-import {info} from '@actions/core'
+import {info} from '../../actions-log'
 import {ensureToolInstalled} from '../tool-installer'
 import {type InstallSpec, type LintResult, type ToolAdapter, type ToolDetection} from '../types'
 import {extractVersion, runCommand} from './exec'

@@ -14,7 +14,7 @@
  * ARCH-005：不再直接 import `@actions/github`，事件类型判断改用调用方
  * （main.ts）传入的 ExecutionContext.eventKind。
  */
-import {info} from '@actions/core'
+import {info} from './actions-log'
 import {bootstrapCommands} from './commands/bootstrap'
 import {dispatchCommentEvent} from './commands/dispatcher'
 import type {Bot} from './bot'

@@ -11,7 +11,7 @@
  * severity: 1 = warning, 2 = error
  */
 
-import {info} from '@actions/core'
+import {info} from '../../actions-log'
 import {existsSync, readFileSync} from 'fs'
 import {join} from 'path'
 import {ensureToolInstalled} from '../tool-installer'

@@ -16,7 +16,7 @@
  *     代码块不会渲染 —— 注入时保证这一点
  */
 
-import {info} from '@actions/core'
+import {info} from './actions-log'
 
 const SUMMARY_LINE = '<summary>🔧 Suggested fix</summary>'
 /** 标头识别关键词（含本地化变体）— 用于判定"是否已经包过" */

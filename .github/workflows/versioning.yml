@@ -1,5 +1,10 @@
 name: Tag latest
 
+# SEC-006：显式最小权限。未声明时会继承仓库默认（可能是 write-all）。
+# actions-tagger 需要写 tag，因此 contents: write；其余一律不给。
+permissions:
+  contents: write
+
 on:
   release:
     types: [published, edited]
@@ -8,6 +13,6 @@ jobs:
   actions-tagger:
     runs-on: windows-latest
     steps:
-      - uses: Actions-R-Us/actions-tagger@latest
+      - uses: Actions-R-Us/actions-tagger@330ddfac760021349fef7ff62b372f2f691c20fb # latest（2022-11-17）
         with:
           publish_latest_tag: true

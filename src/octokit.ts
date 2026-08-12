@@ -9,7 +9,7 @@
  * 认证方式：只从 GITHUB_TOKEN 环境变量获取令牌。
  * 不接受 Action 输入——密钥不作为公开输入暴露（GH-002 敏感性约束）。
  */
-import {warning} from '@actions/core'
+import {warning} from './actions-log'
 import {Octokit} from '@octokit/action'
 import {retry} from '@octokit/plugin-retry'
 import {throttling} from '@octokit/plugin-throttling'

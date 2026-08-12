@@ -9,7 +9,7 @@
  * 5. 可选的 web search 工具支持（用于验证 API 用法）
  */
 
-import {info, setFailed, warning} from '@actions/core'
+import {info, setFailed, warning} from './actions-log'
 import {exec as execCallback} from 'child_process'
 import OpenAI, {APIError} from 'openai'
 import pRetry from 'p-retry'

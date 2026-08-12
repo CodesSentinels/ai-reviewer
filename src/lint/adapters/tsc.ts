@@ -22,7 +22,7 @@
  * （含位置 + ruleId + 主消息），续行的 type chain 详情忽略。
  */
 
-import {info} from '@actions/core'
+import {info} from '../../actions-log'
 import {existsSync} from 'fs'
 import {join} from 'path'
 import {ensureToolInstalled} from '../tool-installer'

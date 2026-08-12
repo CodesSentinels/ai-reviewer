@@ -110,9 +110,10 @@ export function mergeReviewsByTopic(
   filename: string,
   toolFindings: ToolFindingForDedup[]
 ): Review[] {
-  // 仅在测试环境之外 require @actions/core，避免 jest 启动时直接拉起 GitHub runtime
-
-  const {info} = require('@actions/core') as {info: (msg: string) => void}
+  // 保持惰性 require（避免 jest 启动时直接拉起 GitHub runtime），
+  // 但必须走 actions-log 的脱敏包装而不是直接拿 @actions/core（SEC-008）
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const {info} = require('./actions-log') as {info: (msg: string) => void}
 
   // Step 1: 为每条 review 计算其重叠的 ruleId 集合
   const entries: ClusteredEntry[] = reviews.map(r => {

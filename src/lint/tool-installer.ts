@@ -17,7 +17,7 @@
  *   - 安装成功但 bin 路径未生成 → 同上（防御策略性差异）
  */
 
-import {info, warning} from '@actions/core'
+import {info, warning} from '../actions-log'
 import {existsSync, mkdirSync, writeFileSync} from 'fs'
 import {tmpdir} from 'os'
 import {join} from 'path'

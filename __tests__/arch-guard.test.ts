@@ -46,29 +46,18 @@ const LEGACY_ALLOWLIST = new Set([
   // 直接 import @actions/github（ARCH-005 context 迁移目标）
   'review.ts',
   'commenter.ts',
-  'commands/dispatcher.ts',
-  // 直接 import @actions/core（Logger 迁移目标）
-  'bot.ts',
-  'command-handler.ts',
-  'commands/early-reaction.ts',
-  'fix-suggestion-header.ts',
-  'inputs.ts',
-  'lint/adapters/biome.ts',
-  'lint/adapters/eslint.ts',
-  'lint/adapters/exec.ts',
-  'lint/adapters/prettier.ts',
-  'lint/adapters/semgrep.ts',
-  'lint/adapters/tsc.ts',
-  'lint/lint-filter.ts',
-  'lint/orchestrator.ts',
-  'lint/tool-installer.ts',
-  'options.ts'
+  'commands/dispatcher.ts'
+  // 原先这里还有 17 个直接 import @actions/core 的文件（Logger 迁移目标）。
+  // SEC-008 把它们的日志出口统一换成了 src/actions-log.ts 的脱敏包装，
+  // 不再直接依赖 @actions/core，因此从豁免列表移除。
 ])
 
 /** 平台 adapter / 入口层文件 */
 function isAdapterOrEntry(rel: string): boolean {
   if (/^platform\/(github-|gitlab-)/.test(rel)) return true
-  return ['octokit.ts', 'main.ts', 'gitlab-trigger.ts'].includes(rel)
+  // actions-log.ts 是 @actions/core 日志出口的脱敏包装（SEC-008），
+  // 属于 GitHub 平台边界层，允许直接 import @actions/core
+  return ['octokit.ts', 'main.ts', 'gitlab-trigger.ts', 'actions-log.ts'].includes(rel)
 }
 
 function isExempt(rel: string): boolean {
@@ -275,6 +264,79 @@ describe('GLAPI-031: GitLab HTTP 调用只走统一 client', () => {
       /gitlab/i.test(fs.readFileSync(f, 'utf8').replace(/\/\/.*|\/\*[\s\S]*?\*\//g, ''))
     )
     expect(violations.map(f => path.relative(SRC, f))).toEqual([])
+  })
+})
+
+describe('SEC-008: @actions/core 日志出口只能经脱敏包装', () => {
+  const allFiles = collectTsFiles(SRC)
+  /** 允许直接从 @actions/core 导入日志函数的文件 */
+  const LOG_EXPORT_EXEMPT = new Set(['actions-log.ts', 'platform/github-logger.ts'])
+  const LOG_FUNCTIONS = ['info', 'warning', 'error', 'debug', 'setFailed']
+
+  test('只有包装层与 GitHubLogger 直接导入 @actions/core 的日志函数', () => {
+    const violations: string[] = []
+    for (const f of allFiles) {
+      const rel = path.relative(SRC, f).replace(/\\/g, '/')
+      if (LOG_EXPORT_EXEMPT.has(rel)) continue
+      const content = fs.readFileSync(f, 'utf8')
+      const m = /import\s*\{([^}]*)\}\s*from\s*['"]@actions\/core['"]/.exec(content)
+      if (m == null) continue
+      const imported = m[1].split(',').map(n => n.trim())
+      const leaked = imported.filter(n => LOG_FUNCTIONS.includes(n))
+      if (leaked.length > 0) violations.push(`${rel} → ${leaked.join(', ')}`)
+    }
+    expect(violations).toEqual([])
+  })
+
+  test('也不得通过动态 require 绕开包装层', () => {
+    const violations: string[] = []
+    for (const f of allFiles) {
+      const rel = path.relative(SRC, f).replace(/\\/g, '/')
+      if (LOG_EXPORT_EXEMPT.has(rel)) continue
+      const code = fs
+        .readFileSync(f, 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^\s*\/\/.*$/gm, '')
+      if (/require\s*\(\s*['"]@actions\/core['"]\s*\)/.test(code)) violations.push(rel)
+    }
+    expect(violations).toEqual([])
+  })
+
+  test('除平台 Logger 外不得直接使用 console 输出（会完全绕过脱敏）', () => {
+    // 平台 Logger 本身就是 console 的封装，是唯一合法出口
+    const CONSOLE_EXEMPT = new Set(['platform/logger.ts', 'platform/gitlab-logger.ts'])
+    const violations: string[] = []
+    for (const f of allFiles) {
+      const rel = path.relative(SRC, f).replace(/\\/g, '/')
+      if (CONSOLE_EXEMPT.has(rel)) continue
+      // 注释里会举例提到 console.log（如 biome adapter 的 reporter 说明），先剥掉
+      const code = fs
+        .readFileSync(f, 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^\s*\/\/.*$/gm, '')
+      const hits = code.match(/console\.(log|warn|error|debug|info)\s*\(/g)
+      if (hits != null) violations.push(`${rel} → ${hits.join(', ')}`)
+    }
+    expect(violations).toEqual([])
+  })
+
+  test('包装层确实存在且每个日志函数都过 redactForLog', () => {
+    const src = fs.readFileSync(path.join(SRC, 'actions-log.ts'), 'utf8')
+    for (const fn of LOG_FUNCTIONS) {
+      expect(src).toMatch(new RegExp(`export function ${fn}\\b`))
+    }
+    // 每个导出函数体内都必须调用 redactForLog，一个都不能漏
+    const bodies = src.match(/export function \w+\([^)]*\)[^{]*\{[^}]*\}/g) ?? []
+    expect(bodies.length).toBe(LOG_FUNCTIONS.length)
+    for (const body of bodies) {
+      expect(body).toContain('redactForLog(')
+    }
+  })
+
+  test('高风险路径：bot.ts 打印异常与 stack，必须走包装层', () => {
+    const src = fs.readFileSync(path.join(SRC, 'bot.ts'), 'utf8')
+    expect(src).toMatch(/from '\.\/actions-log'/)
+    expect(src).toContain('e.stack')
   })
 })
 
