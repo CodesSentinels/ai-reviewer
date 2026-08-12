@@ -83920,19 +83920,33 @@ class GitHubPlatform {
         }
     }
     // ─── 10. 仓库文件树（DEP-001 / DEP-003）──────────────────────────────────
-    async listRepositoryTree(owner, repo, ref) {
+    async listRepositoryTree(owner, repo, ref, path) {
         try {
             const { data } = await octokit.git.getTree({
                 owner,
                 repo,
+                // `<ref>:<path>` 是 Git Tree API 指定子树的写法
                 // eslint-disable-next-line camelcase
-                tree_sha: ref,
-                recursive: 'true'
+                tree_sha: path != null && path !== '' ? `${ref}:${path}` : ref,
+                // 目录探查只要一层，全量树才需要 recursive
+                ...(path != null && path !== '' ? {} : { recursive: 'true' })
             });
-            return { entries: data.tree, truncated: data.truncated === true };
+            // 子树返回的 path 是相对该目录的，补回根相对路径以统一接口契约
+            const entries = path != null && path !== ''
+                ? data.tree.map(item => ({
+                    ...item,
+                    path: item.path != null ? `${path}/${item.path}` : item.path
+                }))
+                : data.tree;
+            return { entries, truncated: data.truncated === true };
         }
         catch (e) {
-            throw toGitPlatformError(e);
+            const err = toGitPlatformError(e);
+            // 目录探查命中不存在的路径是正常结果，不是错误
+            if (path != null && path !== '' && err.errorKind === 'not_found') {
+                return { entries: [], truncated: false };
+            }
+            throw err;
         }
     }
 }
@@ -84654,7 +84668,7 @@ const LANGUAGE_EXTENSIONS = {
     java: ['.java'],
     unknown: []
 };
-/** 文件树缓存（同一次运行中避免重复调用 API） */
+/** 文件树缓存（同一次运行中避免重复调用 API），连同截断状态一起缓存 */
 let cachedTree = null;
 let cachedTreeKey = null;
 /**
@@ -84663,30 +84677,37 @@ let cachedTreeKey = null;
  * 通过注入的 TreeFetcher 获取指定 ref 下的所有文件路径。
  * 结果会缓存，同一 platform + project + ref 的重复调用直接返回缓存。
  *
+ * 截断状态随结果一起返回并缓存：平台 API 截断时不能谎报完整，
+ * 否则下游 resolveImportPath 会把「文件不在列表里」误判成「不是仓库内导入」。
+ *
  * @param ref - Git 引用（commit SHA / branch / tag）
  * @param project - 目标项目（owner/repo，可选 platform）
  * @param fetcher - 平台相关的 tree 获取实现
- * @returns 仓库中所有文件的路径列表
+ * @returns 文件路径列表 + 是否被平台 API 截断
  */
 async function getRepoFileTree(ref, project, fetcher) {
     const logger = getLogger();
     const cacheKey = `${project.platform ?? 'github'}:${project.owner}/${project.repo}@${ref}`;
     // 如果缓存命中，直接返回
     if (cachedTree != null && cachedTreeKey === cacheKey) {
-        logger.info(`repo tree cache hit for: ${cacheKey}`);
+        logger.info(`repo tree cache hit for: ${cacheKey}${cachedTree.truncated ? ' (truncated)' : ''}`);
         return cachedTree;
     }
     logger.info(`fetching repo tree for: ${cacheKey}`);
     const tree = await fetcher.getTree(project.owner, project.repo, ref);
     // 仅保留 blob 类型（文件），排除 tree 类型（目录）
-    const files = tree
+    const files = tree.entries
         .filter(item => item.type === 'blob' && item.path != null)
         .map(item => item.path);
     logger.info(`repo tree fetched: ${files.length} files`);
-    // 更新缓存
-    cachedTree = files;
+    if (tree.truncated) {
+        logger.warning(`repo tree for ${cacheKey} was truncated by the platform API — ` +
+            `only ${files.length} files are visible, cross-file dependency analysis may be incomplete`);
+    }
+    // 更新缓存（含截断状态，避免后续调用把半棵树当完整树）
+    cachedTree = { files, truncated: tree.truncated };
     cachedTreeKey = cacheKey;
-    return files;
+    return cachedTree;
 }
 /**
  * 根据文件扩展名检测语言
@@ -84750,26 +84771,38 @@ const PATH_ALIAS_RULES = [
     { prefix: '#components/', candidates: ['components/'] }
 ];
 function resolveImportPath(importingFile, importPath, repoFilesSet) {
+    for (const basePath of importBasePaths(importingFile, importPath)) {
+        const resolved = tryResolveWithExtensions(basePath, repoFilesSet);
+        if (resolved != null)
+            return resolved;
+    }
+    return null;
+}
+/**
+ * 推导 import 可能对应的仓库内基础路径（未补扩展名），按优先级排列。
+ *
+ * 纯路径推导，不查文件树 —— 因此在文件树被截断时也能用来决定
+ * 「该去列举哪些目录」（DEP-004 按需回填）。
+ * 非相对、非别名路径（如 npm 包）返回空数组。
+ */
+function importBasePaths(importingFile, importPath) {
     if (importPath.startsWith('.')) {
-        // 相对路径解析
-        return resolveRelativePath(importingFile, importPath, repoFilesSet);
+        return [normalizeRelativePath(importingFile, importPath)];
     }
     // 尝试常见路径别名（@/, ~/, #/）
+    const bases = [];
     for (const rule of PATH_ALIAS_RULES) {
         if (importPath.startsWith(rule.prefix)) {
             const stripped = importPath.substring(rule.prefix.length);
             for (const dir of rule.candidates) {
-                const resolved = tryResolveWithExtensions(dir + stripped, repoFilesSet);
-                if (resolved != null)
-                    return resolved;
+                bases.push(dir + stripped);
             }
         }
     }
-    // 非相对、非别名路径（如 npm 包）不尝试解析
-    return null;
+    return bases;
 }
-/** 解析相对路径（./xxx, ../xxx） */
-function resolveRelativePath(importingFile, importPath, repoFilesSet) {
+/** 把相对路径（./xxx, ../xxx）拼成仓库根相对路径 */
+function normalizeRelativePath(importingFile, importPath) {
     // 获取导入方文件所在目录
     const dir = importingFile.substring(0, importingFile.lastIndexOf('/'));
     // 将相对路径拼接为绝对路径
@@ -84785,8 +84818,28 @@ function resolveRelativePath(importingFile, importPath, repoFilesSet) {
             resolved.push(part);
         }
     }
-    const basePath = resolved.join('/');
-    return tryResolveWithExtensions(basePath, repoFilesSet);
+    return resolved.join('/');
+}
+/**
+ * 推导为解析某个 import 需要列举哪些目录（DEP-004）。
+ *
+ * 每个基础路径对应两个可能位置：
+ * - 父目录 —— 放 `xxx.ts` / `xxx.vue` 这类补扩展名的候选
+ * - 基础路径自身 —— 放 `xxx/index.ts` / `xxx/__init__.py` 这类目录入口
+ *
+ * @returns 去重后的目录路径；仓库根（空字符串）会被保留为 ''，调用方自行决定是否列举
+ */
+function importProbeDirectories(importingFile, importPath) {
+    const dirs = new Set();
+    for (const basePath of importBasePaths(importingFile, importPath)) {
+        if (basePath === '')
+            continue;
+        const slash = basePath.lastIndexOf('/');
+        if (slash > 0)
+            dirs.add(basePath.substring(0, slash));
+        dirs.add(basePath);
+    }
+    return [...dirs];
 }
 /** 尝试直接匹配、补全扩展名、补全 index 文件 */
 function tryResolveWithExtensions(basePath, repoFilesSet) {
@@ -85718,6 +85771,73 @@ function hasReExportFrom(content, sourceFile, targetFile, repoFilesSet) {
     }
     return false;
 }
+// ==================== 文件树截断后的按需回填（DEP-004）====================
+/** 一次运行最多额外列举的目录数，防止在超大仓库里把预算打光 */
+const DEFAULT_MAX_DIR_FETCHES = 40;
+function createRecoveryState(opts) {
+    if (!opts.truncated || opts.dirLister == null)
+        return null;
+    return {
+        lister: opts.dirLister,
+        listed: new Set(),
+        remaining: opts.maxDirFetches ?? DEFAULT_MAX_DIR_FETCHES
+    };
+}
+/**
+ * 把「解析不到的 import」所在目录补进 repoFilesSet（DEP-004 第三层）。
+ *
+ * 截断的文件树里查不到某个路径，只说明它不在可见范围内，不代表文件不存在。
+ * 这里对每个解析失败的 import 推导出候选目录，一个目录一次请求就能解掉
+ * 该目录下所有扩展名候选，比逐个候选路径探测省一个数量级的 API 调用。
+ *
+ * @returns 新发现的文件路径（已并入 repoFilesSet）
+ */
+async function recoverPathsForImports(contents, repoFilesSet, state, concurrencyLimit, stage) {
+    if (state.remaining <= 0)
+        return [];
+    const wanted = new Set();
+    for (const [file, content] of contents) {
+        for (const imp of parseImports(content, file)) {
+            // 能解析出来的不用回填；npm 包等非仓库内路径推导结果为空，自然跳过
+            if (resolveImportPath(file, imp.importPath, repoFilesSet) != null)
+                continue;
+            for (const dir of importProbeDirectories(file, imp.importPath)) {
+                if (dir === '' || state.listed.has(dir))
+                    continue;
+                wanted.add(dir);
+            }
+        }
+    }
+    if (wanted.size === 0)
+        return [];
+    const dirs = [...wanted].slice(0, state.remaining);
+    if (dirs.length < wanted.size) {
+        getLogger().warning(`dependency analysis [${stage}]: directory probe budget exhausted — ` +
+            `${wanted.size - dirs.length} unresolved import director${wanted.size - dirs.length > 1 ? 'ies' : 'y'} left unprobed`);
+    }
+    state.remaining -= dirs.length;
+    for (const dir of dirs)
+        state.listed.add(dir);
+    const discovered = [];
+    await Promise.all(dirs.map(async (dir) => concurrencyLimit(async () => {
+        try {
+            for (const f of await state.lister.listDirectory(dir)) {
+                if (repoFilesSet.has(f))
+                    continue;
+                repoFilesSet.add(f);
+                discovered.push(f);
+            }
+        }
+        catch (e) {
+            // 回填是尽力而为，失败只降级为「解析不到」，不影响主流程
+            getLogger().warning(`dependency analysis [${stage}]: directory probe failed for ${dir}: ${e.message}`);
+        }
+    })));
+    if (discovered.length > 0) {
+        getLogger().info(`dependency analysis [${stage}]: recovered ${discovered.length} file(s) from ${dirs.length} directory probe(s)`);
+    }
+    return discovered;
+}
 // ==================== 依赖分析编排 ====================
 /**
  * 执行完整的跨文件依赖分析
@@ -85737,14 +85857,26 @@ function hasReExportFrom(content, sourceFile, targetFile, repoFilesSet) {
  * @param patchScans - （可选）由 review.ts 预先扫描的 PatchScanMap。
  *   传入后避免对每个 fileDiff 重新 walk 提取 modifiedLines。
  *   未传入时会按需就地扫描（兼容直接调用此函数的单元测试与早期调用方）。
+ * @param treeRecovery - （可选）文件树截断信息与按需回填配置（DEP-004）。
+ *   truncated 会透传到 DependencyContext 供上层向用户提示降级；
+ *   带 dirLister 时还会把解析不到的 import 所在目录补回来。
  * @returns 完整的依赖分析上下文
  */
-async function analyzeDependencies(filesAndChanges, repoFiles, options, concurrencyLimit, project, headSha, contentFetcher, patchScans) {
+async function analyzeDependencies(filesAndChanges, repoFiles, options, concurrencyLimit, project, headSha, contentFetcher, patchScans, treeRecovery = { truncated: false }) {
     const fileAnalyses = new Map();
+    const treeTruncated = treeRecovery.truncated;
     // 空文件树时跳过分析（getRepoFileTree 失败返回空数组）
     if (repoFiles.length === 0) {
         getLogger().warning('dependency analysis: repo file tree is empty, skipping analysis');
-        return { fileAnalyses };
+        return { fileAnalyses, treeTruncated };
+    }
+    // 截断时准备按需回填：只补 PR 真正 import 到的目录，不重拉整棵树
+    const recovery = createRecoveryState(treeRecovery);
+    if (treeTruncated) {
+        const fallback = recovery != null
+            ? `unresolved imports will be probed on demand (budget: ${recovery.remaining} directories)`
+            : 'unresolved imports may point to files outside the visible tree';
+        getLogger().warning(`dependency analysis: repo file tree is truncated (${repoFiles.length} files visible) — ${fallback}`);
     }
     // ===== 步骤 1: 提取所有修改文件的导出符号 =====
     getLogger().info(`dependency analysis [step 1]: analyzing ${filesAndChanges.length} modified files for exported symbols`);
@@ -85781,7 +85913,7 @@ async function analyzeDependencies(filesAndChanges, repoFiles, options, concurre
     // 如果没有修改任何导出符号，跳过后续分析
     if (allModifiedSymbols.size === 0) {
         getLogger().info(`dependency analysis [step 1]: ✓ no modified exports found across all files, skipping dependency scan (saved ~${options.maxDependencyFiles} API calls)`);
-        return { fileAnalyses };
+        return { fileAnalyses, treeTruncated };
     }
     // ===== 步骤 1.5: 智能过滤 — 排除不太可能被导入的文件 =====
     // 入口文件和测试文件通常不会被其他模块导入，跳过分析可节省大量 API 调用
@@ -85802,7 +85934,7 @@ async function analyzeDependencies(filesAndChanges, repoFiles, options, concurre
     }
     if (allModifiedSymbols.size === 0) {
         getLogger().info(`dependency analysis [step 1.5]: ✓ all ${preFilterCount} files with modified exports are entry/test files, skipping dependency scan`);
-        return { fileAnalyses };
+        return { fileAnalyses, treeTruncated };
     }
     if (preFilterCount !== allModifiedSymbols.size) {
         getLogger().info(`dependency analysis [step 1.5]: filtered ${preFilterCount} → ${allModifiedSymbols.size} files (removed ${preFilterCount - allModifiedSymbols.size} entry/test files)`);
@@ -85813,6 +85945,21 @@ async function analyzeDependencies(filesAndChanges, repoFiles, options, concurre
     const dependencyGraph = new Map();
     const fileContents = new Map();
     const repoFilesSet = new Set(repoFiles);
+    // 截断时先把 PR 自己的变更文件补进可见集合：这些路径在 headSha 上一定存在，
+    // 零 API 成本。少了这一步，指向被修改文件本身的 import 会解析失败——
+    // 而那恰恰是依赖分析唯一关心的目标（allModifiedSymbols 的键）。
+    if (treeTruncated) {
+        let seeded = 0;
+        for (const [filename] of filesAndChanges) {
+            if (repoFilesSet.has(filename))
+                continue;
+            repoFilesSet.add(filename);
+            seeded++;
+        }
+        if (seeded > 0) {
+            getLogger().info(`dependency analysis: seeded ${seeded} PR file(s) missing from the truncated tree`);
+        }
+    }
     for (const [modifiedFile] of allModifiedSymbols) {
         dependencyGraph.set(modifiedFile, []);
     }
@@ -85825,6 +85972,12 @@ async function analyzeDependencies(filesAndChanges, repoFiles, options, concurre
         }
     }));
     await Promise.all(prFetchPromises);
+    // 截断回填（第一轮）：PR 内文件的 import 里解析不到的，把目录补回来。
+    // 必须在解析循环之前完成，否则这一轮的依赖边照样丢。
+    let recoveredFiles = [];
+    if (recovery != null) {
+        recoveredFiles = await recoverPathsForImports(fileContents, repoFilesSet, recovery, concurrencyLimit, 'step 2');
+    }
     let prInternalHits = 0;
     for (const candidateFile of prCandidates) {
         const content = fileContents.get(candidateFile);
@@ -85857,7 +86010,9 @@ async function analyzeDependencies(filesAndChanges, repoFiles, options, concurre
     // 按扩展名过滤仓库文件，排除 PR 中已处理的文件和测试文件
     const modifiedFileSet = new Set(modifiedFileNames);
     const prCandidatesSet = new Set(prCandidates);
-    let candidateFiles = filterByExtension(repoFiles, extensions).filter(f => !modifiedFileSet.has(f) && !prCandidatesSet.has(f) && !isTestFile(f));
+    // 回填出来的文件同样是合法候选，不能只从截断后的原始列表里挑
+    const visibleRepoFiles = recoveredFiles.length > 0 ? [...repoFilesSet] : repoFiles;
+    let candidateFiles = filterByExtension(visibleRepoFiles, extensions).filter(f => !modifiedFileSet.has(f) && !prCandidatesSet.has(f) && !isTestFile(f));
     // 使用 pathFilters 排除不需要的文件（直接调用 pathFilters.check 避免逐文件日志）
     candidateFiles = candidateFiles.filter(f => options.pathFilters.check(f));
     // 按与修改文件的距离排序，优先分析同目录文件
@@ -85878,6 +86033,12 @@ async function analyzeDependencies(filesAndChanges, repoFiles, options, concurre
     }));
     await Promise.all(fetchPromises);
     getLogger().info(`dependency analysis [step 4]: fetched ${candidateFiles.length} external file contents (${fileContents.size} total in cache including ${prCandidates.length} PR files from step 2)`);
+    // 截断回填（第二轮）：外部候选文件的 import 同样可能指向不可见目录。
+    // 候选集已定，这一轮只为让步骤 5/5.5 的路径解析拿到完整依据；
+    // 已列举过的目录不会重复请求，预算由 RecoveryState 统一扣减。
+    if (recovery != null) {
+        await recoverPathsForImports(fileContents, repoFilesSet, recovery, concurrencyLimit, 'step 4');
+    }
     // ===== 步骤 5: 解析外部文件的导入语句，扩充依赖图 =====
     const prFileSet = new Set(filesAndChanges.map(([f]) => f));
     let externalHits = 0;
@@ -86076,7 +86237,7 @@ async function analyzeDependencies(filesAndChanges, repoFiles, options, concurre
     }
     getLogger().info(`dependency analysis [summary]: ${fileAnalyses.size} files analyzed, ${totalRefs} cross-file references found`);
     getLogger().info(`dependency analysis [summary]: ${filesWithRefs} files have external references, ${filesWithoutRefs} files have no references (API calls used: ${candidateFiles.length})`);
-    return { fileAnalyses };
+    return { fileAnalyses, treeTruncated };
 }
 // ==================== 格式化输出 ====================
 /** 跨文件上下文的 token 上限 */
@@ -86211,23 +86372,33 @@ function isTestFile(filename) {
         /(?:^|[/\\])test_\w+\.py$/.test(lower) ||
         /[/\\]tests?[/\\]/.test(lower));
 }
+/** 文件树被截断时向用户展示的降级提示（DEP-004） */
+const TREE_TRUNCATED_NOTICE = '> ⚠️ The repository file tree was truncated by the platform API. ' +
+    'Cross-file dependency analysis ran on a partial file list and may have missed references.';
 /**
  * 将依赖分析结果格式化为 PR 评论中的摘要区块（Markdown）
  *
  * 即使没有发现跨文件影响，也会显示分析结果，让用户了解分析覆盖范围。
+ * 文件树被截断时始终输出降级提示 —— 「没找到引用」和「树不完整导致没找到」
+ * 对用户是完全不同的结论，不能只写进日志。
  */
 function formatDependencySummary(ctx) {
+    const truncationNote = ctx.treeTruncated ? `\n${TREE_TRUNCATED_NOTICE}\n` : '';
     const entries = Array.from(ctx.fileAnalyses.entries());
     if (entries.length === 0) {
-        return '';
+        return truncationNote;
     }
     // 如果所有文件都没有外部引用，则不输出依赖分析区块
     const hasAnyReference = entries.some(([, info]) => info.references.length > 0);
     if (!hasAnyReference) {
-        return '';
+        return truncationNote;
     }
     const lines = [];
     lines.push('');
+    if (ctx.treeTruncated) {
+        lines.push(TREE_TRUNCATED_NOTICE);
+        lines.push('');
+    }
     lines.push('<details>');
     lines.push(`<summary>Cross-file dependency analysis (${entries.length} file${entries.length > 1 ? 's' : ''})</summary>`);
     lines.push('');
@@ -88965,13 +89136,24 @@ const review_context = github.context;
 /** 平台无关的 TreeFetcher 实现（DEP-005 → ARCH-018） */
 const platformTreeFetcher = {
     async getTree(owner, repoName, treeSha) {
-        const result = await getPlatform().listRepositoryTree(owner, repoName, treeSha);
-        if (result.truncated) {
-            getLogger().warning(`repo tree for ${owner}/${repoName}@${treeSha} was truncated by the API — dependency analysis may be incomplete`);
-        }
-        return result.entries;
+        // 原样透传截断状态：截断告警与降级提示由 repo-tree / review 统一处理
+        return getPlatform().listRepositoryTree(owner, repoName, treeSha);
     }
 };
+/**
+ * 平台无关的 DirectoryLister 实现（DEP-004 按需回填）。
+ * 只列举单个目录下一层，用于全量文件树被截断后补回 import 指向的路径。
+ */
+function makeDirectoryLister(owner, repoName, ref) {
+    return {
+        async listDirectory(dirPath) {
+            const result = await getPlatform().listRepositoryTree(owner, repoName, ref, dirPath);
+            return result.entries
+                .filter(item => item.type === 'blob' && item.path != null)
+                .map(item => item.path);
+        }
+    };
+}
 /** 平台无关的 FileContentFetcher 实现（DEP-006 → ARCH-018） */
 const platformContentFetcher = {
     async getContent(owner, repoName, path, ref) {
@@ -89226,17 +89408,27 @@ ${hunks.oldHunk}
     }
     // ==================== 阶段零：跨文件依赖分析 ====================
     let dependencyContext = null;
+    // 独立于 dependencyContext 记录：分析本身抛错时仍要向用户说明树不完整
+    let repoTreeTruncated = false;
     if (options.enableDependencyAnalysis) {
         try {
             getLogger().info('Phase 0: starting cross-file dependency analysis');
             // 获取仓库文件树（1 次 API 调用，结果缓存）
-            const repoFiles = await getRepoFileTree(execCtx.headSha || review_context.payload.pull_request.head.sha, {
+            const { files: repoFiles, truncated } = await getRepoFileTree(execCtx.headSha || review_context.payload.pull_request.head.sha, {
                 platform: execCtx.platform,
                 owner: review_repo.owner,
                 repo: review_repo.repo
             }, platformTreeFetcher);
+            repoTreeTruncated = truncated;
             // 分析依赖关系：解析导入、提取被修改的导出符号、搜索引用
-            dependencyContext = await analyzeDependencies(filesAndChanges, repoFiles, options, githubConcurrencyLimit, { owner: review_repo.owner, repo: review_repo.repo }, execCtx.headSha || review_context.payload.pull_request.head.sha, platformContentFetcher, patchScans);
+            dependencyContext = await analyzeDependencies(filesAndChanges, repoFiles, options, githubConcurrencyLimit, { owner: review_repo.owner, repo: review_repo.repo }, execCtx.headSha || review_context.payload.pull_request.head.sha, platformContentFetcher, patchScans, 
+            // 截断时把解析不到的 import 所在目录按需补回来，而不是只提示降级
+            {
+                truncated,
+                dirLister: truncated
+                    ? makeDirectoryLister(review_repo.owner, review_repo.repo, execCtx.headSha || review_context.payload.pull_request.head.sha)
+                    : undefined
+            });
             getLogger().info('Phase 0: dependency analysis completed');
         }
         catch (e) {
@@ -89248,6 +89440,7 @@ ${hunks.oldHunk}
 <summary>Commits</summary>
 Files that changed from the base of the PR and between ${highestReviewedCommitId} and ${review_context.payload.pull_request.head.sha} commits.
 </details>
+${repoTreeTruncated ? `\n${TREE_TRUNCATED_NOTICE}\n` : ''}
 ${filesAndChanges.length > 0
         ? `
 <details>

@@ -19338,15 +19338,31 @@ const PAGINATION_DEFAULTS = {
     maxPages: 50
 };
 /**
- * 构造 list API 的分页参数。调用方传入的 `page` 会被丢弃（会破坏自动翻页契约）。
+ * DEP-004：仓库文件树的分页上限单列。
+ *
+ * 通用上限 50 页 = 5000 条，对中等规模仓库（一个组件多的前端仓库就够）
+ * 直接截断，而文件树截断意味着跨文件依赖分析看不全仓库、导入解析静默失败。
+ * tree 条目只有 path + type（几十字节），单独放宽到 500 页 = 5 万条；
+ * 代价只是超大仓库最坏情况多几百次轻量请求，普通仓库仍然一两页结束。
  */
-function listOptions(extra) {
+const TREE_PAGINATION_DEFAULTS = {
+    perPage: 100,
+    maxPages: 500
+};
+/**
+ * 构造 list API 的分页参数。调用方传入的 `page` 会被丢弃（会破坏自动翻页契约）。
+ *
+ * @param extra - 附加查询参数
+ * @param pagination - 分页契约，默认 PAGINATION_DEFAULTS；文件树等条目轻量、
+ *   数量大的接口传入自己的契约（如 TREE_PAGINATION_DEFAULTS）
+ */
+function listOptions(extra, pagination = PAGINATION_DEFAULTS) {
     const rest = { ...(extra ?? {}) };
     delete rest.page;
     return {
         ...rest,
-        perPage: PAGINATION_DEFAULTS.perPage,
-        maxPages: PAGINATION_DEFAULTS.maxPages
+        perPage: pagination.perPage,
+        maxPages: pagination.maxPages
     };
 }
 /** 配置非法时抛出（fail closed，不回退到默认 host/token） */
@@ -19979,26 +19995,64 @@ class GitLabPlatform {
      * DEP-004 边界处理：
      * - 空仓库 → 返回空数组（正常状态，不抛错）
      * - subgroup 项目 → owner 含 `/`（如 "group/subgroup"），与 repo 拼接成完整 projectPath
-     * - 超大仓库 → 翻页到 perPage × maxPages 上限后标记 truncated
+     * - 超大仓库 → 用 TREE_PAGINATION_DEFAULTS（5 万条）而非通用的 5000 条上限；
+     *   条目数正好卡在上限时再探一页确认，而不是猜「满了就是截断」
      * - Unicode 路径 → gitbeaker 内部做 URL 编码
      * - API 部分失败 → 抛 GitPlatformError（不静默返回空数组）
+     * - 传入 path → 只列举该目录下一层（截断后按需回填），目录不存在返回空树
      */
-    async listRepositoryTree(owner, repo, ref) {
+    async listRepositoryTree(owner, repo, ref, path) {
         const projectPath = `${owner}/${repo}`;
+        const scoped = path != null && path !== '';
         try {
-            const trees = await withGitLabRetry('listRepositoryTree', async () => this.api.Repositories.allRepositoryTrees(projectPath, listOptions({ ref, recursive: true })));
+            const trees = await withGitLabRetry(scoped ? 'listRepositoryTree(dir)' : 'listRepositoryTree', async () => this.api.Repositories.allRepositoryTrees(projectPath, listOptions(scoped ? { ref, recursive: false, path } : { ref, recursive: true }, TREE_PAGINATION_DEFAULTS)));
+            // GitLab 的 tree 条目 path 本身就是仓库根相对路径，无需拼接
             const entries = trees.map(t => ({ type: t.type, path: t.path }));
-            // 达到分页上限时明确标记截断，不谎报完整（GLAPI-024）
-            const limit = PAGINATION_DEFAULTS.perPage * PAGINATION_DEFAULTS.maxPages;
-            return { entries, truncated: entries.length >= limit };
+            // 目录探查只有一层，不参与整树的截断判定
+            if (scoped) {
+                return { entries, truncated: false };
+            }
+            const limit = TREE_PAGINATION_DEFAULTS.perPage * TREE_PAGINATION_DEFAULTS.maxPages;
+            // 没到上限说明翻页自然结束，一定是完整的
+            if (entries.length < limit) {
+                return { entries, truncated: false };
+            }
+            // 正好卡在上限：可能刚好取完，也可能还有下一页。探一页拿事实，
+            // 避免「恰好 5 万个文件的仓库」被误报成截断（GLAPI-024 / DEP-004）
+            return { entries, truncated: await this.hasMoreTreePages(projectPath, ref) };
         }
         catch (e) {
-            // 空仓库返回 404 "404 Tree Not Found"，视为合法的空树
+            // 空仓库返回 404 "404 Tree Not Found"，视为合法的空树；
+            // 目录探查打到不存在的路径同理（投机查询，不是失败）
             const err = normalizeGitLabError(e, 'listRepositoryTree');
-            if (err.errorKind === 'not_found' && /tree not found/i.test(err.message)) {
+            if (err.errorKind === 'not_found' && (scoped || /tree not found/i.test(err.message))) {
                 return { entries: [], truncated: false };
             }
             throw err;
+        }
+    }
+    /**
+     * 探测文件树在分页上限之后是否还有内容（DEP-004）。
+     *
+     * 显式传 `page` 让 gitbeaker 退化为单页请求，perPage 必须与主查询一致，
+     * 否则页码换算不到同一个位置。探测失败时保守返回 true —— 宁可提示
+     * 「可能不完整」，也不能因为一次探测出错就谎报完整。
+     */
+    async hasMoreTreePages(projectPath, ref) {
+        try {
+            const next = await withGitLabRetry('listRepositoryTree(probe)', async () => this.api.Repositories.allRepositoryTrees(projectPath, {
+                ref,
+                recursive: true,
+                page: TREE_PAGINATION_DEFAULTS.maxPages + 1,
+                perPage: TREE_PAGINATION_DEFAULTS.perPage,
+                maxPages: 1
+            }));
+            return Array.isArray(next) && next.length > 0;
+        }
+        catch (e) {
+            getLogger().warning(`listRepositoryTree: truncation probe failed for ${projectPath}@${ref}, ` +
+                `assuming truncated: ${normalizeGitLabError(e, 'listRepositoryTree(probe)').message}`);
+            return true;
         }
     }
     // ─── 3. 文件内容 ─────────────────────────────────────────────────────────
