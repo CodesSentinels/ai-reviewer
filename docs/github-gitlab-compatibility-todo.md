@@ -325,9 +325,9 @@
 
 ### 5.4 GitHub-only 回归
 
-- [ ] `GH-016` 未提供任何 GitLab URL、PAT、Webhook、Runner 或变量时，GitHub
+- [x] `GH-016` 未提供任何 GitLab URL、PAT、Webhook、Runner 或变量时，GitHub
       Action 可启动。
-- [ ] `GH-017` GitLab API 不可达时，GitHub 全功能测试仍通过。
+- [x] `GH-017` GitLab API 不可达时，GitHub 全功能测试仍通过。
 
 ---
 
