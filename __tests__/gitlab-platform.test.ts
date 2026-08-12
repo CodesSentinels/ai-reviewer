@@ -64,7 +64,7 @@ jest.mock('@gitbeaker/rest', () => ({
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const {GitLabPlatform} = require('../src/platform/gitlab-platform')
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const {PAGINATION_DEFAULTS} = require('../src/platform/gitlab-client')
+const {PAGINATION_DEFAULTS, TREE_PAGINATION_DEFAULTS} = require('../src/platform/gitlab-client')
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const {configureGitLabRetry, resetGitLabRetryPolicy} = require('../src/platform/gitlab-retry')
 
@@ -79,6 +79,12 @@ const TEST_CLIENT_CONFIG = {
 const PAGINATION_ARGS = {
   perPage: PAGINATION_DEFAULTS.perPage,
   maxPages: PAGINATION_DEFAULTS.maxPages
+}
+
+/** 文件树有自己的分页契约（DEP-004），上限比通用 list 高 */
+const TREE_PAGINATION_ARGS = {
+  perPage: TREE_PAGINATION_DEFAULTS.perPage,
+  maxPages: TREE_PAGINATION_DEFAULTS.maxPages
 }
 
 describe('GitLabPlatform', () => {
@@ -386,7 +392,7 @@ describe('GitLabPlatform', () => {
       expect(mockRepositories.allRepositoryTrees).toHaveBeenCalledWith('g/r', {
         ref: 'main',
         recursive: true,
-        ...PAGINATION_ARGS
+        ...TREE_PAGINATION_ARGS
       })
     })
 
@@ -414,7 +420,7 @@ describe('GitLabPlatform', () => {
       expect(mockRepositories.allRepositoryTrees).toHaveBeenCalledWith('group/subgroup/repo', {
         ref: 'main',
         recursive: true,
-        ...PAGINATION_ARGS
+        ...TREE_PAGINATION_ARGS
       })
     })
   })

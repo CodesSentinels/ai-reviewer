@@ -22,7 +22,7 @@
 import {
   createGitLabClient,
   listOptions,
-  PAGINATION_DEFAULTS,
+  TREE_PAGINATION_DEFAULTS,
   type GitLabApi,
   type GitLabClientConfig
 } from './gitlab-client'
@@ -190,7 +190,8 @@ export class GitLabPlatform implements IGitPlatform {
    * DEP-004 边界处理：
    * - 空仓库 → 返回空数组（正常状态，不抛错）
    * - subgroup 项目 → owner 含 `/`（如 "group/subgroup"），与 repo 拼接成完整 projectPath
-   * - 超大仓库 → 翻页到 perPage × maxPages 上限后标记 truncated
+   * - 超大仓库 → 用 TREE_PAGINATION_DEFAULTS（5 万条）而非通用的 5000 条上限；
+   *   条目数正好卡在上限时再探一页确认，而不是猜「满了就是截断」
    * - Unicode 路径 → gitbeaker 内部做 URL 编码
    * - API 部分失败 → 抛 GitPlatformError（不静默返回空数组）
    */
@@ -200,13 +201,18 @@ export class GitLabPlatform implements IGitPlatform {
       const trees = await withGitLabRetry('listRepositoryTree', async () =>
         this.api.Repositories.allRepositoryTrees(
           projectPath,
-          listOptions({ref, recursive: true}) as any
+          listOptions({ref, recursive: true}, TREE_PAGINATION_DEFAULTS) as any
         )
       )
       const entries = trees.map(t => ({type: t.type, path: t.path}))
-      // 达到分页上限时明确标记截断，不谎报完整（GLAPI-024）
-      const limit = PAGINATION_DEFAULTS.perPage * PAGINATION_DEFAULTS.maxPages
-      return {entries, truncated: entries.length >= limit}
+      const limit = TREE_PAGINATION_DEFAULTS.perPage * TREE_PAGINATION_DEFAULTS.maxPages
+      // 没到上限说明翻页自然结束，一定是完整的
+      if (entries.length < limit) {
+        return {entries, truncated: false}
+      }
+      // 正好卡在上限：可能刚好取完，也可能还有下一页。探一页拿事实，
+      // 避免「恰好 5 万个文件的仓库」被误报成截断（GLAPI-024 / DEP-004）
+      return {entries, truncated: await this.hasMoreTreePages(projectPath, ref)}
     } catch (e) {
       // 空仓库返回 404 "404 Tree Not Found"，视为合法的空树
       const err = normalizeGitLabError(e, 'listRepositoryTree')
@@ -214,6 +220,34 @@ export class GitLabPlatform implements IGitPlatform {
         return {entries: [], truncated: false}
       }
       throw err
+    }
+  }
+
+  /**
+   * 探测文件树在分页上限之后是否还有内容（DEP-004）。
+   *
+   * 显式传 `page` 让 gitbeaker 退化为单页请求，perPage 必须与主查询一致，
+   * 否则页码换算不到同一个位置。探测失败时保守返回 true —— 宁可提示
+   * 「可能不完整」，也不能因为一次探测出错就谎报完整。
+   */
+  private async hasMoreTreePages(projectPath: string, ref: string): Promise<boolean> {
+    try {
+      const next = await withGitLabRetry('listRepositoryTree(probe)', async () =>
+        this.api.Repositories.allRepositoryTrees(projectPath, {
+          ref,
+          recursive: true,
+          page: TREE_PAGINATION_DEFAULTS.maxPages + 1,
+          perPage: TREE_PAGINATION_DEFAULTS.perPage,
+          maxPages: 1
+        } as any)
+      )
+      return Array.isArray(next) && next.length > 0
+    } catch (e) {
+      getLogger().warning(
+        `listRepositoryTree: truncation probe failed for ${projectPath}@${ref}, ` +
+          `assuming truncated: ${normalizeGitLabError(e, 'listRepositoryTree(probe)').message}`
+      )
+      return true
     }
   }
 

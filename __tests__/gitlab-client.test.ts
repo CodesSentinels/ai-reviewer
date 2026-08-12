@@ -22,6 +22,7 @@ const {
   GITLAB_CLIENT_DEFAULTS,
   listOptions,
   PAGINATION_DEFAULTS,
+  TREE_PAGINATION_DEFAULTS,
   resolveGitLabClientConfig,
   validateGitLabHost,
   validateGitLabTimeoutMS
@@ -197,5 +198,25 @@ describe('listOptions（GLAPI-024 分页契约）', () => {
   test('perPage 取 GitLab REST 上限 100，maxPages 给出有上限的请求预算', () => {
     expect(PAGINATION_DEFAULTS.perPage).toBe(100)
     expect(PAGINATION_DEFAULTS.maxPages).toBeGreaterThan(0)
+  })
+
+  // DEP-004：文件树条目轻量、数量大，用自己的分页契约
+  test('可传入自定义分页契约覆盖默认值', () => {
+    expect(listOptions({ref: 'main'}, TREE_PAGINATION_DEFAULTS)).toEqual({
+      ref: 'main',
+      perPage: TREE_PAGINATION_DEFAULTS.perPage,
+      maxPages: TREE_PAGINATION_DEFAULTS.maxPages
+    })
+  })
+
+  test('自定义契约同样丢弃 page', () => {
+    expect(listOptions({page: 9}, TREE_PAGINATION_DEFAULTS)).not.toHaveProperty('page')
+  })
+
+  test('文件树上限显著高于通用上限（5000 条会截断中等规模仓库）', () => {
+    const treeLimit = TREE_PAGINATION_DEFAULTS.perPage * TREE_PAGINATION_DEFAULTS.maxPages
+    const generalLimit = PAGINATION_DEFAULTS.perPage * PAGINATION_DEFAULTS.maxPages
+    expect(treeLimit).toBeGreaterThan(generalLimit)
+    expect(treeLimit).toBeGreaterThanOrEqual(50_000)
   })
 })

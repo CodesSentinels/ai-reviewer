@@ -54,17 +54,41 @@ export const PAGINATION_DEFAULTS = {
 } as const
 
 /**
+ * DEP-004：仓库文件树的分页上限单列。
+ *
+ * 通用上限 50 页 = 5000 条，对中等规模仓库（一个组件多的前端仓库就够）
+ * 直接截断，而文件树截断意味着跨文件依赖分析看不全仓库、导入解析静默失败。
+ * tree 条目只有 path + type（几十字节），单独放宽到 500 页 = 5 万条；
+ * 代价只是超大仓库最坏情况多几百次轻量请求，普通仓库仍然一两页结束。
+ */
+export const TREE_PAGINATION_DEFAULTS = {
+  perPage: 100,
+  maxPages: 500
+} as const
+
+/** 分页契约的形状（PAGINATION_DEFAULTS / TREE_PAGINATION_DEFAULTS） */
+export interface PaginationContract {
+  perPage: number
+  maxPages: number
+}
+
+/**
  * 构造 list API 的分页参数。调用方传入的 `page` 会被丢弃（会破坏自动翻页契约）。
+ *
+ * @param extra - 附加查询参数
+ * @param pagination - 分页契约，默认 PAGINATION_DEFAULTS；文件树等条目轻量、
+ *   数量大的接口传入自己的契约（如 TREE_PAGINATION_DEFAULTS）
  */
 export function listOptions<T extends Record<string, unknown>>(
-  extra?: T
+  extra?: T,
+  pagination: PaginationContract = PAGINATION_DEFAULTS
 ): T & {perPage: number; maxPages: number} {
   const rest = {...((extra ?? {}) as Record<string, unknown>)}
   delete rest.page
   return {
     ...(rest as T),
-    perPage: PAGINATION_DEFAULTS.perPage,
-    maxPages: PAGINATION_DEFAULTS.maxPages
+    perPage: pagination.perPage,
+    maxPages: pagination.maxPages
   }
 }
 

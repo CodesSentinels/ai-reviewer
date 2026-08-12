@@ -58,7 +58,7 @@ jest.mock('@gitbeaker/rest', () => ({
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const {GitLabPlatform} = require('../src/platform/gitlab-platform')
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const {PAGINATION_DEFAULTS} = require('../src/platform/gitlab-client')
+const {PAGINATION_DEFAULTS, TREE_PAGINATION_DEFAULTS} = require('../src/platform/gitlab-client')
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const {configureGitLabRetry, resetGitLabRetryPolicy} = require('../src/platform/gitlab-retry')
 
@@ -112,17 +112,18 @@ describe('GitLab adapter 稳定性契约', () => {
       await platform.listRepositoryTree('g', 'r', 'main')
       await platform.getCollaboratorPermission('g', 'r', 'alice')
 
+      // 文件树用自己的分页契约（条目轻量、数量大），其余 list API 用通用契约
       const listCalls = [
-        mockMergeRequests.allCommits.mock.calls[0][2],
-        mockMergeRequestNotes.all.mock.calls[0][2],
-        mockMergeRequestDiscussions.all.mock.calls[0][2],
-        mockRepositories.allRepositoryTrees.mock.calls[0][1],
-        mockUsers.all.mock.calls[0][0]
-      ]
-      for (const opts of listCalls) {
+        [mockMergeRequests.allCommits.mock.calls[0][2], PAGINATION_DEFAULTS],
+        [mockMergeRequestNotes.all.mock.calls[0][2], PAGINATION_DEFAULTS],
+        [mockMergeRequestDiscussions.all.mock.calls[0][2], PAGINATION_DEFAULTS],
+        [mockRepositories.allRepositoryTrees.mock.calls[0][1], TREE_PAGINATION_DEFAULTS],
+        [mockUsers.all.mock.calls[0][0], PAGINATION_DEFAULTS]
+      ] as const
+      for (const [opts, contract] of listCalls) {
         expect(opts).toMatchObject({
-          perPage: PAGINATION_DEFAULTS.perPage,
-          maxPages: PAGINATION_DEFAULTS.maxPages
+          perPage: contract.perPage,
+          maxPages: contract.maxPages
         })
         expect(opts).not.toHaveProperty('page')
       }
@@ -143,21 +144,75 @@ describe('GitLab adapter 稳定性契约', () => {
       expect(mockMergeRequestNotes.all).toHaveBeenCalledTimes(1)
     })
 
-    test('文件树未到上限 → truncated=false', async () => {
+    test('文件树未到上限 → truncated=false，且不发探测请求', async () => {
       mockRepositories.allRepositoryTrees.mockResolvedValue(
         Array.from({length: 10}, (_, i) => ({type: 'blob', path: `f${i}.ts`}))
       )
       const result = await platform.listRepositoryTree('g', 'r', 'main')
       expect(result.truncated).toBe(false)
+      expect(mockRepositories.allRepositoryTrees).toHaveBeenCalledTimes(1)
     })
 
-    test('文件树达到 perPage × maxPages 上限 → 如实标记 truncated', async () => {
-      const limit = PAGINATION_DEFAULTS.perPage * PAGINATION_DEFAULTS.maxPages
+    test('文件树用独立的分页上限，通用上限（5000 条）不再触发截断', async () => {
+      expect(TREE_PAGINATION_DEFAULTS.perPage * TREE_PAGINATION_DEFAULTS.maxPages).toBeGreaterThan(
+        PAGINATION_DEFAULTS.perPage * PAGINATION_DEFAULTS.maxPages
+      )
+      const oldLimit = PAGINATION_DEFAULTS.perPage * PAGINATION_DEFAULTS.maxPages
       mockRepositories.allRepositoryTrees.mockResolvedValue(
-        Array.from({length: limit}, (_, i) => ({type: 'blob', path: `f${i}.ts`}))
+        Array.from({length: oldLimit}, (_, i) => ({type: 'blob', path: `f${i}.ts`}))
       )
       const result = await platform.listRepositoryTree('g', 'r', 'main')
+      expect(result.entries).toHaveLength(oldLimit)
+      expect(result.truncated).toBe(false)
+    })
+
+    test('文件树查询按 TREE_PAGINATION_DEFAULTS 传分页参数', async () => {
+      mockRepositories.allRepositoryTrees.mockResolvedValue([])
+      await platform.listRepositoryTree('g', 'r', 'main')
+      const opts = mockRepositories.allRepositoryTrees.mock.calls[0][1] as any
+      expect(opts.perPage).toBe(TREE_PAGINATION_DEFAULTS.perPage)
+      expect(opts.maxPages).toBe(TREE_PAGINATION_DEFAULTS.maxPages)
+    })
+
+    test('条目数正好卡在上限 + 下一页还有内容 → truncated=true', async () => {
+      const limit = TREE_PAGINATION_DEFAULTS.perPage * TREE_PAGINATION_DEFAULTS.maxPages
+      mockRepositories.allRepositoryTrees
+        .mockResolvedValueOnce(
+          Array.from({length: limit}, (_, i) => ({type: 'blob', path: `f${i}.ts`}))
+        )
+        .mockResolvedValueOnce([{type: 'blob', path: 'overflow.ts'}])
+
+      const result = await platform.listRepositoryTree('g', 'r', 'main')
       expect(result.truncated).toBe(true)
+      // 探测请求显式指定下一页，perPage 与主查询一致才对得上位置
+      const probeOpts = mockRepositories.allRepositoryTrees.mock.calls[1][1] as any
+      expect(probeOpts.page).toBe(TREE_PAGINATION_DEFAULTS.maxPages + 1)
+      expect(probeOpts.perPage).toBe(TREE_PAGINATION_DEFAULTS.perPage)
+    })
+
+    test('条目数正好卡在上限但下一页为空 → 不误报截断', async () => {
+      const limit = TREE_PAGINATION_DEFAULTS.perPage * TREE_PAGINATION_DEFAULTS.maxPages
+      mockRepositories.allRepositoryTrees
+        .mockResolvedValueOnce(
+          Array.from({length: limit}, (_, i) => ({type: 'blob', path: `f${i}.ts`}))
+        )
+        .mockResolvedValueOnce([])
+
+      const result = await platform.listRepositoryTree('g', 'r', 'main')
+      expect(result.truncated).toBe(false)
+    })
+
+    test('探测请求失败 → 保守标记 truncated（不谎报完整）', async () => {
+      const limit = TREE_PAGINATION_DEFAULTS.perPage * TREE_PAGINATION_DEFAULTS.maxPages
+      mockRepositories.allRepositoryTrees
+        .mockResolvedValueOnce(
+          Array.from({length: limit}, (_, i) => ({type: 'blob', path: `f${i}.ts`}))
+        )
+        .mockRejectedValue(requestError(500))
+
+      const result = await platform.listRepositoryTree('g', 'r', 'main')
+      expect(result.truncated).toBe(true)
+      expect(result.entries).toHaveLength(limit)
     })
   })
 
