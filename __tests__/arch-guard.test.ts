@@ -470,3 +470,29 @@ describe('GH-015: 平台状态 marker 不跨平台读写', () => {
     expect(gitlabTrigger).toMatch(/setStateNamespace\(\s*'gitlab'\s*\)/)
   })
 })
+
+describe('SYNC-009: GitLab 运行代码不得读取同步 Token', () => {
+  const allFiles = collectTsFiles(SRC)
+
+  // GITLAB_TOKEN 是 .github/workflows/sync-to-gitlab.yml 专用的、持有 GitLab
+  // 写权限的同步凭据，只应存在于 GitHub Actions secret 里；GitLab-only 运行时
+  // 用的是完全不同的 GITLAB_PAT/CI_JOB_TOKEN（见 gitlab-trigger.ts
+  // resolveGitLabCredential()）。src/ 里任何地方出现 GITLAB_TOKEN 字符串，
+  // 都意味着有代码在尝试读取本该只属于同步 workflow 的凭据。
+  test('src/ 下不出现 GITLAB_TOKEN（与 GITLAB_PAT/CI_JOB_TOKEN 是两个不同凭据）', () => {
+    const violations: string[] = []
+    for (const f of allFiles) {
+      const code = fs.readFileSync(f, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*/g, '')
+      if (/\bGITLAB_TOKEN\b/.test(code)) {
+        violations.push(path.relative(SRC, f).replace(/\\/g, '/'))
+      }
+    }
+    expect(violations).toEqual([])
+  })
+
+  test('gitlab-trigger.ts 确实使用的是 GITLAB_PAT/CI_JOB_TOKEN（防止两个凭据名字都被删掉导致上一条测试空跑）', () => {
+    const content = fs.readFileSync(path.join(SRC, 'gitlab-trigger.ts'), 'utf8')
+    expect(content).toContain('GITLAB_PAT')
+    expect(content).toContain('CI_JOB_TOKEN')
+  })
+})

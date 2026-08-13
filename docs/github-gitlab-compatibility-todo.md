@@ -757,15 +757,32 @@
 
 ## 13. 单向发布 Workflow 开发
 
-- [ ] `SYNC-001` 审查并加固 `.github/workflows/sync-to-gitlab.yml`。
-- [ ] `SYNC-002` 固定源/目标仓库与 `main` 分支，禁止不受控 ref 和目标 URL。
-- [ ] `SYNC-003` 增加 concurrency，防止旧同步覆盖新提交。
-- [ ] `SYNC-004` push 后自动比较 GitHub/GitLab `main` SHA。
-- [ ] `SYNC-005` 同步失败时 job 失败，但不得影响 GitHub Action 审查 workflow。
-- [ ] `SYNC-006` 防止 GitLab pipeline 反向触发 GitHub 写入或形成同步循环。
-- [ ] `SYNC-007` 重复同步保持幂等。
-- [ ] `SYNC-008` tag 和其他分支默认不同步；代码中使用显式白名单。
-- [ ] `SYNC-009` GitLab reviewer 运行代码中不得读取同步 Token 或调用 GitHub。
+> **状态**：⚠️ 配置 + 结构性测试已完成，**未经真实同步回放验证**（GitHub Issue
+> [#105](https://github.com/CodesSentinels/ai-reviewer/issues/105) 跟踪，汇总见
+> Issue [#75](https://github.com/CodesSentinels/ai-reviewer/issues/75)；设计文档
+> `docs/tasks/gitlab-sync-hardening-design.md`）。在已有的
+> `.github/workflows/sync-to-gitlab.yml`（目标仓库 URL 固定字面量、自动触发只
+> 监听 `main`/`develop`、与 `openai-review.yml` 完全独立不互相触发，均已确认
+> 满足）基础上，新增三步：分支白名单校验（堵住 `workflow_dispatch` 此前可同步
+> 任意分支的漏洞）、`concurrency`（按目标分支分组、`cancel-in-progress`）、push
+> 后回读 GitLab HEAD 并比对 SHA。`__tests__/workflow-security.test.ts` 新增 7
+> 项结构性断言，`__tests__/arch-guard.test.ts` 新增 `GITLAB_TOKEN`（同步专用
+> 凭据）不得出现在 `src/` 的守卫（`SYNC-009`）。⚠️ 已知缺口：`SYNC-004` 新增的
+> `curl`/`jq` 调用 GitLab REST API 的逻辑，本地/CI 均没有真实有效的
+> `GITLAB_TOKEN` 和 `ai-reviewer-test` 项目可供回放，只做了脚本走查和 YAML 结
+> 构断言，未经真实执行验证；GitLab 项目的 Protected Branch 保护规则（拒绝直接
+> push/MR merge）是项目配置项，本任务无法在代码层面体现。接入真实项目前不应
+> 把本章视为"已验收"。
+
+- [x] `SYNC-001` 审查并加固 `.github/workflows/sync-to-gitlab.yml`。
+- [x] `SYNC-002` 固定源/目标仓库与 `main` 分支，禁止不受控 ref 和目标 URL。
+- [x] `SYNC-003` 增加 concurrency，防止旧同步覆盖新提交。
+- [x] `SYNC-004` push 后自动比较 GitHub/GitLab `main` SHA。
+- [x] `SYNC-005` 同步失败时 job 失败，但不得影响 GitHub Action 审查 workflow。
+- [x] `SYNC-006` 防止 GitLab pipeline 反向触发 GitHub 写入或形成同步循环。
+- [x] `SYNC-007` 重复同步保持幂等。
+- [x] `SYNC-008` tag 和其他分支默认不同步；代码中使用显式白名单。
+- [x] `SYNC-009` GitLab reviewer 运行代码中不得读取同步 Token 或调用 GitHub。
 
 ---
 
