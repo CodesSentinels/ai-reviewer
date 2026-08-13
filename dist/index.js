@@ -77749,6 +77749,8 @@ async function pRetry(input, options) {
 	});
 }
 
+// EXTERNAL MODULE: ./lib/redact.js
+var redact = __nccwpck_require__(1173);
 ;// CONCATENATED MODULE: ./lib/platform/logger.js
 /**
  * platform/logger.ts - 平台无关 Logger 接口（ARCH-012）
@@ -77759,20 +77761,24 @@ async function pRetry(input, options) {
  *
  * ARCH-015：GitLab-only 启动不得初始化 @actions/core，因此 GitLabLogger
  * 不 import @actions/core，只使用 console。
+ *
+ * SEC-008：默认 consoleLogger 同样过 redactForLog——它是未调用 setLogger()
+ * 时的兜底出口（如 lint-only CLI），不能成为脱敏的缺口。
  */
+
 /**
  * 控制台 Logger（默认 fallback）。
  * 在 setLogger() 调用前或未初始化时使用，保证日志不会丢失。
  */
 const consoleLogger = {
     // eslint-disable-next-line no-console
-    info: (msg) => console.log(msg),
+    info: (msg) => console.log((0,redact/* redactForLog */.vS)(msg)),
     // eslint-disable-next-line no-console
-    warning: (msg) => console.warn(msg),
+    warning: (msg) => console.warn((0,redact/* redactForLog */.vS)(msg)),
     // eslint-disable-next-line no-console
-    error: (msg) => console.error(msg),
+    error: (msg) => console.error((0,redact/* redactForLog */.vS)(msg)),
     // eslint-disable-next-line no-console
-    debug: (msg) => console.log(`[DEBUG] ${msg}`)
+    debug: (msg) => console.log(`[DEBUG] ${(0,redact/* redactForLog */.vS)(msg)}`)
 };
 let _logger = consoleLogger;
 /** 设置全局 Logger 实例（入口文件调用） */
@@ -82611,7 +82617,7 @@ class Options {
     botLogin; // 平台专有的 bot 登录标识
     /**
      * 外部 lint 报告路径（SEC-002）。非空时 reviewer **不自己跑工具**，
-     * 而是读取无密钥 job 产出的 JSON 报告——有密钥的执行面不接触 PR 代码。
+     * 而是读取低权限 lint job 产出的 JSON 报告——持业务密钥的执行面不接触 PR 代码。
      */
     lintReportPath;
     constructor(debug, disableReview, disableReleaseNotes, maxFiles = '0', reviewSimpleChanges = false, reviewCommentLGTM = false, pathFilters = null, systemMessage = '', openaiLightModel = 'gpt-5.4-nano', openaiHeavyModel = 'gpt-5.4-mini', openaiModelTemperature = '0.0', openaiRetries = '3', openaiTimeoutMS = '120000', openaiConcurrencyLimit = '6', githubConcurrencyLimit = '6', apiBaseUrl = 'https://api.openai.com/v1', language = 'en-US', enableDependencyAnalysis = true, maxDependencyFiles = '50', enableWebSearch = true, enableShell = true, enableLintTools = true, toolEnableOverrides = {}, toolVersionOverrides = {}, semgrepConfig = 'p/default', commandAckReaction = 'eyes', maxReviewComments = '20', debugResolveInjectFailures = '0', botIcon = '🤖', botName = 'AI Reviewer', botLogin = '', lintReportPath = '') {
@@ -83272,8 +83278,6 @@ class GitHubConfigProvider {
     }
 }
 
-// EXTERNAL MODULE: ./lib/redact.js
-var redact = __nccwpck_require__(1173);
 ;// CONCATENATED MODULE: ./lib/platform/github-logger.js
 /**
  * platform/github-logger.ts - GitHub Actions Logger（ARCH-013）
@@ -88550,7 +88554,7 @@ function formatter_truncate(s, max) {
 /**
  * lint/report-schema.ts — 外部 lint 报告的严格校验（SEC-002 / SEC-005）
  *
- * P0 第二步把 lint 挪进**无密钥 job**：它 checkout PR head、跑工具、产出 JSON
+ * P0 第二步把 lint 挪进**低权限 job**：它 checkout PR head、跑工具、产出 JSON
  * 报告；有密钥的 reviewer job 只把这份报告当**数据**读回来。
  *
  * 这份数据完全由 PR 作者间接控制——他能决定被扫描的代码，因而能影响工具输出的
@@ -89383,7 +89387,7 @@ const MAX_LINT_REPORT_BYTES = 8 * 1024 * 1024;
 /**
  * 读取并严格校验外部 lint 报告（SEC-002 / SEC-005）。
  *
- * 报告由无密钥 job 产出，内容间接受 PR 作者控制，因此这里把它当敌意数据：
+ * 报告由低权限 lint job 产出，内容间接受 PR 作者控制，因此这里把它当敌意数据：
  * 结构违规整份丢弃、单条目违规逐条丢弃，任何失败都只降级为「没有 lint 结果」，
  * 绝不让审查主流程失败——静态分析是增强项，不是审查的前置条件。
  */
@@ -89628,9 +89632,9 @@ ${hunks.oldHunk}
     // ==================== 阶段零·B：静态分析工具扫描（Linter/SAST） ====================
     //
     // 两条来源，互斥：
-    //   1. lintReportPath 非空 → 读取无密钥 job 产出的报告（SEC-002）。
+    //   1. lintReportPath 非空 → 读取低权限 lint job 产出的报告（SEC-002）。
     //      本 job 持有密钥，绝不能自己 checkout/执行 PR 代码，因此优先走这条。
-    //   2. 否则 enableLintTools=true → 本地跑工具（仅适用于无密钥执行面）。
+    //   2. 否则 enableLintTools=true → 本地跑工具（仅适用于无业务密钥的执行面）。
     let lintReport = null;
     if (options.lintReportPath) {
         lintReport = loadExternalLintReport(options.lintReportPath);
