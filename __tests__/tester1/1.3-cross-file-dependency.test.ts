@@ -230,8 +230,18 @@ describe('1.3.1 — formatCrossFileContext', () => {
       ],
       dependentFiles: ['components/Price.vue', 'pages/shop.vue'],
       references: [
-        {filename: 'components/Price.vue', symbolName: 'formatPrice', lineNumber: 3, lineContent: 'const p = formatPrice(amt)'},
-        {filename: 'pages/shop.vue', symbolName: 'formatPrice', lineNumber: 10, lineContent: 'formatPrice(total)'}
+        {
+          filename: 'components/Price.vue',
+          symbolName: 'formatPrice',
+          lineNumber: 3,
+          lineContent: 'const p = formatPrice(amt)'
+        },
+        {
+          filename: 'pages/shop.vue',
+          symbolName: 'formatPrice',
+          lineNumber: 10,
+          lineContent: 'formatPrice(total)'
+        }
       ]
     }
     const context = formatCrossFileContext(analysis)

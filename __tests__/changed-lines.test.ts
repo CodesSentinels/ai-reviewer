@@ -72,9 +72,7 @@ describe('scanPatch — 单次 walk 同时产出 added/touched', () => {
 })
 
 describe('buildPatchScans / toAddedLineMap', () => {
-  const filesAndChanges: Array<
-    [string, string, string, Array<[number, number, string]>]
-  > = [
+  const filesAndChanges: Array<[string, string, string, Array<[number, number, string]>]> = [
     [
       'src/a.ts',
       '',

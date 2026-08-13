@@ -22,16 +22,11 @@
  * （含位置 + ruleId + 主消息），续行的 type chain 详情忽略。
  */
 
-import {info} from '@actions/core'
+import {info} from '../../actions-log'
 import {existsSync} from 'fs'
-import * as path from 'path'
+import {join} from 'path'
 import {ensureToolInstalled} from '../tool-installer'
-import {
-  type InstallSpec,
-  type LintResult,
-  type ToolAdapter,
-  type ToolDetection
-} from '../types'
+import {type InstallSpec, type LintResult, type ToolAdapter, type ToolDetection} from '../types'
 import {extractVersion, runCommand} from './exec'
 
 /**
@@ -39,18 +34,14 @@ import {extractVersion, runCommand} from './exec'
  *
  * 顺序：标准 tsconfig.json 优先；其他变体（base / app / ci）作为后备
  */
-const TSCONFIG_FILES = [
-  'tsconfig.json',
-  'tsconfig.base.json',
-  'tsconfig.app.json'
-]
+const TSCONFIG_FILES = ['tsconfig.json', 'tsconfig.base.json', 'tsconfig.app.json']
 
 /**
  * 在 repoRoot 寻找 tsconfig；命中即返回文件名
  */
 function findTsconfig(repoRoot: string): string | null {
   for (const name of TSCONFIG_FILES) {
-    if (existsSync(path.join(repoRoot, name))) return name
+    if (existsSync(join(repoRoot, name))) return name
   }
   return null
 }
@@ -84,10 +75,7 @@ export class TscAdapter implements ToolAdapter {
   private resolvedVersion = ''
   private resolvedBinPath = ''
 
-  async detect(
-    repoRoot: string,
-    versionOverride?: string
-  ): Promise<ToolDetection> {
+  async detect(repoRoot: string, versionOverride?: string): Promise<ToolDetection> {
     // 1) 沙箱安装 typescript
     const spec: InstallSpec =
       versionOverride && versionOverride.length > 0
@@ -97,9 +85,7 @@ export class TscAdapter implements ToolAdapter {
     if (!install.ok) {
       return {
         available: false,
-        reason: `bundled TypeScript install failed: ${
-          install.reason ?? 'unknown'
-        }`
+        reason: `bundled TypeScript install failed: ${install.reason ?? 'unknown'}`
       }
     }
     this.resolvedBinPath = install.binPath as string
@@ -134,9 +120,7 @@ export class TscAdapter implements ToolAdapter {
           'no tsconfig.json found in repo (looked for tsconfig.json, tsconfig.base.json, tsconfig.app.json)'
       }
     }
-    info(
-      `lint/tsc: bundled bin=${this.resolvedBinPath}, project tsconfig=${tsconfig}`
-    )
+    info(`lint/tsc: bundled bin=${this.resolvedBinPath}, project tsconfig=${tsconfig}`)
 
     this.resolvedVersion = version
     return {available: true, version}
@@ -145,9 +129,7 @@ export class TscAdapter implements ToolAdapter {
   async scan(files: string[], repoRoot: string): Promise<LintResult[]> {
     // 注意：files 参数被忽略 —— tsc 必须扫整个项目（types 跨文件传递），
     // 无法只 type-check 指定文件。orchestrator 会按 addedLines 后过滤到变更行。
-    info(
-      `lint/tsc: type-checking project at ${repoRoot} (${files.length} changed TS file(s))`
-    )
+    info(`lint/tsc: type-checking project at ${repoRoot} (${files.length} changed TS file(s))`)
     const result = await runCommand({
       command: this.resolvedBinPath,
       args: ['--noEmit', '--pretty', 'false'],
@@ -187,9 +169,7 @@ export class TscAdapter implements ToolAdapter {
         category: 'quality'
       })
     }
-    info(
-      `lint/tsc: ${findings.length} type-check finding(s) before changed-line filter`
-    )
+    info(`lint/tsc: ${findings.length} type-check finding(s) before changed-line filter`)
     return findings
   }
 }

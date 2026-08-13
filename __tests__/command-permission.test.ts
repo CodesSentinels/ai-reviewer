@@ -3,41 +3,34 @@
  */
 import {describe, expect, test, beforeEach, jest} from '@jest/globals'
 
-jest.mock('@actions/core', () => ({
-  getInput: jest.fn().mockReturnValue(''),
-  info: jest.fn(),
-  warning: jest.fn(),
-  error: jest.fn()
+const mockGetCollaboratorPermission = jest.fn()
+jest.mock('../src/platform/git-platform', () => ({
+  getPlatform: () => ({
+    getCollaboratorPermission: mockGetCollaboratorPermission
+  })
+}))
+jest.mock('../src/platform/logger', () => ({
+  getLogger: () => ({
+    info: jest.fn(),
+    warning: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn()
+  })
 }))
 
-const getCollaboratorPermissionLevel = jest.fn()
-jest.mock('../src/octokit', () => ({
-  octokit: {
-    repos: {
-      getCollaboratorPermissionLevel
-    }
-  }
-}))
-
-import {
-  getPermission,
-  canExecute,
-  _resetPermissionCache
-} from '../src/commands/permission'
+import {getPermission, canExecute, _resetPermissionCache} from '../src/commands/permission'
 import type {CommandHandler} from '../src/commands/types'
 
 const mockResolve = (permission: string) =>
-  (getCollaboratorPermissionLevel as jest.Mock).mockResolvedValue({
-    data: {permission}
-  } as never)
+  (mockGetCollaboratorPermission as jest.Mock).mockResolvedValue(permission as never)
 
 const mockReject = (err: Error) =>
-  (getCollaboratorPermissionLevel as jest.Mock).mockRejectedValue(err as never)
+  (mockGetCollaboratorPermission as jest.Mock).mockRejectedValue(err as never)
 
 describe('getPermission', () => {
   beforeEach(() => {
     _resetPermissionCache()
-    getCollaboratorPermissionLevel.mockReset()
+    mockGetCollaboratorPermission.mockReset()
   })
 
   test('returns API value', async () => {
@@ -54,14 +47,14 @@ describe('getPermission', () => {
     mockResolve('admin')
     await getPermission({owner: 'o', repo: 'r', username: 'alice'})
     await getPermission({owner: 'o', repo: 'r', username: 'alice'})
-    expect(getCollaboratorPermissionLevel).toHaveBeenCalledTimes(1)
+    expect(mockGetCollaboratorPermission).toHaveBeenCalledTimes(1)
   })
 
   test('different users are cached independently', async () => {
     mockResolve('write')
     await getPermission({owner: 'o', repo: 'r', username: 'alice'})
     await getPermission({owner: 'o', repo: 'r', username: 'bob'})
-    expect(getCollaboratorPermissionLevel).toHaveBeenCalledTimes(2)
+    expect(mockGetCollaboratorPermission).toHaveBeenCalledTimes(2)
   })
 
   test('API failure returns none and does not throw', async () => {

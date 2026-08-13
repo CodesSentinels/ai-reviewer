@@ -50,9 +50,7 @@ export function parse(body: string, opts: ParserOptions): ParseOutcome {
     return {kind: 'none'}
   }
 
-  const mentions = (opts.botMentions ?? DEFAULT_BOT_MENTIONS).map(m =>
-    m.toLowerCase()
-  )
+  const mentions = (opts.botMentions ?? DEFAULT_BOT_MENTIONS).map(m => m.toLowerCase())
 
   // 1. 找到第一个 bot mention 出现的位置（忽略大小写）
   const lower = body.toLowerCase()
@@ -80,8 +78,7 @@ export function parse(body: string, opts: ParserOptions): ParseOutcome {
   // 按第一个换行切分：第一行是命令体，其余是 rawAfter
   const firstNewline = rest.indexOf('\n')
   const firstLineRaw = firstNewline === -1 ? rest : rest.slice(0, firstNewline)
-  const rawAfter =
-    firstNewline === -1 ? '' : rest.slice(firstNewline + 1).trim()
+  const rawAfter = firstNewline === -1 ? '' : rest.slice(firstNewline + 1).trim()
 
   // 3. 命令行长度校验
   if (firstLineRaw.length > MAX_COMMAND_LINE_LENGTH) {

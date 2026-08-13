@@ -9,30 +9,32 @@
  */
 import {describe, expect, test, jest, beforeEach} from '@jest/globals'
 
-// ─── Stub @actions/core ────────────────────────────────────────────────────
-jest.mock('@actions/core', () => ({
-  info: jest.fn(),
-  warning: jest.fn(),
-  error: jest.fn(),
-  getInput: jest.fn(() => '')
-}))
-
 // ─── Stub @actions/github ──────────────────────────────────────────────────
 jest.mock('@actions/github', () => ({
   context: {
-    repo: {owner: 'owner', repo: 'repo'},
+    repo: {owner: 'o', repo: 'r'},
     payload: {}
   }
 }))
 
-// ─── Stub octokit ─────────────────────────────────────────────────────────
-const mockListReviewComments = jest.fn<() => Promise<{data: Record<string, unknown>[]}>>()
-jest.mock('../src/octokit', () => ({
-  octokit: {
-    pulls: {
-      listReviewComments: mockListReviewComments
-    }
-  }
+// ─── Stub platform logger ─────────────────────────────────────────────────
+jest.mock('../src/platform/logger', () => ({
+  getLogger: () => ({
+    info: jest.fn(),
+    warning: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn()
+  })
+}))
+
+// ─── Stub git platform ───────────────────────────────────────────────────
+import type {ReviewComment} from '../src/platform/git-platform'
+
+const mockListReviewComments = jest.fn<() => Promise<ReviewComment[]>>()
+jest.mock('../src/platform/git-platform', () => ({
+  getPlatform: () => ({
+    listReviewComments: mockListReviewComments
+  })
 }))
 
 import {Commenter} from '../src/commenter'
@@ -45,15 +47,16 @@ function makeComment(
   path: string,
   line: number,
   replyTo?: number
-): Record<string, unknown> {
+): ReviewComment {
   return {
     id,
     body,
     path,
     line,
-    start_line: line,
-    in_reply_to_id: replyTo ?? null,
-    user: {login: 'reviewer'}
+    startLine: line,
+    originalLine: null,
+    author: 'reviewer',
+    in_reply_to_id: replyTo ?? undefined
   }
 }
 
@@ -67,11 +70,9 @@ describe('getCommentChainsWithinRange — thread status labels', () => {
     commenter = new Commenter()
 
     // Default: one top-level comment at path src/a.ts line 10
-    mockListReviewComments.mockResolvedValue({
-      data: [
-        makeComment(1, '<!-- AI Reviewer --> SQL injection found', 'src/a.ts', 10)
-      ]
-    })
+    mockListReviewComments.mockResolvedValue([
+      makeComment(1, '<!-- AI Reviewer --> SQL injection found', 'src/a.ts', 10)
+    ])
   })
 
   test('no threadStatusMap → chain has no status label (legacy behaviour)', async () => {
@@ -133,17 +134,15 @@ describe('getCommentChainsWithinRange — thread status labels', () => {
   })
 
   test('multiple chains — each gets its own label', async () => {
-    mockListReviewComments.mockResolvedValue({
-      data: [
-        makeComment(1, '<!-- AI Reviewer --> issue A', 'src/a.ts', 10),
-        makeComment(2, '<!-- AI Reviewer --> issue B', 'src/a.ts', 15)
-      ]
-    })
+    mockListReviewComments.mockResolvedValue([
+      makeComment(1, '<!-- AI Reviewer --> issue A', 'src/a.ts', 10),
+      makeComment(2, '<!-- AI Reviewer --> issue B', 'src/a.ts', 15)
+    ])
 
     // Both lines are in range 10-15
     const statusMap = new Map<string, boolean>([
-      ['src/a.ts:10', false],  // open
-      ['src/a.ts:15', true]    // resolved
+      ['src/a.ts:10', false], // open
+      ['src/a.ts:15', true] // resolved
     ])
 
     const result = await commenter.getCommentChainsWithinRange(
@@ -166,7 +165,7 @@ describe('ThreadStatusMap key format', () => {
 
     const threads = [
       {path: 'src/a.ts', line: 10, isResolved: true},
-      {path: 'src/a.ts', line: 10, isResolved: false}  // same location, unresolved
+      {path: 'src/a.ts', line: 10, isResolved: false} // same location, unresolved
     ]
 
     for (const t of threads) {

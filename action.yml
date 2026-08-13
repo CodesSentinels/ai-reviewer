@@ -26,13 +26,14 @@ inputs:
     required: false
     description: 'Enable debug mode'
     default: 'false'
-  # debug_resolve_inject_failures:
-  #   required: false
-  #   description: >
-  #     FOR TESTING ONLY. When set to a positive integer N, the resolve command
-  #     appends N fake thread IDs to the batchResolve call, producing controlled
-  #     partial-failure output (ok=real failed=N). Remove from production workflows.
-  #   default: '0'
+  debug_resolve_inject_failures:
+    required: false
+    description: >
+      FOR TESTING ONLY. When set to a positive integer N, the resolve command
+      appends N fake thread IDs to the batchResolve call, producing controlled
+      partial-failure output (ok=real failed=N). Remove from production
+      workflows.
+    default: '0'
   max_files:
     required: false
     description:
@@ -351,6 +352,29 @@ inputs:
       "Prettier version (semver range) installed into ai-reviewer's sandbox.
       This default IS the pinned version; override to match your project."
     default: '^3.0.0'
+  semgrep_version:
+    required: false
+    description:
+      "Semgrep version (semver range) installed into ai-reviewer's sandbox via
+      pip. This default IS the pinned version; override to match your project."
+    default: '^1.95.0'
+  lint_report_path:
+    required: false
+    description:
+      'Path to a lint report JSON produced by a separate, secret-free job
+      (SEC-002). When set, the reviewer reads findings from this file instead of
+      running lint tools itself, so the job holding secrets never executes PR
+      code. The file is strictly validated before use; malformed entries are
+      dropped. Leave empty to disable.'
+    default: ''
+  semgrep_config:
+    required: false
+    description:
+      'Semgrep ruleset passed to `semgrep --config`. Accepts a registry
+      shorthand (p/default, p/security-audit, p/owasp-top-ten), a registry URL,
+      or a path to a rules file in the repository. Only takes effect when
+      enable_semgrep is true.'
+    default: 'p/default'
   command_ack_reaction:
     required: false
     description:

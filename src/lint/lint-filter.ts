@@ -17,7 +17,7 @@
  * 为 lint-filter.ts。
  */
 
-import {info} from '@actions/core'
+import {info} from '../actions-log'
 import {type ChangedLineMap} from '../changed-lines'
 import {type LintResult} from './types'
 
@@ -106,10 +106,7 @@ export function deduplicateResults(results: LintResult[]): LintResult[] {
     // 故意不含 column —— 详见函数顶 doc comment
     const key = `${r.file}:${r.line}:${ruleKey}:${msgKey}`
     const existing = map.get(key)
-    if (
-      existing == null ||
-      SEV_RANK[r.severity] > SEV_RANK[existing.severity]
-    ) {
+    if (existing == null || SEV_RANK[r.severity] > SEV_RANK[existing.severity]) {
       map.set(key, r)
     }
   }
@@ -168,9 +165,7 @@ export function collapseAdjacentFindings(results: LintResult[]): LintResult[] {
       out.push(list[0])
       continue
     }
-    list.sort(
-      (a, b) => a.line - b.line || (a.endLine ?? a.line) - (b.endLine ?? b.line)
-    )
+    list.sort((a, b) => a.line - b.line || (a.endLine ?? a.line) - (b.endLine ?? b.line))
     let current: LintResult = {...list[0]}
     for (let i = 1; i < list.length; i++) {
       const next = list[i]

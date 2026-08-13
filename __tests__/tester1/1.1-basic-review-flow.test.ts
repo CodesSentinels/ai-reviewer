@@ -40,18 +40,19 @@ import {
   getReviewStateFromBody,
   writeReviewStateToBody,
   REVIEW_STATE_START_TAG,
-  REVIEW_STATE_END_TAG
+  REVIEW_STATE_END_TAG,
+  reviewStateTags
 } from '../../src/review-state'
 import {
   COMMIT_ID_START_TAG,
   COMMIT_ID_END_TAG,
-  DESCRIPTION_START_TAG,
-  DESCRIPTION_END_TAG,
-  RAW_SUMMARY_START_TAG,
-  RAW_SUMMARY_END_TAG,
-  SHORT_SUMMARY_START_TAG,
-  SHORT_SUMMARY_END_TAG,
-  SUMMARIZE_TAG
+  descriptionStartTag,
+  descriptionEndTag,
+  rawSummaryStartTag,
+  rawSummaryEndTag,
+  shortSummaryStartTag,
+  shortSummaryEndTag,
+  summarizeTag
 } from '../../src/commenter'
 
 // ==================== 1.1.6 ignore 关键词跳过 ====================
@@ -112,13 +113,15 @@ describe('1.1 — pause 状态跳过自动审查', () => {
     expect(getReviewStateFromBody()).toBe('active')
   })
 
-  test('writeReviewStateToBody 写入暂停标记', () => {
+  test('writeReviewStateToBody 写入暂停标记（新区块带平台命名空间，GH-014）', () => {
     const body = '原始描述'
     const result = writeReviewStateToBody(body, 'paused')
-    expect(result).toContain(REVIEW_STATE_START_TAG)
+    const tags = reviewStateTags()
+    expect(result).toContain(tags.start)
     expect(result).toContain('state: paused')
-    expect(result).toContain(REVIEW_STATE_END_TAG)
+    expect(result).toContain(tags.end)
     expect(result).toContain('原始描述')
+    expect(getReviewStateFromBody(result)).toBe('paused')
   })
 
   test('writeReviewStateToBody 替换已有标记', () => {
@@ -206,27 +209,27 @@ describe('1.1 — 文件路径过滤（PathFilter）', () => {
 // ==================== 摘要评论标签管理 ====================
 
 describe('1.1.2 — 摘要评论标签与格式', () => {
-  test('SUMMARIZE_TAG 标识摘要评论', () => {
-    expect(SUMMARIZE_TAG).toContain('summarize')
-    expect(SUMMARIZE_TAG).toContain('AI Reviewer')
+  test('summarizeTag() 标识摘要评论，且带平台命名空间（GH-014）', () => {
+    expect(summarizeTag()).toContain('summarize')
+    expect(summarizeTag()).toContain('ai-reviewer:github:')
   })
 
   test('摘要评论应包含原始摘要标签对', () => {
-    const mockSummary = `${RAW_SUMMARY_START_TAG}raw content here${RAW_SUMMARY_END_TAG}`
-    expect(mockSummary).toContain(RAW_SUMMARY_START_TAG)
-    expect(mockSummary).toContain(RAW_SUMMARY_END_TAG)
+    const mockSummary = `${rawSummaryStartTag()}raw content here${rawSummaryEndTag()}`
+    expect(mockSummary).toContain(rawSummaryStartTag())
+    expect(mockSummary).toContain(rawSummaryEndTag())
   })
 
   test('摘要评论应包含精简摘要标签对', () => {
-    const mockSummary = `${SHORT_SUMMARY_START_TAG}short content${SHORT_SUMMARY_END_TAG}`
-    expect(mockSummary).toContain(SHORT_SUMMARY_START_TAG)
-    expect(mockSummary).toContain(SHORT_SUMMARY_END_TAG)
+    const mockSummary = `${shortSummaryStartTag()}short content${shortSummaryEndTag()}`
+    expect(mockSummary).toContain(shortSummaryStartTag())
+    expect(mockSummary).toContain(shortSummaryEndTag())
   })
 
   test('发布说明标签对', () => {
-    const prBody = `用户描述\n\n${DESCRIPTION_START_TAG}\n发布说明内容\n${DESCRIPTION_END_TAG}`
-    expect(prBody).toContain(DESCRIPTION_START_TAG)
-    expect(prBody).toContain(DESCRIPTION_END_TAG)
+    const prBody = `用户描述\n\n${descriptionStartTag()}\n发布说明内容\n${descriptionEndTag()}`
+    expect(prBody).toContain(descriptionStartTag())
+    expect(prBody).toContain(descriptionEndTag())
   })
 })
 

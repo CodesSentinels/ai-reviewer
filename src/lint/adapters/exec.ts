@@ -9,7 +9,7 @@
  * 注意：使用 execFile（不是 exec）避免 shell 注入风险。
  */
 
-import {info, warning} from '@actions/core'
+import {info, warning} from '../../actions-log'
 import {execFile} from 'child_process'
 
 /** 单个命令执行的最大输出（字节）— 防止 10 万级问题文件撑爆内存 */
@@ -52,9 +52,7 @@ export interface RunCommandResult {
  * Lint 工具按惯例：发现问题时 exitCode != 0，但这不是"失败"；
  * 调用方需根据 stdout 是否能解析出 JSON 来判断真实成功与否。
  */
-export async function runCommand(
-  options: RunCommandOptions
-): Promise<RunCommandResult> {
+export async function runCommand(options: RunCommandOptions): Promise<RunCommandResult> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS
 
   return await new Promise(resolve => {
@@ -104,10 +102,7 @@ export async function runCommand(
 /**
  * 安全地解析 JSON；失败时记录警告并返回 null
  */
-export function parseJsonSafe<T = unknown>(
-  raw: string,
-  context: string
-): T | null {
+export function parseJsonSafe<T = unknown>(raw: string, context: string): T | null {
   if (raw.trim().length === 0) return null
   try {
     return JSON.parse(raw) as T

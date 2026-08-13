@@ -6,7 +6,7 @@
  * - PathFilter: 文件路径过滤器，根据 glob 规则决定哪些文件需要审查
  * - OpenAIOptions: OpenAI 模型配置，关联模型名称与其 token 限制
  */
-import {info} from '@actions/core'
+import {info} from './actions-log'
 import {minimatch} from 'minimatch'
 import {TokenLimits} from './limits'
 
@@ -71,6 +71,14 @@ export class Options {
   commandAckReaction: string // 命令识别后在用户评论上打的表情（空/off/none 表示禁用）
   maxReviewComments: number // 单次审查最多发布的行级评论数，按严重级别截断（0 表示不限制）
   debugResolveInjectFailures: number // 测试用：向 batchResolve 注入 N 个假 thread ID
+  botIcon: string // Bot 评论前缀图标
+  botName: string // Bot 显示名称
+  botLogin: string // 平台专有的 bot 登录标识
+  /**
+   * 外部 lint 报告路径（SEC-002）。非空时 reviewer **不自己跑工具**，
+   * 而是读取无密钥 job 产出的 JSON 报告——有密钥的执行面不接触 PR 代码。
+   */
+  lintReportPath: string
 
   constructor(
     debug: boolean,
@@ -100,7 +108,11 @@ export class Options {
     semgrepConfig = 'p/default',
     commandAckReaction = 'eyes',
     maxReviewComments = '20',
-    debugResolveInjectFailures = '0'
+    debugResolveInjectFailures = '0',
+    botIcon = '🤖',
+    botName = 'AI Reviewer',
+    botLogin = '',
+    lintReportPath = ''
   ) {
     this.debug = debug
     this.disableReview = disableReview
@@ -132,6 +144,10 @@ export class Options {
     this.commandAckReaction = commandAckReaction
     this.maxReviewComments = parseInt(maxReviewComments)
     this.debugResolveInjectFailures = parseInt(debugResolveInjectFailures) || 0
+    this.botIcon = botIcon
+    this.botName = botName
+    this.botLogin = botLogin
+    this.lintReportPath = lintReportPath
   }
 
   /** 打印所有配置项到日志，方便调试 */
@@ -163,6 +179,7 @@ export class Options {
     info(`tool_enable_overrides: ${JSON.stringify(this.toolEnableOverrides)}`)
     info(`tool_version_overrides: ${JSON.stringify(this.toolVersionOverrides)}`)
     info(`semgrep_config: ${this.semgrepConfig}`)
+    info(`lint_report_path: ${this.lintReportPath || '(none)'}`)
     info(`command_ack_reaction: ${this.commandAckReaction}`)
     info(`max_review_comments: ${this.maxReviewComments}`)
   }
@@ -193,9 +210,7 @@ export class Options {
  * - 如果文件匹配任何排除规则，则被排除
  */
 export class PathFilter {
-  private readonly rules: Array<
-    [string /* 规则模式 */, boolean /* 是否为排除规则 */]
-  >
+  private readonly rules: Array<[string /* 规则模式 */, boolean /* 是否为排除规则 */]>
 
   constructor(rules: string[] | null = null) {
     this.rules = []

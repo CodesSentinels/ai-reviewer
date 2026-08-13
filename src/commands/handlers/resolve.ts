@@ -72,9 +72,7 @@ function formatResult(
       ? `\n\n失败详情：\n${failedItems
           .map(
             ({thread, error}) =>
-              `- ${errorTag(error)} \`${threadLabel(thread)}\`：${flattenError(
-                error.message
-              )}`
+              `- ${errorTag(error)} \`${threadLabel(thread)}\`：${flattenError(error.message)}`
           )
           .join('\n')}${permissionHint(failedItems)}`
       : ''

@@ -14,10 +14,7 @@ import {type LintReport, type LintResult} from './types'
 const MAX_PROMPT_CHARS_PER_FILE = 4000
 
 /** 单文件 Prompt 注入：只保留 file == filename 的 lint 结果 */
-export function formatLintContextForFile(
-  filename: string,
-  report: LintReport
-): string {
+export function formatLintContextForFile(filename: string, report: LintReport): string {
   const fileResults = report.results.filter(r => r.file === filename)
   if (fileResults.length === 0) return ''
 
@@ -42,21 +39,23 @@ export function formatLintContextForFile(
     lines.push(`🪛 ${tool}${version ? ` (${version})` : ''}`)
     for (const r of results) {
       const range =
-        r.endLine != null && r.endLine !== r.line
-          ? `${r.line}-${r.endLine}`
-          : `${r.line}`
+        r.endLine != null && r.endLine !== r.line ? `${r.line}-${r.endLine}` : `${r.line}`
       const sev = severityIcon(r.severity)
-      lines.push(
-        `${sev} [${r.severity}] ${r.file}:${range} — ${r.ruleId}: ${oneLine(r.message)}`
-      )
+      lines.push(`${sev} [${r.severity}] ${r.file}:${range} — ${r.ruleId}: ${oneLine(r.message)}`)
     }
     lines.push('')
   }
 
   lines.push('Review guidance:')
-  lines.push('1. For each tool finding, confirm whether it is a real issue and explain its business impact.')
-  lines.push("2. Mention findings the tools missed (logic / architecture issues a Linter cannot detect).")
-  lines.push('3. When you write a review comment that overlaps with a tool finding, mark it as cross-validated by listing the tool name(s).')
+  lines.push(
+    '1. For each tool finding, confirm whether it is a real issue and explain its business impact.'
+  )
+  lines.push(
+    '2. Mention findings the tools missed (logic / architecture issues a Linter cannot detect).'
+  )
+  lines.push(
+    '3. When you write a review comment that overlaps with a tool finding, mark it as cross-validated by listing the tool name(s).'
+  )
 
   return truncate(lines.join('\n'), MAX_PROMPT_CHARS_PER_FILE)
 }
@@ -87,7 +86,9 @@ export function formatLintSummary(report: LintReport): string {
       }
       const errCol = fmtCount(s.errorsOnChanges, s.errors)
       const warnCol = fmtCount(s.warningsOnChanges, s.warnings)
-      return `| ${s.tool}${s.toolVersion ? ` ${s.toolVersion}` : ''} | ${errCol} | ${warnCol} | ${s.filesScanned} | ${s.durationMs}ms |`
+      return `| ${s.tool}${s.toolVersion ? ` ${s.toolVersion}` : ''} | ${errCol} | ${warnCol} | ${
+        s.filesScanned
+      } | ${s.durationMs}ms |`
     })
     .join('\n')
 
@@ -100,9 +101,7 @@ export function formatLintSummary(report: LintReport): string {
   // 仅当至少有一个工具的 errorsOnChanges < errors（或 warnings 同理）时显示图例，
   // 避免每次都铺一段说明
   const hasSplit = report.toolSummaries.some(
-    s =>
-      s.available &&
-      (s.errorsOnChanges !== s.errors || s.warningsOnChanges !== s.warnings)
+    s => s.available && (s.errorsOnChanges !== s.errors || s.warningsOnChanges !== s.warnings)
   )
   const legend = hasSplit
     ? `
@@ -113,7 +112,9 @@ export function formatLintSummary(report: LintReport): string {
 
   return `
 <details>
-<summary>🧰 Static Analysis Summary (${report.toolSummaries.length} tool${report.toolSummaries.length === 1 ? '' : 's'})</summary>
+<summary>🧰 Static Analysis Summary (${report.toolSummaries.length} tool${
+    report.toolSummaries.length === 1 ? '' : 's'
+  })</summary>
 
 ${note}
 ${legend}
@@ -158,9 +159,7 @@ export function formatToolAttribution(
     lines.push(`🪛 ${tool}${version ? ` (${version})` : ''}`)
     for (const r of results) {
       const range =
-        r.endLine != null && r.endLine !== r.line
-          ? `${r.line}-${r.endLine}`
-          : `${r.line}-${r.line}`
+        r.endLine != null && r.endLine !== r.line ? `${r.line}-${r.endLine}` : `${r.line}-${r.line}`
       lines.push(`[${r.severity}] ${range}: ${oneLine(r.message)}`)
       lines.push(`(${r.ruleId})`)
     }
@@ -181,5 +180,5 @@ function oneLine(s: string): string {
 function truncate(s: string, max: number): string {
   if (s.length <= max) return s
   const cut = s.lastIndexOf('\n', max)
-  return s.substring(0, cut > 0 ? cut : max) + '\n... (truncated)'
+  return `${s.substring(0, cut > 0 ? cut : max)}\n... (truncated)`
 }

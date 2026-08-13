@@ -91,9 +91,7 @@ export function scanPatch(patch: string | null | undefined): PatchScan {
  * @param filesAndChanges [filename, fileContent, fileDiff, patches] 列表
  */
 export function buildPatchScans(
-  filesAndChanges: Array<
-    [string, string, string, Array<[number, number, string]>]
-  >
+  filesAndChanges: Array<[string, string, string, Array<[number, number, string]>]>
 ): PatchScanMap {
   const map: PatchScanMap = new Map()
   for (const [filename, , fileDiff] of filesAndChanges) {

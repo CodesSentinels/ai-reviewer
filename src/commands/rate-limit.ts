@@ -23,10 +23,7 @@ export interface RateLimitResult {
   retryAfterMs?: number
 }
 
-export function checkRateLimit(
-  actor: string,
-  now: number = Date.now()
-): RateLimitResult {
+export function checkRateLimit(actor: string, now: number = Date.now()): RateLimitResult {
   let bucket = buckets.get(actor)
   if (!bucket) {
     bucket = {timestamps: []}

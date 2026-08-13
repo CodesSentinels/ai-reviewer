@@ -97,7 +97,7 @@ describe('mergeReviewsByLineRange — 同行去重合并', () => {
         startLine: 98,
         endLine: 98,
         comment:
-          'TS2345 是真实问题：priceLabel 明确要求 number，但这里传入了字符串。\n\n```diff\n-const _wrongLabel = priceLabel(\'19.99\')\n+const _wrongLabel = priceLabel(19.99)\n```'
+          "TS2345 是真实问题：priceLabel 明确要求 number，但这里传入了字符串。\n\n```diff\n-const _wrongLabel = priceLabel('19.99')\n+const _wrongLabel = priceLabel(19.99)\n```"
       },
       {
         startLine: 98,
@@ -202,24 +202,16 @@ describe('mergeReviewsByTopic — 议题级（按 tool finding ruleId）合并',
       {
         startLine: 95,
         endLine: 100,
-        comment:
-          'TS2345 也是实打实的问题：priceLabel 声明接收 number，但这里传入了字符串...'
+        comment: 'TS2345 也是实打实的问题：priceLabel 声明接收 number，但这里传入了字符串...'
       },
       {
         startLine: 98,
         endLine: 98,
-        comment:
-          "priceLabel('19.99') 与函数签名 price: number 不匹配，TypeScript 已报 TS2345..."
+        comment: "priceLabel('19.99') 与函数签名 price: number 不匹配，TypeScript 已报 TS2345..."
       }
     ]
-    const findings: ToolFindingForDedup[] = [
-      {line: 98, endLine: 98, ruleId: 'TS2345'}
-    ]
-    const out = mergeReviewsByTopic(
-      reviews,
-      'utils/lint-test-cart.ts',
-      findings
-    )
+    const findings: ToolFindingForDedup[] = [{line: 98, endLine: 98, ruleId: 'TS2345'}]
+    const out = mergeReviewsByTopic(reviews, 'utils/lint-test-cart.ts', findings)
     expect(out).toHaveLength(1)
     expect(out[0].comment).toContain('TS2345 也是实打实的问题')
     expect(out[0].comment).toContain("priceLabel('19.99') 与函数签名")
@@ -297,9 +289,7 @@ describe('mergeReviewsByTopic — v3 贪心聚类（部分重叠 / 传递闭包�
   })
 
   test('有 finding / 无 finding 的 review 不会互相合并', () => {
-    const findings: ToolFindingForDedup[] = [
-      {line: 10, ruleId: 'TS2345'}
-    ]
+    const findings: ToolFindingForDedup[] = [{line: 10, ruleId: 'TS2345'}]
     const reviews: Review[] = [
       {startLine: 5, endLine: 15, comment: '与 TS2345 finding 重叠'},
       {startLine: 200, endLine: 200, comment: '与任何 finding 都不重叠的纯 AI 洞察'}
@@ -314,9 +304,7 @@ describe('mergeReviewsByTopic — v3 贪心聚类（部分重叠 / 传递闭包�
       {startLine: 200, endLine: 200, comment: '纯 AI 洞察 B'}
     ]
     // 没有任何 tool finding 触及行号 200
-    const out = mergeReviewsByTopic(reviews, 'src/x.ts', [
-      {line: 10, ruleId: 'unrelated'}
-    ])
+    const out = mergeReviewsByTopic(reviews, 'src/x.ts', [{line: 10, ruleId: 'unrelated'}])
     expect(out).toHaveLength(1)
     expect(out[0].comment).toContain('纯 AI 洞察 A')
     expect(out[0].comment).toContain('纯 AI 洞察 B')

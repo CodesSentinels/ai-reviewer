@@ -12,14 +12,18 @@
  * - success/error 若收到 ackId 则 updateComment，否则 createComment
  * - error 文案带错误码，便于日志与用户排查
  */
-import {getInput, info, warning} from '@actions/core'
-import {octokit} from '../octokit'
+import {getCommentGreeting} from '../commenter'
+import {getPlatform} from '../platform/git-platform'
+import {getLogger} from '../platform/logger'
+import {buildStateMarker, hasStateMarker, stateMarkerVariants} from '../platform/state-namespace'
 import type {ErrorCode, Reply as IReply} from './types'
 
-/** Bot 问候图标 + 可配置名称（与 commenter.ts 对齐，但避免循环依赖） */
-const GREETING = `${getInput('bot_icon') || '🤖'} ${getInput('bot_name') || 'AI Reviewer'}`
-
-/** 命令回复评论的幂等标签前缀 */
+/**
+ * 命令回复评论的幂等标签前缀（历史格式，无平台命名空间）。
+ *
+ * 仍用于**匹配**在途 PR 里已经存在的旧标签；新写入一律走 buildCmdReplyTag()
+ * 的命名空间格式（GH-014）。
+ */
 export const CMD_REPLY_TAG_PREFIX = '<!-- codesentinel-cmd-reply'
 
 export interface ReplyContext {
@@ -35,40 +39,42 @@ export interface ReplyContext {
   eventName?: 'issue_comment' | 'pull_request_review_comment'
 }
 
-/** 组装幂等 tag */
-export function buildCmdReplyTag(
-  originalCommentId: number,
-  commandName: string
-): string {
+/** 组装幂等 tag（带平台命名空间，用于写入） */
+export function buildCmdReplyTag(originalCommentId: number, commandName: string): string {
+  return buildStateMarker('cmd-reply', originalCommentId, commandName)
+}
+
+/** 历史格式的幂等 tag（仅用于匹配在途 PR 的旧回复） */
+export function legacyCmdReplyTag(originalCommentId: number, commandName: string): string {
   return `${CMD_REPLY_TAG_PREFIX}:${originalCommentId}:${commandName} -->`
 }
 
+/** 匹配时应接受的全部形态：新命名空间格式 + 历史格式 */
+export function cmdReplyTagVariants(originalCommentId: number, commandName: string): string[] {
+  return stateMarkerVariants(
+    'cmd-reply',
+    legacyCmdReplyTag(originalCommentId, commandName),
+    originalCommentId,
+    commandName
+  )
+}
+
 /** 错误码 → 用户可读文案 */
-export function formatErrorMessage(
-  code: ErrorCode,
-  detail?: string
-): string {
+export function formatErrorMessage(code: ErrorCode, detail?: string): string {
   const base = ERROR_MESSAGES[code] ?? '命令执行出错'
   return detail ? `${base}\n\n详情: ${detail}` : base
 }
 
 const ERROR_MESSAGES: Record<ErrorCode, string> = {
-  UNKNOWN_COMMAND:
-    '❓ **未知命令**。发送 `@ai-reviewer help` 查看支持的命令列表。',
-  INVALID_ARGS:
-    '⚠️ **参数不合法**。命令参数仅接受字母、数字以及 `._-/:=` 字符。',
-  FORBIDDEN:
-    '🚫 **权限不足**。执行该命令需要仓库 `write` 及以上权限。',
+  UNKNOWN_COMMAND: '❓ **未知命令**。发送 `@ai-reviewer help` 查看支持的命令列表。',
+  INVALID_ARGS: '⚠️ **参数不合法**。命令参数仅接受字母、数字以及 `._-/:=` 字符。',
+  FORBIDDEN: '🚫 **权限不足**。执行该命令需要仓库 `write` 及以上权限。',
   BOT_FORBIDDEN:
     '🚫 **Bot 权限不足**。请检查 workflow `permissions` 配置（pull-requests: write / contents: read）。',
-  NOT_IMPLEMENTED:
-    '🚧 **命令暂未实现**。该命令已在路线图中，等待实现。',
-  RATE_LIMITED:
-    '⏱️ **请求过于频繁**。同一用户在 60 秒内最多执行 10 条命令，请稍后再试。',
-  DUPLICATE:
-    'ℹ️ **命令已处理**（重复事件已去重）。',
-  INTERNAL:
-    '💥 **命令执行失败**。错误已记录，请联系维护者。'
+  NOT_IMPLEMENTED: '🚧 **命令暂未实现**。该命令已在路线图中，等待实现。',
+  RATE_LIMITED: '⏱️ **请求过于频繁**。同一用户在 60 秒内最多执行 10 条命令，请稍后再试。',
+  DUPLICATE: 'ℹ️ **命令已处理**（重复事件已去重）。',
+  INTERNAL: '💥 **命令执行失败**。错误已记录，请联系维护者。'
 }
 
 /**
@@ -79,115 +85,90 @@ export class Reply implements IReply {
 
   async ack(message: string): Promise<number | null> {
     const body = this.wrap(`⏳ ${message}`)
+    const platform = getPlatform()
     try {
       if (this.ctx.eventName === 'pull_request_review_comment') {
-        const res = await octokit.pulls.createReplyForReviewComment({
-          owner: this.ctx.owner,
-          repo: this.ctx.repo,
-          pull_number: this.ctx.issueNumber,
-          comment_id: this.ctx.originalCommentId,
+        const res = await platform.replyToReviewComment(
+          this.ctx.owner,
+          this.ctx.repo,
+          this.ctx.issueNumber,
+          this.ctx.originalCommentId,
           body
-        })
-        return res.data.id
+        )
+        return res.id
       }
-      const res = await octokit.issues.createComment({
-        owner: this.ctx.owner,
-        repo: this.ctx.repo,
-        issue_number: this.ctx.issueNumber,
+      const res = await platform.createComment(
+        this.ctx.owner,
+        this.ctx.repo,
+        this.ctx.issueNumber,
         body
-      })
-      return res.data.id
+      )
+      return res.id
     } catch (e) {
-      warning(`reply.ack failed: ${String(e)}`)
+      getLogger().warning(`reply.ack failed: ${String(e)}`)
       return null
     }
   }
 
-  async success(
-    message: string,
-    ackId?: number | null
-  ): Promise<void> {
+  async success(message: string, ackId?: number | null): Promise<void> {
     const body = this.wrap(message)
     await this.publish(body, ackId)
   }
 
-  async error(
-    code: ErrorCode,
-    detail?: string,
-    ackId?: number | null
-  ): Promise<void> {
-    const body = this.wrap(
-      `${formatErrorMessage(code, detail)}\n\n\`错误码: ${code}\``
-    )
+  async error(code: ErrorCode, detail?: string, ackId?: number | null): Promise<void> {
+    const body = this.wrap(`${formatErrorMessage(code, detail)}\n\n\`错误码: ${code}\``)
     await this.publish(body, ackId)
-    info(`command error [${code}] ${detail ?? ''}`)
+    getLogger().info(`command error [${code}] ${detail ?? ''}`)
   }
 
   async progress(message: string, ackId: number): Promise<void> {
     const body = this.wrap(`⏳ ${message}`)
     try {
-      await octokit.issues.updateComment({
-        owner: this.ctx.owner,
-        repo: this.ctx.repo,
-        comment_id: ackId,
-        body
-      })
+      await getPlatform().updateComment(this.ctx.owner, this.ctx.repo, ackId, body)
     } catch (e) {
-      warning(`reply.progress update failed: ${String(e)}`)
+      getLogger().warning(`reply.progress update failed: ${String(e)}`)
     }
   }
 
   /** 新建或更新评论 */
-  private async publish(
-    body: string,
-    ackId?: number | null
-  ): Promise<void> {
+  private async publish(body: string, ackId?: number | null): Promise<void> {
+    const platform = getPlatform()
+    const logger = getLogger()
     if (ackId != null) {
       try {
-        await octokit.issues.updateComment({
-          owner: this.ctx.owner,
-          repo: this.ctx.repo,
-          comment_id: ackId,
-          body
-        })
+        await platform.updateComment(this.ctx.owner, this.ctx.repo, ackId, body)
         return
       } catch (e) {
-        warning(`reply.publish update failed, falling back to create: ${String(e)}`)
+        logger.warning(`reply.publish update failed, falling back to create: ${String(e)}`)
       }
     }
     // 行级评论场景：回复到同一 review thread
     if (this.ctx.eventName === 'pull_request_review_comment') {
       try {
-        await octokit.pulls.createReplyForReviewComment({
-          owner: this.ctx.owner,
-          repo: this.ctx.repo,
-          pull_number: this.ctx.issueNumber,
-          comment_id: this.ctx.originalCommentId,
+        await platform.replyToReviewComment(
+          this.ctx.owner,
+          this.ctx.repo,
+          this.ctx.issueNumber,
+          this.ctx.originalCommentId,
           body
-        })
+        )
         return
       } catch (e) {
-        warning(`reply.publish review thread reply failed, falling back to issue comment: ${String(e)}`)
+        logger.warning(
+          `reply.publish review thread reply failed, falling back to issue comment: ${String(e)}`
+        )
       }
     }
     try {
-      await octokit.issues.createComment({
-        owner: this.ctx.owner,
-        repo: this.ctx.repo,
-        issue_number: this.ctx.issueNumber,
-        body
-      })
+      await platform.createComment(this.ctx.owner, this.ctx.repo, this.ctx.issueNumber, body)
     } catch (e) {
-      warning(`reply.publish create failed: ${String(e)}`)
+      logger.warning(`reply.publish create failed: ${String(e)}`)
     }
   }
 
   private wrap(message: string): string {
-    const tag = buildCmdReplyTag(
-      this.ctx.originalCommentId,
-      this.ctx.commandName
-    )
-    return `${tag}\n${GREETING} · \`${this.ctx.commandName}\`\n\n${message}`
+    const tag = buildCmdReplyTag(this.ctx.originalCommentId, this.ctx.commandName)
+    return `${tag}\n${getCommentGreeting()} · \`${this.ctx.commandName}\`\n\n${message}`
   }
 }
 
@@ -202,23 +183,17 @@ export async function hasBeenProcessed(
   originalCommentId: number,
   commandName: string
 ): Promise<boolean> {
-  const tag = buildCmdReplyTag(originalCommentId, commandName)
+  const variants = cmdReplyTagVariants(originalCommentId, commandName)
   try {
-    // 用 paginate 扫描（一期最多 100 条足够）
-    const res = await octokit.issues.listComments({
-      owner,
-      repo,
-      issue_number: issueNumber,
-      per_page: 100
-    })
-    for (const c of res.data) {
-      if (typeof c.body === 'string' && c.body.includes(tag)) {
+    const comments = await getPlatform().listComments(owner, repo, issueNumber)
+    for (const c of comments) {
+      if (hasStateMarker(c.body, variants)) {
         return true
       }
     }
     return false
   } catch (e) {
-    warning(`hasBeenProcessed failed: ${String(e)} — treating as not processed`)
+    getLogger().warning(`hasBeenProcessed failed: ${String(e)} — treating as not processed`)
     return false
   }
 }

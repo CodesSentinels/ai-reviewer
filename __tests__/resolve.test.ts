@@ -6,7 +6,6 @@
  * - 全部成功 → 返回 "✅ 已解决 N 条"
  * - 部分失败 → 返回 "⚠️ 共 N 条，成功 X，失败 Y"
  * - 全部失败 → 返回权限不足提示
- * - 分页场景（>100 threads）→ GraphQL 被调用 2+ 次，结果合并正确
  * - 非 Bot 发的 thread 被过滤 → 不被 resolve
  * - 已 resolved thread 被跳过 → isResolved=true 的不调用 mutation
  */
@@ -15,31 +14,29 @@ import type {ReviewThread} from '../src/github/review-thread'
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
-jest.mock('@actions/core', () => ({
-  getInput: jest.fn().mockReturnValue(''),
-  info: jest.fn(),
-  warning: jest.fn(),
-  error: jest.fn()
+const mockPlatform = {
+  getAuthenticatedLogin: jest.fn<() => Promise<string>>(),
+  fetchUnresolvedBotThreads: jest.fn<() => Promise<ReviewThread[]>>(),
+  resolveThreads: jest.fn<() => Promise<{ok: number; failed: number; errors: Error[]}>>()
+}
+
+jest.mock('../src/platform/git-platform', () => ({
+  getPlatform: () => mockPlatform
 }))
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mockGraphql = jest.fn<(query: string, vars?: any) => Promise<any>>()
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mockGetAuthenticated = jest.fn<() => Promise<any>>()
+const mockLogger = {
+  info: jest.fn(),
+  warning: jest.fn(),
+  error: jest.fn(),
+  debug: jest.fn()
+}
 
-jest.mock('../src/octokit', () => ({
-  octokit: {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    graphql: (q: string, v?: any) => mockGraphql(q, v),
-    users: {
-      getAuthenticated: () => mockGetAuthenticated()
-    }
-  }
+jest.mock('../src/platform/logger', () => ({
+  getLogger: () => mockLogger
 }))
 
 // ─── Imports (after mocks) ────────────────────────────────────────────────────
 
-import {getInput, warning} from '@actions/core'
 import {
   getBotLogin,
   fetchUnresolvedBotThreads,
@@ -50,43 +47,6 @@ import {resolveHandler} from '../src/commands/handlers/resolve'
 import type {CommandContext} from '../src/commands/types'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-const mockGetInput = getInput as jest.MockedFunction<typeof getInput>
-const mockWarning = warning as jest.MockedFunction<typeof warning>
-
-function makePageResponse(
-  nodes: Array<{
-    id: string
-    isResolved: boolean
-    authorLogin: string | null
-    path?: string
-    line?: number | null
-    commentBody?: string
-  }>,
-  hasNextPage = false,
-  endCursor: string | null = null
-) {
-  return {
-    repository: {
-      pullRequest: {
-        reviewThreads: {
-          pageInfo: {hasNextPage, endCursor},
-          nodes: nodes.map(n => ({
-            id: n.id,
-            isResolved: n.isResolved,
-            path: n.path ?? 'src/test.ts',
-            line: n.line ?? null,
-            comments: {
-              nodes: n.authorLogin
-                ? [{author: {login: n.authorLogin}, body: n.commentBody ?? 'test comment'}]
-                : []
-            }
-          }))
-        }
-      }
-    }
-  }
-}
 
 function makeThread(overrides: Partial<ReviewThread> = {}): ReviewThread {
   return {
@@ -129,34 +89,27 @@ function makeCtx(overrides: Partial<CommandContext> = {}): CommandContext {
 beforeEach(() => {
   jest.clearAllMocks()
   _resetBotLoginCache()
-  mockGetInput.mockReturnValue('')
 })
 
 describe('getBotLogin', () => {
   test('始终调用 getAuthenticated 获取真实 GitHub 登录名', async () => {
-    mockGetAuthenticated.mockResolvedValue({
-      data: {login: 'github-actions[bot]'}
-    })
+    mockPlatform.getAuthenticatedLogin.mockResolvedValue('github-actions[bot]')
     const login = await getBotLogin({} as never)
     expect(login).toBe('github-actions[bot]')
-    expect(mockGetAuthenticated).toHaveBeenCalledTimes(1)
+    expect(mockPlatform.getAuthenticatedLogin).toHaveBeenCalledTimes(1)
   })
 
   test('缓存：第二次调用不再请求 API', async () => {
-    mockGetAuthenticated.mockResolvedValue({
-      data: {login: 'github-actions[bot]'}
-    })
+    mockPlatform.getAuthenticatedLogin.mockResolvedValue('github-actions[bot]')
     await getBotLogin({} as never)
     await getBotLogin({} as never)
-    expect(mockGetAuthenticated).toHaveBeenCalledTimes(1)
+    expect(mockPlatform.getAuthenticatedLogin).toHaveBeenCalledTimes(1)
   })
 
-<<<<<<< HEAD
-  test('getAuthenticated 抛异常时 fallback 到 github-actions（不带 [bot] 后缀，便于与 GraphQL author 比对）', async () => {
-=======
   test('getAuthenticated 抛异常时回退到 github-actions', async () => {
->>>>>>> main
-    mockGetAuthenticated.mockRejectedValue(new Error('network error'))
+    // 平台层 getAuthenticatedLogin 内部 catch 后返回 'github-actions'，
+    // 所以从 getBotLogin 视角看到的是 resolve 值而非 reject。
+    mockPlatform.getAuthenticatedLogin.mockResolvedValue('github-actions')
     const login = await getBotLogin({} as never)
     expect(login).toBe('github-actions')
   })
@@ -164,43 +117,38 @@ describe('getBotLogin', () => {
 
 describe('fetchUnresolvedBotThreads', () => {
   test('非 Bot 发的 thread 被过滤', async () => {
-    mockGraphql.mockResolvedValueOnce(
-      makePageResponse([
-        {id: 't1', isResolved: false, authorLogin: 'human-reviewer'},
-        {id: 't2', isResolved: false, authorLogin: 'cs-bot'}
-      ])
-    )
-    const threads = await fetchUnresolvedBotThreads(
-      {owner: 'o', repo: 'r', prNumber: 1},
-      'cs-bot'
-    )
+    // 平台层已做过滤，返回的只有 bot 的 thread
+    mockPlatform.fetchUnresolvedBotThreads.mockResolvedValueOnce([
+      makeThread({id: 't2', firstCommentAuthorLogin: 'cs-bot'})
+    ])
+    const threads = await fetchUnresolvedBotThreads({owner: 'o', repo: 'r', prNumber: 1}, 'cs-bot')
     expect(threads).toHaveLength(1)
     expect(threads[0].id).toBe('t2')
   })
 
   test('已 resolved 的 thread 被跳过', async () => {
-    mockGraphql.mockResolvedValueOnce(
-      makePageResponse([
-        {id: 't1', isResolved: true, authorLogin: 'cs-bot'},
-        {id: 't2', isResolved: false, authorLogin: 'cs-bot'}
-      ])
-    )
-    const threads = await fetchUnresolvedBotThreads(
-      {owner: 'o', repo: 'r', prNumber: 1},
-      'cs-bot'
-    )
+    // 平台层已过滤 isResolved=true，返回的只有未 resolved 的
+    mockPlatform.fetchUnresolvedBotThreads.mockResolvedValueOnce([
+      makeThread({
+        id: 't2',
+        isResolved: false,
+        firstCommentAuthorLogin: 'cs-bot'
+      })
+    ])
+    const threads = await fetchUnresolvedBotThreads({owner: 'o', repo: 'r', prNumber: 1}, 'cs-bot')
     expect(threads).toHaveLength(1)
     expect(threads[0].id).toBe('t2')
   })
 
   test('[bot] 后缀归一化：REST 身份 github-actions[bot] 匹配 GraphQL 的 github-actions', async () => {
-    // getBotLogin (REST getAuthenticated) 返回带 [bot] 后缀，
-    // 而 GraphQL reviewThread author.login 不带后缀，需归一化后比对
-    mockGraphql.mockResolvedValueOnce(
-      makePageResponse([
-        {id: 't1', isResolved: false, authorLogin: 'github-actions'}
-      ])
-    )
+    // 平台层负责 [bot] 后缀归一化，返回匹配结果
+    mockPlatform.fetchUnresolvedBotThreads.mockResolvedValueOnce([
+      makeThread({
+        id: 't1',
+        isResolved: false,
+        firstCommentAuthorLogin: 'github-actions'
+      })
+    ])
     const threads = await fetchUnresolvedBotThreads(
       {owner: 'o', repo: 'r', prNumber: 1},
       'github-actions[bot]'
@@ -209,157 +157,146 @@ describe('fetchUnresolvedBotThreads', () => {
     expect(threads[0].id).toBe('t1')
   })
 
-  test('分页：GraphQL 被调用 2 次，结果合并正确', async () => {
-    mockGraphql
-      .mockResolvedValueOnce(
-        makePageResponse(
-          [{id: 't1', isResolved: false, authorLogin: 'cs-bot'}],
-          true,
-          'cursor-1'
-        )
-      )
-      .mockResolvedValueOnce(
-        makePageResponse([{id: 't2', isResolved: false, authorLogin: 'cs-bot'}])
-      )
-
-    const threads = await fetchUnresolvedBotThreads(
-      {owner: 'o', repo: 'r', prNumber: 1},
-      'cs-bot'
-    )
-    expect(mockGraphql).toHaveBeenCalledTimes(2)
-    expect(threads).toHaveLength(2)
-    expect(threads.map(t => t.id)).toEqual(['t1', 't2'])
-
-    // 第二次调用应传入 cursor
-    const secondCall = mockGraphql.mock.calls[1] as [string, {after: string}]
-    expect(secondCall[1].after).toBe('cursor-1')
+  test('平台层被正确调用：传入 owner/repo/prNumber/botLogin', async () => {
+    mockPlatform.fetchUnresolvedBotThreads.mockResolvedValueOnce([])
+    await fetchUnresolvedBotThreads({owner: 'o', repo: 'r', prNumber: 1}, 'cs-bot')
+    expect(mockPlatform.fetchUnresolvedBotThreads).toHaveBeenCalledWith('o', 'r', 1, 'cs-bot')
   })
 })
 
 describe('resolveHandler.execute', () => {
   test('无待解决 thread → 返回 "没有找到" 消息', async () => {
-    mockGetAuthenticated.mockResolvedValue({data: {login: 'cs-bot'}})
-    mockGraphql.mockResolvedValueOnce(makePageResponse([]))
+    mockPlatform.getAuthenticatedLogin.mockResolvedValue('cs-bot')
+    mockPlatform.fetchUnresolvedBotThreads.mockResolvedValueOnce([])
 
     const result = await resolveHandler.execute(makeCtx())
     expect(result.message).toMatch(/没有找到/)
   })
 
   test('全部成功 → 返回 "✅ 已解决 N 条"', async () => {
-    mockGetAuthenticated.mockResolvedValue({data: {login: 'cs-bot'}})
-    mockGraphql
-      // query
-      .mockResolvedValueOnce(
-        makePageResponse([
-          {id: 't1', isResolved: false, authorLogin: 'cs-bot'},
-          {id: 't2', isResolved: false, authorLogin: 'cs-bot'}
-        ])
-      )
-      // mutations
-      .mockResolvedValueOnce({
-        resolveReviewThread: {thread: {isResolved: true}}
-      })
-      .mockResolvedValueOnce({
-        resolveReviewThread: {thread: {isResolved: true}}
-      })
+    mockPlatform.getAuthenticatedLogin.mockResolvedValue('cs-bot')
+    mockPlatform.fetchUnresolvedBotThreads.mockResolvedValueOnce([
+      makeThread({id: 't1', firstCommentAuthorLogin: 'cs-bot'}),
+      makeThread({id: 't2', firstCommentAuthorLogin: 'cs-bot'})
+    ])
+    // batchResolve calls resolveThreads per thread
+    mockPlatform.resolveThreads
+      .mockResolvedValueOnce({ok: 1, failed: 0, errors: []})
+      .mockResolvedValueOnce({ok: 1, failed: 0, errors: []})
 
     const result = await resolveHandler.execute(makeCtx())
     expect(result.message).toMatch(/✅/)
     expect(result.message).toMatch(/2/)
   })
 
-  test('部分失败 → 返回 "⚠️" 降级消息', async () => {
-    mockGetAuthenticated.mockResolvedValue({data: {login: 'cs-bot'}})
-    mockGraphql
-      .mockResolvedValueOnce(
-        makePageResponse([
-          {id: 't1', isResolved: false, authorLogin: 'cs-bot'},
-          {id: 't2', isResolved: false, authorLogin: 'cs-bot'}
-        ])
-      )
+  test('部分失败（adapter 返回 failed>0 而非 throw）→ 返回 "⚠️" 降级消息', async () => {
+    mockPlatform.getAuthenticatedLogin.mockResolvedValue('cs-bot')
+    mockPlatform.fetchUnresolvedBotThreads.mockResolvedValueOnce([
+      makeThread({id: 't1', firstCommentAuthorLogin: 'cs-bot'}),
+      makeThread({id: 't2', firstCommentAuthorLogin: 'cs-bot'})
+    ])
+    // adapter 不 throw，而是在返回值中报告失败
+    mockPlatform.resolveThreads
+      .mockResolvedValueOnce({ok: 1, failed: 0, errors: []})
       .mockResolvedValueOnce({
-        resolveReviewThread: {thread: {isResolved: true}}
+        ok: 0,
+        failed: 1,
+        errors: [new Error('forbidden')]
       })
-      .mockRejectedValueOnce(new Error('forbidden'))
 
     const result = await resolveHandler.execute(makeCtx())
     expect(result.message).toMatch(/⚠️/)
     expect(result.message).toMatch(/1/) // ok
   })
 
-  test('全部失败 → 返回 ❌ 和错误详情', async () => {
-    mockGetAuthenticated.mockResolvedValue({data: {login: 'cs-bot'}})
-    mockGraphql
-      .mockResolvedValueOnce(
-        makePageResponse([{id: 't1', isResolved: false, authorLogin: 'cs-bot'}])
-      )
-      .mockRejectedValueOnce(new Error('forbidden'))
+  test('全部失败（adapter 返回 failed>0 而非 throw）→ 返回 ❌ 和错误详情', async () => {
+    mockPlatform.getAuthenticatedLogin.mockResolvedValue('cs-bot')
+    mockPlatform.fetchUnresolvedBotThreads.mockResolvedValueOnce([
+      makeThread({id: 't1', firstCommentAuthorLogin: 'cs-bot'})
+    ])
+    mockPlatform.resolveThreads.mockResolvedValueOnce({
+      ok: 0,
+      failed: 1,
+      errors: [new Error('forbidden')]
+    })
 
     const result = await resolveHandler.execute(makeCtx())
     expect(result.message).toMatch(/❌/)
     expect(result.message).toMatch(/forbidden/)
   })
+
+  test('adapter 抛异常（非预期路径）→ 同样被 catch 计为失败', async () => {
+    mockPlatform.getAuthenticatedLogin.mockResolvedValue('cs-bot')
+    mockPlatform.fetchUnresolvedBotThreads.mockResolvedValueOnce([
+      makeThread({id: 't1', firstCommentAuthorLogin: 'cs-bot'})
+    ])
+    mockPlatform.resolveThreads.mockRejectedValueOnce(new Error('unexpected throw'))
+
+    const result = await resolveHandler.execute(makeCtx())
+    expect(result.message).toMatch(/❌/)
+    expect(result.message).toMatch(/unexpected throw/)
+  })
 })
 
 describe('batchResolve', () => {
-  test('空数组 → 返回 ok=0 failed=0 errors=[]，不调用 GraphQL', async () => {
+  test('空数组 → 返回 ok=0 failed=0 errors=[]，不调用 resolveThreads', async () => {
     const result = await batchResolve([])
-<<<<<<< HEAD
-    expect(result).toEqual({ok: 0, failed: 0, errors: []})
-=======
     expect(result).toEqual({ok: 0, failed: 0, errors: [], failedItems: []})
->>>>>>> main
-    expect(mockGraphql).not.toHaveBeenCalled()
+    expect(mockPlatform.resolveThreads).not.toHaveBeenCalled()
   })
 
   describe('错误输出', () => {
     test('权限错误 → warning 只输出一次，含 resolve_token 指引', async () => {
-      mockGraphql.mockRejectedValueOnce(
+      mockPlatform.resolveThreads.mockRejectedValueOnce(
         new Error('Resource not accessible by integration')
       )
 
       await batchResolve([makeThread()])
 
-      expect(mockWarning).toHaveBeenCalledTimes(1)
-      expect(mockWarning.mock.calls[0][0]).toMatch(/resolve_token/)
-      expect(mockWarning.mock.calls[0][0]).toMatch(/PAT/)
+      expect(mockLogger.warning).toHaveBeenCalledTimes(1)
+      expect(mockLogger.warning.mock.calls[0][0]).toMatch(/resolve_token/)
+      expect(mockLogger.warning.mock.calls[0][0]).toMatch(/PAT/)
     })
 
     test('多线程全为权限错误 → warning 仍只输出一次', async () => {
-      mockGraphql
+      mockPlatform.resolveThreads
         .mockRejectedValueOnce(new Error('Resource not accessible by integration'))
         .mockRejectedValueOnce(new Error('Resource not accessible by integration'))
 
       await batchResolve([makeThread({id: 't1'}), makeThread({id: 't2'})])
 
-      expect(mockWarning).toHaveBeenCalledTimes(1)
+      expect(mockLogger.warning).toHaveBeenCalledTimes(1)
     })
 
     test('非权限错误 → warning 输出含 path:line 和注释摘要的标签', async () => {
-      mockGraphql.mockRejectedValueOnce(new Error('network timeout'))
+      mockPlatform.resolveThreads.mockRejectedValueOnce(new Error('network timeout'))
 
       await batchResolve([
-        makeThread({path: 'src/auth.ts', line: 17, firstCommentBody: 'Missing null check here'})
+        makeThread({
+          path: 'src/auth.ts',
+          line: 17,
+          firstCommentBody: 'Missing null check here'
+        })
       ])
 
-      expect(mockWarning).toHaveBeenCalledTimes(1)
-      const msg = mockWarning.mock.calls[0][0] as string
+      expect(mockLogger.warning).toHaveBeenCalledTimes(1)
+      const msg = mockLogger.warning.mock.calls[0][0] as string
       expect(msg).toMatch(/src\/auth\.ts:17/)
       expect(msg).toMatch(/Missing null check here/)
     })
 
     test('path 无 line 时只输出 path', async () => {
-      mockGraphql.mockRejectedValueOnce(new Error('oops'))
+      mockPlatform.resolveThreads.mockRejectedValueOnce(new Error('oops'))
 
       await batchResolve([makeThread({path: 'src/foo.ts', line: null})])
 
-      const msg = mockWarning.mock.calls[0][0] as string
+      const msg = mockLogger.warning.mock.calls[0][0] as string
       expect(msg).toMatch(/src\/foo\.ts/)
       expect(msg).not.toMatch(/src\/foo\.ts:\d/)
     })
 
     test('混合错误 → 权限 warning + 其他 warning 各一条', async () => {
-      mockGraphql
+      mockPlatform.resolveThreads
         .mockRejectedValueOnce(new Error('Resource not accessible by integration'))
         .mockRejectedValueOnce(new Error('network timeout'))
 
@@ -368,50 +305,39 @@ describe('batchResolve', () => {
         makeThread({id: 't2', path: 'src/b.ts', line: 2})
       ])
 
-      expect(mockWarning).toHaveBeenCalledTimes(2)
-      const msgs = mockWarning.mock.calls.map(c => c[0] as string)
+      expect(mockLogger.warning).toHaveBeenCalledTimes(2)
+      const msgs = mockLogger.warning.mock.calls.map(c => c[0] as string)
       expect(msgs.some(m => m.includes('resolve_token'))).toBe(true)
       expect(msgs.some(m => m.includes('src/b.ts:2'))).toBe(true)
     })
+
+    test('adapter 返回 failed>0（不 throw）→ 计为失败，不误报成功', async () => {
+      mockPlatform.resolveThreads.mockResolvedValueOnce({
+        ok: 0,
+        failed: 1,
+        errors: [new Error('network timeout')]
+      })
+
+      const result = await batchResolve([makeThread({path: 'src/x.ts', line: 5})])
+
+      expect(result.ok).toBe(0)
+      expect(result.failed).toBe(1)
+      expect(result.errors).toHaveLength(1)
+      expect(result.failedItems).toHaveLength(1)
+      expect(mockLogger.warning).toHaveBeenCalled()
+    })
+
+    test('adapter 返回成功 → 正确计为 ok', async () => {
+      mockPlatform.resolveThreads.mockResolvedValueOnce({
+        ok: 1,
+        failed: 0,
+        errors: []
+      })
+
+      const result = await batchResolve([makeThread()])
+
+      expect(result.ok).toBe(1)
+      expect(result.failed).toBe(0)
+    })
   })
 })
-<<<<<<< HEAD
-=======
-
-describe('resolveAllBotComments', () => {
-  test('无待解决 thread → 返回 {ok: 0, failed: 0}，不调用 mutation', async () => {
-    mockGetAuthenticated.mockResolvedValue({data: {login: 'cs-bot'}})
-    mockGraphql.mockResolvedValueOnce(makePageResponse([]))
-
-    const result = await resolveAllBotComments({
-      owner: 'org',
-      repo: 'repo',
-      prNumber: 1,
-      options: {} as never
-    })
-    expect(result).toEqual({ok: 0, failed: 0})
-    expect(mockGraphql).toHaveBeenCalledTimes(1) // 只有 query，无 mutation
-  })
-
-  test('有待解决 thread → 调用 mutation 并返回正确计数', async () => {
-    mockGetAuthenticated.mockResolvedValue({data: {login: 'cs-bot'}})
-    mockGraphql
-      .mockResolvedValueOnce(
-        makePageResponse([
-          {id: 't1', isResolved: false, authorLogin: 'cs-bot'},
-          {id: 't2', isResolved: false, authorLogin: 'cs-bot'}
-        ])
-      )
-      .mockResolvedValueOnce({resolveReviewThread: {thread: {isResolved: true}}})
-      .mockResolvedValueOnce({resolveReviewThread: {thread: {isResolved: true}}})
-
-    const result = await resolveAllBotComments({
-      owner: 'org',
-      repo: 'repo',
-      prNumber: 1,
-      options: {} as never
-    })
-    expect(result).toMatchObject({ok: 2, failed: 0})
-  })
-})
->>>>>>> main

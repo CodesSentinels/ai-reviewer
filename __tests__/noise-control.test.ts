@@ -45,10 +45,7 @@ describe('dedupeFindings — 同类合并', () => {
   })
 
   test('不同文件不合并', () => {
-    const out = dedupeFindings([
-      f({title: 'X', path: 'a.ts'}),
-      f({title: 'X', path: 'b.ts'})
-    ])
+    const out = dedupeFindings([f({title: 'X', path: 'a.ts'}), f({title: 'X', path: 'b.ts'})])
     expect(out).toHaveLength(2)
   })
 })
@@ -64,18 +61,14 @@ describe('prepareFindings — 排序 + 截断', () => {
   })
 
   test('超出 maxComments 时截断并返回截断数量', () => {
-    const findings = Array.from({length: 25}, (_, i) =>
-      f({title: `t${i}`, severity: 'major'})
-    )
+    const findings = Array.from({length: 25}, (_, i) => f({title: `t${i}`, severity: 'major'}))
     const {kept, truncated} = prepareFindings(findings, {maxComments: 20})
     expect(kept).toHaveLength(20)
     expect(truncated).toBe(5)
   })
 
   test('maxComments <= 0 表示不限制（不截断）', () => {
-    const findings = Array.from({length: 25}, (_, i) =>
-      f({title: `t${i}`, severity: 'major'})
-    )
+    const findings = Array.from({length: 25}, (_, i) => f({title: `t${i}`, severity: 'major'}))
     const {kept, truncated} = prepareFindings(findings, {maxComments: 0})
     expect(kept).toHaveLength(25)
     expect(truncated).toBe(0)
@@ -84,18 +77,12 @@ describe('prepareFindings — 排序 + 截断', () => {
 
 describe('classifyFindingSeverity — 启发式分级', () => {
   test('安全类关键词 → critical', () => {
-    expect(
-      classifyFindingSeverity('This is a SQL injection vulnerability')
-    ).toBe('critical')
-    expect(classifyFindingSeverity('硬编码密钥不应出现在源码中')).toBe(
-      'critical'
-    )
+    expect(classifyFindingSeverity('This is a SQL injection vulnerability')).toBe('critical')
+    expect(classifyFindingSeverity('硬编码密钥不应出现在源码中')).toBe('critical')
   })
 
   test('正确性/缺陷关键词 → major', () => {
-    expect(classifyFindingSeverity('this promise is never awaited')).toBe(
-      'major'
-    )
+    expect(classifyFindingSeverity('this promise is never awaited')).toBe('major')
     expect(classifyFindingSeverity('存在 off-by-one 错误')).toBe('major')
   })
 
@@ -104,15 +91,11 @@ describe('classifyFindingSeverity — 启发式分级', () => {
   })
 
   test('建议类关键词 → minor', () => {
-    expect(
-      classifyFindingSeverity('consider extracting this for readability')
-    ).toBe('minor')
+    expect(classifyFindingSeverity('consider extracting this for readability')).toBe('minor')
   })
 
   test('无明显信号 → 默认 minor', () => {
-    expect(classifyFindingSeverity('this changes the default currency')).toBe(
-      'minor'
-    )
+    expect(classifyFindingSeverity('this changes the default currency')).toBe('minor')
   })
 })
 

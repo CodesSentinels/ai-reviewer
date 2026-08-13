@@ -3,11 +3,7 @@
  */
 import {describe, expect, test, beforeEach} from '@jest/globals'
 
-import {
-  checkRateLimit,
-  _resetRateLimit,
-  _RATE_LIMIT_CONSTANTS
-} from '../src/commands/rate-limit'
+import {checkRateLimit, _resetRateLimit, _RATE_LIMIT_CONSTANTS} from '../src/commands/rate-limit'
 
 describe('rate-limit', () => {
   beforeEach(() => {

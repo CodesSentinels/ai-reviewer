@@ -504,10 +504,7 @@ $comment
    * @param inputs - 上下文数据
    * @param reviewSimpleChanges - 是否审查简单变更（false 时附加分类提示词）
    */
-  renderSummarizeFileDiff(
-    inputs: Inputs,
-    reviewSimpleChanges: boolean
-  ): string {
+  renderSummarizeFileDiff(inputs: Inputs, reviewSimpleChanges: boolean): string {
     let prompt = this.summarizeFileDiff
     if (reviewSimpleChanges === false) {
       prompt += this.triageFileDiff
@@ -584,16 +581,12 @@ $lint_context
    * MANDATORY 指令拼到模板中；无发现的文件完全移除两者，节省 token。
    */
   renderReviewFileDiff(inputs: Inputs): string {
-    const hasLintFindings =
-      inputs.lintContext != null && inputs.lintContext.trim().length > 0
+    const hasLintFindings = inputs.lintContext != null && inputs.lintContext.trim().length > 0
 
     let prompt = this.reviewFileDiff
     if (hasLintFindings) {
       prompt = prompt.replace('$lint_section', this.lintSection)
-      prompt = prompt.replace(
-        '$lint_mandatory_instruction',
-        this.lintMandatoryInstruction
-      )
+      prompt = prompt.replace('$lint_mandatory_instruction', this.lintMandatoryInstruction)
     } else {
       prompt = prompt.replace('$lint_section', '')
       prompt = prompt.replace('$lint_mandatory_instruction', '')

@@ -13,22 +13,15 @@
  * - 所有跨模块边界的数据结构都在这里集中声明
  */
 import type {Options} from '../options'
+import type {ExecutionContext} from '../platform/execution-context'
 
 export type ReviewCommandMode = 'incremental' | 'full' | 'summary'
 
 /** 支持的 GitHub 事件类型（命令框架范围内） */
-export type CommandEventName =
-  | 'issue_comment'
-  | 'pull_request_review_comment'
+export type CommandEventName = 'issue_comment' | 'pull_request_review_comment'
 
 /** 仓库协作者权限等级（与 GitHub API 返回对齐） */
-export type PermissionLevel =
-  | 'admin'
-  | 'maintain'
-  | 'write'
-  | 'triage'
-  | 'read'
-  | 'none'
+export type PermissionLevel = 'admin' | 'maintain' | 'write' | 'triage' | 'read' | 'none'
 
 /** 解析结果种类 */
 export type ParseOutcomeKind = 'command' | 'conversation' | 'none'
@@ -68,6 +61,18 @@ export interface CommandContext {
   command: ParsedCommand
   eventName: CommandEventName
   action: 'created'
+
+  /**
+   * 平台无关执行上下文（ARCH-001~003）。过渡期与下方 owner/repo/prNumber 等
+   * GitHub 专有字段并存，不做替换——后者仍是当前唯一实现来源（GitHub adapter）。
+   * 新代码应优先读取 execCtx，仅当需要 GitHub 专有细节（尚未迁移的深层
+   * payload 字段）时才通过 execCtx.raw 兜底。
+   *
+   * 可选：生产入口（main.ts → command-handler.ts → dispatcher.ts）始终会
+   * 提供；单元测试直接构造 CommandContext 或调用 dispatchCommentEvent 时可以
+   * 省略，避免强制改动尚未消费 execCtx 的既有测试文件。
+   */
+  execCtx?: ExecutionContext
 
   owner: string
   repo: string
@@ -119,11 +124,7 @@ export type ErrorCode =
 export interface Reply {
   ack(message: string): Promise<number | null>
   success(message: string, ackId?: number | null): Promise<void>
-  error(
-    code: ErrorCode,
-    detail?: string,
-    ackId?: number | null
-  ): Promise<void>
+  error(code: ErrorCode, detail?: string, ackId?: number | null): Promise<void>
   progress(message: string, ackId: number): Promise<void>
 }
 
@@ -138,9 +139,6 @@ export const PERMISSION_RANK: Record<PermissionLevel, number> = {
 }
 
 /** 判断 actual >= required */
-export function permissionAtLeast(
-  actual: PermissionLevel,
-  required: PermissionLevel
-): boolean {
+export function permissionAtLeast(actual: PermissionLevel, required: PermissionLevel): boolean {
   return PERMISSION_RANK[actual] >= PERMISSION_RANK[required]
 }

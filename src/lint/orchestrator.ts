@@ -14,36 +14,21 @@
  *   - 单个工具 scan 抛异常 → 记录警告，记入 ToolSummary，不阻塞总流程
  */
 
-import {info, warning} from '@actions/core'
-import {
-  buildPatchScans,
-  toAddedLineMap,
-  type PatchScanMap
-} from '../changed-lines'
+import {info, warning} from '../actions-log'
+import {buildPatchScans, toAddedLineMap, type PatchScanMap} from '../changed-lines'
 import {EslintAdapter} from './adapters/eslint'
 import {BiomeAdapter} from './adapters/biome'
 import {PrettierAdapter} from './adapters/prettier'
 import {SemgrepAdapter} from './adapters/semgrep'
 import {TscAdapter} from './adapters/tsc'
-import {
-  collapseAdjacentFindings,
-  deduplicateResults,
-  filterByChangedLines
-} from './lint-filter'
-import {
-  type LintReport,
-  type LintResult,
-  type ToolAdapter,
-  type ToolSummary
-} from './types'
+import {collapseAdjacentFindings, deduplicateResults, filterByChangedLines} from './lint-filter'
+import {type LintReport, type LintResult, type ToolAdapter, type ToolSummary} from './types'
 
 export interface OrchestratorOptions {
   /** 仓库根目录（绝对路径） */
   repoRoot: string
   /** PR 中变更的文件元组列表 */
-  filesAndChanges: Array<
-    [string, string, string, Array<[number, number, string]>]
-  >
+  filesAndChanges: Array<[string, string, string, Array<[number, number, string]>]>
   /** 单个工具超时（毫秒） */
   toolTimeoutMs?: number
   /** 是否禁用全部工具扫描（开关由调用方传入） */
@@ -117,8 +102,7 @@ export async function runLintTools(
   for (const a of adapters) {
     const override = overrides[a.name]
     const enabled = override === undefined ? a.defaultEnabled : override
-    const src =
-      override === undefined ? `default=${a.defaultEnabled}` : `override=${override}`
+    const src = override === undefined ? `default=${a.defaultEnabled}` : `override=${override}`
     decisions.push(`${a.name}:${enabled ? 'on' : 'off'}(${src})`)
     if (enabled) enabledAdapters.push(a)
   }
@@ -154,9 +138,7 @@ export async function runLintTools(
     detections.map(async ({adapter, detection}) => {
       const toolStart = Date.now()
       if (!detection.available) {
-        warning(
-          `lint/${adapter.name}: not available — ${detection.reason ?? 'unknown'}, skipping`
-        )
+        warning(`lint/${adapter.name}: not available — ${detection.reason ?? 'unknown'}, skipping`)
         toolSummaries.push({
           tool: adapter.displayName,
           toolVersion: '',
@@ -223,7 +205,9 @@ export async function runLintTools(
         durationMs: Date.now() - toolStart
       })
       info(
-        `lint/${adapter.name}: ${results.length} raw findings (${counts.error}E/${counts.warning}W/${counts.info}I) on ${targets.length} files in ${Date.now() - toolStart}ms`
+        `lint/${adapter.name}: ${results.length} raw findings (${counts.error}E/${
+          counts.warning
+        }W/${counts.info}I) on ${targets.length} files in ${Date.now() - toolStart}ms`
       )
       allResults.push(...results)
     })
@@ -251,10 +235,7 @@ export async function runLintTools(
   //    避免 tsc 这类项目级扫描器给出"43 errors 但只看到 3 条评论"的迷惑。
   //    用 `collapsed` 计数：相邻合并后 88-89 算 1 条评论而非 2 条 —— 与
   //    实际写到 PR 评论的数量保持一致。
-  const onChangesByTool = new Map<
-    string,
-    {error: number; warning: number; info: number}
-  >()
+  const onChangesByTool = new Map<string, {error: number; warning: number; info: number}>()
   for (const r of collapsed) {
     const c = onChangesByTool.get(r.tool) ?? {error: 0, warning: 0, info: 0}
     if (r.severity === 'error') c.error++

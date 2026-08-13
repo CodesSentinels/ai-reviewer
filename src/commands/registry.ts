@@ -11,6 +11,7 @@
  * - 提供 getRegisteredNames() 给 parser 做命中检测
  */
 import type {CommandHandler} from './types'
+import {getLogger} from '../platform/logger'
 
 class CommandRegistry {
   private readonly handlers = new Map<string, CommandHandler>()
@@ -41,11 +42,8 @@ class CommandRegistry {
       this.handlers.set(a, handler)
     }
 
-    console.log(
-      '[Registered command]:',
-      handler.name,
-      'aliases:',
-      handler.aliases ?? []
+    getLogger().info(
+      `[Registered command]: ${handler.name} aliases: ${(handler.aliases ?? []).join(', ')}`
     )
   }
 

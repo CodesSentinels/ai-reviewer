@@ -16,32 +16,38 @@
  * 设计原则：纯逻辑（意图识别 / 截断 / 轮次统计）抽成可独立单测的函数，
  * I/O 编排集中在 handleConversation 中，复用既有 Commenter / Bot / Prompts。
  */
-import {info, warning} from '@actions/core'
-// eslint-disable-next-line camelcase
-import {context as github_context} from '@actions/github'
 import {type Bot} from './bot'
+import type {ExecutionContext} from './platform/execution-context'
 import {
   Commenter,
-  COMMENT_GREETING,
-  COMMENT_REPLY_TAG,
-  COMMENT_TAG,
-  SUMMARIZE_TAG
+  bodyHasMarker,
+  commentReplyTag,
+  getCommentGreeting,
+  stateMarkerVariantsFor,
+  summarizeTag
 } from './commenter'
 import {BOT_MENTIONS} from './constants'
 import {Inputs} from './inputs'
-import {octokit} from './octokit'
 import {type Options} from './options'
+import {getPlatform} from './platform/git-platform'
+import {getLogger} from './platform/logger'
+import {buildStateMarker, hasStateMarker, stateMarkerVariants} from './platform/state-namespace'
 import {type Prompts} from './prompts'
 import {getTokenCount} from './tokenizer'
-
-// eslint-disable-next-line camelcase
-const context = github_context
 
 /** 默认的 bot mention 别名（小写匹配，与命令解析器保持一致）。共享自 constants。 */
 export {BOT_MENTIONS}
 
-/** 标识 bot 在对话链中出现过的标签（用于轮次统计 / 意图识别） */
-export const BOT_COMMENT_TAGS = [COMMENT_TAG, COMMENT_REPLY_TAG]
+/**
+ * 标识 bot 在对话链中出现过的标签（用于轮次统计 / 意图识别）。
+ *
+ * 必须是函数：命名空间由入口在运行时设置，模块级常量会在 import 时就固化成
+ * 默认的 github 前缀，GitLab 入口再调 setStateNamespace() 也改不回来。
+ * 同时返回 current + legacy 两种形态，否则升级前发的 bot 评论会被当成人类评论。
+ */
+export function botCommentTagVariants(): string[] {
+  return [...stateMarkerVariantsFor('comment'), ...stateMarkerVariantsFor('commentReply')]
+}
 
 /** 单个 thread 的对话轮次上限（bot 已回复的次数），超过后停止追问 */
 export const MAX_CONVERSATION_TURNS = 10
@@ -62,9 +68,23 @@ const CHAIN_SEPARATOR = '\n---\n'
  */
 export const CONV_REPLY_TAG_PREFIX = '<!-- codesentinel-conv-reply'
 
-/** 组装主评论区对话回复的幂等标签 */
+/** 组装主评论区对话回复的幂等标签（带平台命名空间，用于写入，GH-014） */
 export function buildIssueConvReplyTag(originalCommentId: number): string {
+  return buildStateMarker('conv-reply', originalCommentId)
+}
+
+/** 历史格式的幂等标签（仅用于匹配在途 PR 的旧回复） */
+export function legacyIssueConvReplyTag(originalCommentId: number): string {
   return `${CONV_REPLY_TAG_PREFIX}:${originalCommentId} -->`
+}
+
+/** 匹配时应接受的全部形态：新命名空间格式 + 历史格式 */
+export function issueConvReplyTagVariants(originalCommentId: number): string[] {
+  return stateMarkerVariants(
+    'conv-reply',
+    legacyIssueConvReplyTag(originalCommentId),
+    originalCommentId
+  )
 }
 
 /**
@@ -91,7 +111,7 @@ export function isFollowUpQuestion(opts: {
   }
   const body = commentBody ?? ''
   // bot 自动生成的内容带有专属标签，二次保险，避免把 bot 文案当成追问
-  const botTags = opts.botCommentTags ?? BOT_COMMENT_TAGS
+  const botTags = opts.botCommentTags ?? botCommentTagVariants()
   if (botTags.some(tag => body.includes(tag))) {
     return false
   }
@@ -107,7 +127,7 @@ export function isFollowUpQuestion(opts: {
  */
 export function countBotTurns(
   commentChain: string,
-  botCommentTags: string[] = BOT_COMMENT_TAGS
+  botCommentTags: string[] = botCommentTagVariants()
 ): number {
   if (!commentChain) {
     return 0
@@ -181,36 +201,40 @@ export function truncateConversationChain(
  * 仅处理 pull_request_review_comment 事件（代码行级评论中的追问）。
  * 由 command-handler.ts 在命令解析判定为 "fallback_conversation" 时调用。
  *
+ * @param execCtx  - 平台无关执行上下文（ARCH-005：取代直接 import @actions/github）
  * @param heavyBot - 重量级模型，用于生成高质量回复
  * @param options  - 全局配置
  * @param prompts  - 提示词模板
  */
 export const handleConversation = async (
+  execCtx: ExecutionContext,
   heavyBot: Bot,
   options: Options,
   prompts: Prompts
 ): Promise<void> => {
   const commenter: Commenter = new Commenter()
   const inputs: Inputs = new Inputs()
-  const repo = context.repo
+  const [repoOwner, repoName] = execCtx.projectPath.split('/')
+
+  const logger = getLogger()
 
   // ===== 1. 事件与 payload 校验 =====
-  if (context.eventName !== 'pull_request_review_comment') {
-    info(`conversation: skip non review_comment event (${context.eventName})`)
+  if (execCtx.eventKind !== 'review_comment_created') {
+    logger.info(`conversation: skip non review_comment event (${execCtx.eventKind})`)
     return
   }
-  const payload = context.payload
+  const payload = execCtx.raw as any
   if (!payload || payload.action !== 'created') {
-    info('conversation: skip (missing payload or action != created)')
+    logger.info('conversation: skip (missing payload or action != created)')
     return
   }
   const comment = payload.comment
   if (comment == null || typeof comment.body !== 'string') {
-    warning('conversation: skip (missing comment body)')
+    logger.warning('conversation: skip (missing comment body)')
     return
   }
   if (payload.pull_request == null || payload.repository == null) {
-    warning('conversation: skip (missing pull_request/repository)')
+    logger.warning('conversation: skip (missing pull_request/repository)')
     return
   }
 
@@ -218,10 +242,10 @@ export const handleConversation = async (
   const authorIsBot =
     comment.user?.type === 'Bot' ||
     /\[bot\]$/i.test(comment.user?.login ?? '') ||
-    comment.body.includes(COMMENT_TAG) ||
-    comment.body.includes(COMMENT_REPLY_TAG)
+    bodyHasMarker(comment.body, 'comment') ||
+    bodyHasMarker(comment.body, 'commentReply')
   if (authorIsBot) {
-    info('conversation: skip (comment from bot itself)')
+    logger.info('conversation: skip (comment from bot itself)')
     return
   }
 
@@ -237,12 +261,9 @@ export const handleConversation = async (
   inputs.filename = comment.path ?? ''
 
   // ===== 3. Thread 对话历史收集 =====
-  const {chain: rawChain, topLevelComment} = await commenter.getCommentChain(
-    pullNumber,
-    comment
-  )
+  const {chain: rawChain, topLevelComment} = await commenter.getCommentChain(pullNumber, comment)
   if (!topLevelComment) {
-    warning('conversation: cannot locate top-level comment, abort')
+    logger.warning('conversation: cannot locate top-level comment, abort')
     return
   }
 
@@ -253,16 +274,14 @@ export const handleConversation = async (
       authorIsBot: false
     })
   ) {
-    info('conversation: not a follow-up question (no @mention), skip')
+    logger.info('conversation: not a follow-up question (no @mention), skip')
     return
   }
 
   // ===== 5. 对话轮次上限控制 =====
   const turns = countBotTurns(rawChain)
   if (turns >= MAX_CONVERSATION_TURNS) {
-    info(
-      `conversation: turn limit reached (${turns}/${MAX_CONVERSATION_TURNS})`
-    )
+    logger.info(`conversation: turn limit reached (${turns}/${MAX_CONVERSATION_TURNS})`)
     await commenter.reviewCommentReply(
       pullNumber,
       topLevelComment,
@@ -277,18 +296,18 @@ export const handleConversation = async (
   // ===== 7. 关联代码行及扩展上下文（文件完整 diff） =====
   let fileDiff = ''
   try {
-    const diffAll = await octokit.repos.compareCommits({
-      owner: repo.owner,
-      repo: repo.repo,
-      base: payload.pull_request.base.sha,
-      head: payload.pull_request.head.sha
-    })
-    const file = diffAll.data?.files?.find(f => f.filename === comment.path)
+    const diffResult = await getPlatform().compareDiff(
+      repoOwner,
+      repoName,
+      payload.pull_request.base.sha,
+      payload.pull_request.head.sha
+    )
+    const file = diffResult.files.find(f => f.filename === comment.path)
     if (file?.patch) {
       fileDiff = file.patch
     }
   } catch (e) {
-    warning(`conversation: failed to get file diff: ${e}, continue without it`)
+    logger.warning(`conversation: failed to get file diff: ${e}, continue without it`)
   }
 
   // 评论本身没有 diff 片段时，退化为使用完整文件 diff
@@ -311,10 +330,7 @@ export const handleConversation = async (
 
   if (tokens > options.heavyTokenLimits.requestTokens) {
     // 对话链可能仍过长，进一步压缩后重试一次
-    inputs.commentChain = truncateConversationChain(
-      rawChain,
-      Math.floor(MAX_CHAIN_CHARS / 2)
-    )
+    inputs.commentChain = truncateConversationChain(rawChain, Math.floor(MAX_CHAIN_CHARS / 2))
     tokens = getTokenCount(prompts.renderComment(inputs))
   }
   if (tokens > options.heavyTokenLimits.requestTokens) {
@@ -332,8 +348,7 @@ export const handleConversation = async (
     const fileDiffTokens = getTokenCount(fileDiff)
     if (
       fileDiffCount > 0 &&
-      tokens + fileDiffTokens * fileDiffCount <=
-        options.heavyTokenLimits.requestTokens
+      tokens + fileDiffTokens * fileDiffCount <= options.heavyTokenLimits.requestTokens
     ) {
       tokens += fileDiffTokens * fileDiffCount
       inputs.fileDiff = fileDiff
@@ -341,7 +356,7 @@ export const handleConversation = async (
   }
 
   // 预算允许时补充 PR 精简摘要
-  const summary = await commenter.findCommentWithTag(SUMMARIZE_TAG, pullNumber)
+  const summary = await commenter.findCommentWithTag(summarizeTag(), pullNumber)
   if (summary) {
     const shortSummary = commenter.getShortSummary(summary.body)
     const shortSummaryTokens = getTokenCount(shortSummary)
@@ -354,7 +369,7 @@ export const handleConversation = async (
   // ===== 9. LLM 对话推理 + 发布回复 =====
   const [reply] = await heavyBot.chat(prompts.renderComment(inputs), {})
   if (!reply) {
-    warning('conversation: empty reply from model, skip posting')
+    logger.warning('conversation: empty reply from model, skip posting')
     return
   }
   // 由我们用真实评论者用户名前缀回复（模型已被要求不要自行 @）。
@@ -371,7 +386,7 @@ export const handleConversation = async (
     topLevelComment,
     `${quotedQuestion}\n\n${mention}${cleanedReply}`
   )
-  info(
+  logger.info(
     `conversation: replied on PR #${pullNumber} thread (top-level comment ${topLevelComment.id})`
   )
 }
@@ -414,37 +429,40 @@ export function composeIssueCommentChain(
  *   - 主评论区扁平无 thread → 用隐藏幂等标签防止连续提问时重复回帖
  *   - 无关问题由模型判定并友好婉拒（见 prompts.commentIssue）
  *
+ * @param execCtx  - 平台无关执行上下文（ARCH-005：取代直接 import @actions/github）
  * @param heavyBot - 重量级模型，用于生成高质量回复
  * @param options  - 全局配置
  * @param prompts  - 提示词模板
  */
 export const handleIssueConversation = async (
+  execCtx: ExecutionContext,
   heavyBot: Bot,
   options: Options,
   prompts: Prompts
 ): Promise<void> => {
   const commenter: Commenter = new Commenter()
   const inputs: Inputs = new Inputs()
-  const repo = context.repo
+  const [repoOwner, repoName] = execCtx.projectPath.split('/')
+  const logger = getLogger()
 
   // ===== 1. 事件与 payload 校验 =====
-  if (context.eventName !== 'issue_comment') {
-    info(`issue-conversation: skip non issue_comment event (${context.eventName})`)
+  if (execCtx.eventKind !== 'comment_created') {
+    logger.info(`issue-conversation: skip non issue_comment event (${execCtx.eventKind})`)
     return
   }
-  const payload = context.payload
+  const payload = execCtx.raw as any
   if (!payload || payload.action !== 'created') {
-    info('issue-conversation: skip (missing payload or action != created)')
+    logger.info('issue-conversation: skip (missing payload or action != created)')
     return
   }
   // 只处理 PR 上的评论（GitHub 中 PR 复用 issue 模型）
   if (!payload.issue?.pull_request) {
-    info('issue-conversation: skip (issue_comment on non-PR issue)')
+    logger.info('issue-conversation: skip (issue_comment on non-PR issue)')
     return
   }
   const comment = payload.comment
   if (comment == null || typeof comment.body !== 'string') {
-    warning('issue-conversation: skip (missing comment body)')
+    logger.warning('issue-conversation: skip (missing comment body)')
     return
   }
 
@@ -452,10 +470,10 @@ export const handleIssueConversation = async (
   const authorIsBot =
     comment.user?.type === 'Bot' ||
     /\[bot\]$/i.test(comment.user?.login ?? '') ||
-    comment.body.includes(COMMENT_TAG) ||
-    comment.body.includes(COMMENT_REPLY_TAG)
+    bodyHasMarker(comment.body, 'comment') ||
+    bodyHasMarker(comment.body, 'commentReply')
   if (authorIsBot) {
-    info('issue-conversation: skip (comment from bot itself)')
+    logger.info('issue-conversation: skip (comment from bot itself)')
     return
   }
 
@@ -466,7 +484,7 @@ export const handleIssueConversation = async (
       authorIsBot: false
     })
   ) {
-    info('issue-conversation: not a follow-up question (no @mention), skip')
+    logger.info('issue-conversation: not a follow-up question (no @mention), skip')
     return
   }
 
@@ -474,14 +492,10 @@ export const handleIssueConversation = async (
 
   // ===== 4. 幂等去重（连续提问不丢/不重复的关键） =====
   const allComments = await commenter.listComments(pullNumber)
-  const replyTag = buildIssueConvReplyTag(comment.id)
-  const alreadyReplied = allComments.some(
-    (c: any) => typeof c.body === 'string' && c.body.includes(replyTag)
-  )
+  const replyTagVariants = issueConvReplyTagVariants(comment.id)
+  const alreadyReplied = allComments.some((c: any) => hasStateMarker(c.body, replyTagVariants))
   if (alreadyReplied) {
-    info(
-      `issue-conversation: skip duplicate reply for comment ${comment.id}`
-    )
+    logger.info(`issue-conversation: skip duplicate reply for comment ${comment.id}`)
     return
   }
 
@@ -489,9 +503,7 @@ export const handleIssueConversation = async (
   const rawChain = composeIssueCommentChain(allComments, comment.id)
   const turns = countBotTurns(rawChain)
   if (turns >= MAX_CONVERSATION_TURNS) {
-    info(
-      `issue-conversation: turn limit reached (${turns}/${MAX_CONVERSATION_TURNS})`
-    )
+    logger.info(`issue-conversation: turn limit reached (${turns}/${MAX_CONVERSATION_TURNS})`)
     await postIssueReply(
       commenter,
       pullNumber,
@@ -513,36 +525,22 @@ export const handleIssueConversation = async (
   // ===== 7. 拉取整个 PR 的 diff（可选，受 token 预算约束） =====
   let prDiff = ''
   try {
-    const pr = await octokit.pulls.get({
-      owner: repo.owner,
-      repo: repo.repo,
-      // eslint-disable-next-line camelcase
-      pull_number: pullNumber
-    })
-    const diffAll = await octokit.repos.compareCommits({
-      owner: repo.owner,
-      repo: repo.repo,
-      base: pr.data.base.sha,
-      head: pr.data.head.sha
-    })
-    prDiff = (diffAll.data?.files ?? [])
+    const platform = getPlatform()
+    const cr = await platform.getChangeRequest(repoOwner, repoName, pullNumber)
+    const diffResult = await platform.compareDiff(repoOwner, repoName, cr.baseSha, cr.headSha)
+    prDiff = diffResult.files
       .map(f => (f.patch ? `--- ${f.filename}\n${f.patch}` : ''))
       .filter(s => s.length > 0)
       .join('\n\n')
   } catch (e) {
-    warning(
-      `issue-conversation: failed to get PR diff: ${e}, continue without it`
-    )
+    logger.warning(`issue-conversation: failed to get PR diff: ${e}, continue without it`)
   }
 
   // ===== 8. Token 预算内打包上下文 =====
   let tokens = getTokenCount(prompts.renderCommentIssue(inputs))
   if (tokens > options.heavyTokenLimits.requestTokens) {
     // 对话链可能过长，进一步压缩后重试一次
-    inputs.commentChain = truncateConversationChain(
-      rawChain,
-      Math.floor(MAX_CHAIN_CHARS / 2)
-    )
+    inputs.commentChain = truncateConversationChain(rawChain, Math.floor(MAX_CHAIN_CHARS / 2))
     tokens = getTokenCount(prompts.renderCommentIssue(inputs))
   }
   if (tokens > options.heavyTokenLimits.requestTokens) {
@@ -561,8 +559,7 @@ export const handleIssueConversation = async (
     const prDiffTokens = getTokenCount(prDiff)
     if (
       fileDiffCount > 0 &&
-      tokens + prDiffTokens * fileDiffCount <=
-        options.heavyTokenLimits.requestTokens
+      tokens + prDiffTokens * fileDiffCount <= options.heavyTokenLimits.requestTokens
     ) {
       tokens += prDiffTokens * fileDiffCount
       inputs.fileDiff = prDiff
@@ -570,7 +567,7 @@ export const handleIssueConversation = async (
   }
 
   // 预算允许时补充 PR 精简摘要
-  const summary = await commenter.findCommentWithTag(SUMMARIZE_TAG, pullNumber)
+  const summary = await commenter.findCommentWithTag(summarizeTag(), pullNumber)
   if (summary) {
     const shortSummary = commenter.getShortSummary(summary.body)
     const shortSummaryTokens = getTokenCount(shortSummary)
@@ -583,12 +580,12 @@ export const handleIssueConversation = async (
   // ===== 9. LLM 对话推理 + 发布回复 =====
   const [reply] = await heavyBot.chat(prompts.renderCommentIssue(inputs), {})
   if (!reply) {
-    warning('issue-conversation: empty reply from model, skip posting')
+    logger.warning('issue-conversation: empty reply from model, skip posting')
     return
   }
   const cleanedReply = reply.replace(/^\s*@user[，,：:\s]*/i, '').trimStart()
   await postIssueReply(commenter, pullNumber, comment, cleanedReply)
-  info(`issue-conversation: replied on PR #${pullNumber} main thread`)
+  logger.info(`issue-conversation: replied on PR #${pullNumber} main thread`)
 }
 
 /**
@@ -609,13 +606,13 @@ async function postIssueReply(
     .split('\n')
     .map((l: string) => `> ${l}`)
     .join('\n')
-  const message = `${COMMENT_GREETING}
+  const message = `${getCommentGreeting()}
 
 ${quotedQuestion}
 
 ${mention}${body}
 
-${COMMENT_REPLY_TAG}
+${commentReplyTag()}
 ${buildIssueConvReplyTag(comment.id)}
 `
   await commenter.create(message, pullNumber)

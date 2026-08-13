@@ -11,26 +11,15 @@
  *   2+ → 配置错误或其他失败
  */
 
-import {info} from '@actions/core'
+import {info} from '../../actions-log'
 import {ensureToolInstalled} from '../tool-installer'
-import {
-  type InstallSpec,
-  type LintResult,
-  type ToolAdapter,
-  type ToolDetection
-} from '../types'
+import {type InstallSpec, type LintResult, type ToolAdapter, type ToolDetection} from '../types'
 import {extractVersion, runCommand} from './exec'
 
 export class PrettierAdapter implements ToolAdapter {
   readonly name = 'prettier'
   readonly displayName = 'Prettier'
-  readonly supportedLanguages = [
-    'javascript',
-    'typescript',
-    'css',
-    'html',
-    'vue'
-  ]
+  readonly supportedLanguages = ['javascript', 'typescript', 'css', 'html', 'vue']
   readonly fileExtensions = [
     '.js',
     '.jsx',
@@ -64,10 +53,7 @@ export class PrettierAdapter implements ToolAdapter {
   private resolvedVersion = ''
   private resolvedBinPath = ''
 
-  async detect(
-    repoRoot: string,
-    versionOverride?: string
-  ): Promise<ToolDetection> {
+  async detect(repoRoot: string, versionOverride?: string): Promise<ToolDetection> {
     const spec: InstallSpec =
       versionOverride && versionOverride.length > 0
         ? {...this.installSpec, version: versionOverride}
@@ -76,9 +62,7 @@ export class PrettierAdapter implements ToolAdapter {
     if (!install.ok) {
       return {
         available: false,
-        reason: `bundled Prettier install failed: ${
-          install.reason ?? 'unknown'
-        }`
+        reason: `bundled Prettier install failed: ${install.reason ?? 'unknown'}`
       }
     }
     this.resolvedBinPath = install.binPath as string
@@ -109,9 +93,7 @@ export class PrettierAdapter implements ToolAdapter {
   async scan(files: string[], repoRoot: string): Promise<LintResult[]> {
     if (files.length === 0) return []
 
-    info(
-      `lint/prettier: checking ${files.length} files via ${this.resolvedBinPath}`
-    )
+    info(`lint/prettier: checking ${files.length} files via ${this.resolvedBinPath}`)
     const result = await runCommand({
       command: this.resolvedBinPath,
       args: ['--check', '--no-error-on-unmatched-pattern', ...files],

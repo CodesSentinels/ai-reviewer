@@ -9,12 +9,12 @@
  * 5. 可选的 web search 工具支持（用于验证 API 用法）
  */
 
-import { info, setFailed, warning } from '@actions/core'
-import { exec as execCallback } from 'child_process'
-import OpenAI, { APIError } from 'openai'
+import {info, setFailed, warning} from './actions-log'
+import {exec as execCallback} from 'child_process'
+import OpenAI, {APIError} from 'openai'
 import pRetry from 'p-retry'
-import { OpenAIOptions, Options } from './options'
-import { sanitizeModelOutput } from './sanitize-model-output'
+import {OpenAIOptions, Options} from './options'
+import {sanitizeModelOutput} from './sanitize-model-output'
 
 /**
  * 对话 ID 接口，用于维护多轮对话的上下文关系
@@ -70,7 +70,7 @@ interface ShellCallItem {
 interface ShellCallOutputContent {
   stdout: string
   stderr: string
-  outcome: { type: 'exit'; exit_code: number } | { type: 'timeout' }
+  outcome: {type: 'exit'; exit_code: number} | {type: 'timeout'}
 }
 
 interface ShellCallOutputItem {
@@ -119,34 +119,34 @@ const truncateText = (text: string, maxLength: number): string => {
   if (maxLength <= LOCAL_SHELL_OUTPUT_TRUNCATED.length) {
     return text.substring(0, maxLength)
   }
-  return `${text.substring(0, maxLength - LOCAL_SHELL_OUTPUT_TRUNCATED.length)}${LOCAL_SHELL_OUTPUT_TRUNCATED}`
+  return `${text.substring(
+    0,
+    maxLength - LOCAL_SHELL_OUTPUT_TRUNCATED.length
+  )}${LOCAL_SHELL_OUTPUT_TRUNCATED}`
 }
 
 const truncateShellStreams = (
   stdout: string,
   stderr: string,
   maxLength: number
-): { stdout: string; stderr: string } => {
+): {stdout: string; stderr: string} => {
   if (maxLength <= 0) {
-    return { stdout: '', stderr: '' }
+    return {stdout: '', stderr: ''}
   }
 
   const totalLength = stdout.length + stderr.length
   if (totalLength <= maxLength) {
-    return { stdout, stderr }
+    return {stdout, stderr}
   }
 
   if (stdout.length === 0) {
-    return { stdout, stderr: truncateText(stderr, maxLength) }
+    return {stdout, stderr: truncateText(stderr, maxLength)}
   }
   if (stderr.length === 0) {
-    return { stdout: truncateText(stdout, maxLength), stderr }
+    return {stdout: truncateText(stdout, maxLength), stderr}
   }
 
-  let stdoutBudget = Math.max(
-    1,
-    Math.floor((maxLength * stdout.length) / totalLength)
-  )
+  let stdoutBudget = Math.max(1, Math.floor((maxLength * stdout.length) / totalLength))
   let stderrBudget = Math.max(1, maxLength - stdoutBudget)
 
   if (stdoutBudget + stderrBudget > maxLength) {
@@ -278,24 +278,18 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
 
         const pendingShellCalls: ShellCallItem[] = []
         const outputTypes = response.output.map((item: any) => item.type)
-        info(
-          `[web_search_debug] response output types: ${JSON.stringify(
-            outputTypes
-          )}`
-        )
+        info(`[web_search_debug] response output types: ${JSON.stringify(outputTypes)}`)
 
         for (let i = 0; i < response.output.length; i++) {
           const item = response.output[i] as any
           info(
-            `[analysis_chain_debug] output[${i}] type="${item.type}", keys=${JSON.stringify(Object.keys(item))}`
+            `[analysis_chain_debug] output[${i}] type="${item.type}", keys=${JSON.stringify(
+              Object.keys(item)
+            )}`
           )
 
           if (item.type === 'web_search_call') {
-            info(
-              `[web_search] executed, id: ${(item as any).id}, status: ${
-                (item as any).status
-              }`
-            )
+            info(`[web_search] executed, id: ${(item as any).id}, status: ${(item as any).status}`)
             analysisSteps.push({
               type: 'web_search',
               status: (item as any).status
@@ -305,7 +299,9 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
           if (item.type === 'shell_call') {
             const shellItem = item as ShellCallItem
             info(
-              `[analysis_chain_debug] shell_call found! id=${shellItem.id}, commands=${JSON.stringify(shellItem.action?.commands)}, status=${shellItem.status}`
+              `[analysis_chain_debug] shell_call found! id=${
+                shellItem.id
+              }, commands=${JSON.stringify(shellItem.action?.commands)}, status=${shellItem.status}`
             )
             this.ensureShellAnalysisStep(analysisSteps, shellItem)
             pendingShellCalls.push(shellItem)
@@ -314,13 +310,11 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
           if (item.type === 'shell_call_output') {
             const shellOutput = item as ShellCallOutputItem
             info(
-              `[analysis_chain_debug] shell_call_output found! call_id=${shellOutput.call_id}, output_count=${shellOutput.output?.length ?? 0}`
+              `[analysis_chain_debug] shell_call_output found! call_id=${
+                shellOutput.call_id
+              }, output_count=${shellOutput.output?.length ?? 0}`
             )
-            this.attachShellOutput(
-              analysisSteps,
-              shellOutput.call_id,
-              shellOutput.output
-            )
+            this.attachShellOutput(analysisSteps, shellOutput.call_id, shellOutput.output)
           }
 
           if (item.type === 'message') {
@@ -346,13 +340,8 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
           break
         }
 
-        const shellOutputs = await this.executeShellCalls(
-          pendingShellCalls,
-          analysisSteps
-        )
-        response = await this.createResponse(
-          this.buildParams(shellOutputs, response.id, tools)
-        )
+        const shellOutputs = await this.executeShellCalls(pendingShellCalls, analysisSteps)
+        response = await this.createResponse(this.buildParams(shellOutputs, response.id, tools))
       }
 
       // info(`[analysis_chain] total analysis steps captured: ${analysisSteps.length}`)
@@ -374,9 +363,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
       const beforeLen = responseText.length
       responseText = sanitizeModelOutput(responseText)
       if (responseText.length !== beforeLen) {
-        info(
-          `[sanitize] stripped citation markers: ${beforeLen} → ${responseText.length} chars`
-        )
+        info(`[sanitize] stripped citation markers: ${beforeLen} → ${responseText.length} chars`)
       }
 
       if (this.options.debug) {
@@ -435,18 +422,10 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
           retries: this.options.openaiRetries
         }
       )
-      info(
-        `openai sendMessage (including retries) response time: ${
-          Date.now() - start
-        } ms`
-      )
+      info(`openai sendMessage (including retries) response time: ${Date.now() - start} ms`)
       return response
     } catch (e: unknown) {
-      info(
-        `openai sendMessage (including retries) response time: ${
-          Date.now() - start
-        } ms`
-      )
+      info(`openai sendMessage (including retries) response time: ${Date.now() - start} ms`)
       if (e instanceof APIError) {
         warning(`Failed to send message to openai: ${e}, backtrace: ${e.stack}`)
       }
@@ -487,9 +466,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
       .find(step => step.type === 'shell' && step.callId === callId)
 
     if (shellStep == null || output.length === 0) {
-      info(
-        '[analysis_chain_debug] shell_call_output but no matching shell step found or no output'
-      )
+      info('[analysis_chain_debug] shell_call_output but no matching shell step found or no output')
       return
     }
 
@@ -501,7 +478,9 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
 
     for (const out of output) {
       info(
-        `[analysis_chain_debug] shell output chunk: stdout_len=${out.stdout?.length ?? 0}, stderr_len=${out.stderr?.length ?? 0}, outcome=${JSON.stringify(out.outcome)}`
+        `[analysis_chain_debug] shell output chunk: stdout_len=${
+          out.stdout?.length ?? 0
+        }, stderr_len=${out.stderr?.length ?? 0}, outcome=${JSON.stringify(out.outcome)}`
       )
       const stdoutChunkLength = out.stdout?.length ?? 0
       const stderrChunkLength = out.stderr?.length ?? 0
@@ -550,8 +529,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
     shellCall: ShellCallItem
   ): Promise<ShellCallOutputItem> => {
     const commands = shellCall.action?.commands ?? []
-    const timeoutMs =
-      shellCall.action?.timeout_ms ?? DEFAULT_LOCAL_SHELL_TIMEOUT_MS
+    const timeoutMs = shellCall.action?.timeout_ms ?? DEFAULT_LOCAL_SHELL_TIMEOUT_MS
     const requestedMaxOutputLength = shellCall.action?.max_output_length ?? null
     const effectiveMaxOutputLength =
       requestedMaxOutputLength ?? DEFAULT_LOCAL_SHELL_MAX_OUTPUT_LENGTH
@@ -561,30 +539,22 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
     for (let i = 0; i < commands.length; i++) {
       const command = commands[i]
       info(
-        `[local_shell] executing command ${i + 1}/${commands.length} for call ${shellCall.call_id}: ${command}`
+        `[local_shell] executing command ${i + 1}/${commands.length} for call ${
+          shellCall.call_id
+        }: ${command}`
       )
 
-      const result = await this.runLocalShellCommand(
-        command,
-        timeoutMs,
-        effectiveMaxOutputLength
-      )
+      const result = await this.runLocalShellCommand(command, timeoutMs, effectiveMaxOutputLength)
 
       const commandsRemaining = commands.length - i
       const commandBudget =
         remainingOutputBudget > 0
           ? Math.max(1, Math.floor(remainingOutputBudget / commandsRemaining))
           : 0
-      const truncatedOutput = truncateShellStreams(
-        result.stdout,
-        result.stderr,
-        commandBudget
-      )
+      const truncatedOutput = truncateShellStreams(result.stdout, result.stderr, commandBudget)
       remainingOutputBudget = Math.max(
         0,
-        remainingOutputBudget -
-          truncatedOutput.stdout.length -
-          truncatedOutput.stderr.length
+        remainingOutputBudget - truncatedOutput.stdout.length - truncatedOutput.stderr.length
       )
 
       output.push({
@@ -615,10 +585,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
     const shell = getLocalShellBinary()
     const maxBuffer = Math.max(
       1_024 * 1_024,
-      Math.min(
-        LOCAL_SHELL_MAX_BUFFER_BYTES,
-        Math.max(maxOutputLength * 8, 1_024 * 1_024)
-      )
+      Math.min(LOCAL_SHELL_MAX_BUFFER_BYTES, Math.max(maxOutputLength * 8, 1_024 * 1_024))
     )
 
     const sanitizedEnv = {...process.env}
@@ -631,25 +598,29 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
         stdout: string
         stderr: string
       }>((resolve, reject) => {
-        execCallback(command, {
-          cwd: process.cwd(),
-          env: sanitizedEnv,
-          timeout: timeoutMs,
-          maxBuffer,
-          ...(shell ? {shell} : {})
-        }, (error, stdout, stderr) => {
-          if (error != null) {
-            const enrichedError = error as NodeJS.ErrnoException & {
-              stdout?: string
-              stderr?: string
+        execCallback(
+          command,
+          {
+            cwd: process.cwd(),
+            env: sanitizedEnv,
+            timeout: timeoutMs,
+            maxBuffer,
+            ...(shell ? {shell} : {})
+          },
+          (error, stdout, stderr) => {
+            if (error != null) {
+              const enrichedError = error as NodeJS.ErrnoException & {
+                stdout?: string
+                stderr?: string
+              }
+              enrichedError.stdout = stdout
+              enrichedError.stderr = stderr
+              reject(enrichedError)
+              return
             }
-            enrichedError.stdout = stdout
-            enrichedError.stderr = stderr
-            reject(enrichedError)
-            return
+            resolve({stdout, stderr})
           }
-          resolve({stdout, stderr})
-        })
+        )
       })
       return {
         stdout,
@@ -669,17 +640,11 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
         shellError.signal === 'SIGTERM' &&
         (shellError.killed === true || shellError.code === 'ETIMEDOUT')
       const exitCode =
-        typeof shellError.code === 'number'
-          ? shellError.code
-          : timedOut
-            ? undefined
-            : 1
+        typeof shellError.code === 'number' ? shellError.code : timedOut ? undefined : 1
 
       return {
         stdout: shellError.stdout ?? '',
-        stderr:
-          shellError.stderr ??
-          (error instanceof Error ? error.message : String(error)),
+        stderr: shellError.stderr ?? (error instanceof Error ? error.message : String(error)),
         exitCode,
         timedOut
       }

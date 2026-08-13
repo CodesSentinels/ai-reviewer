@@ -50,13 +50,11 @@ describe('ensureFixSuggestionHeaders — <details> 包装主路径', () => {
 +b
 \`\`\``
     const out = ensureFixSuggestionHeaders(input)
-    expect(out).toMatch(
-      /<summary>🔧 Suggested fix<\/summary>\n\n```diff/
-    )
+    expect(out).toMatch(/<summary>🔧 Suggested fix<\/summary>\n\n```diff/)
   })
 
   test('GFM 渲染要求：```diff 闭合与 </details> 之间有空行', () => {
-    const input = '\`\`\`diff\n-a\n+b\n\`\`\`'
+    const input = '```diff\n-a\n+b\n```'
     const out = ensureFixSuggestionHeaders(input)
     expect(out).toMatch(/```\n\n<\/details>/)
   })
@@ -152,7 +150,7 @@ const x: number = 1
   })
 
   test('非 diff 代码块（```bash）不动', () => {
-    const input = '\`\`\`bash\nnpm install\n\`\`\`'
+    const input = '```bash\nnpm install\n```'
     expect(ensureFixSuggestionHeaders(input)).toBe(input)
   })
 
@@ -188,7 +186,7 @@ const x: number = 1
 
 describe('ensureFixSuggestionHeaders — 与既有 Analysis chain 风格一致', () => {
   test('生成的 markdown 与 Analysis chain 同款（详见 review.ts::formatAnalysisChain）', () => {
-    const input = '\`\`\`diff\n-a\n+b\n\`\`\`'
+    const input = '```diff\n-a\n+b\n```'
     const out = ensureFixSuggestionHeaders(input)
     // 结构应该是：
     // <details>

@@ -11,16 +11,11 @@
  * severity: 1 = warning, 2 = error
  */
 
-import {info} from '@actions/core'
+import {info} from '../../actions-log'
 import {existsSync, readFileSync} from 'fs'
-import * as path from 'path'
+import {join} from 'path'
 import {ensureToolInstalled} from '../tool-installer'
-import {
-  type InstallSpec,
-  type LintResult,
-  type ToolAdapter,
-  type ToolDetection
-} from '../types'
+import {type InstallSpec, type LintResult, type ToolAdapter, type ToolDetection} from '../types'
 import {extractVersion, parseJsonSafe, runCommand} from './exec'
 
 /**
@@ -53,10 +48,10 @@ const ESLINT_CONFIG_FILES = [
  */
 function findEslintConfig(repoRoot: string): string | null {
   for (const name of ESLINT_CONFIG_FILES) {
-    if (existsSync(path.join(repoRoot, name))) return name
+    if (existsSync(join(repoRoot, name))) return name
   }
   // package.json 内嵌 eslintConfig
-  const pkgPath = path.join(repoRoot, 'package.json')
+  const pkgPath = join(repoRoot, 'package.json')
   if (existsSync(pkgPath)) {
     try {
       const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as {
@@ -100,11 +95,7 @@ function classifyCategory(ruleId: string): LintResult['category'] {
   if (SECURITY_RULE_PREFIXES.some(p => r.startsWith(p))) return 'security'
   if (PERFORMANCE_RULE_KEYWORDS.some(p => r.includes(p))) return 'performance'
   // ESLint 内置 stylistic rules
-  if (
-    r.startsWith('@stylistic/') ||
-    r.includes('indent') ||
-    r.includes('quotes')
-  ) {
+  if (r.startsWith('@stylistic/') || r.includes('indent') || r.includes('quotes')) {
     return 'style'
   }
   return 'quality'
@@ -114,17 +105,7 @@ export class EslintAdapter implements ToolAdapter {
   readonly name = 'eslint'
   readonly displayName = 'ESLint'
   readonly supportedLanguages = ['javascript', 'typescript', 'vue']
-  readonly fileExtensions = [
-    '.js',
-    '.jsx',
-    '.mjs',
-    '.cjs',
-    '.ts',
-    '.tsx',
-    '.mts',
-    '.cts',
-    '.vue'
-  ]
+  readonly fileExtensions = ['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts', '.vue']
   readonly defaultEnabled = true
 
   /**
@@ -143,10 +124,7 @@ export class EslintAdapter implements ToolAdapter {
   /** detect() 成功后填充：bundled 二进制的绝对路径，scan 时直接调用 */
   private resolvedBinPath = ''
 
-  async detect(
-    repoRoot: string,
-    versionOverride?: string
-  ): Promise<ToolDetection> {
+  async detect(repoRoot: string, versionOverride?: string): Promise<ToolDetection> {
     // 1) 让 installer 确保 bundled ESLint 在沙箱内可用
     //    versionOverride 非空时覆盖默认版本，保证与消费方本地一致
     const spec: InstallSpec =
@@ -193,9 +171,7 @@ export class EslintAdapter implements ToolAdapter {
           'no ESLint config found in repo (looked for eslint.config.{js,mjs,cjs,ts,mts,cts}, .eslintrc.*, package.json#eslintConfig)'
       }
     }
-    info(
-      `lint/eslint: bundled bin=${this.resolvedBinPath}, project config=${configFile}`
-    )
+    info(`lint/eslint: bundled bin=${this.resolvedBinPath}, project config=${configFile}`)
 
     this.resolvedVersion = version
     return {available: true, version}
@@ -206,16 +182,9 @@ export class EslintAdapter implements ToolAdapter {
 
     // 始终使用项目自带的 eslint config（早期支持的 useProjectConfig=false 已移除，
     // 因 ESLint 9 不内置规则集，关掉项目配置会让扫描必败）
-    const args = [
-      '--format',
-      'json',
-      '--no-error-on-unmatched-pattern',
-      ...files
-    ]
+    const args = ['--format', 'json', '--no-error-on-unmatched-pattern', ...files]
 
-    info(
-      `lint/eslint: scanning ${files.length} files via ${this.resolvedBinPath}`
-    )
+    info(`lint/eslint: scanning ${files.length} files via ${this.resolvedBinPath}`)
     const result = await runCommand({
       command: this.resolvedBinPath,
       args,
@@ -230,12 +199,7 @@ export class EslintAdapter implements ToolAdapter {
     // ESLint 在发现问题时返回 1，发现错误时返回 2，但 stdout 仍是合法 JSON
     const parsed = parseJsonSafe<EslintFileResult[]>(result.stdout, 'eslint')
     if (parsed == null) {
-      info(
-        `lint/eslint: no parseable output (stderr: ${result.stderr.substring(
-          0,
-          200
-        )})`
-      )
+      info(`lint/eslint: no parseable output (stderr: ${result.stderr.substring(0, 200)})`)
       return []
     }
 

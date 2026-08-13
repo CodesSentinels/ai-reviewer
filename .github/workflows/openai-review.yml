@@ -1,5 +1,19 @@
+# OpenAI Reviewer
+#
+# 安全不变式（SEC-001~005，改动本文件前必读）：
+#
+#   本 workflow 由 pull_request_target 触发，因此持有 base 仓库的写权限 token
+#   和 OPENAI_API_KEY。任何能开 PR 的人（包括 fork）都能控制 PR head 的内容。
+#   所以本 job 绝不能 checkout 或执行 PR head 中的任何东西——Action 代码、
+#   dist/index.js、依赖、package script、lint 配置都不行。
+#
+#   PR 的 diff 与文件内容由 Action 通过 GitHub API 以「数据」方式读取
+#   （见 src/review.ts 的 listRepositoryTree / getFileContent），
+#   工作区里不需要、也不允许出现 PR 代码。
 name: OpenAI Reviewer
 
+# SEC-006：最小权限。contents 只读用于 checkout 默认分支，
+# pull-requests 写用于发布摘要、行级评论和命令回复。
 permissions:
   contents: read
   pull-requests: write
@@ -24,19 +38,87 @@ concurrency:
     github.event_name != 'issue_comment' }}
 
 jobs:
+  # ─── 不可信执行面：跑 lint，绝不持有任何密钥（SEC-002 / SEC-004）───────────
+  #
+  # ⚠️ 当前状态：本 job 的安全骨架已就位，但 lint **尚未真正执行**——
+  # run-lint-report.sh 目前只产出空报告。原因是本 job checkout 的是 PR 仓库，
+  # reviewer 自己的代码与依赖不在其中，需要单独的 lint-only 可信执行器
+  # （双 checkout：默认分支代码 + pr/ 子目录）。在那之前，审查收不到 lint 结果，
+  # §3 的验收「安全修复不以删除现有 GitHub 功能代替」尚未满足。
+  #
+  # 这个 job 会 checkout 并对 PR head 运行 lint 工具——eslint 会 require()
+  # 仓库里的 eslint.config.js，等同于执行 PR 代码。因此它：
+  #   - 没有 env secrets（用允许列表而非黑名单：这里一条 env 都不给）
+  #   - permissions 只读，拿不到写评论的能力
+  #   - 只产出一份 JSON 数据 artifact，不产出任何可执行物（SEC-005）
+  lint:
+    # 只有 PR 事件需要 lint；评论事件复用上一次审查的结论，不重复扫描
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout PR head (untrusted, no secrets in this job)
+        uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26 # v3
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          submodules: false
+
+      - name: Run lint tools and emit report
+        id: lint
+        continue-on-error: true
+        run: |
+          # 由 scripts/run-lint-report.sh 产出 lint-report.json（当前为空报告占位）。
+          # 失败不阻塞审查——静态分析是增强项，reviewer 读不到报告就照常跑。
+          bash "${GITHUB_WORKSPACE}/.github/scripts/run-lint-report.sh" \
+            || echo '{"results":[],"toolSummaries":[],"durationMs":0,"filesScanned":0}' \
+              > lint-report.json
+
+      - name: Upload report (data only, never executable)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: lint-report
+          path: lint-report.json
+          if-no-files-found: warn
+          retention-days: 1
+
   review:
     runs-on: ubuntu-latest
+    # lint 失败/跳过都不能挡住审查：always() + 下面对文件存在性的判断
+    needs: [lint]
+    if: always()
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
-      - uses: actions/checkout@v3
+      # SEC-001 / SEC-003：固定 checkout 默认分支的可信代码。
+      #
+      # 绝不能加回 `repository: ${{ github.event.pull_request.head.repo.full_name }}`
+      # 或 `ref: ${{ github.event.pull_request.head.ref }}`——那等于把本 job 的
+      # 密钥交给任何能开 PR 的人。default_branch 对三种触发事件都可用
+      # （pull_request_target / issue_comment / pull_request_review_comment）。
+      #
+      # 附带影响：修改 reviewer 自身的 PR，其审查由默认分支上的版本执行，
+      # 不会用 PR 里的新版本自审——这是 SEC-003 要求的结果，不是缺陷。
+      - uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26 # v3
         with:
-          repository: ${{github.event.pull_request.head.repo.full_name}}
-          ref: ${{github.event.pull_request.head.ref}}
+          ref: ${{ github.event.repository.default_branch }}
+          # 不把 token 写进 .git/config，避免后续步骤意外拿到凭据
+          persist-credentials: false
           submodules: false
-      - name: Install ripgrep
-        run: |
-          if ! command -v rg &>/dev/null; then
-            sudo apt-get update && sudo apt-get install -y ripgrep
-          fi
+
+      # SEC-005：只下载**数据**，且落到独立目录，不进工作区、不参与任何执行。
+      # 报告在 reviewer 内部经 lint/report-schema.ts 严格校验后才使用。
+      - name: Download lint report (untrusted data)
+        id: report
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: lint-report
+          path: ${{ runner.temp }}/lint-report
+
       - uses: ./
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -45,6 +127,15 @@ jobs:
           debug: true
           review_comment_lgtm: false
           openai_heavy_model: gpt-5.4-mini
+          # SEC-004 / SEC-005：本 job 持有密钥，不能执行 PR 代码，
+          # 因此本地工具保持关闭；lint 结果改由上面的无密钥 job 提供。
+          #
+          # lint 尤其危险：eslint 适配器会探测并让 eslint require() 仓库里的
+          # eslint.config.js / .eslintrc.js（src/lint/adapters/eslint.ts），
+          # 这些是可执行 JS——在有密钥的 job 里跑等同于任意代码执行。
+          enable_shell: false
+          enable_lint_tools: false
+          lint_report_path: ${{ runner.temp }}/lint-report/lint-report.json
           path_filters: |
             !dist/**
             !**/*.lock

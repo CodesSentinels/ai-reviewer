@@ -31,7 +31,7 @@ export const reviewStub: CommandHandler = {
   minPermission: 'write',
   async execute(ctx: CommandContext): Promise<CommandResult> {
     if (ctx.triggerReview == null) return await notImplemented('review')(ctx)
-    const state = await getReviewState(ctx.prNumber)
+    const state = await getReviewState(ctx.owner, ctx.repo, ctx.prNumber)
     if (state !== 'paused') {
       return {
         message: `<details>
@@ -54,15 +54,14 @@ export const fullReviewStub: CommandHandler = {
   needsAck: true,
   minPermission: 'write',
   async execute(ctx: CommandContext): Promise<CommandResult> {
-    if (ctx.triggerReview == null)
-      return await notImplemented('full review')(ctx)
-    const alreadyReviewed = await isHeadAlreadyReviewed(
-      ctx.prNumber,
-      ctx.headSha
-    )
+    if (ctx.triggerReview == null) return await notImplemented('full review')(ctx)
+    const alreadyReviewed = await isHeadAlreadyReviewed(ctx.prNumber, ctx.headSha)
     if (alreadyReviewed) {
       return {
-        message: `✅ Full review finished.\n\n> **Note:** The current HEAD (\`${ctx.headSha.slice(0, 7)}\`) has already been reviewed. No new changes detected since the last review.`
+        message: `✅ Full review finished.\n\n> **Note:** The current HEAD (\`${ctx.headSha.slice(
+          0,
+          7
+        )}\`) has already been reviewed. No new changes detected since the last review.`
       }
     }
     await ctx.triggerReview('full')
@@ -90,7 +89,7 @@ export const pauseStub: CommandHandler = {
   needsAck: false,
   minPermission: 'write',
   async execute(ctx: CommandContext): Promise<CommandResult> {
-    await setReviewState(ctx.prNumber, 'paused')
+    await setReviewState(ctx.owner, ctx.repo, ctx.prNumber, 'paused')
     await clearReviewedCommitIds(ctx.prNumber)
     return {
       message: `已暂停当前 PR 的自动审查。使用 \`${PRIMARY_BOT_MENTION} resume\` 恢复。`
@@ -105,7 +104,7 @@ export const resumeStub: CommandHandler = {
   needsAck: false,
   minPermission: 'write',
   async execute(ctx: CommandContext): Promise<CommandResult> {
-    await setReviewState(ctx.prNumber, 'active')
+    await setReviewState(ctx.owner, ctx.repo, ctx.prNumber, 'active')
     return {message: '已恢复当前 PR 的自动审查。'}
   }
 }
@@ -115,9 +114,13 @@ export const configurationStub: CommandHandler = {
   description: '显示当前仓库的审查配置',
   usage: `${PRIMARY_BOT_MENTION} configuration`,
   needsAck: false,
-  minPermission: 'read',
+  // CMD-012：Reporter+。GitLab 的 REPORTER(20) 映射为 'triage'，
+  // 与运行差异文档的权限基线一致（见 docs/github-vs-gitlab-runtime-differences.md
+  // 「configuration | 显示 Action inputs | ... | Reporter+」）。
+  // 此前是 'read'，等于放行 GitLab GUEST，比基线宽一级。
+  minPermission: 'triage',
   async execute(ctx: CommandContext): Promise<CommandResult> {
-    const state = await getReviewState(ctx.prNumber)
+    const state = await getReviewState(ctx.owner, ctx.repo, ctx.prNumber)
     const o = ctx.options
     const message = `## 当前审查配置
 

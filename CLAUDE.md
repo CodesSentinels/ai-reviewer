@@ -87,14 +87,15 @@ npm run act                 # 使用 act 在本地模拟 GitHub Actions 环境
 
 ## 🔐 环境变量与配置
 
-### GitHub Actions 输入参数（40+ 个）
+### GitHub Actions 输入与运行密钥
 详见 [action.yml](./action.yml)
 
 关键参数示例：
-- `OPENAI_API_KEY` — OpenAI API 密钥
-- `GITHUB_TOKEN` — GitHub API token（自动提供）
-- `openai-model` — 模型选择（默认 gpt-4.0-turbo）
-- `max-files` — 单个 PR 最多审查文件数
+- `OPENAI_API_KEY` — OpenAI API 密钥（运行密钥，不是公开 Action input）
+- `GITHUB_TOKEN` — GitHub API token（运行时自动提供，不是公开 Action input）
+- `openai_light_model` — 摘要等轻量任务模型（默认 `gpt-5.4-nano`）
+- `openai_heavy_model` — 深度审查模型（默认 `gpt-5.4-mini`）
+- `max_files` — 单个 PR 最多审查文件数
 
 ### 测试环境变量
 - `INTEGRATION=true` — 启用集成测试模式

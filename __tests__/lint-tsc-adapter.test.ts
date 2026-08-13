@@ -20,9 +20,8 @@ jest.mock('@actions/core', () => ({
 }))
 
 // 默认让 tool-installer 总返回成功；个别用例会覆盖
-const ensureToolInstalledMock = jest.fn<
-  () => Promise<{ok: boolean; binPath?: string; reason?: string}>
->()
+const ensureToolInstalledMock =
+  jest.fn<() => Promise<{ok: boolean; binPath?: string; reason?: string}>>()
 jest.mock('../src/lint/tool-installer', () => ({
   ensureToolInstalled: () => ensureToolInstalledMock()
 }))

@@ -17,15 +17,11 @@
  *   - 安装成功但 bin 路径未生成 → 同上（防御策略性差异）
  */
 
-import {info, warning} from '@actions/core'
+import {info, warning} from '../actions-log'
 import {existsSync, mkdirSync, writeFileSync} from 'fs'
 import {tmpdir} from 'os'
-import * as path from 'path'
-import {
-  type InstallSpec,
-  type NpmInstallSpec,
-  type PipInstallSpec
-} from './types'
+import {join} from 'path'
+import {type InstallSpec, type NpmInstallSpec, type PipInstallSpec} from './types'
 import {runCommand} from './adapters/exec'
 
 /**
@@ -34,7 +30,7 @@ import {runCommand} from './adapters/exec'
  * 用 getter 而非顶层常量，让测试可以 mock `os.tmpdir()`。
  */
 function getInstallRoot(): string {
-  return path.join(tmpdir(), 'ai-reviewer-lint-tools')
+  return join(tmpdir(), 'ai-reviewer-lint-tools')
 }
 
 /** 单次 npm install 的超时（5 分钟，足够覆盖慢镜像） */
@@ -53,9 +49,7 @@ export interface InstallResult {
  *
  * @param spec 适配器声明的安装方式（来自 ToolAdapter.installSpec）
  */
-export async function ensureToolInstalled(
-  spec: InstallSpec
-): Promise<InstallResult> {
+export async function ensureToolInstalled(spec: InstallSpec): Promise<InstallResult> {
   switch (spec.kind) {
     case 'npm':
       return await installViaNpm(spec)
@@ -80,7 +74,7 @@ export async function ensureToolInstalled(
  */
 async function installViaNpm(spec: NpmInstallSpec): Promise<InstallResult> {
   const root = getInstallRoot()
-  const binPath = path.join(root, 'node_modules', '.bin', spec.binName)
+  const binPath = join(root, 'node_modules', '.bin', spec.binName)
 
   // 1) 缓存命中：同一 runner job 内 ai-reviewer 多次调用、或多个 adapter
   //    碰巧依赖同一工具时直接返回
@@ -94,21 +88,20 @@ async function installViaNpm(spec: NpmInstallSpec): Promise<InstallResult> {
     if (!existsSync(root)) {
       mkdirSync(root, {recursive: true})
     }
-    const sandboxPkgJson = path.join(root, 'package.json')
+    const sandboxPkgJson = join(root, 'package.json')
     if (!existsSync(sandboxPkgJson)) {
       writeFileSync(
         sandboxPkgJson,
-        JSON.stringify(
+        `${JSON.stringify(
           {
             name: 'ai-reviewer-lint-tools',
             private: true,
             version: '0.0.0',
-            description:
-              'ai-reviewer 内部 lint 工具沙箱（自动管理，请勿手动修改）'
+            description: 'ai-reviewer 内部 lint 工具沙箱（自动管理，请勿手动修改）'
           },
           null,
           2
-        ) + '\n'
+        )}\n`
       )
     }
   } catch (e) {
@@ -123,9 +116,7 @@ async function installViaNpm(spec: NpmInstallSpec): Promise<InstallResult> {
   // 3) 跑 npm install
   // version 缺省时不带 `@<range>`，npm 安装 latest。真实 Action 运行里 version 总会
   // 由 action.yml 的 *_version default 注入；缺省仅出现在未经 Action 的直接调用。
-  const installTarget = spec.version
-    ? `${spec.package}@${spec.version}`
-    : spec.package
+  const installTarget = spec.version ? `${spec.package}@${spec.version}` : spec.package
   info(`lint/installer: installing ${installTarget} → ${root}`)
   const result = await runCommand({
     command: 'npm',
@@ -161,9 +152,7 @@ async function installViaNpm(spec: NpmInstallSpec): Promise<InstallResult> {
     }
   }
   if (!existsSync(binPath)) {
-    warning(
-      `lint/installer: ${installTarget} installed but bin not at ${binPath}`
-    )
+    warning(`lint/installer: ${installTarget} installed but bin not at ${binPath}`)
     return {
       ok: false,
       reason: `package installed but bin not at ${binPath} (unexpected layout)`
@@ -183,7 +172,7 @@ async function installViaNpm(spec: NpmInstallSpec): Promise<InstallResult> {
  *   - --target 让所有 Python 工具集中在沙箱里，与 npm 工具同款的缓存模型
  */
 function getPipInstallDir(): string {
-  return path.join(getInstallRoot(), 'python-tools')
+  return join(getInstallRoot(), 'python-tools')
 }
 
 /**
@@ -241,7 +230,7 @@ async function installViaPip(spec: PipInstallSpec): Promise<InstallResult> {
   const startedAt = Date.now()
   const root = getInstallRoot()
   const targetDir = getPipInstallDir()
-  const binPath = path.join(targetDir, 'bin', spec.binName)
+  const binPath = join(targetDir, 'bin', spec.binName)
 
   // 1) 缓存命中
   if (existsSync(binPath)) {
@@ -264,8 +253,7 @@ async function installViaPip(spec: PipInstallSpec): Promise<InstallResult> {
 
   // 3) 跑 pip install
   const pipSpecifier = npmRangeToPipSpecifier(spec.version)
-  const pkgArg =
-    pipSpecifier.length > 0 ? `${spec.package}${pipSpecifier}` : spec.package
+  const pkgArg = pipSpecifier.length > 0 ? `${spec.package}${pipSpecifier}` : spec.package
   info(
     `lint/installer[pip]: installing ${spec.package} (range "${spec.version}" → pip "${pipSpecifier}") → ${targetDir}`
   )
@@ -293,15 +281,12 @@ async function installViaPip(spec: PipInstallSpec): Promise<InstallResult> {
   const elapsed = Date.now() - startedAt
   if (result.spawnError) {
     warning(
-      `lint/installer[pip]: spawn failed after ${elapsed}ms — ${
-        result.spawnErrorMessage ?? ''
-      }`
+      `lint/installer[pip]: spawn failed after ${elapsed}ms — ${result.spawnErrorMessage ?? ''}`
     )
     return {
       ok: false,
       reason:
-        result.spawnErrorMessage != null &&
-        result.spawnErrorMessage.includes('python3')
+        result.spawnErrorMessage != null && result.spawnErrorMessage.includes('python3')
           ? `python3 not found on runner: ${result.spawnErrorMessage}. ` +
             'ubuntu-latest GitHub-hosted runners ship Python 3 by default — ' +
             'if you are on a self-hosted runner, install Python 3.8+ first.'

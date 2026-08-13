@@ -19,9 +19,9 @@
  * - 旧模型（gpt-4, gpt-4-32k, gpt-3.5-turbo 等）：保留向后兼容
  */
 export class TokenLimits {
-  maxTokens: number       // 模型最大 token 数
-  requestTokens: number   // 请求可用 token 数（发送给模型的提示词上限）
-  responseTokens: number  // 响应预留 token 数（模型回复的上限）
+  maxTokens: number // 模型最大 token 数
+  requestTokens: number // 请求可用 token 数（发送给模型的提示词上限）
+  responseTokens: number // 响应预留 token 数（模型回复的上限）
   knowledgeCutOff: string // 模型知识截止日期
 
   constructor(model = 'gpt-5.4-nano') {
@@ -43,8 +43,7 @@ export class TokenLimits {
       this.maxTokens = 1047576
       this.responseTokens = 32768
 
-    // ==================== 上一代模型（gpt-4.1 系列，不支持 local_shell） ====================
-
+      // ==================== 上一代模型（gpt-4.1 系列，不支持 local_shell） ====================
     } else if (model === 'gpt-4.1' || model.startsWith('gpt-4.1-2')) {
       this.knowledgeCutOff = '2024-06-01'
       this.maxTokens = 1047576
@@ -58,8 +57,7 @@ export class TokenLimits {
       this.maxTokens = 1047576
       this.responseTokens = 32768
 
-    // ==================== 旧模型 ====================
-
+      // ==================== 旧模型 ====================
     } else if (model === 'gpt-4o' || model.startsWith('gpt-4o-2')) {
       // GPT-4o: 上一代旗舰模型，128K 上下文，16K 最大输出
       // 价格：$2.50/1M input, $10.00/1M output
@@ -78,8 +76,7 @@ export class TokenLimits {
       this.maxTokens = 128000
       this.responseTokens = 4096
 
-    // ==================== 旧模型（向后兼容） ====================
-
+      // ==================== 旧模型（向后兼容） ====================
     } else if (model === 'gpt-4-32k') {
       this.knowledgeCutOff = '2021-09-01'
       this.maxTokens = 32600

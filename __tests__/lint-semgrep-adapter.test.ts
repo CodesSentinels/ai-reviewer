@@ -226,8 +226,7 @@ describe('SemgrepAdapter.scan', () => {
       errors: [],
       results: [
         {
-          check_id:
-            'python.lang.security.audit.dangerous-system-call.dangerous-system-call',
+          check_id: 'python.lang.security.audit.dangerous-system-call.dangerous-system-call',
           path: 'src/utils.py',
           start: {line: 42, col: 3},
           end: {line: 42, col: 60},
@@ -343,10 +342,10 @@ describe('SemgrepAdapter.scan', () => {
   })
 
   test('非 JSON 输出 → 返回空数组（不抛异常）', async () => {
-    const results = await detectThenScan(
-      'Traceback (most recent call last): ...\nFatalError',
-      {exitCode: 2, stderr: 'usage: semgrep ...'}
-    )
+    const results = await detectThenScan('Traceback (most recent call last): ...\nFatalError', {
+      exitCode: 2,
+      stderr: 'usage: semgrep ...'
+    })
     expect(results).toEqual([])
   })
 
@@ -533,10 +532,34 @@ describe('SemgrepAdapter.scan', () => {
   test('severity 映射扩展：CRITICAL / HIGH → error, MEDIUM → warning, LOW → info', async () => {
     const out = {
       results: [
-        {check_id: 'a', path: 'a.js', start: {line: 1, col: 1}, end: {line: 1, col: 1}, extra: {severity: 'CRITICAL'}},
-        {check_id: 'b', path: 'b.js', start: {line: 1, col: 1}, end: {line: 1, col: 1}, extra: {severity: 'HIGH'}},
-        {check_id: 'c', path: 'c.js', start: {line: 1, col: 1}, end: {line: 1, col: 1}, extra: {severity: 'MEDIUM'}},
-        {check_id: 'd', path: 'd.js', start: {line: 1, col: 1}, end: {line: 1, col: 1}, extra: {severity: 'LOW'}}
+        {
+          check_id: 'a',
+          path: 'a.js',
+          start: {line: 1, col: 1},
+          end: {line: 1, col: 1},
+          extra: {severity: 'CRITICAL'}
+        },
+        {
+          check_id: 'b',
+          path: 'b.js',
+          start: {line: 1, col: 1},
+          end: {line: 1, col: 1},
+          extra: {severity: 'HIGH'}
+        },
+        {
+          check_id: 'c',
+          path: 'c.js',
+          start: {line: 1, col: 1},
+          end: {line: 1, col: 1},
+          extra: {severity: 'MEDIUM'}
+        },
+        {
+          check_id: 'd',
+          path: 'd.js',
+          start: {line: 1, col: 1},
+          end: {line: 1, col: 1},
+          extra: {severity: 'LOW'}
+        }
       ]
     }
     const results = await detectThenScan(JSON.stringify(out))

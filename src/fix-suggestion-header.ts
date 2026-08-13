@@ -16,7 +16,7 @@
  *     代码块不会渲染 —— 注入时保证这一点
  */
 
-import {info} from '@actions/core'
+import {info} from './actions-log'
 
 const SUMMARY_LINE = '<summary>🔧 Suggested fix</summary>'
 /** 标头识别关键词（含本地化变体）— 用于判定"是否已经包过" */
@@ -70,9 +70,7 @@ export function ensureFixSuggestionHeaders(commentBody: string): string {
       const lookback = out.slice(-5).join('\n')
       const lookahead = lines.slice(endIdx + 1, endIdx + 6).join('\n')
       const alreadyWrapped =
-        lookback.includes('<details>') &&
-        hasFixMarker(lookback) &&
-        lookahead.includes('</details>')
+        lookback.includes('<details>') && hasFixMarker(lookback) && lookahead.includes('</details>')
 
       if (alreadyWrapped) {
         // 原样照搬整个 diff 块

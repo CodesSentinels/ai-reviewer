@@ -22,26 +22,20 @@
  *   - dispatchCommentEvent(deps): 主入口，被 command-handler.ts 调用
  *   - DispatchOutcome: 用于测试的明确返回值
  */
-import {info, warning} from '@actions/core'
 // eslint-disable-next-line camelcase
 import {context as github_context} from '@actions/github'
-import {octokit} from '../octokit'
+import {getPlatform} from '../platform/git-platform'
+import {getLogger} from '../platform/logger'
 import type {Options} from '../options'
 import {getRegistry} from './registry'
 import {parse, type ParserOptions, DEFAULT_BOT_MENTIONS} from './parser'
-import {getPermission} from './permission'
-import {canExecute} from './permission'
+import {getPermissionResult, canExecute} from './permission'
 import {checkRateLimit} from './rate-limit'
 import {hasBeenProcessed, Reply} from './reply'
 import {addAckReaction} from './reaction'
 import {buildUnknownCommandMessage} from './handlers/help'
-import type {
-  ActorInfo,
-  CommandContext,
-  CommandEventName,
-  ErrorCode,
-  ParsedCommand
-} from './types'
+import type {ActorInfo, CommandContext, CommandEventName, ErrorCode, ParsedCommand} from './types'
+import type {ExecutionContext} from '../platform/execution-context'
 
 // eslint-disable-next-line camelcase
 const context = github_context
@@ -53,6 +47,13 @@ export type DispatchOutcome =
   | {kind: 'executed'; command: string; ok: boolean; error?: ErrorCode}
 
 export interface DispatcherDeps {
+  /**
+   * 可选（过渡期，ARCH-005 dual-track）：本文件内部事件坐标解析仍读取
+   * `@actions/github` context，尚未消费 execCtx——只作为透传字段写入
+   * CommandContext 供 handler 使用。完整迁移（消除本文件内的直接 context
+   * 依赖）列入阶段四后续排期，见 docs/tasks/execution-context-design.md 第 6.2 节。
+   */
+  execCtx?: ExecutionContext
   options: Options
   /** 可选: 覆盖默认 bot mention 列表 */
   botMentions?: string[]
@@ -64,17 +65,13 @@ export interface DispatcherDeps {
  * 调用方 (command-handler.ts) 负责:
  *   - 当返回 'fallback_conversation' 时，调用成员 D 的 handleConversation（对话式追问）
  */
-export async function dispatchCommentEvent(
-  deps: DispatcherDeps
-): Promise<DispatchOutcome> {
+export async function dispatchCommentEvent(deps: DispatcherDeps): Promise<DispatchOutcome> {
+  const logger = getLogger()
   // [事件白名单] 仅放行 issue_comment / pull_request_review_comment 两类带评论的事件；
   // 其余事件（push、pull_request、schedule 等）不携带用户评论，直接忽略，
   // 同时把 eventName 收窄为 CommandEventName 供后续分支安全使用。
   const eventName = context.eventName as CommandEventName
-  if (
-    eventName !== 'issue_comment' &&
-    eventName !== 'pull_request_review_comment'
-  ) {
+  if (eventName !== 'issue_comment' && eventName !== 'pull_request_review_comment') {
     return {kind: 'ignored', reason: `unsupported event: ${eventName}`}
   }
 
@@ -106,18 +103,16 @@ export async function dispatchCommentEvent(
     // issue_comment 的 payload 没有 head/base SHA，主动查一次 PR 补齐，
     // 否则 full review 等命令的 headSha 为空、去重逻辑（isHeadAlreadyReviewed）永远失效
     try {
-      const pr = await octokit.pulls.get({
-        owner: context.repo.owner,
-        repo: context.repo.repo,
-        pull_number: prNumber
-      })
-      headSha = pr.data.head?.sha ?? ''
-      baseSha = pr.data.base?.sha ?? ''
+      const cr = await getPlatform().getChangeRequest(
+        context.repo.owner,
+        context.repo.repo,
+        prNumber
+      )
+      headSha = cr.headSha
+      baseSha = cr.baseSha
     } catch (e) {
-      warning(
-        `command dispatcher: failed to fetch head/base sha for PR #${prNumber}: ${String(
-          e
-        )}`
+      logger.warning(
+        `command dispatcher: failed to fetch head/base sha for PR #${prNumber}: ${String(e)}`
       )
     }
   } else {
@@ -144,11 +139,10 @@ export async function dispatchCommentEvent(
   // [bot 自评论过滤] 通过 user.type 或登录名 `xxx[bot]` 后缀识别机器人，
   // 防止 bot 自己回帖再次触发命令造成死循环。
   const actorLogin: string = comment.user?.login ?? ''
-  const actorIsBot =
-    comment.user?.type === 'Bot' || /\[bot\]$/i.test(actorLogin)
+  const actorIsBot = comment.user?.type === 'Bot' || /\[bot\]$/i.test(actorLogin)
   if (actorIsBot) {
     // 打印作者信息，便于排查"明明是人却被当成 bot"的情况
-    info(
+    logger.info(
       `command dispatcher: ignored comment from bot (login=${actorLogin}, type=${comment.user?.type})`
     )
     return {kind: 'ignored', reason: 'comment from bot'}
@@ -194,6 +188,7 @@ export async function dispatchCommentEvent(
       await addAckReaction({
         owner,
         repo: repoName,
+        changeRequestId: prNumber,
         commentId: comment.id,
         eventName,
         rawReaction: deps.options.commandAckReaction
@@ -217,17 +212,9 @@ export async function dispatchCommentEvent(
 
   // [幂等检查] 同一 commentId × 同一 command 是否已有回复；
   // Actions 可能因重试/重复投递触发多次，命中则跳过避免重复执行。
-  const processed = await hasBeenProcessed(
-    owner,
-    repoName,
-    prNumber,
-    comment.id,
-    parsed.name
-  )
+  const processed = await hasBeenProcessed(owner, repoName, prNumber, comment.id, parsed.name)
   if (processed) {
-    info(
-      `command dispatcher: skip duplicate commentId=${comment.id} cmd=${parsed.name}`
-    )
+    logger.info(`command dispatcher: skip duplicate commentId=${comment.id} cmd=${parsed.name}`)
     return {
       kind: 'executed',
       command: parsed.name,
@@ -239,10 +226,7 @@ export async function dispatchCommentEvent(
   // [速率限制] 按操作者维度限流；超限则回帖提示重试时间并结束。
   const rl = checkRateLimit(actorLogin)
   if (!rl.allowed) {
-    await reply.error(
-      'RATE_LIMITED',
-      `请 ${Math.ceil((rl.retryAfterMs ?? 0) / 1000)} 秒后再试`
-    )
+    await reply.error('RATE_LIMITED', `请 ${Math.ceil((rl.retryAfterMs ?? 0) / 1000)} 秒后再试`)
     return {
       kind: 'executed',
       command: parsed.name,
@@ -265,17 +249,19 @@ export async function dispatchCommentEvent(
 
   // [权限校验] 查询操作者在仓库的权限等级，结合"是否为 PR 作者"判断能否执行该命令；
   // 不满足则回帖 FORBIDDEN 并结束。
-  const permission = await getPermission({
+  const {level: permission, queryFailed} = await getPermissionResult({
     owner,
     repo: repoName,
     username: actorLogin
   })
-  const isPrAuthor = actorLogin === prAuthor
+  // CMD-016：权限查询失败时 fail closed——此时不认作者豁免，
+  // 否则 API 故障期间任何 PR 作者都能触发 review/full review/summary（fail open）
+  const isPrAuthor = actorLogin === prAuthor && !queryFailed
   if (!canExecute(handler, permission, isPrAuthor)) {
-    await reply.error(
-      'FORBIDDEN',
-      `用户 \`${actorLogin}\` 当前权限: \`${permission}\``
-    )
+    const detail = queryFailed
+      ? `无法确认用户 \`${actorLogin}\` 的权限（查询失败），已按最严格策略拒绝`
+      : `用户 \`${actorLogin}\` 当前权限: \`${permission}\``
+    await reply.error('FORBIDDEN', detail)
     return {
       kind: 'executed',
       command: parsed.name,
@@ -295,6 +281,7 @@ export async function dispatchCommentEvent(
     command: parsed,
     eventName,
     action: 'created',
+    execCtx: deps.execCtx,
     owner,
     repo: repoName,
     prNumber,
@@ -328,9 +315,7 @@ export async function dispatchCommentEvent(
     const code = extractErrorCode(e)
     const detail = e instanceof Error ? e.message : String(e)
     await reply.error(code, detail, ackId)
-    warning(
-      `command handler failed: name=${parsed.name} code=${code} ${detail}`
-    )
+    logger.warning(`command handler failed: name=${parsed.name} code=${code} ${detail}`)
     return {
       kind: 'executed',
       command: parsed.name,

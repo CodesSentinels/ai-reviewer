@@ -11,8 +11,8 @@
  * - issue_comment 与 pull_request_review_comment 走不同 endpoint
  * - 任何失败都只打 warning，不让命令主流程受影响
  */
-import {info, warning} from '@actions/core'
-import {octokit} from '../octokit'
+import {getPlatform} from '../platform/git-platform'
+import {getLogger} from '../platform/logger'
 import type {CommandEventName} from './types'
 
 /** GitHub Reactions API 支持的合法取值 */
@@ -49,7 +49,7 @@ export function normalizeReaction(raw: string | undefined): ReactionContent | nu
   if ((VALID_REACTIONS as readonly string[]).includes(trimmed)) {
     return trimmed as ReactionContent
   }
-  warning(
+  getLogger().warning(
     `command_ack_reaction "${raw}" is not a valid GitHub reaction ` +
       `(expected one of ${VALID_REACTIONS.join(', ')}); ACK reaction will be skipped.`
   )
@@ -59,6 +59,7 @@ export function normalizeReaction(raw: string | undefined): ReactionContent | nu
 export interface AckReactionParams {
   owner: string
   repo: string
+  changeRequestId: number
   commentId: number
   eventName: CommandEventName
   /** 原始 options.commandAckReaction 值 */
@@ -68,35 +69,29 @@ export interface AckReactionParams {
 /**
  * 在触发命令的用户评论上加表情反应。失败只 warning，不抛错。
  */
-export async function addAckReaction(
-  params: AckReactionParams
-): Promise<void> {
+export async function addAckReaction(params: AckReactionParams): Promise<void> {
   const content = normalizeReaction(params.rawReaction)
   if (content == null) {
     return
   }
 
+  const logger = getLogger()
   try {
-    if (params.eventName === 'pull_request_review_comment') {
-      await octokit.reactions.createForPullRequestReviewComment({
-        owner: params.owner,
-        repo: params.repo,
-        comment_id: params.commentId,
-        content
-      })
-    } else {
-      await octokit.reactions.createForIssueComment({
-        owner: params.owner,
-        repo: params.repo,
-        comment_id: params.commentId,
-        content
-      })
-    }
-    info(
+    const commentKind =
+      params.eventName === 'pull_request_review_comment' ? 'review_comment' : 'issue_comment'
+    await getPlatform().addReaction(
+      params.owner,
+      params.repo,
+      params.changeRequestId,
+      params.commentId,
+      content,
+      commentKind
+    )
+    logger.info(
       `ack reaction "${content}" added on ${params.eventName} commentId=${params.commentId}`
     )
   } catch (e) {
-    warning(
+    logger.warning(
       `addAckReaction failed (content=${content}, commentId=${params.commentId}): ${String(e)}`
     )
   }
