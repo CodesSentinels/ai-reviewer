@@ -730,26 +730,50 @@
 
 ## 12. GitLab CI 开发
 
-- [ ] `CI-001` 新建根目录 `.gitlab-ci.yml`。
-- [ ] `CI-002` 新增无密钥 MR verify job：从 MR SHA build、test、lint、双入口
+> **状态**：⚠️ 配置 + 结构性测试已完成，**未经真实 GitLab 项目/Pipeline 回放
+> 验证**（GitHub Issue
+> [#102](https://github.com/CodesSentinels/ai-reviewer/issues/102) 跟踪，汇总见
+> Issue [#75](https://github.com/CodesSentinels/ai-reviewer/issues/75)；设计文档
+> `docs/tasks/gitlab-ci-design.md`）。交付根目录 `.gitlab-ci.yml`（`mr_verify` 无
+> 密钥 job + `ai_review_trigger` 有密钥 job，两者靠 `CI_PIPELINE_SOURCE` 互斥、
+> 无 `needs`/`dependencies` 互相消费产物）、`scripts/check-ci-verify-bundle-provenance.js`（`CI-012`/`CI-013` 的 bundle 来源校验，纯 Node
+> 脚本，不依赖 GitLab 环境）、`__tests__/gitlab-ci-config.test.ts`（22 项，对
+> `.gitlab-ci.yml` 做结构性安全断言，与 GitHub 侧
+> `__tests__/workflow-security.test.ts` 同一思路）、
+> `__tests__/gitlab-ci-verify-bundle-provenance.test.ts`（4 项）。⚠️ 三个已知
+> 缺口：① 没有真实 `ai-reviewer-test` 项目，`CI_PIPELINE_SOURCE=trigger`、
+> Protected Variable 的实际生效行为只依据 GitLab 官方文档推导
+> （`github-to-gitlab-migration-plan.md` §0.8），未经真实 Pipeline 触发验证；
+> ② `.gitlab-ci.yml` 未跑过 GitLab 官方 CI Lint，只用 `js-yaml` 做了通用 YAML
+> 解析层面的正确性校验，不代表 GitLab 特有 schema（如 `resource_group`/`retry.when`
+> 取值）一定被 GitLab 接受；③ "谁在 `main` 分支上产出
+> `dist/gitlab-trigger/index.js` 供 `ai_review_trigger` 信任"依赖尚未开始的第
+> 13 章 `SYNC-*`，本任务只做了信任链的校验方，没有生产方。接入真实项目后需要
+> 补一轮验证，此前不应把本章视为"GitLab CI 已验收"。
+
+- [x] `CI-001` 新建根目录 `.gitlab-ci.yml`。
+- [x] `CI-002` 新增无密钥 MR verify job：从 MR SHA build、test、lint、双入口
       package 和冒烟测试；产物只用于本次验证并在 job 结束后丢弃。
-- [ ] `CI-003` MR verify job 只以“是否为空/不可访问”的布尔断言验证
+- [x] `CI-003` MR verify job 只以“是否为空/不可访问”的布尔断言验证
       `GITLAB_PAT`、`OPENAI_API_KEY` 和 Trigger token 不可用，禁止输出、展开或写
       入这些变量的值。
-- [ ] `CI-004` MR job 不产生供 protected `main` trigger job 执行的 artifact。
-- [ ] `CI-005` 新增 protected `main` 的 `ai-review-trigger` job。
-- [ ] `CI-006` trigger job 只允许 `CI_PIPELINE_SOURCE=trigger` 且 ref 为
+- [x] `CI-004` MR job 不产生供 protected `main` trigger job 执行的 artifact。
+- [x] `CI-005` 新增 protected `main` 的 `ai-review-trigger` job。
+- [x] `CI-006` trigger job 只允许 `CI_PIPELINE_SOURCE=trigger` 且 ref 为
       protected default branch。
-- [ ] `CI-007` trigger job 执行 `dist/gitlab-trigger/index.js`，不 checkout MR
+- [x] `CI-007` trigger job 执行 `dist/gitlab-trigger/index.js`，不 checkout MR
       head。
-- [ ] `CI-008` trigger job 不执行 MR 提供的 package script、依赖、插件或
+- [x] `CI-008` trigger job 不执行 MR 提供的 package script、依赖、插件或
       artifact。
-- [ ] `CI-009` 配置 `resource_group: ai-reviewer-mvp`。
-- [ ] `CI-010` ignored payload 快速成功退出，不调用模型。
-- [ ] `CI-011` 配置 job timeout、有限 retry 和脱敏日志。
-- [ ] `CI-012` MR verify job 验证两个临时 bundle 均来自当前 MR 的
+- [x] `CI-009` 配置 `resource_group: ai-reviewer-mvp`。
+- [x] `CI-010` ignored payload 快速成功退出，不调用模型。已由 `gitlab-trigger.ts`
+      的 `EVENT-004`/`EVENT-016/017` 保证，本任务未新增业务代码，只确认
+      `.gitlab-ci.yml` 不会把这种 exit 0 误判为失败。
+- [x] `CI-011` 配置 job timeout、有限 retry 和脱敏日志。日志脱敏依赖
+      `gitlab-trigger-redact.ts` 既有实现，本任务未新增二次处理。
+- [x] `CI-012` MR verify job 验证两个临时 bundle 均来自当前 MR 的
       `CI_COMMIT_SHA`，但这些 bundle 不得被 secret-bearing trigger 消费。
-- [ ] `CI-013` protected `main` trigger job 只执行仓库中受信任的 GitLab bundle，
+- [x] `CI-013` protected `main` trigger job 只执行仓库中受信任的 GitLab bundle，
       并验证 bundle 记录的 source commit 与该 job 的 `CI_COMMIT_SHA` 一致；不得
       从 MR artifact、cache 或工作区恢复可执行产物。
 

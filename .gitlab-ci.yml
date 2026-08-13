@@ -1,0 +1,79 @@
+# GitLab CI 开发（CI-001~013）。设计依据：docs/tasks/gitlab-ci-design.md。
+#
+# 安全不变式（改动本文件前必读，呼应 GitHub 侧 openai-review.yml 的
+# SEC-001~005 注释）：
+#
+#   mr_verify（无密钥）和 ai_review_trigger（有密钥）是两个物理隔离的 job，
+#   靠 rules 里的 CI_PIPELINE_SOURCE 互斥（同一次 pipeline 不可能同时是
+#   merge_request_event 和 trigger）。ai_review_trigger 绝不能 checkout 或
+#   执行 MR 提供的任何代码/脚本/依赖——它只信任仓库里已经在 protected
+#   default branch 上、经 SOURCE_SHA 校验过来源的 dist/gitlab-trigger/index.js。
+#   两个 job 之间没有 needs:/dependencies:，mr_verify 的 artifact 不会被
+#   ai_review_trigger 消费。
+#
+#   GITLAB_PAT/OPENAI_API_KEY 必须在 GitLab CI/CD Settings 里标记为
+#   Protected——这是密钥只对 protected ref 上的 pipeline 可见的平台原生保障，
+#   本文件的 job 隔离是第二层、独立的纵深防御，不能互相替代。
+
+stages: [verify, review]
+
+default:
+  image: node:24
+
+# CI-002/003/004/012：无密钥，验证 MR 自己的代码能不能正常 build/test/lint/
+# package/smoke，产物只用于这次验证，绝不流向下面有密钥的 job。
+mr_verify:
+  stage: verify
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  script:
+    - npm ci
+    - npm run build
+    - npm test
+    - npm run lint
+    - npm run package
+    - npm run smoke
+    # CI-012：证明这次构建出的两个 bundle 确实来自当前 MR 的这次提交
+    - node scripts/check-ci-verify-bundle-provenance.js
+    # CI-003：只做布尔断言，不 echo/展开密钥值。CI_JOB_TOKEN 是 GitLab 给
+    # 每个 job 自动签发的 job 级 token，不是我们要防的业务密钥，排除在外。
+    - |
+      for VAR in GITLAB_PAT OPENAI_API_KEY; do
+        VALUE=$(eval echo "\$$VAR")
+        if [ -n "$VALUE" ]; then
+          echo "LEAK: $VAR unexpectedly visible in unprotected MR pipeline" >&2
+          exit 1
+        fi
+      done
+      echo "ok: GITLAB_PAT/OPENAI_API_KEY correctly absent from MR pipeline"
+  artifacts:
+    expire_in: 1h
+
+# CI-005~009/013：有密钥，只在通过 Pipeline Trigger API、针对 protected
+# default branch 发起时运行；只执行仓库里已受信任的 bundle，不 build、
+# 不 checkout MR 分支。
+ai_review_trigger:
+  stage: review
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "trigger" && $CI_COMMIT_REF_NAME == $CI_DEFAULT_BRANCH'
+  variables:
+    # CI-007/008：强制全新 clone，workspace 里不会残留任何其他分支（尤其是
+    # 触发这次 pipeline 的那个 MR 分支）的内容。
+    GIT_STRATEGY: clone
+  resource_group: ai-reviewer-mvp
+  timeout: 10m
+  retry:
+    max: 1
+    when: [runner_system_failure, stuck_or_timeout_failure]
+  script:
+    - test -f dist/gitlab-trigger/SOURCE_SHA
+    # CI-013：bundle 记录的 source commit 必须等于这次 job 自己的
+    # CI_COMMIT_SHA（即 protected default branch 上的当前 commit），
+    # 拒绝执行任何来源不明或陈旧的 bundle。
+    - |
+      RECORDED_SHA=$(cat dist/gitlab-trigger/SOURCE_SHA)
+      if [ "$RECORDED_SHA" != "$CI_COMMIT_SHA" ]; then
+        echo "REFUSED: dist/gitlab-trigger/SOURCE_SHA ($RECORDED_SHA) != CI_COMMIT_SHA ($CI_COMMIT_SHA) — refusing to run untrusted/stale bundle" >&2
+        exit 1
+      fi
+    - node dist/gitlab-trigger/index.js
