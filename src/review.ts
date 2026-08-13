@@ -15,6 +15,7 @@
 import {execFileSync} from 'child_process'
 // eslint-disable-next-line camelcase
 import {context as github_context} from '@actions/github'
+import {readFileSync, statSync} from 'fs'
 import pLimit from 'p-limit'
 import {type AnalysisStep, type Bot} from './bot'
 import {
@@ -45,6 +46,7 @@ import {
   runLintTools,
   type LintReport
 } from './lint'
+import {parseLintReport} from './lint/report-schema'
 import {
   classifyFindingSeverity,
   prepareFindings,
@@ -124,6 +126,72 @@ export interface CodeReviewRunOptions {
  * @param options - 全局配置选项
  * @param prompts - 提示词模板
  */
+/**
+ * 外部 lint 报告的字节上限（8 MiB）。
+ *
+ * 500 条 finding 撑死几百 KB，8 MiB 已经宽松到不会误伤正常报告；
+ * 超过就是异常输入，直接忽略而不是尝试解析。
+ */
+const MAX_LINT_REPORT_BYTES = 8 * 1024 * 1024
+
+/**
+ * 读取并严格校验外部 lint 报告（SEC-002 / SEC-005）。
+ *
+ * 报告由无密钥 job 产出，内容间接受 PR 作者控制，因此这里把它当敌意数据：
+ * 结构违规整份丢弃、单条目违规逐条丢弃，任何失败都只降级为「没有 lint 结果」，
+ * 绝不让审查主流程失败——静态分析是增强项，不是审查的前置条件。
+ */
+function loadExternalLintReport(reportPath: string): LintReport | null {
+  const logger = getLogger()
+
+  // 先按字节数设闸，再读内容：报告由 PR 作者间接控制，超大 JSON 会在
+  // readFileSync/JSON.parse 阶段就把持密钥 job 的内存和时间吃掉——
+  // schema 里的条目上限是解析**之后**才生效的，挡不住这一步。
+  try {
+    const {size} = statSync(reportPath)
+    if (size > MAX_LINT_REPORT_BYTES) {
+      logger.warning(
+        `Phase 0b: external lint report too large (${size} bytes > ${MAX_LINT_REPORT_BYTES}) — ignored`
+      )
+      return null
+    }
+  } catch (e) {
+    logger.warning(
+      `Phase 0b: external lint report not accessible at ${reportPath} — continuing without lint findings (${String(
+        e
+      )})`
+    )
+    return null
+  }
+
+  let raw: unknown
+  try {
+    raw = JSON.parse(readFileSync(reportPath, 'utf8'))
+  } catch (e) {
+    logger.warning(
+      `Phase 0b: external lint report unreadable at ${reportPath} — continuing without lint findings (${String(
+        e
+      )})`
+    )
+    return null
+  }
+
+  const parsed = parseLintReport(raw)
+  for (const w of parsed.warnings) {
+    logger.warning(`Phase 0b: lint report — ${w}`)
+  }
+  if (!parsed.ok || parsed.report == null) {
+    logger.warning('Phase 0b: external lint report rejected by schema — continuing without it')
+    return null
+  }
+
+  logger.info(
+    `Phase 0b: loaded external lint report — ${parsed.report.results.length} finding(s), ` +
+      `${parsed.dropped} dropped, produced by a secret-free job`
+  )
+  return parsed.report
+}
+
 export const codeReview = async (
   execCtx: ExecutionContext,
   lightBot: Bot,
@@ -414,8 +482,15 @@ ${hunks.oldHunk}
   getLogger().info(`shared: precomputed PatchScan for ${patchScans.size} file(s)`)
 
   // ==================== 阶段零·B：静态分析工具扫描（Linter/SAST） ====================
+  //
+  // 两条来源，互斥：
+  //   1. lintReportPath 非空 → 读取无密钥 job 产出的报告（SEC-002）。
+  //      本 job 持有密钥，绝不能自己 checkout/执行 PR 代码，因此优先走这条。
+  //   2. 否则 enableLintTools=true → 本地跑工具（仅适用于无密钥执行面）。
   let lintReport: LintReport | null = null
-  if (options.enableLintTools) {
+  if (options.lintReportPath) {
+    lintReport = loadExternalLintReport(options.lintReportPath)
+  } else if (options.enableLintTools) {
     try {
       getLogger().info('Phase 0b: starting static analysis tool scan (Linter/SAST)')
       lintReport = await runLintTools({

@@ -82609,7 +82609,12 @@ class Options {
     botIcon; // Bot 评论前缀图标
     botName; // Bot 显示名称
     botLogin; // 平台专有的 bot 登录标识
-    constructor(debug, disableReview, disableReleaseNotes, maxFiles = '0', reviewSimpleChanges = false, reviewCommentLGTM = false, pathFilters = null, systemMessage = '', openaiLightModel = 'gpt-5.4-nano', openaiHeavyModel = 'gpt-5.4-mini', openaiModelTemperature = '0.0', openaiRetries = '3', openaiTimeoutMS = '120000', openaiConcurrencyLimit = '6', githubConcurrencyLimit = '6', apiBaseUrl = 'https://api.openai.com/v1', language = 'en-US', enableDependencyAnalysis = true, maxDependencyFiles = '50', enableWebSearch = true, enableShell = true, enableLintTools = true, toolEnableOverrides = {}, toolVersionOverrides = {}, semgrepConfig = 'p/default', commandAckReaction = 'eyes', maxReviewComments = '20', debugResolveInjectFailures = '0', botIcon = '🤖', botName = 'AI Reviewer', botLogin = '') {
+    /**
+     * 外部 lint 报告路径（SEC-002）。非空时 reviewer **不自己跑工具**，
+     * 而是读取无密钥 job 产出的 JSON 报告——有密钥的执行面不接触 PR 代码。
+     */
+    lintReportPath;
+    constructor(debug, disableReview, disableReleaseNotes, maxFiles = '0', reviewSimpleChanges = false, reviewCommentLGTM = false, pathFilters = null, systemMessage = '', openaiLightModel = 'gpt-5.4-nano', openaiHeavyModel = 'gpt-5.4-mini', openaiModelTemperature = '0.0', openaiRetries = '3', openaiTimeoutMS = '120000', openaiConcurrencyLimit = '6', githubConcurrencyLimit = '6', apiBaseUrl = 'https://api.openai.com/v1', language = 'en-US', enableDependencyAnalysis = true, maxDependencyFiles = '50', enableWebSearch = true, enableShell = true, enableLintTools = true, toolEnableOverrides = {}, toolVersionOverrides = {}, semgrepConfig = 'p/default', commandAckReaction = 'eyes', maxReviewComments = '20', debugResolveInjectFailures = '0', botIcon = '🤖', botName = 'AI Reviewer', botLogin = '', lintReportPath = '') {
         this.debug = debug;
         this.disableReview = disableReview;
         this.disableReleaseNotes = disableReleaseNotes;
@@ -82643,6 +82648,7 @@ class Options {
         this.botIcon = botIcon;
         this.botName = botName;
         this.botLogin = botLogin;
+        this.lintReportPath = lintReportPath;
     }
     /** 打印所有配置项到日志，方便调试 */
     print() {
@@ -82673,6 +82679,7 @@ class Options {
         (0,actions_log.info)(`tool_enable_overrides: ${JSON.stringify(this.toolEnableOverrides)}`);
         (0,actions_log.info)(`tool_version_overrides: ${JSON.stringify(this.toolVersionOverrides)}`);
         (0,actions_log.info)(`semgrep_config: ${this.semgrepConfig}`);
+        (0,actions_log.info)(`lint_report_path: ${this.lintReportPath || '(none)'}`);
         (0,actions_log.info)(`command_ack_reaction: ${this.commandAckReaction}`);
         (0,actions_log.info)(`max_review_comments: ${this.maxReviewComments}`);
     }
@@ -83197,7 +83204,7 @@ class GitHubConfigProvider {
             tsc: (0,core.getBooleanInput)('enable_tsc'),
             prettier: (0,core.getBooleanInput)('enable_prettier'),
             semgrep: (0,core.getBooleanInput)('enable_semgrep')
-        }, toolVersionOverrides, (0,core.getInput)('semgrep_config'), (0,core.getInput)('command_ack_reaction'), validateIntStr((0,core.getInput)('max_review_comments'), P, 'max_review_comments'), validateIntStr((0,core.getInput)('debug_resolve_inject_failures'), P, 'debug_resolve_inject_failures'), (0,core.getInput)('bot_icon') || '🤖', (0,core.getInput)('bot_name') || 'AI Reviewer', (0,core.getInput)('bot_github_login'));
+        }, toolVersionOverrides, (0,core.getInput)('semgrep_config'), (0,core.getInput)('command_ack_reaction'), validateIntStr((0,core.getInput)('max_review_comments'), P, 'max_review_comments'), validateIntStr((0,core.getInput)('debug_resolve_inject_failures'), P, 'debug_resolve_inject_failures'), (0,core.getInput)('bot_icon') || '🤖', (0,core.getInput)('bot_name') || 'AI Reviewer', (0,core.getInput)('bot_github_login'), (0,core.getInput)('lint_report_path'));
         return this.cachedOptions;
     }
     getPromptConfig() {
@@ -84553,6 +84560,8 @@ function extractErrorCode(e) {
     return 'INTERNAL';
 }
 
+// EXTERNAL MODULE: external "fs"
+var external_fs_ = __nccwpck_require__(7147);
 ;// CONCATENATED MODULE: ./lib/changed-lines.js
 /**
  * changed-lines.ts - 统一的 unified diff 行号扫描器
@@ -86436,8 +86445,6 @@ function formatDependencySummary(ctx) {
     return lines.join('\n');
 }
 
-// EXTERNAL MODULE: external "fs"
-var external_fs_ = __nccwpck_require__(7147);
 // EXTERNAL MODULE: external "path"
 var external_path_ = __nccwpck_require__(1017);
 // EXTERNAL MODULE: external "os"
@@ -88539,6 +88546,191 @@ function formatter_truncate(s, max) {
 
 
 
+;// CONCATENATED MODULE: ./lib/lint/report-schema.js
+/**
+ * lint/report-schema.ts — 外部 lint 报告的严格校验（SEC-002 / SEC-005）
+ *
+ * P0 第二步把 lint 挪进**无密钥 job**：它 checkout PR head、跑工具、产出 JSON
+ * 报告；有密钥的 reviewer job 只把这份报告当**数据**读回来。
+ *
+ * 这份数据完全由 PR 作者间接控制——他能决定被扫描的代码，因而能影响工具输出的
+ * 文件名、规则 ID 和消息文本。所以跨过信任边界时必须假定它是敌意的：
+ *
+ * - **结构** 只按白名单取字段，未知字段一律丢弃，不做 `Object.assign` 式合并
+ * - **类型** 逐字段校验；严重级别必须落在枚举内
+ * - **规模** 条目数、字符串长度、工具汇总数都有上限，防止撑爆 prompt 预算
+ * - **路径** 拒绝绝对路径与 `..`，报告里的 file 只应是仓库内相对路径
+ * - **字符** 剥掉控制字符（包括用来伪造分节的换行滥用之外的不可见字符）
+ *
+ * 单条目不合法只丢该条目并计数，不因此废掉整份报告——否则一条脏数据就能让
+ * 攻击者关掉整个静态分析。但结构性违规（顶层不是对象、results 不是数组）
+ * 一律 fail closed。
+ */
+/** 规模上限。超出部分截断，并在 warnings 里说明。 */
+const LINT_REPORT_LIMITS = {
+    maxResults: 500,
+    maxToolSummaries: 20,
+    maxMessageLength: 2000,
+    maxRuleIdLength: 200,
+    maxPathLength: 512,
+    maxToolNameLength: 64
+};
+const SEVERITIES = new Set(['error', 'warning', 'info']);
+/** 剥掉控制字符并截断；返回 null 表示该值不可用 */
+function cleanString(value, maxLength) {
+    if (typeof value !== 'string')
+        return null;
+    // eslint-disable-next-line no-control-regex
+    const stripped = value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
+    const trimmed = stripped.trim();
+    if (trimmed === '')
+        return null;
+    return trimmed.length > maxLength ? `${trimmed.slice(0, maxLength)}…[truncated]` : trimmed;
+}
+/** 仓库内相对路径才可接受 */
+function cleanPath(value) {
+    const cleaned = cleanString(value, LINT_REPORT_LIMITS.maxPathLength);
+    if (cleaned == null)
+        return null;
+    if (cleaned.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(cleaned))
+        return null;
+    if (cleaned.split(/[\\/]/).includes('..'))
+        return null;
+    return cleaned;
+}
+/** 1-based 正整数行列号 */
+function cleanPosition(value) {
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < 1)
+        return null;
+    return value;
+}
+function parseResult(raw) {
+    if (raw == null || typeof raw !== 'object' || Array.isArray(raw))
+        return null;
+    const r = raw;
+    const tool = cleanString(r.tool, LINT_REPORT_LIMITS.maxToolNameLength);
+    const file = cleanPath(r.file);
+    const line = cleanPosition(r.line);
+    const column = cleanPosition(r.column);
+    const ruleId = cleanString(r.ruleId, LINT_REPORT_LIMITS.maxRuleIdLength);
+    const message = cleanString(r.message, LINT_REPORT_LIMITS.maxMessageLength);
+    const severity = typeof r.severity === 'string' ? r.severity : null;
+    if (tool == null ||
+        file == null ||
+        line == null ||
+        column == null ||
+        ruleId == null ||
+        message == null ||
+        severity == null ||
+        !SEVERITIES.has(severity)) {
+        return null;
+    }
+    // 白名单构造：未知字段不会被带进来
+    const result = {
+        tool,
+        toolVersion: cleanString(r.toolVersion, LINT_REPORT_LIMITS.maxToolNameLength) ?? 'unknown',
+        file,
+        line,
+        column,
+        severity: severity,
+        ruleId,
+        message,
+        fixable: r.fixable === true
+    };
+    const endLine = cleanPosition(r.endLine);
+    if (endLine != null && endLine >= line)
+        result.endLine = endLine;
+    const endColumn = cleanPosition(r.endColumn);
+    if (endColumn != null)
+        result.endColumn = endColumn;
+    const suggestion = cleanString(r.suggestion, LINT_REPORT_LIMITS.maxMessageLength);
+    if (suggestion != null)
+        result.suggestion = suggestion;
+    return result;
+}
+function parseToolSummary(raw) {
+    if (raw == null || typeof raw !== 'object' || Array.isArray(raw))
+        return null;
+    const s = raw;
+    const tool = cleanString(s.tool, LINT_REPORT_LIMITS.maxToolNameLength);
+    if (tool == null)
+        return null;
+    const summary = {
+        tool,
+        toolVersion: cleanString(s.toolVersion, LINT_REPORT_LIMITS.maxToolNameLength) ?? 'unknown',
+        available: s.available === true,
+        errors: typeof s.errors === 'number' && s.errors >= 0 ? Math.floor(s.errors) : 0,
+        warnings: typeof s.warnings === 'number' && s.warnings >= 0 ? Math.floor(s.warnings) : 0
+    };
+    const reason = cleanString(s.unavailableReason, LINT_REPORT_LIMITS.maxMessageLength);
+    if (reason != null)
+        summary.unavailableReason = reason;
+    return summary;
+}
+/**
+ * 严格解析外部 lint 报告。
+ *
+ * 结构性违规 → `ok: false`；单条目违规 → 丢弃并计数。
+ */
+function parseLintReport(raw) {
+    const warnings = [];
+    if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) {
+        return { ok: false, report: null, dropped: 0, warnings: ['lint report is not a JSON object'] };
+    }
+    const obj = raw;
+    if (obj.results != null && !Array.isArray(obj.results)) {
+        return {
+            ok: false,
+            report: null,
+            dropped: 0,
+            warnings: ['lint report `results` is not an array']
+        };
+    }
+    if (obj.toolSummaries != null && !Array.isArray(obj.toolSummaries)) {
+        return {
+            ok: false,
+            report: null,
+            dropped: 0,
+            warnings: ['lint report `toolSummaries` is not an array']
+        };
+    }
+    const rawResults = (obj.results ?? []);
+    const rawSummaries = (obj.toolSummaries ?? []);
+    if (rawResults.length > LINT_REPORT_LIMITS.maxResults) {
+        warnings.push(`lint report truncated: ${rawResults.length} results exceed limit ${LINT_REPORT_LIMITS.maxResults}`);
+    }
+    if (rawSummaries.length > LINT_REPORT_LIMITS.maxToolSummaries) {
+        warnings.push(`lint report truncated: ${rawSummaries.length} tool summaries exceed limit ${LINT_REPORT_LIMITS.maxToolSummaries}`);
+    }
+    let dropped = 0;
+    const results = [];
+    for (const item of rawResults.slice(0, LINT_REPORT_LIMITS.maxResults)) {
+        const parsed = parseResult(item);
+        if (parsed == null)
+            dropped++;
+        else
+            results.push(parsed);
+    }
+    const toolSummaries = [];
+    for (const item of rawSummaries.slice(0, LINT_REPORT_LIMITS.maxToolSummaries)) {
+        const parsed = parseToolSummary(item);
+        if (parsed == null)
+            dropped++;
+        else
+            toolSummaries.push(parsed);
+    }
+    if (dropped > 0)
+        warnings.push(`dropped ${dropped} malformed entr${dropped === 1 ? 'y' : 'ies'}`);
+    const durationMs = typeof obj.durationMs === 'number' && obj.durationMs >= 0 ? obj.durationMs : 0;
+    const filesScanned = typeof obj.filesScanned === 'number' && obj.filesScanned >= 0 ? Math.floor(obj.filesScanned) : 0;
+    return {
+        ok: true,
+        report: { results, toolSummaries, durationMs, filesScanned },
+        dropped,
+        warnings
+    };
+}
+
 ;// CONCATENATED MODULE: ./lib/noise-control.js
 /**
  * noise-control.ts - 评论噪音控制（迭代二 · 成员 D · 2.5）
@@ -89131,6 +89323,8 @@ function getTokenCount(input) {
 
 
 
+
+
 // eslint-disable-next-line camelcase
 const review_context = github.context;
 /** 平台无关的 TreeFetcher 实现（DEP-005 → ARCH-018） */
@@ -89179,6 +89373,56 @@ const ignoreKeyword = `${PRIMARY_BOT_MENTION}: ignore`;
  * @param options - 全局配置选项
  * @param prompts - 提示词模板
  */
+/**
+ * 外部 lint 报告的字节上限（8 MiB）。
+ *
+ * 500 条 finding 撑死几百 KB，8 MiB 已经宽松到不会误伤正常报告；
+ * 超过就是异常输入，直接忽略而不是尝试解析。
+ */
+const MAX_LINT_REPORT_BYTES = 8 * 1024 * 1024;
+/**
+ * 读取并严格校验外部 lint 报告（SEC-002 / SEC-005）。
+ *
+ * 报告由无密钥 job 产出，内容间接受 PR 作者控制，因此这里把它当敌意数据：
+ * 结构违规整份丢弃、单条目违规逐条丢弃，任何失败都只降级为「没有 lint 结果」，
+ * 绝不让审查主流程失败——静态分析是增强项，不是审查的前置条件。
+ */
+function loadExternalLintReport(reportPath) {
+    const logger = getLogger();
+    // 先按字节数设闸，再读内容：报告由 PR 作者间接控制，超大 JSON 会在
+    // readFileSync/JSON.parse 阶段就把持密钥 job 的内存和时间吃掉——
+    // schema 里的条目上限是解析**之后**才生效的，挡不住这一步。
+    try {
+        const { size } = (0,external_fs_.statSync)(reportPath);
+        if (size > MAX_LINT_REPORT_BYTES) {
+            logger.warning(`Phase 0b: external lint report too large (${size} bytes > ${MAX_LINT_REPORT_BYTES}) — ignored`);
+            return null;
+        }
+    }
+    catch (e) {
+        logger.warning(`Phase 0b: external lint report not accessible at ${reportPath} — continuing without lint findings (${String(e)})`);
+        return null;
+    }
+    let raw;
+    try {
+        raw = JSON.parse((0,external_fs_.readFileSync)(reportPath, 'utf8'));
+    }
+    catch (e) {
+        logger.warning(`Phase 0b: external lint report unreadable at ${reportPath} — continuing without lint findings (${String(e)})`);
+        return null;
+    }
+    const parsed = parseLintReport(raw);
+    for (const w of parsed.warnings) {
+        logger.warning(`Phase 0b: lint report — ${w}`);
+    }
+    if (!parsed.ok || parsed.report == null) {
+        logger.warning('Phase 0b: external lint report rejected by schema — continuing without it');
+        return null;
+    }
+    logger.info(`Phase 0b: loaded external lint report — ${parsed.report.results.length} finding(s), ` +
+        `${parsed.dropped} dropped, produced by a secret-free job`);
+    return parsed.report;
+}
 const codeReview = async (execCtx, lightBot, heavyBot, options, prompts, runOptions = {}) => {
     const commenter = new Commenter();
     const fromCommand = runOptions.source === 'command';
@@ -89382,8 +89626,16 @@ ${hunks.oldHunk}
     const patchScans = buildPatchScans(filesAndChanges);
     getLogger().info(`shared: precomputed PatchScan for ${patchScans.size} file(s)`);
     // ==================== 阶段零·B：静态分析工具扫描（Linter/SAST） ====================
+    //
+    // 两条来源，互斥：
+    //   1. lintReportPath 非空 → 读取无密钥 job 产出的报告（SEC-002）。
+    //      本 job 持有密钥，绝不能自己 checkout/执行 PR 代码，因此优先走这条。
+    //   2. 否则 enableLintTools=true → 本地跑工具（仅适用于无密钥执行面）。
     let lintReport = null;
-    if (options.enableLintTools) {
+    if (options.lintReportPath) {
+        lintReport = loadExternalLintReport(options.lintReportPath);
+    }
+    else if (options.enableLintTools) {
         try {
             getLogger().info('Phase 0b: starting static analysis tool scan (Linter/SAST)');
             lintReport = await runLintTools({

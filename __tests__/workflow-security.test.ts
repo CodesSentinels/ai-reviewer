@@ -78,7 +78,7 @@ describe('SEC-007: workflow 清单', () => {
   })
 })
 
-describe('SEC-004: 特权触发器下不得引用 PR head', () => {
+describe('SEC-004: 持密钥的 job 不得引用 PR head', () => {
   /** 会在 base 仓库上下文运行、能拿到 secrets 的触发器 */
   const PRIVILEGED_TRIGGERS = [
     'pull_request_target',
@@ -102,15 +102,24 @@ describe('SEC-004: 特权触发器下不得引用 PR head', () => {
     expect(privileged.map(w => w.name)).toContain('openai-review.yml')
   })
 
-  test.each(PR_HEAD_REFS)('特权 workflow 正文不含 %s', ref => {
-    const violations = privileged.filter(wf => codeOf(wf.raw).includes(ref)).map(w => w.name)
-    expect(violations).toEqual([])
-  })
-
-  test('特权 workflow 的 checkout 步骤不得指定 repository（可能切到 fork）', () => {
+  // 注意作用域：SEC-002 的双 job 方案里，**无密钥** job 合法地 checkout PR head。
+  // 因此规则不是「文件里不能出现 PR head」，而是「持密钥的 job 里不能出现」。
+  test.each(PR_HEAD_REFS)('持密钥的 job 内不出现 %s', ref => {
     const violations: string[] = []
     for (const wf of privileged) {
       for (const [jobName, job] of jobsOf(wf.doc)) {
+        if (!stepsOf(job).some(stepCarriesSecrets)) continue
+        if (JSON.stringify(job).includes(ref)) violations.push(`${wf.name}:${jobName}`)
+      }
+    }
+    expect(violations).toEqual([])
+  })
+
+  test('持密钥 job 的 checkout 步骤不得指定 repository（可能切到 fork）', () => {
+    const violations: string[] = []
+    for (const wf of privileged) {
+      for (const [jobName, job] of jobsOf(wf.doc)) {
+        if (!stepsOf(job).some(stepCarriesSecrets)) continue
         for (const step of stepsOf(job)) {
           if (!String(step.uses ?? '').startsWith('actions/checkout')) continue
           if (step.with?.repository != null) violations.push(`${wf.name}:${jobName}`)
@@ -118,6 +127,15 @@ describe('SEC-004: 特权触发器下不得引用 PR head', () => {
       }
     }
     expect(violations).toEqual([])
+  })
+
+  test('确有 job 被判定为持密钥（否则上面几条是空跑）', () => {
+    const withSecrets = privileged.flatMap(wf =>
+      jobsOf(wf.doc)
+        .filter(([, job]) => stepsOf(job).some(stepCarriesSecrets))
+        .map(([name]) => `${wf.name}:${name}`)
+    )
+    expect(withSecrets).toContain('openai-review.yml:review')
   })
 
   test('本仓库没有任何 workflow 使用裸 pull_request 触发器执行带密钥的步骤', () => {
@@ -196,21 +214,83 @@ describe('SEC-009/010: 外部 Action 引用固定到 commit SHA', () => {
   })
 })
 
-describe('SEC-005: 持密钥的步骤不消费不可信产物', () => {
-  test('没有任何 workflow 下载 artifact 后交给带密钥的步骤', () => {
-    const violations: string[] = []
-    for (const wf of workflows) {
-      for (const [jobName, job] of jobsOf(wf.doc)) {
-        const steps = stepsOf(job)
-        const downloadsArtifact = steps.some(s =>
-          String(s.uses ?? '').startsWith('actions/download-artifact')
-        )
-        const hasSecrets = steps.some(stepCarriesSecrets)
-        if (downloadsArtifact && hasSecrets) violations.push(`${wf.name}:${jobName}`)
-      }
+describe('SEC-002/004/005: 双执行面的分工与产物流向', () => {
+  const reviewWf = workflows.find(w => w.name === 'openai-review.yml') as Workflow
+  const jobs = Object.fromEntries(jobsOf(reviewWf.doc))
+
+  /** 该 job 是否 checkout 了 PR head */
+  function checksOutPrHead(job: any): boolean {
+    return stepsOf(job).some(step => {
+      if (!String(step.uses ?? '').startsWith('actions/checkout')) return false
+      const w = JSON.stringify(step.with ?? {})
+      return w.includes('pull_request.head')
+    })
+  }
+
+  function jobHasSecrets(job: any): boolean {
+    return stepsOf(job).some(stepCarriesSecrets)
+  }
+
+  test('存在两个 job：不可信的 lint 与持密钥的 review（SEC-002）', () => {
+    expect(Object.keys(jobs).sort()).toEqual(['lint', 'review'])
+  })
+
+  test('checkout PR head 的 job 一条密钥都没有（允许列表：不给 env）', () => {
+    for (const [name, job] of Object.entries(jobs)) {
+      if (!checksOutPrHead(job)) continue
+      expect(`${name}:hasSecrets=${jobHasSecrets(job)}`).toBe(`${name}:hasSecrets=false`)
+      // 也不能有写权限——拿不到密钥但能写评论同样危险
+      expect(job.permissions).toEqual({contents: 'read'})
     }
-    // 第二步恢复 lint 时会引入 artifact 传递：届时必须改成
-    // 「无密钥 job 产出 + 严格 schema 校验后消费」，并在此显式登记豁免
-    expect(violations).toEqual([])
+  })
+
+  test('持密钥的 job 不 checkout PR head（SEC-003）', () => {
+    for (const [name, job] of Object.entries(jobs)) {
+      if (!jobHasSecrets(job)) continue
+      expect(`${name}:checksOutPrHead=${checksOutPrHead(job)}`).toBe(
+        `${name}:checksOutPrHead=false`
+      )
+    }
+  })
+
+  test('不可信 job 只上传数据 artifact，不上传可执行物（SEC-005）', () => {
+    const uploads = stepsOf(jobs.lint).filter(s =>
+      String(s.uses ?? '').startsWith('actions/upload-artifact')
+    )
+    expect(uploads).toHaveLength(1)
+    // 只允许单个 JSON 报告；目录/通配会把脚本、依赖一起带过去
+    expect(uploads[0].with.path).toBe('lint-report.json')
+  })
+
+  test('持密钥 job 下载的产物落在工作区之外，且只作为数据路径传入', () => {
+    const download = stepsOf(jobs.review).find(s =>
+      String(s.uses ?? '').startsWith('actions/download-artifact')
+    )
+    expect(download).toBeDefined()
+    // runner.temp 不在 checkout 出来的工作区里，不会被当成仓库文件执行
+    expect(String(download.with.path)).toContain('runner.temp')
+
+    const action = stepsOf(jobs.review).find(s => s.uses === './')
+    expect(String(action.with.lint_report_path)).toContain('runner.temp')
+  })
+
+  test('持密钥 job 不执行任何来自产物的脚本（没有 run: 引用下载目录）', () => {
+    const runSteps = stepsOf(jobs.review).filter(s => typeof s.run === 'string')
+    for (const step of runSteps) {
+      expect(step.run).not.toContain('runner.temp')
+      expect(step.run).not.toContain('lint-report')
+    }
+  })
+
+  test('持密钥 job 仍然关闭本地工具（产物是唯一的 lint 来源）', () => {
+    const action = stepsOf(jobs.review).find(s => s.uses === './')
+    expect(action.with.enable_shell).toBe(false)
+    expect(action.with.enable_lint_tools).toBe(false)
+  })
+
+  test('lint job 失败或跳过都不阻塞审查', () => {
+    expect(String(jobs.review.if)).toContain('always()')
+    const lintStep = stepsOf(jobs.lint).find((s: any) => s.id === 'lint')
+    expect(lintStep['continue-on-error']).toBe(true)
   })
 })

@@ -358,6 +358,15 @@ inputs:
       "Semgrep version (semver range) installed into ai-reviewer's sandbox via
       pip. This default IS the pinned version; override to match your project."
     default: '^1.95.0'
+  lint_report_path:
+    required: false
+    description:
+      'Path to a lint report JSON produced by a separate, secret-free job
+      (SEC-002). When set, the reviewer reads findings from this file instead of
+      running lint tools itself, so the job holding secrets never executes PR
+      code. The file is strictly validated before use; malformed entries are
+      dropped. Leave empty to disable.'
+    default: ''
   semgrep_config:
     required: false
     description:
