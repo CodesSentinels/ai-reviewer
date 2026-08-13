@@ -283,28 +283,17 @@ describe('SEC-001~006: pull_request_target 执行面不得接触 PR head', () =>
     expect(checkoutStep.with.repository).toBeUndefined()
   })
 
-  test('workflow 全文不出现任何 PR head 引用（防止以别的写法绕回来）', () => {
-    // 注释里为了说明「绝不能加回来」会提到这些表达式，先剥掉注释再查
-    const code = rawWorkflow
-      .split('\n')
-      .filter(line => !line.trim().startsWith('#'))
-      .join('\n')
-
+  test('持密钥的 review job 内不出现任何 PR head 引用', () => {
+    // 作用域是 job 而非整个文件：SEC-002 的双 job 方案里，无密钥的 lint job
+    // 合法地 checkout PR head。跨 workflow 的完整安全规则由
+    // workflow-security.test.ts 负责，这里只钉 reviewer 自己这一格。
+    const serialized = JSON.stringify(reviewJob)
     for (const forbidden of [
       'pull_request.head.repo',
       'pull_request.head.ref',
-      'pull_request.head.sha',
-      'github.head_ref'
+      'pull_request.head.sha'
     ]) {
-      // concurrency group 里的 github.head_ref 只用于分组键，不用于 checkout
-      if (forbidden === 'github.head_ref') {
-        const usedOutsideConcurrency = code
-          .split('\n')
-          .some(line => line.includes(forbidden) && !line.includes('${{ github.repository }}'))
-        expect(usedOutsideConcurrency).toBe(false)
-        continue
-      }
-      expect(code).not.toContain(forbidden)
+      expect(serialized).not.toContain(forbidden)
     }
   })
 

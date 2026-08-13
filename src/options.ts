@@ -74,6 +74,11 @@ export class Options {
   botIcon: string // Bot 评论前缀图标
   botName: string // Bot 显示名称
   botLogin: string // 平台专有的 bot 登录标识
+  /**
+   * 外部 lint 报告路径（SEC-002）。非空时 reviewer **不自己跑工具**，
+   * 而是读取无密钥 job 产出的 JSON 报告——有密钥的执行面不接触 PR 代码。
+   */
+  lintReportPath: string
 
   constructor(
     debug: boolean,
@@ -106,7 +111,8 @@ export class Options {
     debugResolveInjectFailures = '0',
     botIcon = '🤖',
     botName = 'AI Reviewer',
-    botLogin = ''
+    botLogin = '',
+    lintReportPath = ''
   ) {
     this.debug = debug
     this.disableReview = disableReview
@@ -141,6 +147,7 @@ export class Options {
     this.botIcon = botIcon
     this.botName = botName
     this.botLogin = botLogin
+    this.lintReportPath = lintReportPath
   }
 
   /** 打印所有配置项到日志，方便调试 */
@@ -172,6 +179,7 @@ export class Options {
     info(`tool_enable_overrides: ${JSON.stringify(this.toolEnableOverrides)}`)
     info(`tool_version_overrides: ${JSON.stringify(this.toolVersionOverrides)}`)
     info(`semgrep_config: ${this.semgrepConfig}`)
+    info(`lint_report_path: ${this.lintReportPath || '(none)'}`)
     info(`command_ack_reaction: ${this.commandAckReaction}`)
     info(`max_review_comments: ${this.maxReviewComments}`)
   }

@@ -152,7 +152,10 @@ export class GitLabConfigProvider implements ConfigProvider {
       ),
       envStr('AI_REVIEWER_BOT_ICON') ?? CONFIG_DEFAULTS.botIcon,
       envStr('AI_REVIEWER_BOT_NAME') ?? CONFIG_DEFAULTS.botName,
-      envStr('AI_REVIEWER_BOT_GITLAB_LOGIN') ?? ''
+      envStr('AI_REVIEWER_BOT_GITLAB_LOGIN') ?? '',
+      // SEC-002 的双 job 方案目前只落在 GitHub；GitLab 侧 trigger 强制关闭 lint
+      // （CFG-002），没有产出报告的无密钥 job，因此这里固定为空。
+      ''
     )
 
     return this.cachedOptions

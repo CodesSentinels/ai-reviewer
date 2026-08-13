@@ -79,7 +79,8 @@ export class GitHubConfigProvider implements ConfigProvider {
       validateIntStr(getInput('debug_resolve_inject_failures'), P, 'debug_resolve_inject_failures'),
       getInput('bot_icon') || '🤖',
       getInput('bot_name') || 'AI Reviewer',
-      getInput('bot_github_login')
+      getInput('bot_github_login'),
+      getInput('lint_report_path')
     )
 
     return this.cachedOptions
