@@ -59,6 +59,20 @@ function codeOf(raw: string): string {
     .join('\n')
 }
 
+/**
+ * 该 job 是否持有业务密钥或写权限。
+ *
+ * 只读的 GITHUB_TOKEN 与业务密钥要分开看：checkout 私有仓库本来就需要前者
+ * （actions/checkout 的 token 默认即 github.token），真正不能与不可信代码
+ * 同处一室的是模型密钥和写权限。
+ */
+function jobHasBusinessSecrets(job: any): boolean {
+  const serialized = JSON.stringify(stepsOf(job).map(s => s.env ?? {}))
+  const hasNonGithubSecret = /secrets\.(?!GITHUB_TOKEN)/.test(serialized)
+  const perms = JSON.stringify(job.permissions ?? {})
+  return hasNonGithubSecret || perms.includes('write')
+}
+
 /** 该步骤是否被注入了密钥 */
 function stepCarriesSecrets(step: any): boolean {
   const serialized = JSON.stringify(step.env ?? {}) + JSON.stringify(step.with ?? {})
@@ -102,8 +116,8 @@ describe('SEC-004: 持密钥的 job 不得引用 PR head', () => {
     expect(privileged.map(w => w.name)).toContain('openai-review.yml')
   })
 
-  // 注意作用域：SEC-002 的双 job 方案里，**无密钥** job 合法地 checkout PR head。
-  // 因此规则不是「文件里不能出现 PR head」，而是「持密钥的 job 里不能出现」。
+  // 注意作用域：SEC-002 的双 job 方案里，**低权限** job 合法地 checkout PR head。
+  // 因此规则不是「文件里不能出现 PR head」，而是「持业务密钥的 job 里不能出现」。
   test.each(PR_HEAD_REFS)('持密钥的 job 内不出现 %s', ref => {
     const violations: string[] = []
     for (const wf of privileged) {
@@ -115,11 +129,11 @@ describe('SEC-004: 持密钥的 job 不得引用 PR head', () => {
     expect(violations).toEqual([])
   })
 
-  test('持密钥 job 的 checkout 步骤不得指定 repository（可能切到 fork）', () => {
+  test('持业务密钥或写权限的 job，checkout 不得指定 repository（可能切到 fork）', () => {
     const violations: string[] = []
     for (const wf of privileged) {
       for (const [jobName, job] of jobsOf(wf.doc)) {
-        if (!stepsOf(job).some(stepCarriesSecrets)) continue
+        if (!jobHasBusinessSecrets(job)) continue
         for (const step of stepsOf(job)) {
           if (!String(step.uses ?? '').startsWith('actions/checkout')) continue
           if (step.with?.repository != null) violations.push(`${wf.name}:${jobName}`)
@@ -127,6 +141,16 @@ describe('SEC-004: 持密钥的 job 不得引用 PR head', () => {
       }
     }
     expect(violations).toEqual([])
+  })
+
+  test('确有 job 被判定为「持业务密钥」（防止上一条空跑）', () => {
+    const wf = workflows.find(w => w.name === 'openai-review.yml') as Workflow
+    const flagged = jobsOf(wf.doc)
+      .filter(([, job]) => jobHasBusinessSecrets(job))
+      .map(([name]) => name)
+    expect(flagged).toContain('review')
+    // lint 只有只读 GITHUB_TOKEN + contents:read，不算业务密钥面
+    expect(flagged).not.toContain('lint')
   })
 
   test('确有 job 被判定为持密钥（否则上面几条是空跑）', () => {
@@ -231,16 +255,66 @@ describe('SEC-002/004/005: 双执行面的分工与产物流向', () => {
     return stepsOf(job).some(stepCarriesSecrets)
   }
 
-  test('存在两个 job：不可信的 lint 与持密钥的 review（SEC-002）', () => {
-    expect(Object.keys(jobs).sort()).toEqual(['lint', 'review'])
+  test('三个 job 各司其职：元数据解析 / 不可信 lint / 持密钥 review（SEC-002）', () => {
+    expect(Object.keys(jobs).sort()).toEqual(['lint', 'resolve-pr', 'review'])
   })
 
-  test('checkout PR head 的 job 一条密钥都没有（允许列表：不给 env）', () => {
+  // 旧名字是「拿 token 的 job 一律不 checkout 任何代码」，LINT-009 之后不成立：
+  // lint job 既有只读 token 又要 checkout PR head。真正的边界在**步骤**层级，
+  // 下面三条分别锁住三个 job 各自的那一条。
+  test('resolve-pr 只查 API，一个 checkout 都没有', () => {
+    const checkouts = stepsOf(jobs['resolve-pr']).filter(s =>
+      String(s.uses ?? '').startsWith('actions/checkout')
+    )
+    expect(checkouts).toHaveLength(0)
+  })
+
+  test('持业务密钥或写权限的 job 不 checkout PR head', () => {
+    const flagged = Object.entries(jobs).filter(([, job]) => jobHasBusinessSecrets(job))
+    // 防空跑：review 必须被判进来，lint 必须被排除
+    expect(flagged.map(([name]) => name)).toEqual(['review'])
+
+    for (const [name, job] of flagged) {
+      expect(`${name}:${checksOutPrHead(job)}`).toBe(`${name}:false`)
+      for (const step of stepsOf(job)) {
+        if (!String(step.uses ?? '').startsWith('actions/checkout')) continue
+        expect(`${name}:${JSON.stringify(step.with)}`).not.toContain('pull_request.head')
+      }
+    }
+  })
+
+  test('Run lint tools 步骤不注入任何 token 或密钥', () => {
+    const execStep = stepsOf(jobs.lint).find(s => String(s.run ?? '').includes('dist/lint-report'))
+    expect(execStep).toBeDefined()
+
+    const env = JSON.stringify(execStep.env ?? {})
+    expect(env).not.toMatch(/secrets\./)
+    expect(env).not.toMatch(/github\.token/i)
+    expect(env).not.toMatch(/GH_TOKEN|GITHUB_TOKEN/)
+    expect(stepCarriesSecrets(execStep)).toBe(false)
+  })
+
+  test('评论事件也会跑 lint——download-artifact 只看当前 run，拿不到历史产物', () => {
+    // 早先 lint job 限定 pull_request_target，并声称「评论事件复用上一次结论」，
+    // 那是错的：评论触发的 review/full review/summary 因此完全没有 lint 结果
+    expect(String(jobs.lint.if)).not.toContain('pull_request_target')
+    const triggers = Object.keys(triggersOf(reviewWf.doc))
+    const resolveIf = String(jobs['resolve-pr'].if)
+    for (const t of triggers) {
+      expect(resolveIf).toContain(t)
+    }
+  })
+
+  test('checkout PR head 的 job 只有只读权限，且执行 PR 代码的步骤不带凭据', () => {
     for (const [name, job] of Object.entries(jobs)) {
       if (!checksOutPrHead(job)) continue
-      expect(`${name}:hasSecrets=${jobHasSecrets(job)}`).toBe(`${name}:hasSecrets=false`)
-      // 也不能有写权限——拿不到密钥但能写评论同样危险
-      expect(job.permissions).toEqual({contents: 'read'})
+      // 拿不到写权限：即使有只读 token，也不能写评论/改仓库
+      expect(`${name}:${JSON.stringify(job.permissions)}`).toBe(`${name}:{"contents":"read"}`)
+      // 真正执行不可信代码的步骤本身不得注入任何凭据
+      const execStep = stepsOf(job).find(s => String(s.run ?? '').includes('dist/lint-report'))
+      if (execStep != null) {
+        expect(JSON.stringify(execStep.env ?? {})).not.toContain('secrets.')
+      }
     }
   })
 

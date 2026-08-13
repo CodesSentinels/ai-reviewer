@@ -76,7 +76,7 @@ export class Options {
   botLogin: string // 平台专有的 bot 登录标识
   /**
    * 外部 lint 报告路径（SEC-002）。非空时 reviewer **不自己跑工具**，
-   * 而是读取无密钥 job 产出的 JSON 报告——有密钥的执行面不接触 PR 代码。
+   * 而是读取低权限 lint job 产出的 JSON 报告——持业务密钥的执行面不接触 PR 代码。
    */
   lintReportPath: string
 

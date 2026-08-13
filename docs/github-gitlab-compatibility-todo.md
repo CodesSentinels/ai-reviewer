@@ -44,8 +44,8 @@
 - [x] `SEC-001` 重构 `.github/workflows/openai-review.yml`，禁止
       `pull_request_target` checkout 并执行 PR head 中的
       Action、`dist/index.js`、依赖或脚本。
-- [ ] `SEC-002` 将无密钥 PR head 验证与有评论写权限/模型密钥的 reviewer 执行面分
-      离。
+- [x] `SEC-002` 将低权限 PR head 验证与有评论写权限/模型密钥的 reviewer 执行面
+      分离。
 - [x] `SEC-003` 有密钥 reviewer 固定执行 GitHub 默认分支中的可信代码，只把 PR
       diff 和文件内容作为数据读取。
 - [x] `SEC-004` 普通 PR head job 不得获得 `OPENAI_API_KEY`、写权限 PAT、GitLab
@@ -68,7 +68,7 @@
 - [ ] 修改 Action 源码、`dist/index.js`、workflow、package scripts 和依赖的恶意
       PR 无法读取业务密钥。
 - [ ] GitHub 自动审查、摘要、行级评论和评论命令仍可正常运行。
-- [ ] 安全修复不以删除现有 GitHub 功能代替。
+- [x] 安全修复不以删除现有 GitHub 功能代替。
 
 ---
 
@@ -612,7 +612,28 @@
 - [ ] `LINT-002` 在无外网、空工具缓存和未安装 lint 工具的 GitLab trigger 测试环
       境中，API-only 审查仍须通过。
 - [x] `LINT-003` 当前 MVP 不为 secret-bearing trigger 实现 lint 工具网络、缓存或
-      离线镜像安装策略；未来启用时必须使用独立无密钥执行面重新设计。
+      离线镜像安装策略；GitHub 侧改由 `LINT-004~008` 的独立低权限执行面承担，
+      GitLab trigger 维持强制关闭。
+- [x] `LINT-004` 新增 lint-only 可信执行器 `src/lint-report-cli.ts`：接收
+      `--repo-root/--base-sha/--head-sha/--out`，本地 `git diff` 得到变更文件，
+      调用 orchestrator 产出 `LintReport` JSON。
+- [x] `LINT-005` 新增第三个打包入口 `dist/lint-report/index.js`，纳入
+      `npm run package`、`SOURCE_SHA`、许可证检查与冒烟测试。
+- [x] `LINT-006` base/head 只接受事件中不可伪造的 40 位 commit SHA，不接受分支
+      名；执行前验证两个 commit 在 checkout 后确实存在。
+- [x] `LINT-007` lint job 采用双 checkout：默认分支可信代码在工作区根、PR head
+      隔离在 `pr/`；CLI 只从可信路径执行，不从 `pr/` 解析入口、插件或依赖，也不
+      运行 PR 的 `npm install`、生命周期脚本或 package scripts。
+- [x] `LINT-009` 私有仓库的跨仓库 fork 同样能取回 base：同仓库 PR 先短路（不需
+      要网络），跨仓库 fork 用只读 `GITHUB_TOKEN` 以 `-c http.extraheader` 内联
+      认证 fetch，不写入 `.git/config`、不回显认证头。该步骤跑在任何 PR 代码执行
+      之前，执行 PR 代码的步骤本身不带凭据。
+- [x] `LINT-008` 恶意 PR 用例：修改 lint CLI、`dist/lint-report`、package
+      scripts、lint 配置和 workflow，确认实际执行的仍是默认分支 bundle，且
+      两个 checkout 均不保留凭据、只跑 GitHub 托管临时 runner。job 的不变式是
+      「不持有业务密钥或写权限；只读 token 仅用于执行 PR 代码之前的可信 fetch
+      步骤；执行 PR 代码的步骤本身无凭据」，而不是「没有任何 token」——
+      checkout 私有仓库本来就需要只读 token。
 
 ---
 

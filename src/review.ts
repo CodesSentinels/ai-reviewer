@@ -137,7 +137,7 @@ const MAX_LINT_REPORT_BYTES = 8 * 1024 * 1024
 /**
  * 读取并严格校验外部 lint 报告（SEC-002 / SEC-005）。
  *
- * 报告由无密钥 job 产出，内容间接受 PR 作者控制，因此这里把它当敌意数据：
+ * 报告由低权限 lint job 产出，内容间接受 PR 作者控制，因此这里把它当敌意数据：
  * 结构违规整份丢弃、单条目违规逐条丢弃，任何失败都只降级为「没有 lint 结果」，
  * 绝不让审查主流程失败——静态分析是增强项，不是审查的前置条件。
  */
@@ -484,9 +484,9 @@ ${hunks.oldHunk}
   // ==================== 阶段零·B：静态分析工具扫描（Linter/SAST） ====================
   //
   // 两条来源，互斥：
-  //   1. lintReportPath 非空 → 读取无密钥 job 产出的报告（SEC-002）。
+  //   1. lintReportPath 非空 → 读取低权限 lint job 产出的报告（SEC-002）。
   //      本 job 持有密钥，绝不能自己 checkout/执行 PR 代码，因此优先走这条。
-  //   2. 否则 enableLintTools=true → 本地跑工具（仅适用于无密钥执行面）。
+  //   2. 否则 enableLintTools=true → 本地跑工具（仅适用于无业务密钥的执行面）。
   let lintReport: LintReport | null = null
   if (options.lintReportPath) {
     lintReport = loadExternalLintReport(options.lintReportPath)

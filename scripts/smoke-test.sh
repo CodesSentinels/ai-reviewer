@@ -22,6 +22,14 @@ else
   FAIL=1
 fi
 
+echo "--- check: lib/lint-report-entry.js exists (LINT-005) ---"
+if [ -f lib/lint-report-entry.js ]; then
+  echo "PASS: lib/lint-report-entry.js 已生成"
+else
+  echo "FAIL: lib/lint-report-entry.js 不存在，tsc 编译可能未覆盖 lint-only 入口"
+  FAIL=1
+fi
+
 check() {
   local label="$1" cmd="$2" expected_text="$3"
   echo "--- smoke test: ${label} ---"
@@ -56,6 +64,14 @@ check "GitHub bundle (dist/index.js)" \
 check "GitLab bundle (dist/gitlab-trigger/index.js) — 缺凭据" \
   "env -u GITLAB_PAT -u CI_JOB_TOKEN node dist/gitlab-trigger/index.js" \
   "GITLAB_PAT or CI_JOB_TOKEN is required"
+
+check "lint-only bundle (dist/lint-report/index.js) — 缺参数" \
+  "node dist/lint-report/index.js --repo-root /nonexistent" \
+  "usage: --repo-root"
+
+check "lint-only bundle — 拒绝分支名（只接受 40 位 SHA）" \
+  "node dist/lint-report/index.js --repo-root . --base-sha main --head-sha feature --out /dev/null" \
+  "must be full 40-char commit SHAs, not refs"
 
 check "GitLab bundle (dist/gitlab-trigger/index.js) — 缺事件 payload" \
   "env -u TRIGGER_PAYLOAD GITLAB_PAT=glpat-smoke-placeholder node dist/gitlab-trigger/index.js" \

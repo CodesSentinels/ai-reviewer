@@ -1,7 +1,7 @@
 /**
  * lint/report-schema.ts — 外部 lint 报告的严格校验（SEC-002 / SEC-005）
  *
- * P0 第二步把 lint 挪进**无密钥 job**：它 checkout PR head、跑工具、产出 JSON
+ * P0 第二步把 lint 挪进**低权限 job**：它 checkout PR head、跑工具、产出 JSON
  * 报告；有密钥的 reviewer job 只把这份报告当**数据**读回来。
  *
  * 这份数据完全由 PR 作者间接控制——他能决定被扫描的代码，因而能影响工具输出的
