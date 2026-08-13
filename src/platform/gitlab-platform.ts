@@ -53,6 +53,13 @@ import {
 
 export type {GitLabCredential} from './gitlab-client'
 
+/**
+ * 无法解析 bot 用户名时的兜底值（GLAPI-022）。
+ * 它几乎不可能等于真实用户名，所以只是「让流程能继续」，
+ * 不是「身份已确认」——用它的地方必须已经打过降级 warning。
+ */
+export const FALLBACK_BOT_LOGIN = 'gitlab-bot'
+
 // ─── GitLab diff 状态映射 ──────────────────────────────────────────────────
 
 function diffStatus(d: {
@@ -81,13 +88,39 @@ const REACTION_TO_EMOJI: Record<ReactionContent, string> = {
 
 // ─── GitLab AccessLevel → PlatformPermission 映射 ───────────────────────────
 
-function accessLevelToPermission(level: number): PlatformPermission {
-  if (level >= 50) return 'admin' // OWNER
-  if (level >= 40) return 'maintain' // MAINTAINER
-  if (level >= 30) return 'write' // DEVELOPER
-  if (level >= 20) return 'triage' // REPORTER
-  if (level >= 10) return 'read' // GUEST
-  return 'none'
+/**
+ * GitLab access level → PlatformPermission 的**穷举表**（GLAPI-020 / CMD-016）。
+ *
+ * 用穷举而不是 `>=` 阶梯：阶梯会把任何未知高值（60、999、损坏的响应）
+ * 一路提升到 'admin'——权限响应异常时反而给出最高权限，正好是 fail open。
+ * 表里没有的值一律视为不可信，由调用方抛错交上层 fail closed。
+ *
+ * 两个容易漏掉的等级显式落到最保守的一档：
+ * - 5  MINIMAL_ACCESS → none（够不到 Guest，连读都不该假设）
+ * - 15 PLANNER（GitLab 17.7+，Guest 与 Reporter 之间）→ read
+ *      它在 Reporter 之下，够不到命令矩阵里 triage 的门槛
+ *
+ * 60 ADMIN 故意不在表内：那是实例管理员，不是项目成员等级，
+ * 项目成员接口不该返回它。真出现说明响应不对劲，宁可 fail closed 报出来，
+ * 也不要靠 `>= 50` 顺手当 Owner 放行。
+ */
+const ACCESS_LEVEL_TO_PERMISSION: ReadonlyMap<number, PlatformPermission> = new Map<
+  number,
+  PlatformPermission
+>([
+  [0, 'none'], // NO_ACCESS
+  [5, 'none'], // MINIMAL_ACCESS
+  [10, 'read'], // GUEST
+  [15, 'read'], // PLANNER
+  [20, 'triage'], // REPORTER
+  [30, 'write'], // DEVELOPER
+  [40, 'maintain'], // MAINTAINER
+  [50, 'admin'] // OWNER
+])
+
+/** 已知等级 → 权限；未知等级返回 null（调用方必须当成查询失败处理） */
+function accessLevelToPermission(level: number): PlatformPermission | null {
+  return ACCESS_LEVEL_TO_PERMISSION.get(level) ?? null
 }
 
 /** GitLab note → 平台无关 PlatformComment（GLAPI-032：snake_case → camelCase） */
@@ -127,6 +160,8 @@ export class GitLabPlatform implements IGitPlatform {
    * projectPath 和 mrIid，避免跨 MR 混用。
    */
   private discussionIdToContext = new Map<string, {projectPath: string; mrIid: number}>()
+  /** 凭据自检 / 首次查询得到的真实 bot 用户名，避免重复请求 */
+  private verifiedLogin: string | null = null
 
   /**
    * 只接受受信任配置构造（GLAPI-029）：host/凭据/timeout 全部来自
@@ -868,11 +903,20 @@ export class GitLabPlatform implements IGitPlatform {
   /**
    * 按用户名查询项目 access level。
    *
-   * 流程：Users.all({username}) 获取 userId → ProjectMembers.show(projectId, userId, {includeInherited})
-   * 获取 access_level → 映射为 PlatformPermission。
+   * 流程：Users.all({username}) 取 userId → ProjectMembers.all(projectId,
+   * {includeInherited, userIds}) 取 access_level → 映射为 PlatformPermission。
    *
-   * GLAPI-021: 任何环节失败都 fail closed，返回 'none'。
-   * GLAPI-026: 401/403 时把权限诊断写进日志，避免 fail closed 变成无法排查的静默拒绝。
+   * GLAPI-021 / CMD-016 —— 返回 'none' 与抛错的边界必须分清：
+   * - 'none' 只用于**查询成功且答案明确**的两种情况：查无此用户、
+   *   成员列表里没有该用户（不是项目成员，外部贡献者的正常路径）。
+   * - 其余一切都抛 GitPlatformError：401/403/超时/5xx/网络错误、成员接口
+   *   任何错误（含语义含混的 404）、响应结构或 access_level 不合法。这些是
+   *   「不知道」，不是「确认没权限」。把它们折叠成 'none' 会让 permission.ts
+   *   记成 queryFailed=false，dispatcher 随后仍承认 PR 作者豁免——权限 API
+   *   故障期间任何作者都能触发 review/summary，正好是 fail open。
+   *   语义与 GitHub adapter 一致（那边同样是 throw）。
+   *
+   * GLAPI-026: 抛错前把诊断写进日志，避免 fail closed 变成无法排查的静默拒绝。
    */
   async getCollaboratorPermission(
     owner: string,
@@ -880,33 +924,103 @@ export class GitLabPlatform implements IGitPlatform {
     username: string
   ): Promise<PlatformPermission> {
     const projectPath = `${owner}/${repo}`
+
+    // 1. 用户名 → userId
+    let users: any[]
     try {
-      // 1. 用户名 → userId
-      const users = (await withGitLabRetry('getCollaboratorPermission.users', async () =>
+      users = (await withGitLabRetry('getCollaboratorPermission.users', async () =>
         this.api.Users.all(listOptions({username}))
       )) as any[]
-      const user = users.find(
-        (u: any) => (u.username as string).toLowerCase() === username.toLowerCase()
-      )
-      if (!user) return 'none'
-
-      // 2. userId → access_level（includeInherited 包含继承的组权限）
-      const member = (await withGitLabRetry('getCollaboratorPermission.member', async () =>
-        (this.api.ProjectMembers as any).show(projectPath, user.id, {
-          includeInherited: true
-        })
-      )) as any
-      const level: number = member.access_level ?? 0
-
-      return accessLevelToPermission(level)
     } catch (e) {
-      const err = normalizeGitLabError(e, 'getCollaboratorPermission')
-      if (err.errorKind !== 'not_found') {
-        getLogger().warning(`Permission lookup failed, denying access: ${err.message}`)
-      }
-      // GLAPI-021: fail closed
-      return 'none'
+      throw this.permissionLookupFailure(e, 'getCollaboratorPermission.users')
     }
+    const user = users.find(
+      (u: any) =>
+        typeof u?.username === 'string' && u.username.toLowerCase() === username.toLowerCase()
+    )
+    // 查询成功但查无此人 —— 这是明确答案，不是失败
+    if (!user) return 'none'
+    if (typeof user.id !== 'number' || !Number.isInteger(user.id)) {
+      throw this.permissionLookupFailure(
+        new Error(`user lookup returned a non-numeric id for "${username}"`),
+        'getCollaboratorPermission.users'
+      )
+    }
+
+    // 2. userId → access_level。
+    // 用成员**列表**查询而不是 show(userId)：show 对「不是成员」和「项目不存在 /
+    // 项目不可见 / 隐藏的授权失败」返回的都是 404，无法区分，把它一律当成
+    // 「确定不是成员」就会在凭据失效或项目可见性变化时给出 queryFailed=false，
+    // 让 PR 作者豁免继续放行（fail open）。列表查询的语义是明确的：
+    // 200 + 空集合 = 确定不是成员，任何错误（含 404）= 不确定 → 抛错。
+    let members: any[]
+    try {
+      members = (await withGitLabRetry('getCollaboratorPermission.members', async () =>
+        (this.api.ProjectMembers as any).all(
+          projectPath,
+          listOptions({includeInherited: true, userIds: [user.id]})
+        )
+      )) as any[]
+    } catch (e) {
+      throw this.permissionLookupFailure(e, 'getCollaboratorPermission.members')
+    }
+    if (!Array.isArray(members)) {
+      throw this.permissionLookupFailure(
+        new Error('project member list response is not an array'),
+        'getCollaboratorPermission.members'
+      )
+    }
+    // 服务端若忽略 userIds 过滤，这里仍按 id 精确匹配，不会误取他人的等级
+    const member = members.find((m: any) => m?.id === user.id)
+    // 查询成功但不在成员列表里 —— 明确的「不是项目成员」，外部贡献者的正常路径
+    if (!member) return 'none'
+
+    return this.memberAccessToPermission(member.access_level, username)
+  }
+
+  /**
+   * 把成员响应里的 access_level 转成权限等级（CMD-016）。
+   *
+   * 两道关卡，都往 fail closed 的方向倒：
+   * 1. 格式：缺字段、null、字符串、NaN、小数都不是「等级 0」，而是「响应不可信」。
+   *    原来的 `?? 0` 会把它们静默折叠成 'none' + queryFailed=false，放开作者豁免。
+   * 2. 取值：必须是 ACCESS_LEVEL_TO_PERMISSION 里的已知等级。未知值（60、999、
+   *    负数）过去会被 `>= 50` 的阶梯提升成 'admin'——响应越异常权限越高。
+   *
+   * 注意 0 本身是合法值（GitLab NO_ACCESS），不能一并拒掉。
+   */
+  private memberAccessToPermission(raw: unknown, username: string): PlatformPermission {
+    if (typeof raw !== 'number' || !Number.isInteger(raw)) {
+      throw this.permissionLookupFailure(
+        new Error(
+          `project member response for "${username}" has an invalid access_level: ${JSON.stringify(
+            raw
+          )}`
+        ),
+        'getCollaboratorPermission.members'
+      )
+    }
+    const permission = accessLevelToPermission(raw)
+    if (permission == null) {
+      throw this.permissionLookupFailure(
+        new Error(
+          `project member response for "${username}" has an unknown access_level: ${raw} ` +
+            `(known levels: ${[...ACCESS_LEVEL_TO_PERMISSION.keys()].join(', ')})`
+        ),
+        'getCollaboratorPermission.members'
+      )
+    }
+    return permission
+  }
+
+  /** 权限查询的不确定性失败：记录诊断并归一化为 GitPlatformError（调用方 fail closed） */
+  private permissionLookupFailure(e: unknown, operation: string): GitPlatformError {
+    const err = normalizeGitLabError(e, operation)
+    getLogger().warning(
+      `Permission lookup failed (${err.errorKind}): ${err.message} — ` +
+        'result is indeterminate, the caller must fail closed'
+    )
+    return err
   }
 
   // ─── 9. 用户身份（GLAPI-022）───────────────────────────────────────────────
@@ -916,15 +1030,53 @@ export class GitLabPlatform implements IGitPlatform {
    * 用于 bot 自评论过滤（fetchUnresolvedBotThreads 的 botLogin 参数）。
    */
   async getAuthenticatedLogin(): Promise<string> {
+    if (this.verifiedLogin != null) return this.verifiedLogin
+    try {
+      const login = await this.resolveCurrentUsername()
+      this.verifiedLogin = login
+      return login
+    } catch (e) {
+      const err = normalizeGitLabError(e, 'getAuthenticatedLogin')
+      // 说清后果和补救手段：这里返回的名字会被用来匹配 note 作者，
+      // 名字不对 ≠ 报错，而是「一条 bot 评论都识别不出来」的静默失效
+      getLogger().warning(
+        `Failed to resolve the bot username (${err.message}) — falling back to ` +
+          `'${FALLBACK_BOT_LOGIN}'. Bot-authored threads will not be recognized unless ` +
+          'AI_REVIEWER_BOT_GITLAB_LOGIN is set to the real bot username.'
+      )
+      return FALLBACK_BOT_LOGIN
+    }
+  }
+
+  /**
+   * 身份自检（GLAPI-022 / GLAPI-029）：确认当前凭据能解析出自己的用户名。
+   *
+   * **只证明身份，不证明权限能力**：它探的是 `GET /user`，而命令权限判定走的是
+   * `GET /users` + `GET /projects/:id/members`，是另外两个端点、另外的授权范围。
+   * 调用方不得用这里的成功推断「权限查询可用」。凭据类型层面的能力差异见
+   * JOB_TOKEN_LIMITATION_WARNING。
+   *
+   * 与 getAuthenticatedLogin 的区别是**不吞错**——启动期要能区分「凭据有效」
+   * 和「凭据无效」，而不是一律回落到编造的用户名继续往下跑。
+   *
+   * 不进 IGitPlatform：GitHub 的 installation token 本来就调不了 GET /user，
+   * 强行统一只会让 GitHub 侧多一次注定失败的探测。
+   */
+  async verifyCredential(): Promise<string> {
+    const login = await this.resolveCurrentUsername()
+    this.verifiedLogin = login
+    return login
+  }
+
+  /** 查询当前凭据对应的用户名；失败抛 GitPlatformError */
+  private async resolveCurrentUsername(): Promise<string> {
     try {
       const user = (await withGitLabRetry('getAuthenticatedLogin', async () =>
         this.api.Users.showCurrentUser()
       )) as any
       return user.username as string
     } catch (e) {
-      const err = normalizeGitLabError(e, 'getAuthenticatedLogin')
-      getLogger().warning(`Failed to resolve PAT username: ${err.message}`)
-      return 'gitlab-bot'
+      throw normalizeGitLabError(e, 'getAuthenticatedLogin')
     }
   }
 }

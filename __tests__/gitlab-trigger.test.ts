@@ -25,6 +25,13 @@ jest.mock('fs', () => ({
   readFileSync: (...a: any[]) => fsState.readFileSync(...a)
 }))
 
+// 凭据自检会真的调 Users.showCurrentUser()，必须 mock 掉，
+// 否则测试会朝 gitlab.com 发真实请求
+const mockUsers = {showCurrentUser: jest.fn<() => Promise<any>>()}
+jest.mock('@gitbeaker/rest', () => ({
+  Gitlab: jest.fn().mockImplementation(() => ({Users: mockUsers}))
+}))
+
 async function runTrigger(): Promise<void> {
   jest.resetModules()
   await import('../src/gitlab-trigger')
@@ -41,6 +48,8 @@ describe('gitlab-trigger.ts run()', () => {
     delete process.env.TRIGGER_PAYLOAD
     // GitLabPlatform 初始化需要 token
     process.env.GITLAB_PAT = 'glpat-test-token'
+    delete process.env.AI_REVIEWER_BOT_GITLAB_LOGIN
+    mockUsers.showCurrentUser.mockResolvedValue({username: 'ai-reviewer-bot'})
     process.exitCode = undefined
     logSpy = jest.spyOn(console, 'log').mockImplementation(() => {})
     warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {})
@@ -53,6 +62,7 @@ describe('gitlab-trigger.ts run()', () => {
     errorSpy.mockRestore()
     delete process.env.GITLAB_PAT
     delete process.env.CI_JOB_TOKEN
+    delete process.env.AI_REVIEWER_BOT_GITLAB_LOGIN
     process.exitCode = undefined
   })
 
@@ -184,6 +194,81 @@ describe('gitlab-trigger.ts run()', () => {
     expect(errorSpy).not.toHaveBeenCalled()
     expect(process.exitCode).toBeUndefined()
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('is not MergeRequest'))
+  })
+
+  // ─── GLAPI-022/029：凭据自检 ─────────────────────────────────────────────
+
+  describe('身份自检', () => {
+    beforeEach(() => {
+      process.env.TRIGGER_PAYLOAD = '/tmp/payload.json'
+      fsState.readFileSync.mockReturnValue(JSON.stringify(mrOpen))
+    })
+
+    test('自检成功 → 打印真实 bot 身份，不报错', async () => {
+      await runTrigger()
+
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('acting as @ai-reviewer-bot'))
+      expect(process.exitCode).toBeUndefined()
+    })
+
+    test('自检失败且未配置 bot login → 只谈身份后果，不冒充权限结论', async () => {
+      mockUsers.showCurrentUser.mockRejectedValue(new Error('401 Unauthorized'))
+
+      await runTrigger()
+
+      const warned = warnSpy.mock.calls.map(c => String(c[0])).join('\n')
+      expect(warned).toContain('bot identity check failed')
+      expect(warned).toContain('AI_REVIEWER_BOT_GITLAB_LOGIN')
+      // 自检探的是 GET /user，证明不了权限链路（GET /users + /members）的可用性，
+      // 所以不得声称「所有命令会被拒」——那是凭据类型层面的结论
+      expect(warned).not.toContain('deny everyone')
+      expect(warned).not.toContain('permission')
+      // 自检失败不 fail closed：job token 是文档支持的认证方式，只是能力受限
+      expect(process.exitCode).toBeUndefined()
+    })
+
+    test('自检失败但配了 bot login → 降级为「继续用配置值」而不是全量告警', async () => {
+      process.env.AI_REVIEWER_BOT_GITLAB_LOGIN = 'my-bot'
+      mockUsers.showCurrentUser.mockRejectedValue(new Error('401 Unauthorized'))
+
+      await runTrigger()
+
+      const warned = warnSpy.mock.calls.map(c => String(c[0])).join('\n')
+      expect(warned).toContain('using the configured bot login')
+      expect(warned).toContain('my-bot')
+    })
+
+    test('配置的 bot login 与凭据真实身份不一致 → 告警（几乎总是配错了）', async () => {
+      process.env.AI_REVIEWER_BOT_GITLAB_LOGIN = 'wrong-bot'
+
+      await runTrigger()
+
+      const warned = warnSpy.mock.calls.map(c => String(c[0])).join('\n')
+      expect(warned).toContain('wrong-bot')
+      expect(warned).toContain('ai-reviewer-bot')
+      expect(warned).toContain('will not be recognized')
+    })
+
+    test('配置值与真实身份一致（忽略大小写）→ 不告警', async () => {
+      process.env.AI_REVIEWER_BOT_GITLAB_LOGIN = 'AI-Reviewer-Bot'
+
+      await runTrigger()
+
+      const warned = warnSpy.mock.calls.map(c => String(c[0])).join('\n')
+      expect(warned).not.toContain('will not be recognized')
+    })
+
+    test('选中 CI_JOB_TOKEN → 配置期就告知能力降级，不必等运行时 401', async () => {
+      delete process.env.GITLAB_PAT
+      process.env.CI_JOB_TOKEN = 'job-token-value'
+
+      await runTrigger()
+
+      const warned = warnSpy.mock.calls.map(c => String(c[0])).join('\n')
+      expect(warned).toContain('CI_JOB_TOKEN')
+      expect(warned).toContain('/projects/:id/members')
+      expect(warned).toContain('fail closed')
+    })
   })
 
   test('ARCH-015: gitlab-trigger.ts 不 import orchestrator / @actions/core / @actions/github', () => {

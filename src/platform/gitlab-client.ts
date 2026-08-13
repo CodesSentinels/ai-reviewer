@@ -14,6 +14,7 @@
  */
 
 import {Gitlab} from '@gitbeaker/rest'
+import {getLogger} from './logger'
 
 /** GitLab 凭据：PAT 优先，缺失时 fallback 到 CI job token */
 export interface GitLabCredential {
@@ -92,6 +93,19 @@ export function listOptions<T extends Record<string, unknown>>(
   }
 }
 
+/**
+ * CI job token 的能力降级告警（GLAPI-029 / CMD-016）。
+ *
+ * job token 的 API allowlist 不含 `/users` 和 `/projects/:id/members`，
+ * 而命令权限判定（getCollaboratorPermission）正是靠这两个端点。
+ * 结果是每次查询都 401/403 → GLAPI-021 fail closed → 所有人的所有命令被拒。
+ * 这是配置期就能预判的事实，不该等到运行时逐次报错才暴露。
+ */
+export const JOB_TOKEN_LIMITATION_WARNING =
+  'GitLab credential is CI_JOB_TOKEN: job tokens cannot call /users or /projects/:id/members, ' +
+  'so command permission checks will fail closed (every command denied) and MR discussion writes ' +
+  'may be rejected. Set GITLAB_PAT to enable the full feature set.'
+
 /** 配置非法时抛出（fail closed，不回退到默认 host/token） */
 export class GitLabClientConfigError extends Error {
   constructor(message: string) {
@@ -151,6 +165,7 @@ export function validateGitLabTimeoutMS(raw: string): number {
  * - timeout：`AI_REVIEWER_GITLAB_TIMEOUT_MS`，默认 30s
  *
  * 凭据缺失或配置非法时抛 GitLabClientConfigError（fail closed）。
+ * 选中 job token 时会打一条能力降级 warning——见 JOB_TOKEN_LIMITATION_WARNING。
  */
 export function resolveGitLabClientConfig(
   env: Record<string, string | undefined> = process.env
@@ -167,6 +182,11 @@ export function resolveGitLabClientConfig(
       : null
   if (credential == null) {
     throw new GitLabClientConfigError('GITLAB_PAT or CI_JOB_TOKEN is required')
+  }
+
+  // 凭据的能力差异是配置期就能知道的事，不该等到运行时每次调用报 401
+  if (credential.type === 'job_token') {
+    getLogger().warning(JOB_TOKEN_LIMITATION_WARNING)
   }
 
   const timeoutMS = validateGitLabTimeoutMS(

@@ -488,11 +488,19 @@
 
 - [x] `GLAPI-020` 按用户 ID 查询项目 access level。
       — `getCollaboratorPermission` 通过 `Users.all({username})` 获取 userId，
-      再 `ProjectMembers.show(projectId, userId, {includeInherited: true})` 获取
-      access_level，映射为 PlatformPermission（OWNER→admin, MAINTAINER→maintain,
-      DEVELOPER→write, REPORTER→triage, GUEST→read）。
+      再 `ProjectMembers.all(projectId, {includeInherited: true, userIds})` 获取
+      access_level。映射用穷举表而非 `>=` 阶梯（阶梯会把未知高值提升为 admin）：
+      NO_ACCESS(0)→none, MINIMAL_ACCESS(5)→none, GUEST(10)→read, PLANNER(15)→read,
+      REPORTER(20)→triage, DEVELOPER(30)→write, MAINTAINER(40)→maintain,
+      OWNER(50)→admin；表外取值（含 ADMIN(60)）一律抛错 fail closed。
 - [x] `GLAPI-021` 权限查询失败时 fail closed。
-      — Users.all / ProjectMembers.show 任何异常均返回 `'none'`，不抛错。
+      — `'none'` 只用于查询成功且答案明确的情况（查无此用户、成员列表里没有该
+      用户）；成员查询用 `ProjectMembers.all({userIds})` 而非 `show()`，因为
+      `show()` 的 404 无法区分「非成员」与「项目不存在/不可见/授权失败」。
+      其余一切抛 `GitPlatformError`：401/403/超时/5xx/网络错误、成员接口任何
+      错误、响应结构或 `access_level` 不合法，由 `permission.ts` 记为
+      `queryFailed` 并在 dispatcher 侧 fail closed（与 GitHub adapter 同语义，
+      见 CMD-016）。
 - [x] `GLAPI-022` 将 PAT 用户名与命令前缀分开配置。
       — `getAuthenticatedLogin` 通过 `Users.showCurrentUser()` 获取 PAT 用户名，
       失败返回默认 `'gitlab-bot'`。

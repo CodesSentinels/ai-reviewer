@@ -21,6 +21,7 @@ const {
   GitLabClientConfigError,
   GITLAB_CLIENT_DEFAULTS,
   listOptions,
+  JOB_TOKEN_LIMITATION_WARNING,
   PAGINATION_DEFAULTS,
   TREE_PAGINATION_DEFAULTS,
   resolveGitLabClientConfig,
@@ -40,6 +41,36 @@ describe('resolveGitLabClientConfig（GLAPI-029）', () => {
   test('PAT 为空白字符串时 fallback 到 CI_JOB_TOKEN', () => {
     const config = resolveGitLabClientConfig({GITLAB_PAT: '   ', CI_JOB_TOKEN: 'job-token'})
     expect(config.credential).toEqual({type: 'job_token', value: 'job-token'})
+  })
+
+  // job token 的能力边界是配置期就能确定的事实，不该等运行时逐次 401 才暴露
+  test('选中 job token → 打降级 warning，说明命令权限会全拒', () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {})
+    resolveGitLabClientConfig({CI_JOB_TOKEN: 'job-token'})
+    const warned = warnSpy.mock.calls.map(c => String(c[0])).join('\n')
+    warnSpy.mockRestore()
+
+    expect(warned).toContain(JOB_TOKEN_LIMITATION_WARNING)
+    expect(JOB_TOKEN_LIMITATION_WARNING).toContain('/projects/:id/members')
+    expect(JOB_TOKEN_LIMITATION_WARNING).toContain('GITLAB_PAT')
+  })
+
+  test('选中 PAT → 不打 job token 的降级 warning', () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {})
+    resolveGitLabClientConfig({GITLAB_PAT: 'glpat-abc', CI_JOB_TOKEN: 'job-token'})
+    const warned = warnSpy.mock.calls.map(c => String(c[0])).join('\n')
+    warnSpy.mockRestore()
+
+    expect(warned).not.toContain(JOB_TOKEN_LIMITATION_WARNING)
+  })
+
+  test('warning 不含 token 值（GLAPI-029）', () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {})
+    resolveGitLabClientConfig({CI_JOB_TOKEN: 'super-secret-job-token'})
+    const warned = warnSpy.mock.calls.map(c => String(c[0])).join('\n')
+    warnSpy.mockRestore()
+
+    expect(warned).not.toContain('super-secret-job-token')
   })
 
   test('两个凭据都缺失 → fail closed 抛错', () => {

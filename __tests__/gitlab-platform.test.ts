@@ -41,7 +41,7 @@ const mockMergeRequestNoteAwardEmojis = {
   award: jest.fn<any>()
 }
 const mockProjectMembers = {
-  show: jest.fn<any>()
+  all: jest.fn<any>()
 }
 const mockUsers = {
   all: jest.fn<any>(),
@@ -62,7 +62,7 @@ jest.mock('@gitbeaker/rest', () => ({
 }))
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const {GitLabPlatform} = require('../src/platform/gitlab-platform')
+const {GitLabPlatform, FALLBACK_BOT_LOGIN} = require('../src/platform/gitlab-platform')
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const {PAGINATION_DEFAULTS, TREE_PAGINATION_DEFAULTS} = require('../src/platform/gitlab-client')
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -1358,40 +1358,76 @@ describe('GitLabPlatform', () => {
   describe('getCollaboratorPermission', () => {
     test('OWNER (50) → admin', async () => {
       mockUsers.all.mockResolvedValue([{id: 42, username: 'alice'}])
-      mockProjectMembers.show.mockResolvedValue({access_level: 50})
+      mockProjectMembers.all.mockResolvedValue([{id: 42, access_level: 50}])
       const perm = await platform.getCollaboratorPermission('g', 'r', 'alice')
       expect(perm).toBe('admin')
-      expect(mockProjectMembers.show).toHaveBeenCalledWith('g/r', 42, {includeInherited: true})
+      expect(mockProjectMembers.all).toHaveBeenCalledWith(
+        'g/r',
+        expect.objectContaining({includeInherited: true, userIds: [42]})
+      )
     })
 
     test('MAINTAINER (40) → maintain', async () => {
       mockUsers.all.mockResolvedValue([{id: 43, username: 'bob'}])
-      mockProjectMembers.show.mockResolvedValue({access_level: 40})
+      mockProjectMembers.all.mockResolvedValue([{id: 43, access_level: 40}])
       expect(await platform.getCollaboratorPermission('g', 'r', 'bob')).toBe('maintain')
     })
 
     test('DEVELOPER (30) → write', async () => {
       mockUsers.all.mockResolvedValue([{id: 44, username: 'carol'}])
-      mockProjectMembers.show.mockResolvedValue({access_level: 30})
+      mockProjectMembers.all.mockResolvedValue([{id: 44, access_level: 30}])
       expect(await platform.getCollaboratorPermission('g', 'r', 'carol')).toBe('write')
     })
 
     test('REPORTER (20) → triage', async () => {
       mockUsers.all.mockResolvedValue([{id: 45, username: 'dave'}])
-      mockProjectMembers.show.mockResolvedValue({access_level: 20})
+      mockProjectMembers.all.mockResolvedValue([{id: 45, access_level: 20}])
       expect(await platform.getCollaboratorPermission('g', 'r', 'dave')).toBe('triage')
     })
 
     test('GUEST (10) → read', async () => {
       mockUsers.all.mockResolvedValue([{id: 46, username: 'eve'}])
-      mockProjectMembers.show.mockResolvedValue({access_level: 10})
+      mockProjectMembers.all.mockResolvedValue([{id: 46, access_level: 10}])
       expect(await platform.getCollaboratorPermission('g', 'r', 'eve')).toBe('read')
     })
 
     test('NO_ACCESS (0) → none', async () => {
       mockUsers.all.mockResolvedValue([{id: 47, username: 'frank'}])
-      mockProjectMembers.show.mockResolvedValue({access_level: 0})
+      mockProjectMembers.all.mockResolvedValue([{id: 47, access_level: 0}])
       expect(await platform.getCollaboratorPermission('g', 'r', 'frank')).toBe('none')
+    })
+
+    // 这两级过去落在 `>=` 阶梯的缝里，映射从未被显式确定过
+    test('MINIMAL_ACCESS (5) → none（够不到 Guest，连读都不假设）', async () => {
+      mockUsers.all.mockResolvedValue([{id: 60, username: 'minimal'}])
+      mockProjectMembers.all.mockResolvedValue([{id: 60, access_level: 5}])
+      expect(await platform.getCollaboratorPermission('g', 'r', 'minimal')).toBe('none')
+    })
+
+    test('PLANNER (15) → read（在 Reporter 之下，够不到 triage 门槛）', async () => {
+      mockUsers.all.mockResolvedValue([{id: 61, username: 'planner'}])
+      mockProjectMembers.all.mockResolvedValue([{id: 61, access_level: 15}])
+      expect(await platform.getCollaboratorPermission('g', 'r', 'planner')).toBe('read')
+    })
+
+    // 未知等级过去会被 `>= 50` 的阶梯提升成 admin —— 响应越异常权限越高
+    test.each([[60], [51], [999], [-1], [7]])(
+      '未知 access_level %s → 抛错，绝不提升为 admin',
+      async level => {
+        mockUsers.all.mockResolvedValue([{id: 62, username: 'weird'}])
+        mockProjectMembers.all.mockResolvedValue([{id: 62, access_level: level}])
+        await expect(platform.getCollaboratorPermission('g', 'r', 'weird')).rejects.toThrow(
+          GitPlatformError
+        )
+      }
+    )
+
+    test('未知等级的报错信息列出已知等级，便于排查', async () => {
+      mockUsers.all.mockResolvedValue([{id: 62, username: 'weird'}])
+      mockProjectMembers.all.mockResolvedValue([{id: 62, access_level: 60}])
+      await expect(platform.getCollaboratorPermission('g', 'r', 'weird')).rejects.toThrow(
+        /unknown access_level: 60/
+      )
     })
 
     test('用户名不存在 → none', async () => {
@@ -1401,7 +1437,7 @@ describe('GitLabPlatform', () => {
 
     test('用户名大小写不敏感', async () => {
       mockUsers.all.mockResolvedValue([{id: 48, username: 'Alice'}])
-      mockProjectMembers.show.mockResolvedValue({access_level: 30})
+      mockProjectMembers.all.mockResolvedValue([{id: 48, access_level: 30}])
       expect(await platform.getCollaboratorPermission('g', 'r', 'alice')).toBe('write')
     })
 
@@ -1410,30 +1446,134 @@ describe('GitLabPlatform', () => {
         {id: 50, username: 'alice-dev'},
         {id: 51, username: 'alice'}
       ])
-      mockProjectMembers.show.mockResolvedValue({access_level: 40})
+      mockProjectMembers.all.mockResolvedValue([{id: 51, access_level: 40}])
       await platform.getCollaboratorPermission('g', 'r', 'alice')
-      expect(mockProjectMembers.show).toHaveBeenCalledWith('g/r', 51, {includeInherited: true})
+      expect(mockProjectMembers.all).toHaveBeenCalledWith(
+        'g/r',
+        expect.objectContaining({userIds: [51]})
+      )
     })
 
-    test('GLAPI-021: Users.all 失败 → fail closed 返回 none', async () => {
+    // CMD-016：'none'（确认无权限）与抛错（查询失败）必须分开——
+    // 折叠成 'none' 会让 dispatcher 仍然承认 PR 作者豁免，等于 fail open
+    test('成员列表为空（不是项目成员）→ 明确的 none，不抛错', async () => {
+      mockUsers.all.mockResolvedValue([{id: 42, username: 'alice'}])
+      mockProjectMembers.all.mockResolvedValue([])
+      // 外部贡献者走的就是这条路，必须能拿到确定答案，否则自己 MR 上的作者豁免会被误杀
+      expect(await platform.getCollaboratorPermission('g', 'r', 'alice')).toBe('none')
+    })
+
+    test('成员列表非空但没有该用户 id → none（服务端忽略 userIds 过滤时也不误取他人等级）', async () => {
+      mockUsers.all.mockResolvedValue([{id: 42, username: 'alice'}])
+      mockProjectMembers.all.mockResolvedValue([{id: 99, access_level: 50}])
+      expect(await platform.getCollaboratorPermission('g', 'r', 'alice')).toBe('none')
+    })
+
+    // 成员接口的 404 语义含混：不是成员、项目不存在、项目不可见、隐藏的授权失败
+    // 都是 404。当成「确定不是成员」会在凭据失效/可见性变化时放开作者豁免。
+    test('成员接口 404 → 抛错而不是当成「确定不是成员」', async () => {
+      mockUsers.all.mockResolvedValue([{id: 42, username: 'alice'}])
+      mockProjectMembers.all.mockRejectedValue(
+        Object.assign(new Error('404 Project Not Found'), {response: {status: 404}})
+      )
+      await expect(platform.getCollaboratorPermission('g', 'r', 'alice')).rejects.toThrow(
+        GitPlatformError
+      )
+    })
+
+    // access_level 异常不是「等级 0」，是「响应不可信」
+    test.each([
+      ['缺字段', {}],
+      ['null', {access_level: null}],
+      ['字符串', {access_level: '30'}],
+      ['NaN', {access_level: Number.NaN}],
+      ['小数', {access_level: 30.5}]
+    ])('access_level 格式非法（%s）→ 抛错而不是折叠成 none', async (_label, member) => {
+      mockUsers.all.mockResolvedValue([{id: 42, username: 'alice'}])
+      mockProjectMembers.all.mockResolvedValue([{id: 42, ...(member as object)}])
+      await expect(platform.getCollaboratorPermission('g', 'r', 'alice')).rejects.toThrow(
+        GitPlatformError
+      )
+    })
+
+    test('access_level 0 是合法值（NO_ACCESS），不能一并拒掉', async () => {
+      mockUsers.all.mockResolvedValue([{id: 42, username: 'alice'}])
+      mockProjectMembers.all.mockResolvedValue([{id: 42, access_level: 0}])
+      expect(await platform.getCollaboratorPermission('g', 'r', 'alice')).toBe('none')
+    })
+
+    test('成员响应不是数组 → 抛错', async () => {
+      mockUsers.all.mockResolvedValue([{id: 42, username: 'alice'}])
+      mockProjectMembers.all.mockResolvedValue({access_level: 30} as any)
+      await expect(platform.getCollaboratorPermission('g', 'r', 'alice')).rejects.toThrow(
+        GitPlatformError
+      )
+    })
+
+    test('用户条目缺 username → 不参与匹配（不会 TypeError 逃逸）', async () => {
+      mockUsers.all.mockResolvedValue([{id: 1}, {id: 42, username: 'alice'}])
+      mockProjectMembers.all.mockResolvedValue([{id: 42, access_level: 30}])
+      expect(await platform.getCollaboratorPermission('g', 'r', 'alice')).toBe('write')
+    })
+
+    test('用户 id 非整数 → 抛错（不拿脏 id 去查成员）', async () => {
+      mockUsers.all.mockResolvedValue([{id: 'x42', username: 'alice'}])
+      await expect(platform.getCollaboratorPermission('g', 'r', 'alice')).rejects.toThrow(
+        GitPlatformError
+      )
+      expect(mockProjectMembers.all).not.toHaveBeenCalled()
+    })
+
+    test.each([
+      ['401 Unauthorized', 401],
+      ['403 Forbidden', 403],
+      ['500 Internal Server Error', 500]
+    ])('Users.all %s → 抛 GitPlatformError（不确定，不是「无权限」）', async (msg, status) => {
+      mockUsers.all.mockRejectedValue(Object.assign(new Error(msg), {response: {status}}))
+      await expect(platform.getCollaboratorPermission('g', 'r', 'alice')).rejects.toThrow(
+        GitPlatformError
+      )
+    })
+
+    test('Users.all 网络错误 → 抛 GitPlatformError', async () => {
       mockUsers.all.mockRejectedValue(new Error('Network Error'))
-      expect(await platform.getCollaboratorPermission('g', 'r', 'alice')).toBe('none')
+      await expect(platform.getCollaboratorPermission('g', 'r', 'alice')).rejects.toThrow(
+        GitPlatformError
+      )
     })
 
-    test('GLAPI-021: ProjectMembers.show 404（非成员）→ fail closed 返回 none', async () => {
+    test.each([
+      ['401 Unauthorized', 401],
+      ['403 Forbidden', 403],
+      ['500 Internal Server Error', 500]
+    ])('成员列表查询 %s → 抛 GitPlatformError（不确定，不是「无权限」）', async (msg, status) => {
       mockUsers.all.mockResolvedValue([{id: 42, username: 'alice'}])
-      mockProjectMembers.show.mockRejectedValue(
-        Object.assign(new Error('404'), {response: {status: 404}})
+      mockProjectMembers.all.mockRejectedValue(Object.assign(new Error(msg), {response: {status}}))
+      await expect(platform.getCollaboratorPermission('g', 'r', 'alice')).rejects.toThrow(
+        GitPlatformError
       )
-      expect(await platform.getCollaboratorPermission('g', 'r', 'alice')).toBe('none')
     })
 
-    test('GLAPI-021: ProjectMembers.show 500 → fail closed 返回 none', async () => {
-      mockUsers.all.mockResolvedValue([{id: 42, username: 'alice'}])
-      mockProjectMembers.show.mockRejectedValue(
-        Object.assign(new Error('500'), {response: {status: 500}})
+    test('抛错前打诊断日志（fail closed 不能变成无法排查的静默拒绝，GLAPI-026）', async () => {
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {})
+      mockUsers.all.mockRejectedValue(
+        Object.assign(new Error('401 Unauthorized'), {response: {status: 401}})
       )
-      expect(await platform.getCollaboratorPermission('g', 'r', 'alice')).toBe('none')
+
+      await expect(platform.getCollaboratorPermission('g', 'r', 'alice')).rejects.toThrow()
+      const warned = warnSpy.mock.calls.map(c => String(c[0])).join('\n')
+      warnSpy.mockRestore()
+
+      expect(warned).toContain('Permission lookup failed')
+      expect(warned).toContain('indeterminate')
+    })
+
+    test('与 GitHub adapter 语义一致：两边都对不确定失败抛错', async () => {
+      // 语义漂移会让同一份 dispatcher 代码在两个平台上得到相反的安全结论
+      mockUsers.all.mockRejectedValue(Object.assign(new Error('403'), {response: {status: 403}}))
+      await expect(platform.getCollaboratorPermission('g', 'r', 'alice')).rejects.toThrow(
+        GitPlatformError
+      )
     })
   })
 
@@ -1447,7 +1587,50 @@ describe('GitLabPlatform', () => {
 
     test('API 失败 → 返回默认 gitlab-bot', async () => {
       mockUsers.showCurrentUser.mockRejectedValue(new Error('401'))
-      expect(await platform.getAuthenticatedLogin()).toBe('gitlab-bot')
+      expect(await platform.getAuthenticatedLogin()).toBe(FALLBACK_BOT_LOGIN)
+    })
+
+    test('API 失败时的 warning 必须说清后果和补救手段（不能只说「失败了」）', async () => {
+      mockUsers.showCurrentUser.mockRejectedValue(new Error('401'))
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {})
+
+      await platform.getAuthenticatedLogin()
+
+      const joined = warnSpy.mock.calls.map(c => String(c[0])).join('\n')
+      warnSpy.mockRestore()
+      expect(joined).toContain('will not be recognized')
+      expect(joined).toContain('AI_REVIEWER_BOT_GITLAB_LOGIN')
+    })
+
+    test('成功结果被缓存，重复调用不再打 API', async () => {
+      mockUsers.showCurrentUser.mockResolvedValue({username: 'review-bot'})
+
+      await platform.getAuthenticatedLogin()
+      await platform.getAuthenticatedLogin()
+
+      expect(mockUsers.showCurrentUser).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  // ─── verifyCredential（GLAPI-022/029）────────────────────────────────────
+
+  describe('verifyCredential', () => {
+    test('成功返回真实用户名', async () => {
+      mockUsers.showCurrentUser.mockResolvedValue({username: 'review-bot'})
+      expect(await platform.verifyCredential()).toBe('review-bot')
+    })
+
+    test('失败时抛错而不是伪装成功（与 getAuthenticatedLogin 的区别）', async () => {
+      mockUsers.showCurrentUser.mockRejectedValue(new Error('401 Unauthorized'))
+      await expect(platform.verifyCredential()).rejects.toThrow(GitPlatformError)
+    })
+
+    test('自检结果被 getAuthenticatedLogin 复用，不重复打 API', async () => {
+      mockUsers.showCurrentUser.mockResolvedValue({username: 'review-bot'})
+
+      await platform.verifyCredential()
+      expect(await platform.getAuthenticatedLogin()).toBe('review-bot')
+      expect(mockUsers.showCurrentUser).toHaveBeenCalledTimes(1)
     })
   })
 })

@@ -39,7 +39,7 @@ const mockMergeRequestDiscussions = {
   resolve: jest.fn<any>()
 }
 const mockMergeRequestNoteAwardEmojis = {award: jest.fn<any>()}
-const mockProjectMembers = {show: jest.fn<any>()}
+const mockProjectMembers = {all: jest.fn<any>()}
 const mockUsers = {all: jest.fn<any>(), showCurrentUser: jest.fn<any>()}
 
 jest.mock('@gitbeaker/rest', () => ({
@@ -103,8 +103,10 @@ describe('GitLab adapter 稳定性契约', () => {
       mockMergeRequestNotes.all.mockResolvedValue([])
       mockMergeRequestDiscussions.all.mockResolvedValue([])
       mockRepositories.allRepositoryTrees.mockResolvedValue([])
-      mockUsers.all.mockResolvedValue([])
-      mockProjectMembers.show.mockResolvedValue({access_level: 30})
+      // 成员列表也是 list API（GLAPI-021 改用列表查询后），必须一起纳入契约断言，
+      // 所以这里让用户查询命中，否则 getCollaboratorPermission 会提前返回
+      mockUsers.all.mockResolvedValue([{id: 1, username: 'alice'}])
+      mockProjectMembers.all.mockResolvedValue([{id: 1, access_level: 30}])
 
       await platform.listChangeRequestCommits('g', 'r', 1)
       await platform.listComments('g', 'r', 1)
@@ -118,7 +120,8 @@ describe('GitLab adapter 稳定性契约', () => {
         [mockMergeRequestNotes.all.mock.calls[0][2], PAGINATION_DEFAULTS],
         [mockMergeRequestDiscussions.all.mock.calls[0][2], PAGINATION_DEFAULTS],
         [mockRepositories.allRepositoryTrees.mock.calls[0][1], TREE_PAGINATION_DEFAULTS],
-        [mockUsers.all.mock.calls[0][0], PAGINATION_DEFAULTS]
+        [mockUsers.all.mock.calls[0][0], PAGINATION_DEFAULTS],
+        [mockProjectMembers.all.mock.calls[0][1], PAGINATION_DEFAULTS]
       ] as const
       for (const [opts, contract] of listCalls) {
         expect(opts).toMatchObject({
@@ -238,9 +241,14 @@ describe('GitLab adapter 稳定性契约', () => {
       expect(mockMergeRequestNotes.all).toHaveBeenCalledTimes(1)
     })
 
-    test('权限查询 401 时 fail closed 返回 none 且不重试（GLAPI-021 + GLAPI-026）', async () => {
+    test('权限查询 401 时抛错且不重试（GLAPI-021/026 + CMD-016）', async () => {
       mockUsers.all.mockRejectedValue(requestError(401))
-      await expect(platform.getCollaboratorPermission('g', 'r', 'alice')).resolves.toBe('none')
+      // 抛错而不是返回 'none'：401 是「不知道」，不是「确认无权限」。
+      // 返回 'none' 会让 permission.ts 记成 queryFailed=false，
+      // dispatcher 随后仍承认 PR 作者豁免 → 权限 API 故障期间 fail open。
+      await expect(platform.getCollaboratorPermission('g', 'r', 'alice')).rejects.toThrow(
+        GitPlatformError
+      )
       expect(mockUsers.all).toHaveBeenCalledTimes(1)
     })
   })

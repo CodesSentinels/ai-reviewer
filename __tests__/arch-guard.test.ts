@@ -185,7 +185,11 @@ describe('ARCH-024: @gitbeaker/rest 类型不泄露到 IGitPlatform 或共享核
 
   test('gitlab-platform.ts 只导出项目自定义类型（allowlist）', () => {
     // 允许导出的项目自定义标识符（新增 export 时必须同步更新此列表）
-    const allowedExports = new Set(['GitLabCredential', 'GitLabPlatform'])
+    const allowedExports = new Set([
+      'GitLabCredential',
+      'GitLabPlatform',
+      'FALLBACK_BOT_LOGIN' // GLAPI-022：bot 用户名兜底值，项目自定义字符串常量
+    ])
 
     // 匹配所有 export 声明的标识符名称（覆盖多行情况）
     const exportPattern = /export\s+(?:interface|class|type|function|const|enum)\s+(\w+)/g

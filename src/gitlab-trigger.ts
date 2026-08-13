@@ -23,6 +23,47 @@ import {checkForkMergeRequest} from './gitlab-mr-hook-rules'
 
 const logger = new GitLabLogger()
 
+/**
+ * 启动期身份自检（GLAPI-022/029）。
+ *
+ * 作用范围严格限定在**身份**：探 `GET /user`，回答「凭据能不能解析出自己是谁」。
+ * 它证明不了权限查询可用——那条链路走的是 `GET /users` +
+ * `GET /projects/:id/members`，是另外的端点和授权范围。所以这里的日志只谈
+ * bot 身份，不谈命令权限；凭据类型层面的能力差异由
+ * JOB_TOKEN_LIMITATION_WARNING 在配置期声明，运行期的权限判定由
+ * getCollaboratorPermission 抛错 + dispatcher 的 queryFailed 分支 fail closed。
+ *
+ * 自检失败不中止运行：CI_JOB_TOKEN 是文档里支持的认证方式，只是能力受限。
+ */
+async function verifyBotIdentity(platform: GitLabPlatform): Promise<void> {
+  const configuredLogin = (process.env.AI_REVIEWER_BOT_GITLAB_LOGIN ?? '').trim()
+  try {
+    const login = await platform.verifyCredential()
+    logger.info(`GitLab bot identity resolved: acting as @${login}`)
+    if (configuredLogin !== '' && configuredLogin.toLowerCase() !== login.toLowerCase()) {
+      // 配置值优先级更高，但两者不一致几乎总是配错了，必须说出来
+      logger.warning(
+        `AI_REVIEWER_BOT_GITLAB_LOGIN is "${configuredLogin}" but the credential belongs to ` +
+          `"${login}" — bot-authored threads will not be recognized.`
+      )
+    }
+  } catch (e) {
+    const detail = redact(e instanceof Error ? e.message : String(e))
+    if (configuredLogin !== '') {
+      logger.warning(
+        `GitLab bot identity check failed (${detail}); using the configured bot login ` +
+          `"${configuredLogin}".`
+      )
+      return
+    }
+    logger.warning(
+      `GitLab bot identity check failed (${detail}) and AI_REVIEWER_BOT_GITLAB_LOGIN is not set. ` +
+        'Bot-authored threads will not be recognized. Set AI_REVIEWER_BOT_GITLAB_LOGIN to the ' +
+        'bot username, or use a GITLAB_PAT whose identity can be resolved.'
+    )
+  }
+}
+
 export async function run(): Promise<void> {
   // 初始化 GitLab Logger（ARCH-014）+ Platform（ARCH-018/020）
   setLogger(logger)
@@ -39,7 +80,8 @@ export async function run(): Promise<void> {
   // 摘要只含 host/凭据类型/timeout，不含 token（GLAPI-029）；
   // 走 debug 级别，避免在事件被拒绝（如 fork MR）前产生无关输出
   logger.debug(`GitLab client: ${describeGitLabClientConfig(clientConfig)}`)
-  setPlatform(new GitLabPlatform(clientConfig))
+  const platform = new GitLabPlatform(clientConfig)
+  setPlatform(platform)
   // GH-014 / STATE-006：本次运行写入的 marker / 幂等键带 gitlab: 命名空间
   setStateNamespace('gitlab')
 
@@ -100,6 +142,10 @@ export async function run(): Promise<void> {
   logger.info(
     `GitLab event validated: platform=${execCtx.platform} eventKind=${execCtx.eventKind} project=${execCtx.projectPath} mr=${execCtx.changeRequestId}`
   )
+
+  // 事件被接受之后才自检：被拒绝的事件（fork MR、无关事件）不该产生无关输出，
+  // 也不该为此多打一次 API
+  await verifyBotIdentity(platform)
   // TODO: 待 GLAPI-* 补全后，此处调用 runOrchestrator 或 dispatchEvent 执行审查。
 }
 

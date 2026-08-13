@@ -40,8 +40,10 @@ const LADDER: PermissionLevel[] = ['none', 'read', 'triage', 'write', 'maintain'
 
 /**
  * 权限基线，来源：docs/github-vs-gitlab-runtime-differences.md 命令对照表。
- * GitLab access level → PlatformPermission 的映射见 gitlab-platform.ts：
- * OWNER→admin / MAINTAINER→maintain / DEVELOPER→write / REPORTER→triage / GUEST→read
+ * GitLab access level → PlatformPermission 的映射见 gitlab-platform.ts 的
+ * ACCESS_LEVEL_TO_PERMISSION 穷举表：OWNER(50)→admin / MAINTAINER(40)→maintain /
+ * DEVELOPER(30)→write / REPORTER(20)→triage / PLANNER(15)、GUEST(10)→read /
+ * MINIMAL_ACCESS(5)、NO_ACCESS(0)→none；表外取值抛错，由调用方 fail closed
  */
 const MATRIX: Array<{
   command: string
