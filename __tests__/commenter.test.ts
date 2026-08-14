@@ -12,12 +12,26 @@
  */
 import {describe, expect, test, jest, beforeEach} from '@jest/globals'
 
-// ─── Stub @actions/github（payload 需可变：comment() 按事件类型取 target）──────
-const mockContext: any = {
-  repo: {owner: 'o', repo: 'r'},
-  payload: {}
+// ─── 执行上下文（ARCH-005：Commenter 不再读 @actions/github）────────────────
+// 迁移前这里 stub 的是 `@actions/github` 的 context——那正是让 GitLab 入口
+// 在模块加载期就崩掉的依赖，也正因为被 mock 掉，旧用例完全看不到这个问题。
+import {setExecCtx, resetExecCtx} from '../src/platform/run-context'
+import type {ExecutionContext} from '../src/platform/execution-context'
+
+function execCtx(over: Partial<ExecutionContext> = {}): ExecutionContext {
+  return {
+    platform: 'github',
+    projectPath: 'o/r',
+    projectId: 'o/r',
+    changeRequestId: 7,
+    eventKind: 'pr_opened',
+    actor: {login: 'someone', isBot: false},
+    baseSha: 'base',
+    headSha: 'head',
+    raw: {},
+    ...over
+  } as ExecutionContext
 }
-jest.mock('@actions/github', () => ({context: mockContext}))
 
 // ─── Stub logger ────────────────────────────────────────────────────────────
 const logs = {
@@ -67,7 +81,8 @@ function reviewComment(id: number, path: string, line: number, body: string, sta
 
 beforeEach(() => {
   jest.clearAllMocks()
-  mockContext.payload = {pull_request: {number: 7}}
+  resetExecCtx()
+  setExecCtx(execCtx({changeRequestId: 7}))
   platform.createComment.mockResolvedValue(issueComment(100, 'created'))
   platform.updateComment.mockResolvedValue(undefined)
   platform.deleteComment.mockResolvedValue(undefined)
@@ -160,16 +175,16 @@ describe('GH-006: PR 顶层 summary 评论的查找、创建与更新', () => {
     expect(body).toContain(commentTag())
   })
 
-  test('issue 事件 → target 取 issue.number', async () => {
-    mockContext.payload = {issue: {number: 33}}
+  test('顶层评论事件 → target 取归一化后的 changeRequestId', async () => {
+    setExecCtx(execCtx({changeRequestId: 33, eventKind: 'comment_created'}))
 
     await new Commenter().comment('body', summarizeTag(), 'create')
 
     expect((platform.createComment.mock.calls[0] as any[])[2]).toBe(33)
   })
 
-  test('payload 既无 pull_request 也无 issue → 跳过且不调用平台（fail closed）', async () => {
-    mockContext.payload = {}
+  test('上下文没有 change request id → 跳过且不调用平台（fail closed）', async () => {
+    setExecCtx(execCtx({changeRequestId: 0}))
 
     await new Commenter().comment('body', summarizeTag(), 'create')
 

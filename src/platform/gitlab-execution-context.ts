@@ -151,6 +151,10 @@ function buildFromNoteHook(p: Record<string, any>): ExecutionContext {
     comment: {
       kind: attrs.discussion_id ? 'review_thread' : 'top_level',
       id: attrs.id,
+      // 正文必须填：共享 dispatcher 以 `typeof comment.body === 'string'` 作为
+      // 「这是一条可解析的评论」的判据，缺了它所有 GitLab 命令都会在解析前
+      // 就被当成「missing comment body」静默丢弃。
+      body: typeof attrs.note === 'string' ? attrs.note : undefined,
       threadId: attrs.discussion_id
     },
     raw: p

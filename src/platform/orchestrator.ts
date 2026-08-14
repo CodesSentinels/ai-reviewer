@@ -22,6 +22,7 @@ import type {ExecutionContext} from './execution-context'
 import type {Logger} from './logger'
 import {Prompts} from '../prompts'
 import {codeReview} from '../review'
+import {setExecCtx} from './run-context'
 
 // re-export 供已有消费方（tests/main.ts）不需要改 import 路径
 export {handleExecCtxError} from './exec-ctx-error-handler'
@@ -113,6 +114,10 @@ export async function runOrchestrator(deps: OrchestratorDeps): Promise<void> {
     handleExecCtxError(e, logger, onFailed)
     return
   }
+
+  // 共享核心里拿不到 execCtx 参数的位置（Commenter 等）通过模块级上下文读取，
+  // 两个入口都经由本函数，所以在这里登记一次即可覆盖 review 与命令两条路径
+  setExecCtx(execCtx)
 
   logger.info(`Event: platform=${execCtx.platform} eventKind=${execCtx.eventKind}`)
 

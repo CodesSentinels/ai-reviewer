@@ -192,6 +192,19 @@ describe('GH-017: GitLab 不可达时 GitHub 全功能仍然通过', () => {
     commenterState.addInProgressStatus.mockReturnValue('IN_PROGRESS')
     commenterState.addReviewedCommitId.mockReturnValue('<!-- reviewed-commit-ids -->')
 
+    // ARCH-005：PR 详情统一经 octokit.pulls.get 现查
+    octokitState.pullsGet.mockResolvedValue({
+      data: {
+        number: 42,
+        title: 'GitHub-only regression',
+        body: 'body',
+        state: 'open',
+        base: {sha: 'base-sha-0001', ref: 'main'},
+        head: {sha: 'head-sha-0001', ref: 'feature'},
+        user: {login: 'someone'}
+      }
+    })
+
     octokitState.compareCommits.mockResolvedValue({
       data: {
         files: [

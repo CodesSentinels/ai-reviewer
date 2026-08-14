@@ -174,6 +174,20 @@ describe('I1: main.ts → ExecutionContext → codeReview/handleCommentEvent 全
     commenterState.addInProgressStatus.mockReturnValue('IN_PROGRESS')
     commenterState.addReviewedCommitId.mockReturnValue('<!-- reviewed-commit-ids -->')
 
+    // ARCH-005：codeReview 现在统一经 IGitPlatform.getChangeRequest() 现查 PR 详情
+    // （GitHubPlatform → octokit.pulls.get），不再读 context.payload.pull_request
+    octokitState.pullsGet.mockResolvedValue({
+      data: {
+        number: 42,
+        title: 'Add execution context integration',
+        body: 'body',
+        state: 'open',
+        base: {sha: 'base-sha-0001', ref: 'main'},
+        head: {sha: 'head-sha-0001', ref: 'feature'},
+        user: {login: 'someone'}
+      }
+    })
+
     octokitState.compareCommits.mockResolvedValue({
       data: {
         files: [

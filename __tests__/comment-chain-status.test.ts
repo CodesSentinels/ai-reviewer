@@ -9,13 +9,21 @@
  */
 import {describe, expect, test, jest, beforeEach} from '@jest/globals'
 
-// ─── Stub @actions/github ──────────────────────────────────────────────────
-jest.mock('@actions/github', () => ({
-  context: {
-    repo: {owner: 'o', repo: 'r'},
-    payload: {}
-  }
-}))
+// ─── 执行上下文（ARCH-005：Commenter 不再读 @actions/github）────────────────
+import {setExecCtx} from '../src/platform/run-context'
+import type {ExecutionContext} from '../src/platform/execution-context'
+
+setExecCtx({
+  platform: 'github',
+  projectPath: 'o/r',
+  projectId: 'o/r',
+  changeRequestId: 1,
+  eventKind: 'pr_opened',
+  actor: {login: 'someone', isBot: false},
+  baseSha: 'base',
+  headSha: 'head',
+  raw: {}
+} as ExecutionContext)
 
 // ─── Stub platform logger ─────────────────────────────────────────────────
 jest.mock('../src/platform/logger', () => ({

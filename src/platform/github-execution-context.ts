@@ -138,7 +138,8 @@ export function createGitHubExecutionContext(): ExecutionContext {
     comment: {
       kind: eventKind === 'review_comment_created' ? 'review_thread' : 'top_level',
       id: comment.id,
-      body: typeof comment.body === 'string' ? comment.body : undefined
+      body: typeof comment.body === 'string' ? comment.body : undefined,
+      nodeId: typeof comment.node_id === 'string' ? comment.node_id : undefined
       // threadId 故意不填充——见 CommentRef.threadId 的文档注释（ARCH-021/Issue #88 P2）。
     },
     raw: githubContext.payload

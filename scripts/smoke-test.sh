@@ -83,3 +83,66 @@ if [ "$FAIL" -ne 0 ]; then
 fi
 
 echo "冒烟测试全部通过"
+
+# ─── GitLab bundle 在零 GITHUB_* 环境下必须能跑到事件分发（ARCH-005）──────────
+#
+# 这是长期挡住 gitlab-trigger 接入审查核心的那个故障：review.ts / commenter.ts
+# 在模块级求值 @actions/github 的 context.repo，没有 GITHUB_REPOSITORY 就抛，
+# 于是 GitLab 入口在**加载期**崩溃，run() 根本执行不到。
+#
+# 这里用假 token 跑真实产物：预期走到 getChangeRequest 的 401，而不是加载期崩溃。
+echo "--- smoke test: GitLab bundle 在零 GITHUB_* 环境下完成事件分发 ---"
+GITLAB_SMOKE_PAYLOAD="$(mktemp)"
+cat > "$GITLAB_SMOKE_PAYLOAD" <<'PAYLOAD'
+{"object_kind":"merge_request","project":{"id":77,"path_with_namespace":"group/demo"},
+ "user":{"username":"alice"},
+ "object_attributes":{"iid":42,"action":"open","source_project_id":77,"target_project_id":77,
+ "last_commit":{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+ "oldrev":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}
+PAYLOAD
+
+GITLAB_SMOKE_OUT="$(env -u GITHUB_REPOSITORY -u GITHUB_EVENT_PATH -u GITHUB_EVENT_NAME \
+  -u GITHUB_ACTION -u GITHUB_SERVER_URL -u GITHUB_TOKEN \
+  GITLAB_HOST=https://gitlab.invalid GITLAB_PAT=glpat-smoketestplaceholder \
+  TRIGGER_PAYLOAD="$GITLAB_SMOKE_PAYLOAD" OPENAI_API_KEY=sk-smoke-test \
+  node dist/gitlab-trigger/index.js 2>&1)"
+rm -f "$GITLAB_SMOKE_PAYLOAD"
+
+# note 事件走的是另一条分发分支（命令/对话），MR 事件绿不代表它也通——
+# 第一版接线就是 MR 通、note 全部静默丢弃。两条都要跑。
+GITLAB_NOTE_PAYLOAD="$(mktemp)"
+cat > "$GITLAB_NOTE_PAYLOAD" <<'PAYLOAD'
+{"object_kind":"note","project":{"id":77,"path_with_namespace":"group/demo"},"project_id":77,
+ "user":{"username":"alice"},"merge_request":{"iid":42,"diff_head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+ "object_attributes":{"id":9001,"action":"create","note":"@ai-reviewer help",
+ "noteable_type":"MergeRequest","system":false}}
+PAYLOAD
+
+GITLAB_NOTE_OUT="$(env -u GITHUB_REPOSITORY -u GITHUB_EVENT_PATH -u GITHUB_EVENT_NAME \
+  -u GITHUB_ACTION -u GITHUB_SERVER_URL -u GITHUB_TOKEN \
+  GITLAB_HOST=https://gitlab.invalid GITLAB_PAT=glpat-smoketestplaceholder \
+  TRIGGER_PAYLOAD="$GITLAB_NOTE_PAYLOAD" OPENAI_API_KEY=sk-smoke-test \
+  node dist/gitlab-trigger/index.js 2>&1)"
+rm -f "$GITLAB_NOTE_PAYLOAD"
+
+if echo "$GITLAB_NOTE_OUT" | grep -q "missing comment body"; then
+  echo "FAIL: note 事件被当成「无评论正文」丢弃（comment.body 未填充）"
+  FAIL=1
+elif echo "$GITLAB_NOTE_OUT" | grep -q "eventKind=comment_created"; then
+  echo "PASS: note 事件分发到达命令路径"
+else
+  echo "FAIL: note 事件未走到命令分发，实际输出："
+  echo "$GITLAB_NOTE_OUT" | head -5
+  FAIL=1
+fi
+
+if echo "$GITLAB_SMOKE_OUT" | grep -q "GITHUB_REPOSITORY"; then
+  echo "FAIL: GitLab bundle 仍在向 @actions/github 要 GITHUB_REPOSITORY（加载期崩溃回归）"
+  FAIL=1
+elif echo "$GITLAB_SMOKE_OUT" | grep -q "eventKind=pr_opened"; then
+  echo "PASS: 事件分发到达共享核心（platform=gitlab eventKind=pr_opened）"
+else
+  echo "FAIL: 未走到事件分发，实际输出："
+  echo "$GITLAB_SMOKE_OUT" | head -5
+  FAIL=1
+fi

@@ -7,9 +7,9 @@
  * 3. 全局异常处理
  */
 import {setFailed, warning} from './actions-log'
-import {Bot} from './bot'
 import {tryEarlyReaction} from './commands/early-reaction'
-import {OpenAIOptions, type Options} from './options'
+import {type Options} from './options'
+import {createBots as createBotPair} from './bot-factory'
 import {createGitHubExecutionContext} from './platform/github-execution-context'
 import {GitHubConfigProvider} from './platform/github-config-provider'
 import {GitHubLogger} from './platform/github-logger'
@@ -18,41 +18,6 @@ import {setStateNamespace} from './platform/state-namespace'
 import {GitHubPlatform} from './platform/github-platform'
 import {setLogger} from './platform/logger'
 import {runOrchestrator} from './platform/orchestrator'
-
-function createBots(options: Options): {lightBot: Bot; heavyBot: Bot} | null {
-  let lightBot: Bot | null = null
-  try {
-    lightBot = new Bot(
-      options,
-      new OpenAIOptions(options.openaiLightModel, options.lightTokenLimits, false, false)
-    )
-  } catch (e: any) {
-    warning(
-      `Skipped: failed to create summary bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`
-    )
-    return null
-  }
-
-  let heavyBot: Bot | null = null
-  try {
-    heavyBot = new Bot(
-      options,
-      new OpenAIOptions(
-        options.openaiHeavyModel,
-        options.heavyTokenLimits,
-        options.enableWebSearch,
-        options.enableShell
-      )
-    )
-  } catch (e: any) {
-    warning(
-      `Skipped: failed to create review bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`
-    )
-    return null
-  }
-
-  return {lightBot, heavyBot}
-}
 
 async function run(): Promise<void> {
   // 初始化 GitHub Logger（ARCH-013）+ Platform（ARCH-018）
@@ -66,7 +31,7 @@ async function run(): Promise<void> {
     createExecCtx: createGitHubExecutionContext,
     logger: new GitHubLogger(),
     onFailed: setFailed,
-    createBots,
+    createBots: (options: Options) => createBotPair(options, warning),
     earlyReaction: tryEarlyReaction
   })
 }

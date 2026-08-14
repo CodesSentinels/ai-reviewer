@@ -15,15 +15,13 @@
 import {describe, expect, test, beforeEach, jest} from '@jest/globals'
 
 // --- mocks ---
-const mockPayload: any = {}
-const mockContext: any = {
-  eventName: 'issue_comment',
-  payload: mockPayload,
-  repo: {owner: 'octo', repo: 'demo'}
-}
-jest.mock('@actions/github', () => ({
-  context: mockContext
-}))
+// ARCH-005 迁移后 dispatcher 不再读 @actions/github，事件坐标一律来自
+// ExecutionContext。原先这里 mock 的 context.payload 正是 GitLab 用不了、
+// 也让本文件看不见「GitLab 一 import 就崩」的那个依赖。
+import type {ExecutionContext} from '../src/platform/execution-context'
+import {setExecCtx} from '../src/platform/run-context'
+
+let currentCtx: ExecutionContext
 
 jest.mock('../src/platform/logger', () => ({
   getLogger: () => ({
@@ -59,12 +57,55 @@ import {_resetRateLimit} from '../src/commands/rate-limit'
 // 一个最小的 Options 存根；dispatcher 只是传递不使用
 const stubOptions: any = {commandAckReaction: 'eyes'}
 
+/**
+ * 把原有的「事件名 + payload」测试数据映射成 ExecutionContext。
+ *
+ * 保留 payload 形状是为了让用例意图保持原样可读；构造期才做的判断
+ * （action != created、issue_comment 挂在非 PR issue 上）已由
+ * createGitHubExecutionContext 负责，对应覆盖在 github-execution-context.test.ts。
+ */
 function setEvent(
   eventName: 'issue_comment' | 'pull_request_review_comment' | 'push',
   payload: any
 ) {
-  mockContext.eventName = eventName
-  mockContext.payload = payload
+  const eventKind: ExecutionContext['eventKind'] =
+    eventName === 'issue_comment'
+      ? 'comment_created'
+      : eventName === 'pull_request_review_comment'
+      ? 'review_comment_created'
+      : 'unknown'
+
+  const pr = payload.issue ?? payload.pull_request
+  const comment = payload.comment
+  const login: string = comment?.user?.login ?? ''
+
+  currentCtx = {
+    platform: 'github',
+    projectPath: 'octo/demo',
+    projectId: 'octo/demo',
+    changeRequestId: pr?.number ?? 0,
+    eventKind,
+    actor: {
+      login,
+      isBot: comment?.user?.type === 'Bot' || /\[bot\]$/i.test(login)
+    },
+    baseSha: '',
+    headSha: '',
+    comment:
+      comment == null
+        ? undefined
+        : {
+            kind: eventName === 'pull_request_review_comment' ? 'review_thread' : 'top_level',
+            id: comment.id,
+            body: comment.body,
+            nodeId: comment.node_id
+          },
+    raw: payload
+  } as ExecutionContext
+
+  // handler 内部的 Commenter 拿不到 execCtx 参数，读的是模块级上下文——
+  // 入口在生产里也是这么注入的（main.ts / gitlab-trigger.ts）
+  setExecCtx(currentCtx)
 }
 
 function buildIssueCommentPayload(body: string, overrides: any = {}) {
@@ -145,31 +186,37 @@ beforeEach(() => {
 describe('dispatcher — 事件过滤', () => {
   test('非支持事件 → ignored', async () => {
     setEvent('push', {action: 'created'})
-    const r = await dispatchCommentEvent({options: stubOptions})
+    const r = await dispatchCommentEvent({execCtx: currentCtx, options: stubOptions})
     expect(r.kind).toBe('ignored')
   })
 
-  test('action !== created → ignored', async () => {
-    setEvent('issue_comment', buildIssueCommentPayload('@ai-reviewer help', {action: 'edited'}))
-    const r = await dispatchCommentEvent({options: stubOptions})
-    expect(r.kind).toBe('ignored')
-  })
-
-  test('issue_comment 在非 PR 上 → ignored', async () => {
-    setEvent('issue_comment', {
-      action: 'created',
-      issue: {number: 1, user: {login: 'x'}}, // 没有 pull_request 字段
-      comment: {id: 1, body: '@ai-reviewer help', user: {login: 'alice'}}
-    })
-    const r = await dispatchCommentEvent({options: stubOptions})
-    expect(r.kind).toBe('ignored')
-  })
+  /**
+   * 「action != created」和「issue_comment 挂在非 PR issue 上」这两条原本在本文件，
+   * ARCH-005 迁移后判断上移到 createGitHubExecutionContext 的构造阶段
+   * （抛 ExecutionContextError(ignorable_event)，调用方优雅跳过）。
+   *
+   * 覆盖没有消失，搬到了逻辑所在的那一层：
+   *   github-execution-context.test.ts『issue_comment action=edited → ignorable_event』
+   *   github-execution-context.test.ts『issue_comment 但 issue 上没有 pull_request』
+   *
+   * dispatcher 这一层剩下的契约只有一条：非评论类 eventKind 一律不处理。
+   */
+  test.each(['pr_opened', 'pr_synchronize', 'metadata_updated', 'unknown'] as const)(
+    'eventKind=%s（非评论事件）→ ignored',
+    async kind => {
+      setEvent('issue_comment', buildIssueCommentPayload('@ai-reviewer help'))
+      currentCtx = {...currentCtx, eventKind: kind} as ExecutionContext
+      const r = await dispatchCommentEvent({execCtx: currentCtx, options: stubOptions})
+      expect(r.kind).toBe('ignored')
+      if (r.kind === 'ignored') expect(r.reason).toContain(kind)
+    }
+  )
 
   test('bot 评论自身 → ignored', async () => {
     const payload = buildIssueCommentPayload('@ai-reviewer help')
     payload.comment.user = {login: 'ai-reviewer[bot]', type: 'Bot'}
     setEvent('issue_comment', payload)
-    const r = await dispatchCommentEvent({options: stubOptions})
+    const r = await dispatchCommentEvent({execCtx: currentCtx, options: stubOptions})
     expect(r.kind).toBe('ignored')
   })
 })
@@ -177,19 +224,19 @@ describe('dispatcher — 事件过滤', () => {
 describe('dispatcher — 解析与 fallback', () => {
   test('无 @bot → ignored', async () => {
     setEvent('issue_comment', buildIssueCommentPayload('普通评论'))
-    const r = await dispatchCommentEvent({options: stubOptions})
+    const r = await dispatchCommentEvent({execCtx: currentCtx, options: stubOptions})
     expect(r.kind).toBe('ignored')
   })
 
   test('@bot 后跟自然语言（中文）→ fallback_conversation', async () => {
     setEvent('issue_comment', buildIssueCommentPayload('@ai-reviewer 这里为啥这样写？'))
-    const r = await dispatchCommentEvent({options: stubOptions})
+    const r = await dispatchCommentEvent({execCtx: currentCtx, options: stubOptions})
     expect(r.kind).toBe('fallback_conversation')
   })
 
   test('@bot 后跟未知 ASCII 命令 → UNKNOWN_COMMAND with help listing and ACK reaction', async () => {
     setEvent('issue_comment', buildIssueCommentPayload('@ai-reviewer invalidcmd'))
-    const r = await dispatchCommentEvent({options: stubOptions})
+    const r = await dispatchCommentEvent({execCtx: currentCtx, options: stubOptions})
     expect(r).toEqual({
       kind: 'executed',
       command: 'unknown',
@@ -209,7 +256,7 @@ describe('dispatcher — 解析与 fallback', () => {
     const payload = buildReviewCommentPayload('这个问题严重吗')
     ;(payload.comment as any).in_reply_to_id = 2001
     setEvent('pull_request_review_comment', payload)
-    const r = await dispatchCommentEvent({options: stubOptions})
+    const r = await dispatchCommentEvent({execCtx: currentCtx, options: stubOptions})
     expect(r.kind).toBe('ignored')
   })
 
@@ -217,13 +264,13 @@ describe('dispatcher — 解析与 fallback', () => {
     const payload = buildReviewCommentPayload('@ai-reviewer 这个问题严重吗')
     ;(payload.comment as any).in_reply_to_id = 2001
     setEvent('pull_request_review_comment', payload)
-    const r = await dispatchCommentEvent({options: stubOptions})
+    const r = await dispatchCommentEvent({execCtx: currentCtx, options: stubOptions})
     expect(r.kind).toBe('fallback_conversation')
   })
 
   test('review_comment 未知命令 → 回复到 thread 而非主评论区', async () => {
     setEvent('pull_request_review_comment', buildReviewCommentPayload('@ai-reviewer invalidcmd'))
-    const r = await dispatchCommentEvent({options: stubOptions})
+    const r = await dispatchCommentEvent({execCtx: currentCtx, options: stubOptions})
     expect(r).toEqual({
       kind: 'executed',
       command: 'unknown',
@@ -245,7 +292,7 @@ describe('dispatcher — 解析与 fallback', () => {
 describe('dispatcher — 命令执行', () => {
   test('help 命令成功执行', async () => {
     setEvent('issue_comment', buildIssueCommentPayload('@ai-reviewer help'))
-    const r = await dispatchCommentEvent({options: stubOptions})
+    const r = await dispatchCommentEvent({execCtx: currentCtx, options: stubOptions})
     expect(r).toEqual({kind: 'executed', command: 'help', ok: true})
     expect(platformState.createComment).toHaveBeenCalled()
     // help handler 的响应 body 应包含 "支持的命令"
@@ -256,7 +303,7 @@ describe('dispatcher — 命令执行', () => {
   test('stub handler 抛 NOT_IMPLEMENTED', async () => {
     // resolve 已由成员 B 实现；改用成员 C 尚未实现的 review stub
     setEvent('issue_comment', buildIssueCommentPayload('@ai-reviewer review'))
-    const r = await dispatchCommentEvent({options: stubOptions})
+    const r = await dispatchCommentEvent({execCtx: currentCtx, options: stubOptions})
     expect(r.kind).toBe('executed')
     if (r.kind === 'executed') {
       expect(r.ok).toBe(false)
@@ -269,13 +316,13 @@ describe('dispatcher — 命令执行', () => {
 
   test('review_comment 上的 help 命令', async () => {
     setEvent('pull_request_review_comment', buildReviewCommentPayload('@ai-reviewer help'))
-    const r = await dispatchCommentEvent({options: stubOptions})
+    const r = await dispatchCommentEvent({execCtx: currentCtx, options: stubOptions})
     expect(r.kind).toBe('executed')
   })
 
   test('非法参数 → INVALID_ARGS', async () => {
     setEvent('issue_comment', buildIssueCommentPayload('@ai-reviewer review $(whoami)'))
-    const r = await dispatchCommentEvent({options: stubOptions})
+    const r = await dispatchCommentEvent({execCtx: currentCtx, options: stubOptions})
     expect(r.kind).toBe('executed')
     if (r.kind === 'executed') {
       expect(r.error).toBe('INVALID_ARGS')
@@ -286,7 +333,7 @@ describe('dispatcher — 命令执行', () => {
     platformState.getCollaboratorPermission.mockResolvedValue('read')
     // 用 pause 命令（无 PR 作者豁免）
     setEvent('issue_comment', buildIssueCommentPayload('@ai-reviewer pause'))
-    const r = await dispatchCommentEvent({options: stubOptions})
+    const r = await dispatchCommentEvent({execCtx: currentCtx, options: stubOptions})
     expect(r.kind).toBe('executed')
     if (r.kind === 'executed') {
       expect(r.error).toBe('FORBIDDEN')
@@ -308,11 +355,22 @@ describe('dispatcher — 命令执行', () => {
       author: 'pr-author'
     })
     const triggerReview: any = jest.fn().mockResolvedValue(undefined as never)
-    // 让 alice 成为 PR 作者
-    const payload = buildIssueCommentPayload('@ai-reviewer review')
-    payload.issue.user.login = 'alice'
-    setEvent('issue_comment', payload)
+    // 让 alice 成为 PR 作者。ARCH-005 迁移后 prAuthor 不再取自 payload.issue.user，
+    // 而是 getChangeRequest().author——payload 里的作者可能是缓存的旧值
+    platformState.getChangeRequest.mockResolvedValue({
+      number: 42,
+      title: '',
+      body: '<!-- codesentinel-review-state:start -->\nstate: paused\n<!-- codesentinel-review-state:end -->',
+      state: 'open',
+      baseSha: 'base-sha',
+      headSha: 'head-sha',
+      baseRef: 'main',
+      headRef: 'feature',
+      author: 'alice'
+    })
+    setEvent('issue_comment', buildIssueCommentPayload('@ai-reviewer review'))
     const r = await dispatchCommentEvent({
+      execCtx: currentCtx,
       options: stubOptions,
       triggerReview
     })
@@ -326,7 +384,7 @@ describe('dispatcher — 命令执行', () => {
   test('review 命令在非 paused 状态下返回提示信息', async () => {
     const triggerReview: any = jest.fn().mockResolvedValue(undefined as never)
     setEvent('issue_comment', buildIssueCommentPayload('@ai-reviewer review'))
-    const r = await dispatchCommentEvent({options: stubOptions, triggerReview})
+    const r = await dispatchCommentEvent({execCtx: currentCtx, options: stubOptions, triggerReview})
     expect(r.kind).toBe('executed')
     if (r.kind === 'executed') {
       expect(r.ok).toBe(true)
@@ -337,7 +395,7 @@ describe('dispatcher — 命令执行', () => {
   test('full review 命令触发全量审查', async () => {
     const triggerReview: any = jest.fn().mockResolvedValue(undefined as never)
     setEvent('issue_comment', buildIssueCommentPayload('@ai-reviewer full review'))
-    const r = await dispatchCommentEvent({options: stubOptions, triggerReview})
+    const r = await dispatchCommentEvent({execCtx: currentCtx, options: stubOptions, triggerReview})
     expect(r).toEqual({kind: 'executed', command: 'full review', ok: true})
     expect(triggerReview).toHaveBeenCalledWith('full')
   })
@@ -355,7 +413,7 @@ describe('dispatcher — 命令执行', () => {
       }
     ])
     setEvent('issue_comment', buildIssueCommentPayload('@ai-reviewer full review'))
-    const r = await dispatchCommentEvent({options: stubOptions, triggerReview})
+    const r = await dispatchCommentEvent({execCtx: currentCtx, options: stubOptions, triggerReview})
     expect(r).toEqual({kind: 'executed', command: 'full review', ok: true})
     expect(triggerReview).not.toHaveBeenCalled()
   })
@@ -363,14 +421,14 @@ describe('dispatcher — 命令执行', () => {
   test('summary 命令触发摘要重生成', async () => {
     const triggerReview: any = jest.fn().mockResolvedValue(undefined as never)
     setEvent('issue_comment', buildIssueCommentPayload('@ai-reviewer summary'))
-    const r = await dispatchCommentEvent({options: stubOptions, triggerReview})
+    const r = await dispatchCommentEvent({execCtx: currentCtx, options: stubOptions, triggerReview})
     expect(r).toEqual({kind: 'executed', command: 'summary', ok: true})
     expect(triggerReview).toHaveBeenCalledWith('summary')
   })
 
   test('pause 命令写入暂停状态', async () => {
     setEvent('issue_comment', buildIssueCommentPayload('@ai-reviewer pause'))
-    const r = await dispatchCommentEvent({options: stubOptions})
+    const r = await dispatchCommentEvent({execCtx: currentCtx, options: stubOptions})
     expect(r).toEqual({kind: 'executed', command: 'pause', ok: true})
     expect(platformState.updateChangeRequestBody).toHaveBeenCalled()
     const newBody = platformState.updateChangeRequestBody.mock.calls[0][3] // positional: (owner, repo, prNumber, body)
@@ -391,7 +449,7 @@ describe('dispatcher — 幂等', () => {
       }
     ])
     setEvent('issue_comment', buildIssueCommentPayload('@ai-reviewer help'))
-    const r = await dispatchCommentEvent({options: stubOptions})
+    const r = await dispatchCommentEvent({execCtx: currentCtx, options: stubOptions})
     expect(r.kind).toBe('executed')
     if (r.kind === 'executed') {
       expect(r.error).toBe('DUPLICATE')

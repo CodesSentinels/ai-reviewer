@@ -117,6 +117,9 @@ describe('createGitLabExecutionContext()', () => {
     expect(execCtx.comment).toEqual({
       kind: 'top_level',
       id: 5001,
+      // 正文必须带上：共享 dispatcher 靠它判定「这是一条可解析的评论」，
+      // 缺了它所有 GitLab 命令都会被当成 missing comment body 静默丢弃
+      body: '@ai-reviewer review',
       threadId: undefined
     })
   })
@@ -128,6 +131,7 @@ describe('createGitLabExecutionContext()', () => {
     expect(execCtx.comment).toEqual({
       kind: 'review_thread',
       id: 5002,
+      body: '@ai-reviewer 这里为什么这样写？',
       threadId: 'abc123discussionid'
     })
   })

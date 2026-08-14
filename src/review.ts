@@ -13,8 +13,6 @@
  * 后续运行只审查新增的变更，避免重复审查。
  */
 import {execFileSync} from 'child_process'
-// eslint-disable-next-line camelcase
-import {context as github_context} from '@actions/github'
 import {readFileSync, statSync} from 'fs'
 import pLimit from 'p-limit'
 import {type AnalysisStep, type Bot} from './bot'
@@ -63,11 +61,9 @@ import {mergeReviewsByTopic, type Review} from './review-dedup'
 import {ensureFixSuggestionHeaders} from './fix-suggestion-header'
 import {getRepoFileTree, type DirectoryLister, type TreeFetcher} from './repo-tree'
 import {getReviewStateFromBody} from './review-state'
+import {getRepoCoords, repoCoordsOf, setExecCtx} from './platform/run-context'
 import {getTokenCount} from './tokenizer'
 import {fetchThreadStatusMap, type ThreadStatusMap} from './github/review-thread'
-
-// eslint-disable-next-line camelcase
-const context = github_context
 
 /** 平台无关的 TreeFetcher 实现（DEP-005 → ARCH-018） */
 const platformTreeFetcher: TreeFetcher = {
@@ -101,7 +97,21 @@ const platformContentFetcher: FileContentFetcher = {
 
 /** 跨文件上下文注入的 token 上限 */
 const MAX_CROSS_FILE_CONTEXT_TOKENS = 1500
-const repo = context.repo
+/**
+ * 仓库坐标（ARCH-005）。
+ *
+ * 迁移前是 `const repo = context.repo`——`@actions/github` 的 getter 在没有
+ * GITHUB_REPOSITORY 时直接抛，于是 GitLab 入口一 import 本文件就崩，
+ * run() 根本执行不到。改成属性访问器：调用期才求值，16 个调用点一字不改。
+ */
+const repo = {
+  get owner(): string {
+    return getRepoCoords().owner
+  },
+  get repo(): string {
+    return getRepoCoords().repo
+  }
+}
 
 /** 在 PR 描述中添加此关键词可跳过 AI 审查 */
 const ignoreKeyword = `${PRIMARY_BOT_MENTION}: ignore`
@@ -115,12 +125,9 @@ export interface CodeReviewRunOptions {
 /**
  * 代码审查主函数
  *
- * @param execCtx - 平台无关执行上下文（ARCH-005/ARCH-007 过渡期：本函数内部
- *   仍以模块级 `context`/`repo`（`@actions/github`）为唯一数据源，尚未逐处
- *   替换为 execCtx——40+ 处调用点的完整迁移列入阶段四后续排期，见
- *   docs/tasks/execution-context-design.md 第 6.3 节。当前只接收该参数，
- *   保证 main.ts/command-handler.ts 可以在入口层完成 ExecutionContext 改造，
- *   不阻塞双平台兼容的入口层工作。
+ * @param execCtx - 平台无关执行上下文，本函数唯一的事件坐标来源（ARCH-005 迁移
+ *   完成）。PR/MR 的标题、描述、base/head SHA 一律经 IGitPlatform 现查，
+ *   不再读取任何平台 payload。
  * @param lightBot - 轻量模型 Bot（用于文件摘要和变更分类）
  * @param heavyBot - 重量模型 Bot（用于深度代码审查和最终摘要）
  * @param options - 全局配置选项
@@ -200,6 +207,11 @@ export const codeReview = async (
   prompts: Prompts,
   runOptions: CodeReviewRunOptions = {}
 ): Promise<void> => {
+  // 登记当前上下文：Commenter 在十几处被构造，签名里没有 execCtx，只能读模块级
+  // 上下文。共享核心入口统一登记一次，调用方（main.ts / gitlab-trigger.ts /
+  // 命令 handler）不必各自记得这件事。
+  setExecCtx(execCtx)
+
   const commenter: Commenter = new Commenter()
   const fromCommand = runOptions.source === 'command'
   const reviewMode = runOptions.mode ?? 'incremental'
@@ -209,50 +221,57 @@ export const codeReview = async (
   const githubConcurrencyLimit = pLimit(options.githubConcurrencyLimit)
 
   // ==================== 事件验证 ====================
-  if (
-    context.eventName !== 'pull_request' &&
-    context.eventName !== 'pull_request_target' &&
-    !fromCommand
-  ) {
+  // 归一化事件类型：GitHub 的 pull_request / pull_request_target 与 GitLab 的
+  // MR open/update 在构造阶段已经合流成 pr_* 三种
+  const isPrEvent =
+    execCtx.eventKind === 'pr_opened' ||
+    execCtx.eventKind === 'pr_synchronize' ||
+    execCtx.eventKind === 'pr_reopened'
+  if (!isPrEvent && !fromCommand) {
     getLogger().warning(
-      `Skipped: current event is ${context.eventName}, only support pull_request event`
+      `Skipped: current event is ${execCtx.eventKind}, only support pull request events`
     )
     return
   }
-  if (context.payload.pull_request == null && fromCommand) {
-    const issueNumber = context.payload.issue?.number
-    if (issueNumber != null) {
-      const cr = await getPlatform().getChangeRequest(repo.owner, repo.repo, issueNumber)
-      // 构造与 payload.pull_request 兼容的结构
-      ;(context.payload as any).pull_request = {
-        number: cr.number,
-        title: cr.title,
-        body: cr.body,
-        state: cr.state,
-        base: {sha: cr.baseSha, ref: cr.baseRef},
-        head: {sha: cr.headSha, ref: cr.headRef},
-        user: {login: cr.author}
-      }
-    }
+
+  // PR/MR 详情统一现查（ARCH-005）。
+  //
+  // 迁移前这里分两路：PR 事件直接读 context.payload.pull_request，命令路径才去
+  // 查 API 合成一个同形状的对象。现在统一走 API——payload 里的标题/描述/SHA 是
+  // 事件发生那一刻的快照，命令触发时往往已经过期；而且 GitLab 侧根本没有这个
+  // payload 形状。
+  const {owner: prOwner, repo: prRepo} = repoCoordsOf(execCtx)
+  let pr: {
+    number: number
+    title: string
+    body: string
+    base: {sha: string; ref: string}
+    head: {sha: string; ref: string}
   }
-  if (context.payload.pull_request == null) {
-    getLogger().warning('Skipped: context.payload.pull_request is null')
+  try {
+    const cr = await getPlatform().getChangeRequest(prOwner, prRepo, execCtx.changeRequestId)
+    pr = {
+      number: cr.number,
+      title: cr.title,
+      body: cr.body,
+      base: {sha: cr.baseSha, ref: cr.baseRef},
+      head: {sha: cr.headSha, ref: cr.headRef}
+    }
+  } catch (e) {
+    getLogger().warning(`Skipped: failed to load change request details: ${String(e)}`)
     return
   }
 
-  if (
-    !fromCommand &&
-    getReviewStateFromBody(context.payload.pull_request.body ?? '') === 'paused'
-  ) {
+  if (!fromCommand && getReviewStateFromBody(pr.body ?? '') === 'paused') {
     getLogger().info('Skipped: review automation is paused for this PR')
     return
   }
 
   // ==================== 填充 PR 基本信息 ====================
   const inputs: Inputs = new Inputs()
-  inputs.title = context.payload.pull_request.title
-  if (context.payload.pull_request.body != null) {
-    inputs.description = commenter.getDescription(context.payload.pull_request.body)
+  inputs.title = pr.title
+  if (pr.body != null) {
+    inputs.description = commenter.getDescription(pr.body)
   }
 
   // 如果 PR 描述中包含忽略关键词，跳过审查
@@ -266,10 +285,7 @@ export const codeReview = async (
 
   // ==================== 恢复增量审查状态 ====================
   // 从已有的摘要评论中恢复上次审查的状态
-  const existingSummarizeCmt = await commenter.findCommentWithTag(
-    summarizeTag(),
-    context.payload.pull_request.number
-  )
+  const existingSummarizeCmt = await commenter.findCommentWithTag(summarizeTag(), pr.number)
   let existingCommitIdsBlock = ''
   let existingSummarizeCmtBody = ''
   if (existingSummarizeCmt != null) {
@@ -295,21 +311,12 @@ export const codeReview = async (
 
   // 确定 diff 的起始 commit
   if (reviewMode === 'full') {
-    getLogger().info(
-      `Will review full diff from the base commit: ${
-        context.payload.pull_request.base.sha as string
-      }`
-    )
-    highestReviewedCommitId = context.payload.pull_request.base.sha
-  } else if (
-    highestReviewedCommitId === '' ||
-    highestReviewedCommitId === context.payload.pull_request.head.sha
-  ) {
+    getLogger().info(`Will review full diff from the base commit: ${pr.base.sha as string}`)
+    highestReviewedCommitId = pr.base.sha
+  } else if (highestReviewedCommitId === '' || highestReviewedCommitId === pr.head.sha) {
     // 首次审查或已是最新：从 base 分支开始
-    getLogger().info(
-      `Will review from the base commit: ${context.payload.pull_request.base.sha as string}`
-    )
-    highestReviewedCommitId = context.payload.pull_request.base.sha
+    getLogger().info(`Will review from the base commit: ${pr.base.sha as string}`)
+    highestReviewedCommitId = pr.base.sha
   } else {
     // 增量审查：从上次审查的 commit 开始
     getLogger().info(`Will review from commit: ${highestReviewedCommitId}`)
@@ -322,15 +329,15 @@ export const codeReview = async (
     repo.owner,
     repo.repo,
     highestReviewedCommitId,
-    context.payload.pull_request.head.sha
+    pr.head.sha
   )
 
   // 全量 diff：从目标分支的 base 到最新 commit（完整变更视图）
   const targetBranchDiff = await getPlatform().compareDiff(
     repo.owner,
     repo.repo,
-    context.payload.pull_request.base.sha,
-    context.payload.pull_request.head.sha
+    pr.base.sha,
+    pr.head.sha
   )
 
   const incrementalFiles = incrementalDiff.files
@@ -344,7 +351,7 @@ export const codeReview = async (
   // 增量审查：使用 incrementalFiles 的 patch（仅包含新增变更的 hunk）
   // 全量审查（首次或 full mode）：incremental 与 targetBranch 相同，直接使用
   // 关键：必须用 incrementalFiles 的 patch 送入 AI，否则 AI 会看到已审查过的旧变更
-  const isFirstOrFullReview = highestReviewedCommitId === context.payload.pull_request.base.sha
+  const isFirstOrFullReview = highestReviewedCommitId === pr.base.sha
   const files = isFirstOrFullReview
     ? targetBranchFiles.filter(targetBranchFile =>
         incrementalFiles.some(
@@ -395,10 +402,6 @@ export const codeReview = async (
         githubConcurrencyLimit(async () => {
           // 获取文件在基准分支上的原始内容
           let fileContent = ''
-          if (context.payload.pull_request == null) {
-            getLogger().warning('Skipped: context.payload.pull_request is null')
-            return null
-          }
           if (file.status === 'added') {
             getLogger().info(`skip base content fetch for new file: ${file.filename}`)
           } else {
@@ -407,7 +410,7 @@ export const codeReview = async (
                 repo.owner,
                 repo.repo,
                 file.filename,
-                context.payload.pull_request.base.sha
+                pr.base.sha
               )
               if (content != null) {
                 fileContent = content
@@ -527,7 +530,7 @@ ${hunks.oldHunk}
       getLogger().info('Phase 0: starting cross-file dependency analysis')
       // 获取仓库文件树（1 次 API 调用，结果缓存）
       const {files: repoFiles, truncated} = await getRepoFileTree(
-        execCtx.headSha || context.payload.pull_request.head.sha,
+        execCtx.headSha || pr.head.sha,
         {
           platform: execCtx.platform,
           owner: repo.owner,
@@ -543,18 +546,14 @@ ${hunks.oldHunk}
         options,
         githubConcurrencyLimit,
         {owner: repo.owner, repo: repo.repo},
-        execCtx.headSha || context.payload.pull_request.head.sha,
+        execCtx.headSha || pr.head.sha,
         platformContentFetcher,
         patchScans,
         // 截断时把解析不到的 import 所在目录按需补回来，而不是只提示降级
         {
           truncated,
           dirLister: truncated
-            ? makeDirectoryLister(
-                repo.owner,
-                repo.repo,
-                execCtx.headSha || context.payload.pull_request.head.sha
-              )
+            ? makeDirectoryLister(repo.owner, repo.repo, execCtx.headSha || pr.head.sha)
             : undefined
         }
       )
@@ -568,7 +567,7 @@ ${hunks.oldHunk}
   let statusMsg = `<details>
 <summary>Commits</summary>
 Files that changed from the base of the PR and between ${highestReviewedCommitId} and ${
-    context.payload.pull_request.head.sha
+    pr.head.sha
   } commits.
 </details>
 ${repoTreeTruncated ? `\n${TREE_TRUNCATED_NOTICE}\n` : ''}
@@ -738,7 +737,7 @@ ${filename}: ${summary}
       let message = `### Summary by ${botName}\n\n`
       message += releaseNotesResponse
       try {
-        await commenter.updateDescription(context.payload.pull_request.number, message)
+        await commenter.updateDescription(pr.number, message)
       } catch (e: any) {
         getLogger().warning(`release notes: error from github: ${e.message as string}`)
       }
@@ -826,12 +825,12 @@ ${
     // PR 级别的线程状态 map（path:line → isResolved）
     // 一次性拉取，复用于所有文件的评论链注入，让 AI 感知 [OPEN]/[RESOLVED] 状态
     let threadStatusMap: ThreadStatusMap = new Map()
-    if (context.payload.pull_request != null) {
+    {
       try {
         threadStatusMap = await fetchThreadStatusMap({
           owner: repo.owner,
           repo: repo.repo,
-          prNumber: context.payload.pull_request.number
+          prNumber: pr.number
         })
         getLogger().info(`thread-status: fetched ${threadStatusMap.size} thread locations`)
       } catch (e) {
@@ -849,11 +848,9 @@ ${
       string,
       Array<{startLine: number; endLine: number}>
     > = new Map()
-    if (reviewMode === 'full' && context.payload.pull_request != null) {
+    if (reviewMode === 'full') {
       try {
-        const allReviewComments = await commenter.listReviewComments(
-          context.payload.pull_request.number
-        )
+        const allReviewComments = await commenter.listReviewComments(pr.number)
         for (const c of allReviewComments) {
           if (!bodyHasMarker(c.body, 'comment')) continue
           const key = `${c.path}:${c.line}`
@@ -952,10 +949,6 @@ ${
       let patchesPacked = 0
       let patchesSkippedByDedup = 0
       for (const [startLine, endLine, patch] of patches) {
-        if (context.payload.pull_request == null) {
-          getLogger().warning('No pull request found, skipping.')
-          continue
-        }
         // full review 去重：跳过已有未 resolved bot 评论覆盖的 patch
         if (existingBotCommentRanges.has(filename)) {
           const ranges = existingBotCommentRanges.get(filename)!
@@ -984,7 +977,7 @@ ${
         let commentChain = ''
         try {
           const allChains = await commenter.getCommentChainsWithinRange(
-            context.payload.pull_request.number,
+            pr.number,
             filename,
             startLine,
             endLine,
@@ -1077,10 +1070,6 @@ ${commentChain}
               (review.comment.includes('LGTM') || review.comment.includes('looks good to me'))
             ) {
               lgtmCount += 1
-              continue
-            }
-            if (context.payload.pull_request == null) {
-              getLogger().warning('No pull request found, skipping.')
               continue
             }
 
@@ -1231,14 +1220,11 @@ ${
 </details>
 `
     // 将最新的 head commit SHA 添加到已审查列表
-    summarizeComment += `\n${commenter.addReviewedCommitId(
-      existingCommitIdsBlock,
-      context.payload.pull_request.head.sha
-    )}`
+    summarizeComment += `\n${commenter.addReviewedCommitId(existingCommitIdsBlock, pr.head.sha)}`
 
     // 批量提交所有缓冲的审查评论（严重级别已内嵌在每条评论顶部，不再单独发汇总评论）
     await commenter.submitReview(
-      context.payload.pull_request.number,
+      pr.number,
       commits[commits.length - 1].sha,
       statusMsg,
       threadStatusMap
@@ -1272,13 +1258,22 @@ function formatShellCommandForDisplay(command: string): string {
  * 生成可折叠的 `<details>` 块，包含每个 shell 命令及其输出、web search 调用等，
  * 展示模型在给出审查意见之前的推理/调查过程。
  */
+/**
+ * 推导仓库 Web URL，仅用于 Analysis chain 的展示链接。
+ *
+ * ARCH-005/023：迁移前这里同时读 `payload.repository.html_url`（GitHub）和
+ * `payload.project.web_url`（GitLab）——一个共享核心函数里塞两个平台的 payload
+ * 形状，正是架构约束要防的耦合。改为只用平台中立来源：
+ *
+ *   GitHub Actions → GITHUB_SERVER_URL + 仓库坐标（buildGithubRepositoryUrl）
+ *   GitLab CI      → CI_PROJECT_URL / CI_REPOSITORY_URL
+ *   两者都没有     → git remote origin
+ *
+ * 两个 CI 环境各自保证对应变量存在，因此覆盖面与原先等价；纯展示用途，
+ * 取不到时返回空串，不影响审查本身。
+ */
 function resolveAnalysisRepositoryUrl(): string {
-  const payload = context.payload as Record<string, any>
   const candidates = [
-    context.payload.repository?.html_url,
-    payload.project?.web_url,
-    payload.project?.homepage,
-    payload.repository?.homepage,
     process.env.CI_PROJECT_URL,
     process.env.CI_REPOSITORY_URL,
     buildGithubRepositoryUrl(),

@@ -21,9 +21,27 @@ import noteSystem from './fixtures/gitlab-note-hook-system.json'
 import noteNonMr from './fixtures/gitlab-note-hook-non-mr.json'
 
 const fsState = {readFileSync: jest.fn<(...a: any[]) => string>()}
+// 只替换 readFileSync，其余原样透传。
+// 早先这里返回一个只有 readFileSync 的对象，等于把整个 fs 挖空——
+// 接上共享编排层后传递依赖里有模块在加载期读 fs.promises，会直接抛
+// 「Cannot destructure property 'access'」。那是 mock 的问题，不是被测代码的：
+// 真实运行环境里 fs.promises 一直都在（打包产物实测可正常启动）。
 jest.mock('fs', () => ({
+  ...(jest.requireActual('fs') as object),
   readFileSync: (...a: any[]) => fsState.readFileSync(...a)
 }))
+
+// Bot 的依赖 p-retry 是纯 ESM，jest 解析不了；本文件关心的是入口编排，
+// 不关心模型客户端本身，直接把工厂换成存根。
+jest.mock('../src/bot-factory', () => ({
+  createBots: () => ({lightBot: {}, heavyBot: {}})
+}))
+
+// tokenizer.ts 在模块加载期就 get_encoding('o200k_base')，jest 里解析不到
+// wasm 资产。接上共享编排层后它进入本文件的传递依赖，与其他碰到审查核心的
+// 用例（characterization / github-only 等）一样在这里替换掉。
+// 打包产物不受影响：dist/gitlab-trigger/ 已随构建复制 tiktoken_bg.wasm。
+jest.mock('../src/tokenizer', () => ({getTokenCount: () => 0}))
 
 // 凭据自检会真的调 Users.showCurrentUser()，必须 mock 掉，
 // 否则测试会朝 gitlab.com 发真实请求
@@ -246,7 +264,11 @@ describe('gitlab-trigger.ts run()', () => {
       const warned = warnSpy.mock.calls.map(c => String(c[0])).join('\n')
       expect(warned).toContain('wrong-bot')
       expect(warned).toContain('ai-reviewer-bot')
-      expect(warned).toContain('will not be recognized')
+      // 不一致仍要告警（几乎总是配错了），但后果不再是「认不出 bot 自己」——
+      // 两个身份现在都算 reviewer 本人，见 verifyBotIdentity 的返回值注释。
+      // 实际的过滤行为由 gitlab-trigger-dispatch.integration.test.ts 验证。
+      expect(warned).not.toContain('will not be recognized')
+      expect(warned).toContain("both are treated as the reviewer's own identity")
     })
 
     test('配置值与真实身份一致（忽略大小写）→ 不告警', async () => {
@@ -271,12 +293,40 @@ describe('gitlab-trigger.ts run()', () => {
     })
   })
 
-  test('ARCH-015: gitlab-trigger.ts 不 import orchestrator / @actions/core / @actions/github', () => {
-    const fs = require('fs')
+  /**
+   * 原先这条还禁止 import orchestrator。那不是 ARCH-015 的本意，而是当时的
+   * 权宜之计：共享核心（review.ts / commenter.ts / dispatcher.ts）在模块级求值
+   * `@actions/github` 的 context.repo，一 import 编排层就会在加载期崩掉。
+   *
+   * 三者迁移到 ExecutionContext 之后，GitLab 入口**必须**经由同一个编排层执行
+   * 审查——那正是「两个平台调用同一共享核心」的含义。禁令随之取消，改为直接
+   * 断言真正的约束：入口不碰平台 SDK。
+   */
+  test('ARCH-015: gitlab-trigger.ts 不 import @actions/core / @actions/github', () => {
+    const fs = jest.requireActual('fs') as typeof import('fs')
     const path = require('path')
-    const source = fs.readFileSync(path.resolve(__dirname, '../src/gitlab-trigger.ts'), 'utf8')
-    expect(source).not.toContain("from './platform/orchestrator'")
-    expect(source).not.toContain("from '@actions/core'")
-    expect(source).not.toContain("from '@actions/github'")
+    const source: string = fs.readFileSync(
+      path.resolve(__dirname, '../src/gitlab-trigger.ts'),
+      'utf8'
+    )
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+    expect(code).not.toContain("from '@actions/core'")
+    expect(code).not.toContain("from '@actions/github'")
+  })
+
+  test('gitlab-trigger.ts 确实接上了共享编排层（不是空跑到底）', () => {
+    // 本文件 mock 了 fs，读真实源码要绕过 mock
+    const fs = jest.requireActual('fs') as typeof import('fs')
+    const path = require('path')
+    const source: string = fs.readFileSync(
+      path.resolve(__dirname, '../src/gitlab-trigger.ts'),
+      'utf8'
+    )
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+    expect(code).toContain('runOrchestrator(')
+    // 复用已构造好的 execCtx，不重复解析 payload
+    expect(code).toMatch(/createExecCtx:\s*\(\)\s*=>\s*execCtx/)
+    // 曾经的占位 TODO 必须已经消失
+    expect(source).not.toContain('此处调用 runOrchestrator 或 dispatchEvent')
   })
 })

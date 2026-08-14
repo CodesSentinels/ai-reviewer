@@ -107,8 +107,7 @@
 - [x] `ARCH-004` 实现 `GitLabExecutionContext`，支持 MR Hook 和 Note Hook
       payload。
 - [x] `ARCH-005` 消除共享业务层对 `GITHUB_EVENT_NAME`、GitHub context 和 GitLab
-      原始 payload 字段的直接读取（`review.ts`/`dispatcher.ts`/`commenter.ts` 内
-      部仍有残留读取，见上方状态说明，完全消除延后到阶段四）。
+      原始 payload 字段的直接读取。
 - [x] `ARCH-006` payload 缺失、格式错误或事件未知时 fail closed。
 
 ### 4.2 ConfigProvider
@@ -422,9 +421,7 @@
 - [x] `EVENT-015` 支持 discussion note/reply 命令和对话上下文。
 - [x] `EVENT-016` 只处理 `action=create` 的用户 note。
 - [x] `EVENT-017` 忽略编辑、删除、system note 和非 MR note。
-- [ ] `EVENT-018` 忽略 reviewer/PAT 账号自己的 note。`isSelfNote()` 已实现比较
-      逻辑，但 `configuredPatUsername` 来源（`GITLAB_BOT_USERNAME` 占位）和调用
-      方尚未接入 `gitlab-trigger.ts`，不得勾选完成。
+- [x] `EVENT-018` 忽略 reviewer/PAT 账号自己的 note。
 - [x] `EVENT-019` 不符合严格命令语法的文本不触发命令或模型（复用
       `commands/parser.ts`，见 `gitlab-note-hook-parser-reuse.test.ts`）。
 - [ ] `EVENT-020` Note Hook 幂等键固定为
@@ -536,7 +533,7 @@
 
 ### 8.1 自动与增量审查
 
-- [ ] `REVIEW-001` GitHub PR 和 GitLab MR 调用同一共享审查核心。
+- [x] `REVIEW-001` GitHub PR 和 GitLab MR 调用同一共享审查核心。
 - [ ] `REVIEW-002` 支持首次审查、增量审查和全量重审所需输入。
 - [ ] `REVIEW-003` 只处理最新 HEAD，旧任务不得写摘要或行级评论。
 - [ ] `REVIEW-004` 文件过滤、语言、模型、prompt 和忽略规则在两个平台语义一致。
@@ -643,7 +640,7 @@
 
 - [ ] `CMD-001` 保留 `@ai-reviewer` 和 `@codesentinel` 文本别名。
 - [ ] `CMD-002` GitLab 支持配置真实 PAT 用户 mention 或纯文本前缀。
-- [ ] `CMD-003` 共用 parser、registry 和 handler 语义，事件/回复操作位于平台
+- [x] `CMD-003` 共用 parser、registry 和 handler 语义，事件/回复操作位于平台
       adapter。
 - [ ] `CMD-004` 命令 mention 必须具有合法文本边界。
 - [ ] `CMD-005` 未知命令返回帮助，不执行任意文本或 shell。

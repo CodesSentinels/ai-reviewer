@@ -10,6 +10,7 @@
  */
 import {readFileSync} from 'fs'
 import {createGitLabExecutionContext} from './platform/gitlab-execution-context'
+import type {ExecutionContext} from './platform/execution-context'
 import {GitLabLogger} from './platform/gitlab-logger'
 import {GitLabPlatform} from './platform/gitlab-platform'
 import {describeGitLabClientConfig, resolveGitLabClientConfig} from './platform/gitlab-client'
@@ -17,9 +18,13 @@ import {setPlatform} from './platform/git-platform'
 import {setStateNamespace} from './platform/state-namespace'
 import {setLogger} from './platform/logger'
 import {handleExecCtxError} from './platform/exec-ctx-error-handler'
+import {GitLabConfigProvider} from './platform/gitlab-config-provider'
+import {runOrchestrator} from './platform/orchestrator'
+import {createBots} from './bot-factory'
 import {validateTriggerPayload} from './gitlab-trigger-validation'
 import {redact} from './gitlab-trigger-redact'
 import {checkForkMergeRequest} from './gitlab-mr-hook-rules'
+import {isSelfNote} from './gitlab-note-hook-rules'
 
 const logger = new GitLabLogger()
 
@@ -35,32 +40,42 @@ const logger = new GitLabLogger()
  *
  * 自检失败不中止运行：CI_JOB_TOKEN 是文档里支持的认证方式，只是能力受限。
  */
-async function verifyBotIdentity(platform: GitLabPlatform): Promise<void> {
+async function verifyBotIdentity(platform: GitLabPlatform): Promise<string[]> {
   const configuredLogin = (process.env.AI_REVIEWER_BOT_GITLAB_LOGIN ?? '').trim()
   try {
     const login = await platform.verifyCredential()
     logger.info(`GitLab bot identity resolved: acting as @${login}`)
     if (configuredLogin !== '' && configuredLogin.toLowerCase() !== login.toLowerCase()) {
-      // 配置值优先级更高，但两者不一致几乎总是配错了，必须说出来
+      // 两者不一致几乎总是配错了（改过 PAT 却忘了改配置），必须说出来
       logger.warning(
         `AI_REVIEWER_BOT_GITLAB_LOGIN is "${configuredLogin}" but the credential belongs to ` +
-          `"${login}" — bot-authored threads will not be recognized.`
+          `"${login}" — both are treated as the reviewer's own identity; ` +
+          'update the configuration to match the credential.'
       )
     }
+    // 自检成功时**两个身份都算自己**。
+    //
+    // 早先只返回配置值（配置优先），结果配置过期或写错时，真实账号发出的 note
+    // 不会被识别成自评论——反馈循环保护恰好在最容易配错的场景下失效。真实身份
+    // 来自凭据，是最可靠的那一个；配置值仍然保留，因为它可能指向另一个也属于
+    // 本 reviewer 的账号（例如轮换期新旧两个 PAT）。
+    return [login, configuredLogin].filter(v => v !== '')
   } catch (e) {
     const detail = redact(e instanceof Error ? e.message : String(e))
     if (configuredLogin !== '') {
+      // 自检失败时拿不到真实身份，只能退回配置值
       logger.warning(
         `GitLab bot identity check failed (${detail}); using the configured bot login ` +
           `"${configuredLogin}".`
       )
-      return
+      return [configuredLogin]
     }
     logger.warning(
       `GitLab bot identity check failed (${detail}) and AI_REVIEWER_BOT_GITLAB_LOGIN is not set. ` +
         'Bot-authored threads will not be recognized. Set AI_REVIEWER_BOT_GITLAB_LOGIN to the ' +
         'bot username, or use a GITLAB_PAT whose identity can be resolved.'
     )
+    return []
   }
 }
 
@@ -126,7 +141,7 @@ export async function run(): Promise<void> {
     return
   }
 
-  let execCtx
+  let execCtx: ExecutionContext
   try {
     execCtx = createGitLabExecutionContext(parsed)
   } catch (e) {
@@ -145,8 +160,46 @@ export async function run(): Promise<void> {
 
   // 事件被接受之后才自检：被拒绝的事件（fork MR、无关事件）不该产生无关输出，
   // 也不该为此多打一次 API
-  await verifyBotIdentity(platform)
-  // TODO: 待 GLAPI-* 补全后，此处调用 runOrchestrator 或 dispatchEvent 执行审查。
+  const botLogins = await verifyBotIdentity(platform)
+
+  // ─── EVENT-018：自评论过滤 ───────────────────────────────────────────────
+  //
+  // ExecutionContext 构造阶段把 actor.isBot 恒定填 false，是刻意的：那一层不该
+  // 依赖「已配置的 PAT 用户名」这个外部输入（ARCH-002）。但共享 dispatcher 只按
+  // actor.isBot 过滤自评论，所以判定必须在这里补上——否则 bot 自己的回帖会再次
+  // 触发命令，形成反馈循环。
+  //
+  // 只对评论类事件生效：MR 事件的 actor 是提交者，与反馈循环无关。
+  const isCommentEvent =
+    execCtx.eventKind === 'comment_created' || execCtx.eventKind === 'review_comment_created'
+  if (isCommentEvent && botLogins.some(login => isSelfNote(execCtx.actor.login, login))) {
+    execCtx = {...execCtx, actor: {...execCtx.actor, isBot: true}}
+    logger.info(`Note authored by the reviewer itself (@${execCtx.actor.login}) — will be ignored`)
+  }
+
+  // ─── 执行审查 / 命令（ARCH-025）──────────────────────────────────────────
+  //
+  // 走与 GitHub 入口完全相同的编排层：配置 → 事件分发 → codeReview 或
+  // handleCommentEvent。两个入口的差异只剩下 configProvider / logger /
+  // 失败处理这三件平台相关的事。
+  //
+  // 这一步长期接不上，卡的不是 GLAPI（§7 早已全绿），而是共享核心里
+  // review.ts / commenter.ts / commands/dispatcher.ts 三个文件在**模块级**
+  // 求值 `@actions/github` 的 `context.repo`——那个 getter 没有
+  // GITHUB_REPOSITORY 就抛，于是本文件一 import 编排层，模块加载阶段就崩，
+  // run() 根本执行不到。三者迁移到 ExecutionContext 之后（ARCH-005），
+  // 这里才成立。
+  await runOrchestrator({
+    configProvider: new GitLabConfigProvider(),
+    // ExecutionContext 已在上面构造并校验过，这里直接复用，不重复解析 payload
+    createExecCtx: () => execCtx,
+    logger,
+    onFailed: (msg: string) => {
+      logger.error(redact(msg))
+      process.exitCode = 1
+    },
+    createBots: options => createBots(options, (msg: string) => logger.warning(redact(msg)))
+  })
 }
 
 // 不用顶层 await（同 main.ts 的既有原因）

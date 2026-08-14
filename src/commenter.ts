@@ -12,15 +12,28 @@
  * 使用 HTML 注释标签（如 <!-- tag -->）作为唯一标识，
  * 实现评论的幂等性操作（查找并替换已有评论，而非重复创建）
  */
-// eslint-disable-next-line camelcase
-import {context as github_context} from '@actions/github'
 import {getPlatform} from './platform/git-platform'
 import {getLogger} from './platform/logger'
 import {buildStateMarker} from './platform/state-namespace'
+import {getExecCtx, getRepoCoords} from './platform/run-context'
 
-// eslint-disable-next-line camelcase
-const context = github_context
-const repo = context.repo
+/**
+ * 仓库坐标（ARCH-005）。
+ *
+ * 原先是模块级的 `const repo = context.repo`——`@actions/github` 的 getter 在
+ * 没有 GITHUB_REPOSITORY 时直接抛，导致 GitLab 入口一 import 本文件就崩。
+ *
+ * 这里保留 `repo.owner` / `repo.repo` 的写法（18 个调用点一字不改），只把求值
+ * 从**加载期**挪到**调用期**：属性访问器每次现算，不再依赖任何平台 SDK。
+ */
+const repo = {
+  get owner(): string {
+    return getRepoCoords().owner
+  },
+  get repo(): string {
+    return getRepoCoords().repo
+  }
+}
 
 // ==================== 标签常量 ====================
 // 这些 HTML 注释标签用于标识和定位 bot 生成的各类评论
@@ -172,15 +185,11 @@ export class Commenter {
    * @param mode - "create"（新建）或 "replace"（查找并替换已有评论）
    */
   async comment(message: string, tag: string, mode: string) {
-    let target: number
-    if (context.payload.pull_request != null) {
-      target = context.payload.pull_request.number
-    } else if (context.payload.issue != null) {
-      target = context.payload.issue.number
-    } else {
-      getLogger().warning(
-        'Skipped: context.payload.pull_request and context.payload.issue are both null'
-      )
+    // PR number / MR iid 已由 ExecutionContext 归一化（GitHub 的 payload 里
+    // 它可能来自 pull_request 也可能来自 issue，两者在构造阶段已经合流）
+    const target = getExecCtx().changeRequestId
+    if (!target) {
+      getLogger().warning('Skipped: execution context carries no change request id')
       return
     }
 
@@ -858,12 +867,9 @@ ${chain}
 
   /** 获取 PR 的所有 commit ID（分页获取完整列表） */
   async getAllCommitIds(): Promise<string[]> {
-    if (context && context.payload && context.payload.pull_request != null) {
-      return getPlatform().listChangeRequestCommits(
-        repo.owner,
-        repo.repo,
-        context.payload.pull_request.number
-      )
+    const execCtx = getExecCtx()
+    if (execCtx.changeRequestId) {
+      return getPlatform().listChangeRequestCommits(repo.owner, repo.repo, execCtx.changeRequestId)
     }
     return []
   }

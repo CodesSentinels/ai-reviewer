@@ -1,17 +1,16 @@
 /**
- * review-execctx-consistency.test.ts — review.ts 双轨一致性断言（U5）
+ * review-execctx-consistency.test.ts — review.ts 的事件坐标来源（ARCH-005）
  *
- * review.ts 的 codeReview() 在 T7 新增了 execCtx 首参数，但内部仍以模块级
- * `context`/`repo`（`@actions/github`）为主要数据源（dual-track 过渡态，
- * 见设计文档 6.3 节）。唯二真正读取 execCtx 的地方是 Phase 0 依赖分析调用
- * getRepoFileTree()/analyzeDependencies() 时的 `execCtx.headSha || context.
- * payload.pull_request.head.sha` 回退表达式。本测试验证：
- *   1. 正常场景下 execCtx（由 createGitHubExecutionContext() 真实构造）与
- *      context 两条数据源对同一事件算出的 headSha 一致；
- *   2. execCtx.headSha 为空（评论触发场景）时，回退表达式正确退回到
- *      context.payload.pull_request.head.sha，不会传出 undefined/空值。
+ * 「双轨」已经结束：codeReview() 内部不再读 `@actions/github`，PR/MR 的标题、
+ * 描述、base/head SHA 一律经 IGitPlatform.getChangeRequest() 现查。本文件相应
+ * 改为验证迁移后的不变式：
+ *   1. 传给 getRepoFileTree()/analyzeDependencies() 的 ref/headSha 来自 execCtx，
+ *      与现查到的 PR 详情一致；
+ *   2. execCtx.headSha 为空（评论触发场景）时回退到现查值，不会传出空字符串；
+ *   3. DEP-004 的文件树截断提示行为不受迁移影响。
  *
- * 参考 docs/tasks/execution-context-design.md 第 9.2 节 U5。
+ * 注意这里**不再** mock `@actions/github`——迁移后 review.ts 根本不 import 它，
+ * 继续 mock 只会掩盖回退。
  */
 import {describe, expect, test, jest, beforeEach} from '@jest/globals'
 
@@ -22,6 +21,8 @@ jest.mock('@actions/core', () => ({
   error: jest.fn()
 }))
 
+// createGitHubExecutionContext 是 GitHub adapter，读 @actions/github 是它的职责；
+// 被测的 review.ts 则完全不碰它——两者的边界正是本文件要守住的东西。
 const mockContext: any = {
   eventName: 'pull_request',
   actor: 'someone',
@@ -155,7 +156,7 @@ function makePullRequestPayload(overrides: Record<string, any> = {}): any {
   }
 }
 
-describe('review.ts 双轨一致性（execCtx vs context，Phase 0 依赖分析调用）', () => {
+describe('review.ts 的事件坐标来源（Phase 0 依赖分析调用）', () => {
   beforeEach(() => {
     jest.clearAllMocks()
     process.env.GITHUB_EVENT_NAME = 'pull_request'
@@ -166,6 +167,19 @@ describe('review.ts 双轨一致性（execCtx vs context，Phase 0 依赖分析�
       pull_request: makePullRequestPayload()
     }
     mockContext.repo = {owner: 'octo', repo: 'demo'}
+
+    // ARCH-005：PR 详情统一现查，不再读 payload
+    platformState.getChangeRequest.mockResolvedValue({
+      number: 42,
+      title: 'Add dependency analysis path',
+      body: 'body',
+      state: 'open',
+      baseSha: 'base-sha-0001',
+      headSha: 'head-sha-0001',
+      baseRef: 'main',
+      headRef: 'feature',
+      author: 'someone'
+    })
 
     commenterState.getDescription.mockImplementation((body: string) => body ?? '')
     commenterState.findCommentWithTag.mockResolvedValue(null)
@@ -192,16 +206,25 @@ describe('review.ts 双轨一致性（execCtx vs context，Phase 0 依赖分析�
     })
   })
 
-  test('execCtx（真实工厂构造）与 context 对同一事件算出的 headSha 一致', () => {
-    // 前置断言：不依赖 codeReview 内部行为，直接验证两套构造路径本身的取值一致性——
-    // 这是"双轨"这个词真正的含义：两套独立代码路径读同一个底层事件，必须得到相同答案。
+  test('GitHub adapter 从 payload 构造出的坐标与事件本身一致', () => {
     const execCtx = createGitHubExecutionContext()
     expect(execCtx.headSha).toBe(mockContext.payload.pull_request.head.sha)
     expect(execCtx.baseSha).toBe(mockContext.payload.pull_request.base.sha)
     expect(execCtx.changeRequestId).toBe(mockContext.payload.pull_request.number)
   })
 
-  test('正常 PR 事件：getRepoFileTree/analyzeDependencies 收到的 ref/headSha 等于 execCtx.headSha 也等于 context.payload.pull_request.head.sha', async () => {
+  test('review.ts 不再 import @actions/github（迁移不可回退）', () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const fs = require('fs')
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const path = require('path')
+    const src: string = fs.readFileSync(path.resolve(__dirname, '../src/review.ts'), 'utf8')
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+    expect(code).not.toMatch(/from ['"]@actions\/github['"]/)
+    expect(code).not.toMatch(/\bcontext\.payload\b/)
+  })
+
+  test('正常 PR 事件：getRepoFileTree/analyzeDependencies 收到的 ref/headSha 等于 execCtx.headSha', async () => {
     const execCtx = createGitHubExecutionContext()
     expect(execCtx.headSha).toBe('head-sha-0001') // 前置确认 fixture 搭建正确
 
@@ -226,7 +249,7 @@ describe('review.ts 双轨一致性（execCtx vs context，Phase 0 依赖分析�
     expect(depArgs[headShaArgPosition]).toBe(mockContext.payload.pull_request.head.sha)
   })
 
-  test('execCtx.headSha 为空（评论触发场景）时，回退到 context.payload.pull_request.head.sha，不传出空字符串', async () => {
+  test('execCtx.headSha 为空（评论触发场景）时，回退到现查到的 head sha，不传出空字符串', async () => {
     // 模拟评论触发命令场景：execCtx 来自评论事件（GitHub 工厂对 comment 事件固定
     // 返回空字符串 headSha，见 github-execution-context.ts），但 codeReview 内部
     // 的 context 仍然是完整的 PR 事件 payload（fromCommand 场景下 review.ts 会

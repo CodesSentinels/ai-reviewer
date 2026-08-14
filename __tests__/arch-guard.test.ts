@@ -42,11 +42,10 @@ function collectTsFiles(dir: string): string[] {
  * 每当一个文件完成迁移（不再直接 import octokit/@actions/core），
  * 就从此列表移除，让架构测试自动捕获回退。
  */
-const LEGACY_ALLOWLIST = new Set([
-  // 直接 import @actions/github（ARCH-005 context 迁移目标）
-  'review.ts',
-  'commenter.ts',
-  'commands/dispatcher.ts'
+const LEGACY_ALLOWLIST = new Set<string>([
+  // 原先这里是 review.ts / commenter.ts / commands/dispatcher.ts（ARCH-005 context
+  // 迁移目标）。三者已改为只消费 ExecutionContext + IGitPlatform，不再 import
+  // @actions/github，因此从豁免列表移除——这正是迁移的意义：让门禁能挡住回退。
   // 原先这里还有 17 个直接 import @actions/core 的文件（Logger 迁移目标）。
   // SEC-008 把它们的日志出口统一换成了 src/actions-log.ts 的脱敏包装，
   // 不再直接依赖 @actions/core，因此从豁免列表移除。
@@ -64,6 +63,14 @@ function isExempt(rel: string): boolean {
   return isAdapterOrEntry(rel) || LEGACY_ALLOWLIST.has(rel)
 }
 
+/**
+ * 判定 import 必须先剥注释：文档注释里写「迁移前是 import ... from '@actions/github'」
+ * 这类说明是常态，把它算成违规会逼着注释绕开事实。
+ */
+function stripComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+}
+
 describe('ARCH-023: 共享核心不得新增直接平台依赖', () => {
   const allFiles = collectTsFiles(SRC)
   const coreFiles = allFiles.filter(f => !isExempt(path.relative(SRC, f).replace(/\\/g, '/')))
@@ -75,7 +82,7 @@ describe('ARCH-023: 共享核心不得新增直接平台依赖', () => {
   test('@actions/core 不应出现在共享核心中', () => {
     const violations: string[] = []
     for (const f of coreFiles) {
-      const content = fs.readFileSync(f, 'utf8')
+      const content = stripComments(fs.readFileSync(f, 'utf8'))
       if (/from ['"]@actions\/core['"]/.test(content)) {
         violations.push(path.relative(SRC, f))
       }
@@ -86,7 +93,7 @@ describe('ARCH-023: 共享核心不得新增直接平台依赖', () => {
   test('@actions/github 不应出现在共享核心中', () => {
     const violations: string[] = []
     for (const f of coreFiles) {
-      const content = fs.readFileSync(f, 'utf8')
+      const content = stripComments(fs.readFileSync(f, 'utf8'))
       if (/from ['"]@actions\/github['"]/.test(content)) {
         violations.push(path.relative(SRC, f))
       }
@@ -97,7 +104,7 @@ describe('ARCH-023: 共享核心不得新增直接平台依赖', () => {
   test('octokit 直接 import 不应出现在共享核心中', () => {
     const violations: string[] = []
     for (const f of coreFiles) {
-      const content = fs.readFileSync(f, 'utf8')
+      const content = stripComments(fs.readFileSync(f, 'utf8'))
       if (/from ['"]\.\.?\/octokit['"]/.test(content)) {
         violations.push(path.relative(SRC, f))
       }
@@ -126,10 +133,6 @@ describe('ARCH-023: 共享核心不得新增直接平台依赖', () => {
 })
 
 /** 粗粒度剥离注释（块注释/行注释），避免文档里提到 "execCtx.raw" 这几个字触发假阳性 */
-function stripComments(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
-}
-
 describe('ARCH-005: 共享业务层不得新增 execCtx.raw 读取（GitHub Issue #88 P2 复核）', () => {
   // 已知例外：conversation.ts 需要 review comment 的 diff_hunk/path 等深层 GitHub
   // 字段，以及完整 PR title/body/base/head sha——这些依赖 Commenter（本身仍直接

@@ -144,22 +144,29 @@ function makeExecCtx(overrides: Partial<Record<string, any>> = {}): any {
   }
 }
 
-function makePullRequestPayload(overrides: Record<string, any> = {}): any {
-  return {
+/**
+ * ARCH-005：PR 详情不再来自 context.payload.pull_request，而是
+ * IGitPlatform.getChangeRequest()。这里直接构造它的返回形状。
+ */
+function setChangeRequest(overrides: Record<string, any> = {}): void {
+  platformState.getChangeRequest.mockResolvedValue({
     number: 42,
     title: 'Add characterization test fixtures',
     body: 'This PR adds baseline fixtures.',
-    base: {sha: 'base-sha-0001'},
-    head: {sha: 'head-sha-0001'},
+    state: 'open',
+    baseSha: 'base-sha-0001',
+    headSha: 'head-sha-0001',
+    baseRef: 'main',
+    headRef: 'feature',
+    author: 'someone',
     ...overrides
-  }
+  })
 }
 
 describe('codeReview() — 改造前控制流行为基线', () => {
   beforeEach(() => {
     jest.clearAllMocks()
-    mockContext.eventName = 'pull_request'
-    mockContext.payload = {}
+    setChangeRequest()
     commenterState.getDescription.mockImplementation((body: string) => body ?? '')
     commenterState.findCommentWithTag.mockResolvedValue(null)
     commenterState.getAllCommitIds.mockResolvedValue([])
@@ -167,19 +174,21 @@ describe('codeReview() — 改造前控制流行为基线', () => {
     commenterState.addReviewedCommitId.mockReturnValue('<!-- reviewed-commit-ids -->')
   })
 
-  test('非 pull_request/pull_request_target 事件（非命令触发）→ 直接跳过，不调用任何 platform API', async () => {
-    mockContext.eventName = 'push'
-    mockContext.payload = {}
-
-    await codeReview(makeExecCtx(), makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
+  test('非 PR 类事件（非命令触发）→ 直接跳过，不调用任何 platform API', async () => {
+    await codeReview(
+      makeExecCtx({eventKind: 'metadata_updated'}),
+      makeBot(),
+      makeBot(),
+      makeOptions(),
+      new Prompts('', '')
+    )
 
     expect(platformState.compareDiff).not.toHaveBeenCalled()
     expect(commenterState.comment).not.toHaveBeenCalled()
   })
 
-  test('context.payload.pull_request 缺失（非命令触发）→ 跳过，不调用 platform API', async () => {
-    mockContext.eventName = 'pull_request'
-    mockContext.payload = {}
+  test('PR 详情取不到（getChangeRequest 抛错）→ 跳过，不调用后续 platform API', async () => {
+    platformState.getChangeRequest.mockRejectedValue(new Error('not found'))
 
     await codeReview(makeExecCtx(), makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
 
@@ -188,11 +197,9 @@ describe('codeReview() — 改造前控制流行为基线', () => {
   })
 
   test('PR 处于 paused 状态 → 跳过，不查询 diff', async () => {
-    mockContext.payload = {
-      pull_request: makePullRequestPayload({
-        body: '<!-- codesentinel-review-state:start -->\nstate: paused\n<!-- codesentinel-review-state:end -->\nSome description'
-      })
-    }
+    setChangeRequest({
+      body: '<!-- codesentinel-review-state:start -->\nstate: paused\n<!-- codesentinel-review-state:end -->\nSome description'
+    })
 
     await codeReview(makeExecCtx(), makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
 
@@ -201,11 +208,7 @@ describe('codeReview() — 改造前控制流行为基线', () => {
   })
 
   test('PR 描述含 ignore 关键词 → 跳过，不查询 diff', async () => {
-    mockContext.payload = {
-      pull_request: makePullRequestPayload({
-        body: `Description. ${IGNORE_KEYWORD}`
-      })
-    }
+    setChangeRequest({body: `Description. ${IGNORE_KEYWORD}`})
     commenterState.getDescription.mockReturnValue(`Description. ${IGNORE_KEYWORD}`)
 
     await codeReview(makeExecCtx(), makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
@@ -214,7 +217,6 @@ describe('codeReview() — 改造前控制流行为基线', () => {
   })
 
   test('无增量变更（compareCommits 返回空 files）→ 查询一次 diff 后跳过，不发布评论', async () => {
-    mockContext.payload = {pull_request: makePullRequestPayload()}
     platformState.compareDiff.mockResolvedValue({files: [], commits: []})
 
     await codeReview(makeExecCtx(), makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
@@ -224,7 +226,6 @@ describe('codeReview() — 改造前控制流行为基线', () => {
   })
 
   test('首次审查：incremental 与 targetBranch diff 均从 base sha 起算（历史无 reviewed commit）', async () => {
-    mockContext.payload = {pull_request: makePullRequestPayload()}
     platformState.compareDiff.mockResolvedValue({
       files: [
         {
@@ -275,7 +276,6 @@ describe('codeReview() — 改造前控制流行为基线', () => {
   })
 
   test('reviewMode="full" → 忽略历史 reviewed commit，强制从 PR base sha 开始', async () => {
-    mockContext.payload = {pull_request: makePullRequestPayload()}
     // 即使存在历史摘要评论和 reviewed commit block，full 模式也必须忽略它们
     commenterState.findCommentWithTag.mockResolvedValue({
       body: 'existing summary body'
@@ -293,9 +293,7 @@ describe('codeReview() — 改造前控制流行为基线', () => {
   })
 
   test('增量审查：存在历史 reviewed commit 时，diff 从该 commit 而非 base sha 起算', async () => {
-    mockContext.payload = {
-      pull_request: makePullRequestPayload({head: {sha: 'head-sha-0002'}})
-    }
+    setChangeRequest({headSha: 'head-sha-0002'})
     commenterState.findCommentWithTag.mockResolvedValue({
       body: 'existing summary body'
     })

@@ -22,9 +22,8 @@
  *   - dispatchCommentEvent(deps): 主入口，被 command-handler.ts 调用
  *   - DispatchOutcome: 用于测试的明确返回值
  */
-// eslint-disable-next-line camelcase
-import {context as github_context} from '@actions/github'
 import {getPlatform} from '../platform/git-platform'
+import {repoCoordsOf} from '../platform/run-context'
 import {getLogger} from '../platform/logger'
 import type {Options} from '../options'
 import {getRegistry} from './registry'
@@ -37,9 +36,6 @@ import {buildUnknownCommandMessage} from './handlers/help'
 import type {ActorInfo, CommandContext, CommandEventName, ErrorCode, ParsedCommand} from './types'
 import type {ExecutionContext} from '../platform/execution-context'
 
-// eslint-disable-next-line camelcase
-const context = github_context
-
 /** 调度结果（主要用于测试断言，以及 fallback 决策） */
 export type DispatchOutcome =
   | {kind: 'ignored'; reason: string}
@@ -48,12 +44,14 @@ export type DispatchOutcome =
 
 export interface DispatcherDeps {
   /**
-   * 可选（过渡期，ARCH-005 dual-track）：本文件内部事件坐标解析仍读取
-   * `@actions/github` context，尚未消费 execCtx——只作为透传字段写入
-   * CommandContext 供 handler 使用。完整迁移（消除本文件内的直接 context
-   * 依赖）列入阶段四后续排期，见 docs/tasks/execution-context-design.md 第 6.2 节。
+   * 事件坐标的唯一来源（ARCH-005 迁移完成）。
+   *
+   * 迁移前本文件直接读 `@actions/github` 的 context.payload 自行解析 PR number、
+   * 评论、head/base SHA 和作者。那些判断（action != created、issue_comment 是否
+   * 挂在 PR 上、bot 识别）与 createGitHubExecutionContext 的构造期校验完全重复，
+   * 且让 GitLab 无法复用本调度器。现在统一消费归一化字段。
    */
-  execCtx?: ExecutionContext
+  execCtx: ExecutionContext
   options: Options
   /** 可选: 覆盖默认 bot mention 列表 */
   botMentions?: string[]
@@ -67,68 +65,45 @@ export interface DispatcherDeps {
  */
 export async function dispatchCommentEvent(deps: DispatcherDeps): Promise<DispatchOutcome> {
   const logger = getLogger()
-  // [事件白名单] 仅放行 issue_comment / pull_request_review_comment 两类带评论的事件；
-  // 其余事件（push、pull_request、schedule 等）不携带用户评论，直接忽略，
-  // 同时把 eventName 收窄为 CommandEventName 供后续分支安全使用。
-  const eventName = context.eventName as CommandEventName
-  if (eventName !== 'issue_comment' && eventName !== 'pull_request_review_comment') {
-    return {kind: 'ignored', reason: `unsupported event: ${eventName}`}
+  const execCtx = deps.execCtx
+
+  // [事件白名单] 只放行两类带评论的事件。归一化 eventKind → 平台事件名，
+  // 供 Reply / addAckReaction 等仍按 GitHub 事件名分支的下游使用。
+  const eventName: CommandEventName | null =
+    execCtx.eventKind === 'comment_created'
+      ? 'issue_comment'
+      : execCtx.eventKind === 'review_comment_created'
+      ? 'pull_request_review_comment'
+      : null
+  if (eventName == null) {
+    return {kind: 'ignored', reason: `unsupported event: ${execCtx.eventKind}`}
   }
 
-  // [action 校验] 只处理"新建评论"(created)，忽略 edited / deleted 等动作，
-  // 避免编辑历史评论时重复触发命令。
-  const payload = context.payload
-  if (!payload || payload.action !== 'created') {
-    return {kind: 'ignored', reason: `action not created`}
-  }
+  // action != 'created' 和「issue_comment 挂在非 PR issue 上」这两条，已经在
+  // ExecutionContext 构造阶段判掉（ignorable_event，见 github-execution-context.ts），
+  // 走到这里的一定是新建的 PR/MR 评论，不必重复判断。
+  const prNumber = execCtx.changeRequestId
+  const comment = execCtx.comment
+  const commentNodeId = comment?.nodeId
+  const threadNodeId = comment?.threadId
 
-  // 提取 PR number & 评论 —— 两种事件的 payload 形态不同
-  let prNumber: number | undefined
-  let comment: any
+  // head/base SHA 与 PR 作者：评论事件的 payload 不保证带全（GitHub 侧构造阶段
+  // 固定留空），统一查一次当前详情补齐。迁移前 issue_comment 分支本来就查这一次，
+  // review_comment 分支从 payload 读——改成统一查询后行为更准，payload 里的 SHA
+  // 可能已经过期。
   let headSha = ''
   let baseSha = ''
   let prAuthor = ''
-  let commentNodeId: string | undefined
-  let threadNodeId: string | undefined
-
-  if (eventName === 'issue_comment') {
-    // [issue_comment 分支] PR 主评论区。GitHub 中 PR 复用 issue 模型，
-    // 只有当该 issue 关联 pull_request 时才是 PR 评论；否则是普通 issue，忽略。
-    if (!payload.issue?.pull_request) {
-      return {kind: 'ignored', reason: 'issue_comment on non-PR issue'}
-    }
-    prNumber = payload.issue.number
-    comment = payload.comment
-    prAuthor = payload.issue.user?.login ?? ''
-    // issue_comment 的 payload 没有 head/base SHA，主动查一次 PR 补齐，
-    // 否则 full review 等命令的 headSha 为空、去重逻辑（isHeadAlreadyReviewed）永远失效
-    try {
-      const cr = await getPlatform().getChangeRequest(
-        context.repo.owner,
-        context.repo.repo,
-        prNumber
-      )
-      headSha = cr.headSha
-      baseSha = cr.baseSha
-    } catch (e) {
-      logger.warning(
-        `command dispatcher: failed to fetch head/base sha for PR #${prNumber}: ${String(e)}`
-      )
-    }
-  } else {
-    // [pull_request_review_comment 分支] 代码 diff 上的行级评论。
-    // 缺少 pull_request 字段属于异常 payload，忽略。
-    if (!payload.pull_request) {
-      return {kind: 'ignored', reason: 'review_comment missing pull_request'}
-    }
-    prNumber = payload.pull_request.number
-    comment = payload.comment
-    // 行级评论 payload 自带 head/base SHA，可直接用于后续 diff 定位
-    headSha = payload.pull_request.head?.sha ?? ''
-    baseSha = payload.pull_request.base?.sha ?? ''
-    prAuthor = payload.pull_request.user?.login ?? ''
-    commentNodeId = comment?.node_id
-    // review_thread 的 nodeId 需要另查 GraphQL；此处置空由 B 在 handler 中补齐
+  const {owner, repo: repoName} = repoCoordsOf(execCtx)
+  try {
+    const cr = await getPlatform().getChangeRequest(owner, repoName, prNumber)
+    headSha = cr.headSha
+    baseSha = cr.baseSha
+    prAuthor = cr.author
+  } catch (e) {
+    logger.warning(
+      `command dispatcher: failed to fetch head/base sha for #${prNumber}: ${String(e)}`
+    )
   }
 
   // [字段完整性校验] 评论体非字符串或缺 PR number 则无法解析命令，忽略。
@@ -138,13 +113,11 @@ export async function dispatchCommentEvent(deps: DispatcherDeps): Promise<Dispat
 
   // [bot 自评论过滤] 通过 user.type 或登录名 `xxx[bot]` 后缀识别机器人，
   // 防止 bot 自己回帖再次触发命令造成死循环。
-  const actorLogin: string = comment.user?.login ?? ''
-  const actorIsBot = comment.user?.type === 'Bot' || /\[bot\]$/i.test(actorLogin)
-  if (actorIsBot) {
-    // 打印作者信息，便于排查"明明是人却被当成 bot"的情况
-    logger.info(
-      `command dispatcher: ignored comment from bot (login=${actorLogin}, type=${comment.user?.type})`
-    )
+  // bot 识别（user.type === 'Bot' 或 `xxx[bot]` 后缀）已在构造阶段归一化为
+  // actor.isBot，两个平台共用同一判定
+  const actorLogin: string = execCtx.actor.login
+  if (execCtx.actor.isBot) {
+    logger.info(`command dispatcher: ignored comment from bot (login=${actorLogin})`)
     return {kind: 'ignored', reason: 'comment from bot'}
   }
 
@@ -169,8 +142,6 @@ export async function dispatchCommentEvent(deps: DispatcherDeps): Promise<Dispat
 
   // outcome.kind === 'command'：解析出一条已知命令，进入执行流程。
   // 即便解析出错，也尽量构造 reply 以反馈用户
-  const owner = context.repo.owner
-  const repoName = context.repo.repo
   const cmdNameForReply = outcome.command?.name ?? 'unknown'
   const reply = new Reply({
     owner,
