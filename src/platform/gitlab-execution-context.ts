@@ -20,6 +20,19 @@
 import {type EventKind, type ExecutionContext, ExecutionContextError} from './execution-context'
 
 /**
+ * GitLab Note Hook `object_attributes.noteable_type` 的已知取值——评论挂在
+ * 哪一类对象上。依据 GitLab 官方 Webhook events 文档「Comment events」一节
+ * 整理，跟本文件其余字段映射一样，尚未经真实 Webhook 验证。
+ *
+ * `Epic` 属于 Premium/Ultimate 功能，当前项目只针对 GitLab.com Free 套餐
+ * （见 github-to-gitlab-migration-plan.md §0.4/§0.5），故意不列入。
+ */
+export type GitLabNoteableType = 'Commit' | 'MergeRequest' | 'Issue' | 'Snippet'
+
+/** 唯一需要业务处理的 noteable_type；其余一律 ignorable_event（EVENT-017）。 */
+export const MERGE_REQUEST_NOTEABLE_TYPE: GitLabNoteableType = 'MergeRequest'
+
+/**
  * 输入为已由 EVENT-002 任务解析出的 GitLab webhook payload 对象
  * （对应 TRIGGER_PAYLOAD 文件反序列化后的 JSON）。本函数不做文件 IO。
  *
@@ -77,10 +90,12 @@ function buildFromNoteHook(p: Record<string, any>): ExecutionContext {
   const attrs = p.object_attributes
   const mr = p.merge_request
 
-  // 结构缺失：真正的校验失败，fail closed（区别于下面的 ignorable_event）
-  if (attrs == null || mr == null) {
+  // 结构缺失：真正的校验失败，fail closed（区别于下面的 ignorable_event）。
+  // 只要求 object_attributes 存在——merge_request 是否必须存在取决于
+  // noteable_type，不能在这里无条件要求（见下方 bug 说明）。
+  if (attrs == null) {
     throw new ExecutionContextError(
-      'note payload missing object_attributes/merge_request',
+      'note payload missing required fields', // object_attributes
       'gitlab',
       'missing_required_field'
     )
@@ -88,7 +103,15 @@ function buildFromNoteHook(p: Record<string, any>): ExecutionContext {
 
   // 结构合法但业务上不需要处理：优雅跳过（EVENT-016/017，修复 Issue #66——
   // 此前这三种情形跟"字段真正缺失"共用 missing_required_field，导致
-  // gitlab-trigger.ts 对编辑/删除评论等 fail closed 而非优雅跳过）
+  // gitlab-trigger.ts 对编辑/删除评论等 fail closed 而非优雅跳过）。
+  //
+  // noteable_type 检查必须排在 merge_request 非空检查之前：GitLab 真实 Note
+  // Hook payload 里 merge_request 字段只在 noteable_type === 'MergeRequest'
+  // 时才会出现——评论挂在 Issue/commit/snippet 上时，payload 里根本没有
+  // merge_request（而是 issue/commit/snippet 字段）。如果先无条件要求
+  // merge_request 非空，Issue 等对象上的评论这一最常见的"非 MR note"场景会
+  // 在走到这条 ignorable_event 判断之前就先被上面的结构校验 fail closed，
+  // 这条判断反而变成只有人为构造的 fixture 才能触发的死代码。
   if (attrs.action !== 'create') {
     throw new ExecutionContextError(
       `note action is '${attrs.action}', not 'create' — ignorable`,
@@ -99,11 +122,21 @@ function buildFromNoteHook(p: Record<string, any>): ExecutionContext {
   if (attrs.system === true) {
     throw new ExecutionContextError('system note — ignorable', 'gitlab', 'ignorable_event')
   }
-  if (attrs.noteable_type !== 'MergeRequest') {
+  if (attrs.noteable_type !== MERGE_REQUEST_NOTEABLE_TYPE) {
     throw new ExecutionContextError(
       `noteable_type '${attrs.noteable_type}' is not MergeRequest — ignorable`,
       'gitlab',
       'ignorable_event'
+    )
+  }
+
+  // 到这里已经确认 noteable_type === 'MergeRequest'，merge_request 理应存在；
+  // 缺失说明 payload 结构真的坏了（不是"评论在别的对象上"这种正常情况）。
+  if (mr == null) {
+    throw new ExecutionContextError(
+      'MergeRequest note payload missing required fields', // merge_request
+      'gitlab',
+      'missing_required_field'
     )
   }
   return {

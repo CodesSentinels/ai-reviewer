@@ -96,17 +96,27 @@ describe('validateTriggerPayload()', () => {
     })
   })
 
-  test('note 缺少 merge_request.iid → ok:false', () => {
+  test('note 缺少 merge_request.iid（noteable_type=MergeRequest）→ ok:false', () => {
     const payload = {
       object_kind: 'note',
       project: {id: 42},
-      object_attributes: {id: 1},
+      object_attributes: {id: 1, noteable_type: 'MergeRequest'},
       merge_request: {}
     }
     expect(validateTriggerPayload(payload)).toEqual({
       ok: false,
       reason: 'missing merge_request.iid'
     })
+  })
+
+  test('note 挂在 Issue 上（noteable_type=Issue，无 merge_request 字段）→ ok:true（业务判断留给 ECF 层）', () => {
+    const payload = {
+      object_kind: 'note',
+      project: {id: 42},
+      object_attributes: {id: 1, noteable_type: 'Issue', action: 'create'}
+      // 真实 GitLab payload 里不会有 merge_request 字段
+    }
+    expect(validateTriggerPayload(payload)).toEqual({ok: true})
   })
 
   test('note 缺少 project.id → ok:false', () => {

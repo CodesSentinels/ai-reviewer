@@ -9,6 +9,7 @@
  *
  * 参考 docs/tasks/gitlab-trigger-cli-design.md 第 4 节。
  */
+import {MERGE_REQUEST_NOTEABLE_TYPE} from './platform/gitlab-execution-context'
 
 export interface TriggerPayloadValidation {
   ok: boolean
@@ -53,7 +54,12 @@ export function validateTriggerPayload(payload: unknown): TriggerPayloadValidati
   if (attrs?.id == null) {
     return {ok: false, reason: 'missing object_attributes.id'}
   }
-  if (mr?.iid == null) {
+  // merge_request 只在 noteable_type === 'MergeRequest' 时才会出现在真实
+  // GitLab payload 里——评论挂在 Issue/commit/snippet 上时根本没有这个字段，
+  // 那是需要交给 createGitLabExecutionContext 判定 ignorable_event 的正常
+  // 情况，不是结构校验失败。只有"明明是 MergeRequest 的评论却没带 merge_request"
+  // 才是这里要拦的真正结构性缺失。
+  if (attrs?.noteable_type === MERGE_REQUEST_NOTEABLE_TYPE && mr?.iid == null) {
     return {ok: false, reason: 'missing merge_request.iid'}
   }
   return {ok: true}
