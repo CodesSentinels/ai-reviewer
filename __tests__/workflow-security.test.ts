@@ -368,3 +368,72 @@ describe('SEC-002/004/005: 双执行面的分工与产物流向', () => {
     expect(lintStep['continue-on-error']).toBe(true)
   })
 })
+
+describe('SYNC-001~009: sync-to-gitlab.yml 加固', () => {
+  const wf = workflows.find(w => w.name === 'sync-to-gitlab.yml') as Workflow
+
+  test('存在 sync-to-gitlab.yml', () => {
+    expect(wf).toBeDefined()
+  })
+
+  test('SYNC-003：配置了 concurrency，且按目标分支分组', () => {
+    expect(wf.doc.concurrency).toBeDefined()
+    expect(wf.doc.concurrency.group).toContain('github.event.inputs.branch')
+    expect(wf.doc.concurrency.group).toContain('github.ref_name')
+  })
+
+  test('SYNC-002/008：workflow_dispatch 的 branch 输入前有白名单校验 step', () => {
+    for (const [, job] of jobsOf(wf.doc)) {
+      const steps = stepsOf(job)
+      const validateIdx = steps.findIndex((s: any) => /allowlist/i.test(s.name ?? ''))
+      expect(validateIdx).toBeGreaterThanOrEqual(0)
+
+      const validateScript = String(steps[validateIdx].run ?? '')
+      expect(validateScript).toMatch(/main\|develop/)
+
+      // 校验必须排在 checkout/push 之前，不能形同虚设
+      const checkoutIdx = steps.findIndex((s: any) =>
+        String(s.uses ?? '').startsWith('actions/checkout')
+      )
+      expect(checkoutIdx).toBeGreaterThan(validateIdx)
+    }
+  })
+
+  test('SYNC-004：push 之后存在一个回读 GitLab HEAD 并比对 SHA 的 step', () => {
+    for (const [, job] of jobsOf(wf.doc)) {
+      const steps = stepsOf(job)
+      const pushIdx = steps.findIndex((s: any) => String(s.run ?? '').includes('git push gitlab'))
+      const verifyIdx = steps.findIndex((s: any) =>
+        String(s.run ?? '').includes('repository/branches')
+      )
+      expect(pushIdx).toBeGreaterThanOrEqual(0)
+      expect(verifyIdx).toBeGreaterThan(pushIdx)
+      expect(String(steps[verifyIdx].run)).toContain('LOCAL_SHA')
+    }
+  })
+
+  test('SYNC-002：目标仓库 URL 是固定字面量，不是变量插值', () => {
+    expect(codeOf(wf.raw)).toContain('gitlab.com/CodesSentinels/ai-reviewer.git')
+    expect(codeOf(wf.raw)).not.toMatch(/gitlab\.com\/\$\{/)
+  })
+
+  test('SYNC-005/006：sync-to-gitlab.yml 只有一个 job，内部没有 needs（file 内没有可失败的依赖链）', () => {
+    const jobs = jobsOf(wf.doc)
+    expect(jobs).toHaveLength(1)
+    for (const [, job] of jobs) {
+      expect(job.needs).toBeUndefined()
+    }
+  })
+
+  test('SYNC-005/006：sync-to-gitlab.yml 与 openai-review.yml 互不跨文件触发（无 workflow_run 指向对方）', () => {
+    const reviewWf = workflows.find(w => w.name === 'openai-review.yml') as Workflow
+    expect(triggersOf(wf.doc).workflow_run).toBeUndefined()
+    expect(triggersOf(reviewWf.doc).workflow_run).toBeUndefined()
+  })
+
+  test('SYNC-008：自动触发（on.push）只监听 main/develop，不含 tag', () => {
+    const pushTrigger = wf.doc.on?.push ?? wf.doc[true as unknown as string]?.push
+    expect(pushTrigger.branches).toEqual(['main', 'develop'])
+    expect(pushTrigger.tags).toBeUndefined()
+  })
+})
