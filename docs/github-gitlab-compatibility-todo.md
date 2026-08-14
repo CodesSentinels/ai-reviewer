@@ -53,7 +53,7 @@
 - [x] `SEC-005` 有密钥 job 不得执行 PR job 产生的脚本、依赖、插件或可执行
       artifact。
 - [x] `SEC-006` 在 workflow/job 中显式声明最小 `permissions:`。
-- [ ] `SEC-007` 为 fork PR、同项目 PR、机器人 PR 和恶意 PR 增加 workflow 安全测
+- [x] `SEC-007` 为 fork PR、同项目 PR、机器人 PR 和恶意 PR 增加 workflow 安全测
       试。
 - [x] `SEC-008` 增加日志脱敏工具和测试，覆盖 HTTP Header、URL query、异常对象、
       环境变量和 debug 输出。
@@ -65,7 +65,7 @@
 
 ### 验收
 
-- [ ] 修改 Action 源码、`dist/index.js`、workflow、package scripts 和依赖的恶意
+- [x] 修改 Action 源码、`dist/index.js`、workflow、package scripts 和依赖的恶意
       PR 无法读取业务密钥。
 - [ ] GitHub 自动审查、摘要、行级评论和评论命令仍可正常运行。
 - [x] 安全修复不以删除现有 GitHub 功能代替。
