@@ -42,6 +42,14 @@ export function validateTriggerPayload(payload: unknown): TriggerPayloadValidati
     if (attrs?.source_project_id == null || attrs?.target_project_id == null) {
       return {ok: false, reason: 'missing source_project_id/target_project_id'}
     }
+    // EVENT-003（GitHub Issue #88 P1 复核）：GitLab 官方 Merge Request events
+    // 文档里 object_attributes.last_commit 在所有 action 下都会出现，用来描述
+    // 当前 HEAD——缺失/空值/类型错误一律 fail closed，不能像
+    // gitlab-execution-context.ts 里 `attrs.last_commit?.id ?? ''` 那样静默兜底
+    // 成空字符串（那会让 EVENT-008 拿着一个假的空 headSha 继续跑下去）。
+    if (!isNonEmptyString(attrs?.last_commit?.id)) {
+      return {ok: false, reason: 'missing or invalid object_attributes.last_commit.id'}
+    }
     return {
       ok: true,
       sourceTargetMismatch: attrs.source_project_id !== attrs.target_project_id
@@ -59,8 +67,19 @@ export function validateTriggerPayload(payload: unknown): TriggerPayloadValidati
   // 那是需要交给 createGitLabExecutionContext 判定 ignorable_event 的正常
   // 情况，不是结构校验失败。只有"明明是 MergeRequest 的评论却没带 merge_request"
   // 才是这里要拦的真正结构性缺失。
-  if (attrs?.noteable_type === MERGE_REQUEST_NOTEABLE_TYPE && mr?.iid == null) {
-    return {ok: false, reason: 'missing merge_request.iid'}
+  if (attrs?.noteable_type === MERGE_REQUEST_NOTEABLE_TYPE) {
+    if (mr?.iid == null) {
+      return {ok: false, reason: 'missing merge_request.iid'}
+    }
+    // EVENT-003：Note Hook 里 HEAD SHA 对应字段是 merge_request.diff_head_sha
+    // （见 gitlab-execution-context.ts 的 headSha 取值），同样不允许缺失/空值。
+    if (!isNonEmptyString(mr?.diff_head_sha)) {
+      return {ok: false, reason: 'missing or invalid merge_request.diff_head_sha'}
+    }
   }
   return {ok: true}
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value !== ''
 }

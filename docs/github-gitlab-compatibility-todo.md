@@ -352,14 +352,16 @@
 
 - [x] `EVENT-001` 新增 GitLab trigger CLI 源入口。
 - [x] `EVENT-002` CLI 从 file-type `TRIGGER_PAYLOAD` 路径读取原始 payload。
-- [ ] `EVENT-003` CLI 校验 project ID、事件类型、source/target project、MR IID
+- [x] `EVENT-003` CLI 校验 project ID、事件类型、source/target project、MR IID
       和 HEAD SHA。`validateTriggerPayload()`（`gitlab-trigger-validation.ts`）
-      只校验 project ID、事件类型、source/target project、MR IID，**未校验任何
-      HEAD SHA 相关字段**；`createGitLabExecutionContext()` 里
-      `baseSha: attrs.oldrev ?? ''`、`headSha: attrs.last_commit?.id ?? ''` 字段
-      缺失时静默兜底成空字符串，不是 fail closed。此前误勾为已完成（GitHub
-      Issue [#88](https://github.com/CodesSentinels/ai-reviewer/issues/88) P1
-      复核指出），已改回未完成。
+      现在对 HEAD SHA 做 fail closed 校验：`merge_request` 事件要求
+      `object_attributes.last_commit.id` 是非空字符串，`note` 事件（仅当
+      `noteable_type === 'MergeRequest'`）要求 `merge_request.diff_head_sha`
+      是非空字符串，缺失/空值/类型错误统一返回 `ok:false`。此前误勾为已完成，
+      经 GitHub Issue [#88](https://github.com/CodesSentinels/ai-reviewer/issues/88)
+      P1 复核指出缺口后改回未完成；现已补齐 HEAD SHA 校验并重新验证通过（GitHub
+      Issue [#109](https://github.com/CodesSentinels/ai-reviewer/issues/109)
+      跟踪，汇总见 Issue [#75](https://github.com/CodesSentinels/ai-reviewer/issues/75)）。
 - [x] `EVENT-004` 无关事件快速成功退出，不调用模型、不写评论。
 - [x] `EVENT-005` 所有错误日志脱敏，不输出完整 payload 或 Token。
 
