@@ -40336,10 +40336,12 @@ class ExecutionContextError extends Error {
  * 那些属于 EVENT-002/EVENT-003 任务，届时只需要"解析出 payload JSON 后调用
  * 本文件的函数"，不需要重新设计字段映射。
  *
- * `isBot` 恒为 false：GitLab MVP 使用个人 PAT 身份评论，没有天然的 bot 账号标记；
- * 真正的自反馈过滤需要将 actor.login 与配置好的 PAT 用户名比较（EVENT-018，
- * 见 `gitlab-note-hook-rules.ts` 的 `isSelfNote()`），故意不放进 ExecutionContext
- * 构造阶段判断——构造阶段不应依赖外部配置输入（呼应 ARCH-002 的字段设计边界）。
+ * `isBot` 只依据 GitLab 的**权威命名**判定（access token 账号与内置系统账号，
+ * 见 `isGitLabBotUsername`）。判不出「这是不是 reviewer 自己」——那需要把
+ * actor.login 与配置好的 PAT 用户名比较（EVENT-018，见
+ * `gitlab-note-hook-rules.ts` 的 `isSelfNote()`），故意不放进构造阶段：
+ * 构造阶段不应依赖外部配置输入（呼应 ARCH-002 的字段设计边界），该判定由
+ * `gitlab-trigger.ts` 在配置就绪后补上。
  *
  * GitLab Webhook 字段映射依据 GitLab 官方 Webhook events 文档整理，尚未经真实
  * Webhook 验证（ai-reviewer-test 项目尚未接入），EVENT-002 对接真实环境时需要
@@ -40382,7 +40384,7 @@ function buildFromMergeRequestHook(p) {
         projectId: String(project.id),
         changeRequestId: attrs.iid,
         eventKind,
-        actor: { login: p.user?.username ?? '', isBot: false },
+        actor: makeGitLabActor(p.user?.username),
         baseSha: attrs.oldrev ?? '',
         headSha: attrs.last_commit?.id ?? '',
         raw: p
@@ -40430,7 +40432,7 @@ function buildFromNoteHook(p) {
         projectId: String(p.project_id ?? p.project?.id ?? ''),
         changeRequestId: mr.iid,
         eventKind: attrs.discussion_id ? 'review_comment_created' : 'comment_created',
-        actor: { login: p.user?.username ?? '', isBot: false },
+        actor: makeGitLabActor(p.user?.username),
         baseSha: '',
         headSha: mr.diff_head_sha ?? '',
         comment: {
@@ -40445,6 +40447,41 @@ function buildFromNoteHook(p) {
         raw: p
     };
 }
+/**
+ * GitLab 侧的 bot 识别（CMD-006）。
+ *
+ * GitLab 的 webhook payload 里 user 只有 username/name，**没有** bot 标记
+ * （`user.bot` 只在 REST 的用户表示里出现），所以拿不到 GitHub
+ * `user.type === 'Bot'` 那样的确定信号。这里只认 GitLab 自己保证的命名：
+ *
+ *   project_{id}_bot / project_{id}_bot_{hash}   —— 项目 access token
+ *   group_{id}_bot / group_{id}_bot_{hash}       —— 群组 access token
+ *   支持/告警等内置系统账号
+ *
+ * **刻意不匹配**泛化的 `-bot` / `_bot` 后缀：那会把用户名恰好以 bot 结尾的真人
+ * 一并挡掉，让他再也用不了命令。反向的漏判危害小得多——reviewer 自己造成的
+ * 反馈循环已由 gitlab-trigger.ts 的 isSelfNote 过滤（EVENT-018）。
+ */
+function makeGitLabActor(username) {
+    const login = username ?? '';
+    return { login, isBot: isGitLabBotUsername(login) };
+}
+function isGitLabBotUsername(username) {
+    const name = (username ?? '').trim().toLowerCase();
+    if (name === '')
+        return false;
+    if (/^(project|group)_\d+_bot(_.*)?$/.test(name))
+        return true;
+    return GITLAB_SYSTEM_BOTS.has(name);
+}
+/** GitLab 内置系统账号（发 note 时同样不该进入权限与模型流程） */
+const GITLAB_SYSTEM_BOTS = new Set([
+    'support-bot',
+    'alert-bot',
+    'automation-bot',
+    'security-bot',
+    'ghost'
+]);
 function mapMergeRequestAction(attrs, changes) {
     if (attrs.action === 'open')
         return 'pr_opened';
@@ -54157,6 +54194,33 @@ function _resetBootstrap() {
 
 /** 默认支持的 bot mention 别名（小写，已带 @）。共享自 constants.BOT_MENTIONS。 */
 const DEFAULT_BOT_MENTIONS = [...BOT_MENTIONS];
+/**
+ * 本次运行认可的全部 mention（CMD-001 / CMD-002）。
+ *
+ * 两类来源：
+ *
+ * 1. **文本别名** `@ai-reviewer` / `@codesentinel`——平台无关，两边都保留
+ *    （CMD-001）。GitLab 上 bot 常以个人 PAT 身份发言，`@` 一个不存在的用户
+ *    不会产生通知，但作为纯文本前缀依然可用，这正是 CMD-002 里「或纯文本前缀」
+ *    的含义。
+ * 2. **真实账号 mention** `@{botLogin}`——GitLab 是 PAT 用户名
+ *    （`AI_REVIEWER_BOT_GITLAB_LOGIN`），GitHub 是 `bot_github_login`。
+ *    用户凭直觉 @ 真实账号时也应该能触发。
+ *
+ * 未配置 botLogin 时退化为纯别名，与迁移前行为一致。
+ *
+ * 入参容忍 undefined：这条链路一崩，**所有**命令都会失效，不值得为了类型上的
+ * 洁癖去赌每个调用方都传了值。
+ */
+function resolveBotMentions(botLogin) {
+    const login = (botLogin ?? '').trim().replace(/^@/, '');
+    if (login === '')
+        return [...DEFAULT_BOT_MENTIONS];
+    const real = `@${login.toLowerCase()}`;
+    return DEFAULT_BOT_MENTIONS.includes(real)
+        ? [...DEFAULT_BOT_MENTIONS]
+        : [...DEFAULT_BOT_MENTIONS, real];
+}
 /** 命令行长度上限 */
 const MAX_COMMAND_LINE_LENGTH = 512;
 /** 单个 arg 长度上限 */
@@ -54168,6 +54232,36 @@ const SAFE_TOKEN_RE = /^[A-Za-z0-9_\-./:=]+$/;
 /** shell 元字符黑名单（补充检查，用于生成更明确的错误信息） */
 const SHELL_METACHARS_RE = /[`$(){}|&;<>\\'"]/;
 /**
+ * mention 两侧必须都是边界（CMD-004）。
+ *
+ * 只看前一个字符是不够的：`@ai-reviewerX help` 会命中 `@ai-reviewer` 并把
+ * `X help` 当成命令体，等于替另一个用户执行命令。两侧都要卡：
+ *
+ *   前：行首、空白或标点          —— 挡住 `foo@ai-reviewer`
+ *   后：非标识符字符              —— 挡住 `@ai-reviewerX` / `@ai-reviewer-bot`
+ *
+ * 尾部的 `.` 单独处理：`@ai-reviewer.` 句末是合法的，但 GitLab 用户名允许含
+ * `.`，所以 `.` 后面若紧跟标识符字符（`@ai-reviewer.bot`）仍判为另一个用户。
+ */
+function hasMentionBoundary(body, idx, len) {
+    if (idx > 0) {
+        const prev = body[idx - 1];
+        if (!/\s|[,.;:，。；：]/.test(prev))
+            return false;
+    }
+    const next = body[idx + len];
+    if (next === undefined)
+        return true;
+    if (/[A-Za-z0-9_-]/.test(next))
+        return false;
+    if (next === '.') {
+        const after = body[idx + len + 1];
+        if (after !== undefined && /[A-Za-z0-9_-]/.test(after))
+            return false;
+    }
+    return true;
+}
+/**
  * 主解析入口
  */
 function parse(body, opts) {
@@ -54175,19 +54269,28 @@ function parse(body, opts) {
         return { kind: 'none' };
     }
     const mentions = (opts.botMentions ?? DEFAULT_BOT_MENTIONS).map(m => m.toLowerCase());
-    // 1. 找到第一个 bot mention 出现的位置（忽略大小写）
+    // 1. 找到第一个**边界合法**的 bot mention（忽略大小写）
     const lower = body.toLowerCase();
     let mentionIdx = -1;
     let mentionLen = 0;
     for (const m of mentions) {
-        const idx = lower.indexOf(m);
-        if (idx !== -1 && (mentionIdx === -1 || idx < mentionIdx)) {
-            // 要求 mention 前是行首/空白/标点，避免匹配到 foo@ai-reviewer
-            const prev = idx === 0 ? ' ' : body[idx - 1];
-            if (/\s|[,.;:，。；：]/.test(prev) || idx === 0) {
+        // 必须遍历该 mention 的**每一次**出现：早先只取 indexOf 的第一处，
+        // 首次出现边界不合法就整个放弃，于是
+        //   "邮箱 a@ai-reviewer.com\n@ai-reviewer help"
+        // 里第二行真正的命令被完全吞掉（返回 none）。
+        let from = 0;
+        for (;;) {
+            const idx = lower.indexOf(m, from);
+            if (idx === -1)
+                break;
+            from = idx + 1;
+            if (!hasMentionBoundary(body, idx, m.length))
+                continue;
+            if (mentionIdx === -1 || idx < mentionIdx) {
                 mentionIdx = idx;
                 mentionLen = m.length;
             }
+            break; // 该别名的首个合法位置即可，更靠前的由其他别名比较得出
         }
     }
     if (mentionIdx === -1) {
@@ -61504,6 +61607,7 @@ ${buildIssueConvReplyTag(comment.id)}
 
 
 
+
 async function handleCommentEvent(deps) {
     bootstrapCommands();
     const triggerReview = async (mode) => {
@@ -61522,6 +61626,9 @@ async function handleCommentEvent(deps) {
     const outcome = await dispatchCommentEvent({
         execCtx: deps.execCtx,
         options: deps.options,
+        // CMD-001/002：文本别名 + 配置的真实账号。此前 deps.botMentions 从未被传，
+        // 两个平台都只吃默认别名，GitLab 上 @ 真实 PAT 账号不会触发。
+        botMentions: resolveBotMentions(deps.options.botLogin),
         triggerReview
     });
     (0,actions_log.info)(`commentEvent dispatcher outcome: ${JSON.stringify(outcome)}`);
@@ -62211,7 +62318,7 @@ async function runOrchestrator(deps) {
     // 3. 评论事件 ACK
     if (deps.earlyReaction &&
         (execCtx.eventKind === 'comment_created' || execCtx.eventKind === 'review_comment_created')) {
-        await deps.earlyReaction(execCtx, options.commandAckReaction);
+        await deps.earlyReaction(execCtx, options);
     }
     // 4. 构建提示词
     const promptConfig = configProvider.getPromptConfig();

@@ -71181,6 +71181,33 @@ function _resetBootstrap() {
 
 /** 默认支持的 bot mention 别名（小写，已带 @）。共享自 constants.BOT_MENTIONS。 */
 const DEFAULT_BOT_MENTIONS = [...BOT_MENTIONS];
+/**
+ * 本次运行认可的全部 mention（CMD-001 / CMD-002）。
+ *
+ * 两类来源：
+ *
+ * 1. **文本别名** `@ai-reviewer` / `@codesentinel`——平台无关，两边都保留
+ *    （CMD-001）。GitLab 上 bot 常以个人 PAT 身份发言，`@` 一个不存在的用户
+ *    不会产生通知，但作为纯文本前缀依然可用，这正是 CMD-002 里「或纯文本前缀」
+ *    的含义。
+ * 2. **真实账号 mention** `@{botLogin}`——GitLab 是 PAT 用户名
+ *    （`AI_REVIEWER_BOT_GITLAB_LOGIN`），GitHub 是 `bot_github_login`。
+ *    用户凭直觉 @ 真实账号时也应该能触发。
+ *
+ * 未配置 botLogin 时退化为纯别名，与迁移前行为一致。
+ *
+ * 入参容忍 undefined：这条链路一崩，**所有**命令都会失效，不值得为了类型上的
+ * 洁癖去赌每个调用方都传了值。
+ */
+function resolveBotMentions(botLogin) {
+    const login = (botLogin ?? '').trim().replace(/^@/, '');
+    if (login === '')
+        return [...DEFAULT_BOT_MENTIONS];
+    const real = `@${login.toLowerCase()}`;
+    return DEFAULT_BOT_MENTIONS.includes(real)
+        ? [...DEFAULT_BOT_MENTIONS]
+        : [...DEFAULT_BOT_MENTIONS, real];
+}
 /** 命令行长度上限 */
 const MAX_COMMAND_LINE_LENGTH = 512;
 /** 单个 arg 长度上限 */
@@ -71192,6 +71219,36 @@ const SAFE_TOKEN_RE = /^[A-Za-z0-9_\-./:=]+$/;
 /** shell 元字符黑名单（补充检查，用于生成更明确的错误信息） */
 const SHELL_METACHARS_RE = /[`$(){}|&;<>\\'"]/;
 /**
+ * mention 两侧必须都是边界（CMD-004）。
+ *
+ * 只看前一个字符是不够的：`@ai-reviewerX help` 会命中 `@ai-reviewer` 并把
+ * `X help` 当成命令体，等于替另一个用户执行命令。两侧都要卡：
+ *
+ *   前：行首、空白或标点          —— 挡住 `foo@ai-reviewer`
+ *   后：非标识符字符              —— 挡住 `@ai-reviewerX` / `@ai-reviewer-bot`
+ *
+ * 尾部的 `.` 单独处理：`@ai-reviewer.` 句末是合法的，但 GitLab 用户名允许含
+ * `.`，所以 `.` 后面若紧跟标识符字符（`@ai-reviewer.bot`）仍判为另一个用户。
+ */
+function hasMentionBoundary(body, idx, len) {
+    if (idx > 0) {
+        const prev = body[idx - 1];
+        if (!/\s|[,.;:，。；：]/.test(prev))
+            return false;
+    }
+    const next = body[idx + len];
+    if (next === undefined)
+        return true;
+    if (/[A-Za-z0-9_-]/.test(next))
+        return false;
+    if (next === '.') {
+        const after = body[idx + len + 1];
+        if (after !== undefined && /[A-Za-z0-9_-]/.test(after))
+            return false;
+    }
+    return true;
+}
+/**
  * 主解析入口
  */
 function parse(body, opts) {
@@ -71199,19 +71256,28 @@ function parse(body, opts) {
         return { kind: 'none' };
     }
     const mentions = (opts.botMentions ?? DEFAULT_BOT_MENTIONS).map(m => m.toLowerCase());
-    // 1. 找到第一个 bot mention 出现的位置（忽略大小写）
+    // 1. 找到第一个**边界合法**的 bot mention（忽略大小写）
     const lower = body.toLowerCase();
     let mentionIdx = -1;
     let mentionLen = 0;
     for (const m of mentions) {
-        const idx = lower.indexOf(m);
-        if (idx !== -1 && (mentionIdx === -1 || idx < mentionIdx)) {
-            // 要求 mention 前是行首/空白/标点，避免匹配到 foo@ai-reviewer
-            const prev = idx === 0 ? ' ' : body[idx - 1];
-            if (/\s|[,.;:，。；：]/.test(prev) || idx === 0) {
+        // 必须遍历该 mention 的**每一次**出现：早先只取 indexOf 的第一处，
+        // 首次出现边界不合法就整个放弃，于是
+        //   "邮箱 a@ai-reviewer.com\n@ai-reviewer help"
+        // 里第二行真正的命令被完全吞掉（返回 none）。
+        let from = 0;
+        for (;;) {
+            const idx = lower.indexOf(m, from);
+            if (idx === -1)
+                break;
+            from = idx + 1;
+            if (!hasMentionBoundary(body, idx, m.length))
+                continue;
+            if (mentionIdx === -1 || idx < mentionIdx) {
                 mentionIdx = idx;
                 mentionLen = m.length;
             }
+            break; // 该别名的首个合法位置即可，更靠前的由其他别名比较得出
         }
     }
     if (mentionIdx === -1) {
@@ -71448,7 +71514,7 @@ async function addAckReaction(params) {
  * 尝试在 Bot 初始化前尽快给用户评论打 ACK 表情。
  * 失败或非命令场景下静默返回，不影响后续流程。
  */
-async function tryEarlyReaction(execCtx, rawReaction) {
+async function tryEarlyReaction(execCtx, options) {
     try {
         if (execCtx.eventKind !== 'comment_created' && execCtx.eventKind !== 'review_comment_created') {
             return;
@@ -71465,7 +71531,7 @@ async function tryEarlyReaction(execCtx, rawReaction) {
         const registry = registry_getRegistry();
         const outcome = parse(comment.body, {
             registeredCommands: registry.getRegisteredNames(),
-            botMentions: DEFAULT_BOT_MENTIONS
+            botMentions: resolveBotMentions(options.botLogin)
         });
         // 命令（@bot <cmd>）与对话式追问（@bot <自然语言>）都先打 ACK 表情：
         // 二者都会触发后续 bot 回帖，提前给用户一个"已收到"的可见信号。
@@ -71483,7 +71549,7 @@ async function tryEarlyReaction(execCtx, rawReaction) {
             changeRequestId: execCtx.changeRequestId,
             commentId: comment.id,
             eventName,
-            rawReaction
+            rawReaction: options.commandAckReaction
         });
         (0,actions_log.info)(`early ack reaction sent for commentId=${comment.id}`);
     }
@@ -91209,6 +91275,7 @@ ${buildIssueConvReplyTag(comment.id)}
 
 
 
+
 async function handleCommentEvent(deps) {
     bootstrapCommands();
     const triggerReview = async (mode) => {
@@ -91227,6 +91294,9 @@ async function handleCommentEvent(deps) {
     const outcome = await dispatchCommentEvent({
         execCtx: deps.execCtx,
         options: deps.options,
+        // CMD-001/002：文本别名 + 配置的真实账号。此前 deps.botMentions 从未被传，
+        // 两个平台都只吃默认别名，GitLab 上 @ 真实 PAT 账号不会触发。
+        botMentions: resolveBotMentions(deps.options.botLogin),
         triggerReview
     });
     (0,actions_log.info)(`commentEvent dispatcher outcome: ${JSON.stringify(outcome)}`);
@@ -91950,7 +92020,7 @@ async function runOrchestrator(deps) {
     // 3. 评论事件 ACK
     if (deps.earlyReaction &&
         (execCtx.eventKind === 'comment_created' || execCtx.eventKind === 'review_comment_created')) {
-        await deps.earlyReaction(execCtx, options.commandAckReaction);
+        await deps.earlyReaction(execCtx, options);
     }
     // 4. 构建提示词
     const promptConfig = configProvider.getPromptConfig();
