@@ -390,12 +390,15 @@
 - [x] `EVENT-011` 同项目 MR 内容仍按不可信数据处理。
 - [ ] `EVENT-012` 每次写操作前重新读取当前 MR HEAD；不一致时退出且不写旧结果。
       `isHeadStale()` 已实现比较逻辑，但调用方（写操作前重新读取 GLAPI）尚未接
-      入，不得勾选完成。
+      入，不得勾选完成。跟踪见 GitHub Issue
+      [#111](https://github.com/CodesSentinels/ai-reviewer/issues/111)（暂无
+      实现 PR，依赖 `STATE-005`）。
 - [ ] `EVENT-013` MR 自动审查幂等键使用
       `gitlab:{project_id}:{mr_iid}:head:{head_sha}`，并与 summary note 中的
       reviewed SHA marker 一起判断；不得依赖未明确进入 `TRIGGER_PAYLOAD` 的
       Webhook Header。`buildMrIdempotencyKey()` 已实现格式生成，但与 summary
-      note marker 的比对属于 `STATE-005`，尚未接入，不得勾选完成。
+      note marker 的比对属于 `STATE-005`，尚未接入，不得勾选完成。跟踪见
+      Issue [#111](https://github.com/CodesSentinels/ai-reviewer/issues/111)。
 
 ### 6.3 Note Hook
 
@@ -429,9 +432,11 @@
       `TRIGGER_PAYLOAD` body 中可验证的字段，不假定 job 能读取
       `Idempotency-Key`、`X-Gitlab-Event-UUID` 等 Webhook Header。
       `buildNoteIdempotencyKey()` 已实现格式生成，与 marker 存储的对接属于
-      `STATE-005`，尚未接入，不得勾选完成。
+      `STATE-005`，尚未接入，不得勾选完成。跟踪见 Issue
+      [#111](https://github.com/CodesSentinels/ai-reviewer/issues/111)。
 - [ ] `EVENT-021` 重复 webhook 投递不得重复调用模型或重复回复。依赖
-      `EVENT-020`/`STATE-*` 幂等存储接入，尚未完成。
+      `EVENT-020`/`STATE-*` 幂等存储接入，尚未完成。跟踪见 Issue
+      [#111](https://github.com/CodesSentinels/ai-reviewer/issues/111)。
 
 ---
 
@@ -695,7 +700,10 @@
 - [x] `STATE-003` GitLab MR description 保存 pause/resume marker。
 - [x] `STATE-004` GitLab summary note 保存 reviewed SHA marker。
 - [ ] `STATE-005` GitLab reviewer note 保存已处理 Note Hook 幂等键 marker；自动
-      MR 审查继续使用 summary note 中的 reviewed SHA marker。
+      MR 审查继续使用 summary note 中的 reviewed SHA marker。Issue #108
+      （`STATE-001~009`）明确标注本项"属于 §6 领地"未认领；跟踪见 Issue
+      [#111](https://github.com/CodesSentinels/ai-reviewer/issues/111)（连同
+      `EVENT-012/013/020/021` 一并跟踪，暂无实现 PR）。
 - [x] `STATE-006` marker 和幂等键包含 `github:` 或 `gitlab:` 命名空间。
 - [x] `STATE-007` 禁止通过相同 commit SHA 合并 GitHub PR 和 GitLab MR 的任务状态
       。
