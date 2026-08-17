@@ -131,4 +131,76 @@ describe('validateTriggerPayload()', () => {
       reason: 'missing project.id'
     })
   })
+
+  // EVENT-003（GitHub Issue #88 P1 复核）：HEAD SHA 缺失/空值/类型错误必须
+  // fail closed，不能像 gitlab-execution-context.ts 那样静默兜底成空字符串。
+  describe('EVENT-003: HEAD SHA 校验', () => {
+    test('merge_request 缺少 object_attributes.last_commit → ok:false', () => {
+      const payload = {
+        object_kind: 'merge_request',
+        project: {id: 42},
+        object_attributes: {iid: 1, source_project_id: 1, target_project_id: 1}
+      }
+      expect(validateTriggerPayload(payload)).toEqual({
+        ok: false,
+        reason: 'missing or invalid object_attributes.last_commit.id'
+      })
+    })
+
+    test('merge_request 的 last_commit.id 是空字符串 → ok:false', () => {
+      const payload = {
+        object_kind: 'merge_request',
+        project: {id: 42},
+        object_attributes: {
+          iid: 1,
+          source_project_id: 1,
+          target_project_id: 1,
+          last_commit: {id: ''}
+        }
+      }
+      expect(validateTriggerPayload(payload)).toEqual({
+        ok: false,
+        reason: 'missing or invalid object_attributes.last_commit.id'
+      })
+    })
+
+    test('merge_request 的 last_commit.id 类型错误（非字符串）→ ok:false', () => {
+      const payload = {
+        object_kind: 'merge_request',
+        project: {id: 42},
+        object_attributes: {
+          iid: 1,
+          source_project_id: 1,
+          target_project_id: 1,
+          last_commit: {id: 12345}
+        }
+      }
+      expect(validateTriggerPayload(payload)).toEqual({
+        ok: false,
+        reason: 'missing or invalid object_attributes.last_commit.id'
+      })
+    })
+
+    test('note（noteable_type=MergeRequest）缺少 merge_request.diff_head_sha → ok:false', () => {
+      const payload = {
+        object_kind: 'note',
+        project: {id: 42},
+        object_attributes: {id: 1, noteable_type: 'MergeRequest', action: 'create'},
+        merge_request: {iid: 7}
+      }
+      expect(validateTriggerPayload(payload)).toEqual({
+        ok: false,
+        reason: 'missing or invalid merge_request.diff_head_sha'
+      })
+    })
+
+    test('note（noteable_type=Issue）不要求 diff_head_sha 存在 → ok:true（沿用既有 ignorable 分支）', () => {
+      const payload = {
+        object_kind: 'note',
+        project: {id: 42},
+        object_attributes: {id: 1, noteable_type: 'Issue', action: 'create'}
+      }
+      expect(validateTriggerPayload(payload)).toEqual({ok: true})
+    })
+  })
 })
