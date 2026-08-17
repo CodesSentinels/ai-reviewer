@@ -199,6 +199,21 @@ function loadExternalLintReport(reportPath: string): LintReport | null {
   return parsed.report
 }
 
+/**
+ * 最终摘要生成失败时的可见兜底（REVIEW-006）。
+ *
+ * 逐文件摘要本身是已经算出来的，只是原本只存进 `inputs.rawSummary`——而那份内容
+ * 落在隐藏 marker 区块里，用户在评论正文里一个字也看不到。这里把它渲染成可见的
+ * 简表，让「模型整合失败」退化为「摘要质量下降」，而不是「什么都没有」。
+ */
+function renderPerFileSummaryFallback(summaries: Array<[string, string, boolean]>): string {
+  if (summaries.length === 0) return ''
+  const rows = summaries
+    .map(([filename, summary]) => `- **${filename}**：${summary.trim().replace(/\n+/g, ' ')}`)
+    .join('\n')
+  return `> 整合摘要生成失败，以下是未经整合的逐文件摘要：\n\n${rows}`
+}
+
 export const codeReview = async (
   execCtx: ExecutionContext,
   lightBot: Bot,
@@ -416,8 +431,12 @@ export const codeReview = async (
                 fileContent = content
               }
             } catch (e: any) {
+              // REVIEW-005：新增文件走的是上面的 status === 'added' 分支，根本
+              // 不会到这里。能走到这里说明是真的读不到（权限、超大文件、
+              // 二进制、临时故障），说"这对新文件是正常的"会把真问题盖过去。
               getLogger().warning(
-                `Failed to get file contents: ${e as string}. This is OK if it's a new file.`
+                `Failed to read base content of ${file.filename}: ${String(e)}. ` +
+                  'Continuing with diff only — review quality for this file may be reduced.'
               )
             }
           }
@@ -468,6 +487,14 @@ ${hunks.oldHunk}
     )
 
   // 过滤掉没有有效 patch 的文件
+  // REVIEW-005：已删除的文件在**摘要**里仍有价值（"某某被删掉了"是重要变更），
+  // 但不该进入**行级审查**——删除后的文件没有新行可挂评论，模型给出的行号无处
+  // 落地，提交行级评论时会被平台拒绝。filesAndChanges 元组不带 status，
+  // 这里旁路记一份文件名集合。
+  const deletedFiles = new Set(
+    files.filter(file => file.status === 'removed').map(file => file.filename)
+  )
+
   const filesAndChanges = filteredFiles.filter(file => file !== null) as Array<
     [string, string, string, Array<[number, number, string]>]
   >
@@ -616,6 +643,32 @@ ${
    *
    * @returns [文件名, 摘要内容, 是否需要审查] 三元组，或 null（失败时）
    */
+  // REVIEW-006：阶段三的模型调用原本是裸调用，任一失败都会抛出 codeReview，
+  // 已经算好的 per-file 摘要与行级审查结果全部丢失，PR 上还留着 in-progress
+  // 状态——用户只看到"审查卡住了"，不知道发生了什么。
+  //
+  // 改为：单个阶段失败 → 降级继续，把失败原因收集起来，最后明确写进摘要评论。
+  const degradations: string[] = []
+
+  /**
+   * 调用模型，失败则降级为 null 并登记。
+   *
+   * 登记进 `degradations` 的文案会**发布到 PR/MR 评论**，因此只放阶段名 +
+   * 一句通用描述。原始 Error.message 来自 OpenAI SDK / 代理，可能带内部
+   * endpoint、响应正文、请求 ID 等不适合公开的内容——那些只写进（已脱敏的）
+   * 运行日志。
+   */
+  const chatOrNull = async (bot: Bot, prompt: string, label: string): Promise<string | null> => {
+    try {
+      const [response] = await bot.chat(prompt, {})
+      return response
+    } catch (e: any) {
+      getLogger().warning(`${label} failed: ${e instanceof Error ? e.message : String(e)}`)
+      degradations.push(`${label}未完成（模型调用失败，详情见运行日志）`)
+      return null
+    }
+  }
+
   const doSummary = async (
     filename: string,
     fileContent: string,
@@ -705,9 +758,14 @@ ${
 ${filename}: ${summary}
 `
       }
-      // 调用重量模型合并摘要
-      const [summarizeResp] = await heavyBot.chat(prompts.renderSummarizeChangesets(inputs), {})
-      if (summarizeResp === '') {
+      // 调用重量模型合并摘要。失败时保留上一轮的 rawSummary 继续——
+      // 少合并一批好过整份摘要都没有
+      const summarizeResp = await chatOrNull(
+        heavyBot,
+        prompts.renderSummarizeChangesets(inputs),
+        '摘要合并'
+      )
+      if (summarizeResp == null || summarizeResp === '') {
         getLogger().warning('summarize: nothing obtained from openai')
       } else {
         inputs.rawSummary = summarizeResp
@@ -717,8 +775,17 @@ ${filename}: ${summary}
 
   // ==================== 阶段三：生成最终摘要和发布说明 ====================
 
-  // 生成最终摘要
-  const [summarizeFinalResponse] = await heavyBot.chat(prompts.renderSummarize(inputs), {})
+  // 生成最终摘要。失败时用逐文件摘要兜底——注意兜底内容必须落在**用户可见**的
+  // 正文里：inputs.rawSummary 只存在隐藏 marker 区块中，光有它等于什么都没发。
+  const summarizeFinalRaw = await chatOrNull(
+    heavyBot,
+    prompts.renderSummarize(inputs),
+    '最终摘要生成'
+  )
+  const summarizeFinalResponse =
+    summarizeFinalRaw != null && summarizeFinalRaw !== ''
+      ? summarizeFinalRaw
+      : renderPerFileSummaryFallback(summaries)
   if (summarizeFinalResponse === '') {
     getLogger().info('summarize: nothing obtained from openai')
   }
@@ -727,10 +794,9 @@ ${filename}: ${summary}
 
   // 生成发布说明并写入 PR 描述
   if (options.disableReleaseNotes === false) {
-    const [releaseNotesResponse] = await heavyBot.chat(
-      prompts.renderSummarizeReleaseNotes(inputs),
-      {}
-    )
+    const releaseNotesResponse =
+      (await chatOrNull(heavyBot, prompts.renderSummarizeReleaseNotes(inputs), '发布说明生成')) ??
+      ''
     if (releaseNotesResponse === '') {
       getLogger().info('release notes: nothing obtained from openai')
     } else {
@@ -745,8 +811,9 @@ ${filename}: ${summary}
   }
 
   // 生成精简摘要（用于后续代码审查时提供上下文）
-  const [summarizeShortResponse] = await heavyBot.chat(prompts.renderSummarizeShort(inputs), {})
-  inputs.shortSummary = summarizeShortResponse
+  // 精简摘要只用于后续审查的上下文，失败不影响本次输出
+  inputs.shortSummary =
+    (await chatOrNull(heavyBot, prompts.renderSummarizeShort(inputs), '精简摘要生成')) ?? ''
 
   // 构建最终的摘要评论内容（包含隐藏的状态数据）
   let summarizeComment = `${summarizeFinalResponse}
@@ -796,6 +863,10 @@ ${
 }
 `
 
+  // 提到函数作用域：最终摘要评论在审查阶段**之后**发布，需要读这份失败清单
+  // 来生成「本次审查不完整」提示（REVIEW-006）
+  const reviewsFailed: string[] = []
+
   // ==================== 阶段四：逐文件代码审查 ====================
   if (!options.disableReview && runOptions.summaryOnly !== true) {
     // 筛选出需要审查的文件（分类为 NEEDS_REVIEW 的文件）
@@ -813,7 +884,6 @@ ${
       )
       .map(([filename]) => filename)
 
-    const reviewsFailed: string[] = []
     let lgtmCount = 0 // LGTM 评论计数（被过滤掉的）
     let reviewCount = 0 // 收集到的审查发现总数（去重/截断前）
 
@@ -894,6 +964,11 @@ ${
       fileContent: string,
       patches: Array<[number, number, string]>
     ): Promise<void> => {
+      if (deletedFiles.has(filename)) {
+        // 摘要阶段已经覆盖过这次删除，这里只是不再为它跑一次深度审查
+        getLogger().info(`skip line-level review for deleted file: ${filename}`)
+        return
+      }
       getLogger().info(`reviewing ${filename}`)
       const ins: Inputs = inputs.clone()
       ins.filename = filename
@@ -1235,6 +1310,31 @@ ${
   // 否则 replace 摘要评论会清空增量审查标记，导致下次自动审查从 base 重审
   if (runOptions.summaryOnly === true && existingCommitIdsBlock !== '') {
     summarizeComment += `\n${existingCommitIdsBlock}`
+  }
+
+  // REVIEW-006：不完整的审查必须让用户看得见。
+  //
+  // 详细清单原本只挂在 statusMsg 上，而 statusMsg 走 submitReview——那个方法在
+  // **没有行级评论时会直接返回**（GitHub 不接受空审查）。于是最常见的情况下
+  //（模型没挑出问题，或者所有文件都失败了）用户什么提示都收不到：全部失败与
+  // "没发现问题"长得一模一样。
+  //
+  // 摘要评论是唯一一条必定发出的消息，所以提示放这里。
+  const incomplete: string[] = [
+    ...degradations,
+    // 摘要失败同样要算进来：token 超限、空响应、模型异常都会落在这里，
+    // 而它原本只进 statusMsg——没有行级评论时那条消息根本不会发布
+    ...(summariesFailed.length > 0 ? [`${summariesFailed.length} 个文件摘要失败`] : []),
+    ...(skippedFiles.length > 0
+      ? [`${skippedFiles.length} 个文件因超出 max_files 限制未处理`]
+      : []),
+    ...(reviewsFailed.length > 0 ? [`${reviewsFailed.length} 个文件审查失败`] : [])
+  ]
+  if (incomplete.length > 0) {
+    summarizeComment +=
+      `\n\n> ⚠️ 本次审查不完整，共 ${incomplete.length} 项未能完成：\n>\n` +
+      incomplete.map(d => `> - ${d}`).join('\n') +
+      '\n>\n> 已发布的部分仍然有效；重新触发审查可以重试失败的环节。\n'
   }
 
   // 发布最终的摘要评论
