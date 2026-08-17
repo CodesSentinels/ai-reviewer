@@ -702,14 +702,18 @@
 - [x] `STATE-008` marker 缺失或损坏时不得误更新用户评论。
 - [x] `STATE-009` GitLab CI 使用 `resource_group: ai-reviewer-mvp` 保证 MVP 串行
       。
-- [ ] `STATE-010` marker 检查和写入在同一串行执行面完成。
+- [x] `STATE-010` marker 检查和写入在同一串行执行面完成：同一进程内按 PR/MR
+      串行；GitLab 跨 pipeline 由 `resource_group` 覆盖。GitHub 评论事件按
+      `comment.id` 分组并行是**已决策接受**的例外，不提供跨运行串行。
 - [ ] `STATE-011` 每次写 note/discussion 前重新读取 HEAD SHA。
 - [ ] `STATE-012` HEAD 变化时退出且不写旧结果。
 - [ ] `STATE-013` GitHub workflow rerun 不重复发布结果。
 - [ ] `STATE-014` GitLab job Retry 不重复发布结果。
 - [ ] `STATE-015` Webhook 重投、API 超时重试和手动 Retry 使用同一幂等规则。
-- [ ] `STATE-016` PR/MR description 状态实现提供 marker 分区解析、最新值读取、条
-      件更新和冲突重试，防止 pause/resume 与 release notes 并发覆盖。
+- [x] `STATE-016` PR/MR description 状态实现提供 marker 分区解析、最新值读取、
+      写前重读与冲突重试，且只替换自身 marker 区域。**并发覆盖的防护范围以
+      `STATE-010` 的串行执行面为准**：进程内确定性防护，跨运行依赖平台并发控制
+      （GitLab 成立；GitHub 评论事件并行为已决策接受的例外）。
 
 ---
 

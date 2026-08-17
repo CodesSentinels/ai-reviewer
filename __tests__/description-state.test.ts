@@ -555,3 +555,54 @@ describe('STATE-016 反向顺序：先校验成功，再被别人用旧快照覆
 })
 
 const PAUSE_BLOCK_2 = '<!-- ps-start -->\nstate: paused\n<!-- ps-end -->'
+
+/**
+ * workflow-concurrency-contract — 把「产品决策」与「代码边界」绑在一起
+ *
+ * STATE-010/016 的验收范围之所以收窄到「进程内确定性」，唯一原因是 GitHub 的
+ * concurrency group 让同一 PR 的评论事件并行（保住评论的响应体验，避免排队的
+ * 运行被后一条评论挤掉）。
+ *
+ * 这条契约一旦变了，跨运行串行就成立了，STATE-010/016 的边界说明也该同步放宽。
+ * 所以在这里钉住：改分组的人会看到这组测试失败，从而知道去放宽，而不是让文档
+ * 和代码注释里的边界说明悄悄过期。
+ */
+describe('workflow-concurrency-contract：评论事件并行是已决策的取舍', () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const fs = require('fs')
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const path = require('path')
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const yaml = require('js-yaml')
+
+  const wfPath = path.resolve(__dirname, '../.github/workflows/openai-review.yml')
+  const raw: string = fs.readFileSync(wfPath, 'utf8')
+  const doc: any = yaml.load(raw)
+
+  test('concurrency group 仍按 comment.id 分组（同一 PR 的评论并行）', () => {
+    const group = String(doc.concurrency?.group ?? '')
+    expect(group).toContain('github.event.comment.id')
+  })
+
+  test('若分组不再区分评论，则跨运行串行成立，应同步放宽 STATE-010/016 的边界说明', () => {
+    const group = String(doc.concurrency?.group ?? '')
+    const commentsRunInParallel = group.includes('github.event.comment.id')
+
+    // 断言写成「二选一必须自洽」：并行 → 源码里必须保留边界说明；
+    // 不并行 → 说明该改了，不能留着一段已经过时的限制描述
+    const src: string = fs.readFileSync(
+      path.resolve(__dirname, '../src/description-state.ts'),
+      'utf8'
+    )
+    const documentsBoundary = src.includes('已决策接受的边界')
+
+    expect(`parallel=${commentsRunInParallel} documented=${documentsBoundary}`).toBe(
+      `parallel=${commentsRunInParallel} documented=${commentsRunInParallel}`
+    )
+  })
+
+  test('GitLab 侧的跨 pipeline 串行确实存在（对照：那一层是成立的）', () => {
+    const ci: string = fs.readFileSync(path.resolve(__dirname, '../.gitlab-ci.yml'), 'utf8')
+    expect(ci).toContain('resource_group: ai-reviewer-mvp')
+  })
+})
