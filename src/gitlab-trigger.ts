@@ -23,10 +23,26 @@ import {runOrchestrator} from './platform/orchestrator'
 import {createBots} from './bot-factory'
 import {validateTriggerPayload} from './gitlab-trigger-validation'
 import {redact} from './gitlab-trigger-redact'
-import {checkForkMergeRequest} from './gitlab-mr-hook-rules'
-import {isSelfNote} from './gitlab-note-hook-rules'
+import {checkForkMergeRequest, isHeadStale, buildMrIdempotencyKey} from './gitlab-mr-hook-rules'
+import {hasHeadBeenReviewed} from './gitlab-mr-idempotency'
+import {isSelfNote, buildNoteIdempotencyKey} from './gitlab-note-hook-rules'
+import {hasNoteBeenProcessed, markNoteAsProcessed} from './gitlab-note-idempotency'
+import {parse, resolveBotMentions} from './commands/parser'
 
 const logger = new GitLabLogger()
+
+/**
+ * 从 GitLab 项目路径拆出 owner/repo——subgroup 项目路径可能含多级 namespace
+ * （如 group/subgroup/repo），用 lastIndexOf 确保 owner 保留完整 namespace。
+ * 与 commands/early-reaction.ts 的同名逻辑保持一致。
+ */
+function splitProjectPath(projectPath: string): {owner: string; repo: string} {
+  const lastSlash = projectPath.lastIndexOf('/')
+  return {
+    owner: projectPath.substring(0, lastSlash),
+    repo: projectPath.substring(lastSlash + 1)
+  }
+}
 
 /**
  * 启动期身份自检（GLAPI-022/029）。
@@ -177,6 +193,111 @@ export async function run(): Promise<void> {
     logger.info(`Note authored by the reviewer itself (@${execCtx.actor.login}) — will be ignored`)
   }
 
+  // ─── EVENT-012：MR HEAD 陈旧检查 ─────────────────────────────────────────
+  //
+  // GitLab webhook 不保证顺序投递，CI job 排队期间也可能被更新的 push 事件
+  // 抢先执行完。若此时仍按 payload 里那个（已经不是最新的）headSha 跑审查，
+  // 审查的是过期代码，且容易和随后处理的新事件互相覆盖评论。写操作前重新
+  // 读取当前 HEAD，与事件不一致就跳过——真正最新的 commit 有自己的 webhook
+  // 投递，不会因为这次跳过而丢失。
+  //
+  // 重新读取失败（网络错误等）时不 fail closed：这里防的是「审查陈旧代码」
+  // 的浪费/噪音，不是安全边界，查询失败就按事件自带的 headSha 继续，比因为
+  // 一次探测失败连正常的审查都拦下更安全。
+  const isMrEvent =
+    execCtx.eventKind === 'pr_opened' ||
+    execCtx.eventKind === 'pr_synchronize' ||
+    execCtx.eventKind === 'pr_reopened'
+  if (isMrEvent) {
+    const {owner, repo} = splitProjectPath(execCtx.projectPath)
+    try {
+      const current = await platform.getChangeRequest(owner, repo, execCtx.changeRequestId)
+      const staleCheck = isHeadStale(execCtx.headSha, current.headSha)
+      if (staleCheck.stale) {
+        logger.info(
+          `MR ${execCtx.changeRequestId} HEAD has moved since this event was emitted ` +
+            `(event=${staleCheck.eventHeadSha} current=${staleCheck.currentHeadSha}) — ` +
+            'skipping stale delivery (EVENT-012)'
+        )
+        return
+      }
+    } catch (e) {
+      logger.warning(
+        `gitlab-trigger: failed to re-check current MR HEAD before review, proceeding with the ` +
+          `event's own headSha: ${redact(String(e))}`
+      )
+    }
+
+    // ─── EVENT-013：MR 自动审查幂等 ───────────────────────────────────────
+    //
+    // GitLab webhook 不保证恰好投递一次；CI job 也可能被重试。重复投递同一个
+    // headSha 不得重复调模型跑同一次审查。判断依据是 summary note 里已有的
+    // reviewed-commit-ids marker（review.ts 每次成功审查后都会写入），见
+    // gitlab-mr-idempotency.ts 的文件头说明——不新建独立存储，直接复用这一条
+    // 既有机制。
+    const alreadyReviewed = await hasHeadBeenReviewed(
+      owner,
+      repo,
+      execCtx.changeRequestId,
+      execCtx.headSha
+    )
+    if (alreadyReviewed) {
+      logger.info(
+        `MR ${execCtx.changeRequestId} headSha ${execCtx.headSha} already reviewed ` +
+          `(idempotency key ${buildMrIdempotencyKey(
+            execCtx.projectId,
+            execCtx.changeRequestId,
+            execCtx.headSha
+          )}) — skipping duplicate delivery (EVENT-013)`
+      )
+      return
+    }
+  }
+
+  // ─── EVENT-020/021：Note Hook 幂等 ───────────────────────────────────────
+  //
+  // GitLab webhook 不保证恰好投递一次；CI job 也可能被重试。重复投递同一条
+  // note（相同 note_id）不得重复调模型或重复回复。幂等键的记账位置见
+  // gitlab-note-idempotency.ts 的文件头说明（独立 note，不与 summary note
+  // 混用）。自评论（isBot=true）已经会被下游 dispatcher 过滤掉、不产生任何
+  // 调用/回复，这里不必再为它多查一次幂等账本。
+  //
+  // 只对「确实 @ 了 bot」的 note 记账：完全不提 bot 的普通讨论无论被重复投递
+  // 多少次，dispatcher 都会走 `{kind: 'ignored', reason: 'no bot mention'}`
+  // 原地跳过，本来就没有副作用可去重——为它写一条记账评论纯属浪费一次 API
+  // 调用，还会在 MR 上留下与内容无关的噪音评论。判断标准复用 dispatcher 自己
+  // 用来识别命令/对话触发的同一个 parse()，避免这里另起一套 mention 规则
+  // 和共享核心的判定跑偏。
+  let noteIdempotencyKey: string | null = null
+  if (isCommentEvent && !execCtx.actor.isBot && execCtx.comment != null) {
+    const mentions = resolveBotMentions(process.env.AI_REVIEWER_BOT_GITLAB_LOGIN)
+    const mentionsBot =
+      typeof execCtx.comment.body === 'string' &&
+      parse(execCtx.comment.body, {registeredCommands: new Set(), botMentions: mentions}).kind !==
+        'none'
+
+    if (mentionsBot) {
+      noteIdempotencyKey = buildNoteIdempotencyKey(
+        execCtx.projectId,
+        execCtx.changeRequestId,
+        execCtx.comment.id
+      )
+      const {owner, repo} = splitProjectPath(execCtx.projectPath)
+      const alreadyProcessed = await hasNoteBeenProcessed(
+        owner,
+        repo,
+        execCtx.changeRequestId,
+        noteIdempotencyKey
+      )
+      if (alreadyProcessed) {
+        logger.info(
+          `Note ${execCtx.comment.id} already processed (idempotency key ${noteIdempotencyKey}) — skipping duplicate delivery (EVENT-021)`
+        )
+        return
+      }
+    }
+  }
+
   // ─── 执行审查 / 命令（ARCH-025）──────────────────────────────────────────
   //
   // 走与 GitHub 入口完全相同的编排层：配置 → 事件分发 → codeReview 或
@@ -200,6 +321,13 @@ export async function run(): Promise<void> {
     },
     createBots: options => createBots(options, (msg: string) => logger.warning(redact(msg)))
   })
+
+  // 只在真正跑成功之后才记账——onFailed 会把 exitCode 设成 1，失败的这次不能
+  // 被记成"已处理"，否则下次重试会被幂等检查拦住，永远无法真正跑成功。
+  if (noteIdempotencyKey != null && process.exitCode !== 1) {
+    const {owner, repo} = splitProjectPath(execCtx.projectPath)
+    await markNoteAsProcessed(owner, repo, execCtx.changeRequestId, noteIdempotencyKey)
+  }
 }
 
 // 不用顶层 await（同 main.ts 的既有原因）

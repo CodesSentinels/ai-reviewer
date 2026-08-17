@@ -119,6 +119,19 @@ export const STATE_MARKERS = {
     kind: 'review-state-end',
     legacy: '<!-- codesentinel-review-state:end -->',
     current: () => buildStateMarker('review-state-end')
+  },
+  noteHookMarkersStart: {
+    kind: 'note-hook-markers-start',
+    // 这个 marker 是随命名空间一起引入的（STATE-005），没有真正的历史无前缀形态；
+    // legacy 只是占位，保持字段完整性和 tagPairVariants 回退逻辑一致，不会在真实
+    // 数据里命中。
+    legacy: '<!-- ai-reviewer-note-hook-markers-start -->',
+    current: () => buildStateMarker('note-hook-markers-start')
+  },
+  noteHookMarkersEnd: {
+    kind: 'note-hook-markers-end',
+    legacy: '<!-- ai-reviewer-note-hook-markers-end -->',
+    current: () => buildStateMarker('note-hook-markers-end')
   }
 } as const satisfies Record<string, StateMarkerSpec>
 
