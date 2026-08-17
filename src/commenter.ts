@@ -16,6 +16,7 @@ import {getPlatform} from './platform/git-platform'
 import {getLogger} from './platform/logger'
 import {buildStateMarker} from './platform/state-namespace'
 import {getExecCtx, getRepoCoords} from './platform/run-context'
+import {updateDescriptionSection} from './description-state'
 
 /**
  * 仓库坐标（ARCH-005）。
@@ -272,24 +273,29 @@ ${tag}`
    * 将发布说明嵌入到 descriptionStartTag() 和 descriptionEndTag() 之间
    */
   async updateDescription(pullNumber: number, message: string) {
-    const platform = getPlatform()
-    try {
-      const cr = await platform.getChangeRequest(repo.owner, repo.repo, pullNumber)
-      let body = ''
-      if (cr.body) {
-        body = cr.body
-      }
-      const description = this.getDescription(body)
+    // STATE-016：走分区更新而不是「读整份 → 拼 → 整份写回」。
+    // 旧写法与 pause/resume（review-state.ts）是两条独立的整份覆盖路径，
+    // 交错执行时后写的一方会用自己读到的旧快照抹掉对方刚写入的区块。
+    const messageClean = this.removeContentWithinTags(
+      message,
+      descriptionStartTag(),
+      descriptionEndTag()
+    )
 
-      const messageClean = this.removeContentWithinTags(
-        message,
-        descriptionStartTag(),
-        descriptionEndTag()
+    const outcome = await updateDescriptionSection({
+      owner: repo.owner,
+      repo: repo.repo,
+      changeRequestId: pullNumber,
+      startTag: descriptionStartTag(),
+      endTag: descriptionEndTag(),
+      render: () => messageClean
+    })
+
+    if (!outcome.ok) {
+      getLogger().warning(
+        `Skipped adding release notes to description (${outcome.reason}, ` +
+          `${outcome.attempts} attempt(s)).`
       )
-      const newDescription = `${description}\n${descriptionStartTag()}\n${messageClean}\n${descriptionEndTag()}`
-      await platform.updateChangeRequestBody(repo.owner, repo.repo, pullNumber, newDescription)
-    } catch (e) {
-      getLogger().warning(`Failed to get PR: ${e}, skipping adding release notes to description.`)
     }
   }
 

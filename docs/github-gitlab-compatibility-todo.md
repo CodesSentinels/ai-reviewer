@@ -690,17 +690,17 @@
 
 ## 10. 状态、幂等、并发与重试
 
-- [ ] `STATE-001` 定义平台无关状态接口和 GitHub/GitLab 两个实现。
-- [ ] `STATE-002` GitHub 保留 PR body/summary/review thread marker。
-- [ ] `STATE-003` GitLab MR description 保存 pause/resume marker。
-- [ ] `STATE-004` GitLab summary note 保存 reviewed SHA marker。
+- [x] `STATE-001` 定义平台无关状态接口和 GitHub/GitLab 两个实现。
+- [x] `STATE-002` GitHub 保留 PR body/summary/review thread marker。
+- [x] `STATE-003` GitLab MR description 保存 pause/resume marker。
+- [x] `STATE-004` GitLab summary note 保存 reviewed SHA marker。
 - [ ] `STATE-005` GitLab reviewer note 保存已处理 Note Hook 幂等键 marker；自动
       MR 审查继续使用 summary note 中的 reviewed SHA marker。
-- [ ] `STATE-006` marker 和幂等键包含 `github:` 或 `gitlab:` 命名空间。
-- [ ] `STATE-007` 禁止通过相同 commit SHA 合并 GitHub PR 和 GitLab MR 的任务状态
+- [x] `STATE-006` marker 和幂等键包含 `github:` 或 `gitlab:` 命名空间。
+- [x] `STATE-007` 禁止通过相同 commit SHA 合并 GitHub PR 和 GitLab MR 的任务状态
       。
-- [ ] `STATE-008` marker 缺失或损坏时不得误更新用户评论。
-- [ ] `STATE-009` GitLab CI 使用 `resource_group: ai-reviewer-mvp` 保证 MVP 串行
+- [x] `STATE-008` marker 缺失或损坏时不得误更新用户评论。
+- [x] `STATE-009` GitLab CI 使用 `resource_group: ai-reviewer-mvp` 保证 MVP 串行
       。
 - [ ] `STATE-010` marker 检查和写入在同一串行执行面完成。
 - [ ] `STATE-011` 每次写 note/discussion 前重新读取 HEAD SHA。

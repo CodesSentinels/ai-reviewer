@@ -427,6 +427,27 @@ describe('dispatcher — 命令执行', () => {
   })
 
   test('pause 命令写入暂停状态', async () => {
+    // STATE-016：写入走「读最新 → 只改自己那段 → 写回 → 读回校验」，
+    // 因此平台桩必须反映写入结果，否则校验读不到刚写的内容会判为并发冲突。
+    // 静态只写桩模拟的是「写了但读不回来」的平台，那本来就该报失败。
+    let storedBody = 'PR body'
+    platformState.getChangeRequest.mockImplementation(async () => ({
+      number: 42,
+      title: '',
+      body: storedBody,
+      state: 'open',
+      baseSha: 'base-sha',
+      headSha: 'head-sha',
+      baseRef: 'main',
+      headRef: 'feature',
+      author: 'pr-author'
+    }))
+    platformState.updateChangeRequestBody.mockImplementation(
+      async (_o: any, _r: any, _n: any, body: string) => {
+        storedBody = body
+      }
+    )
+
     setEvent('issue_comment', buildIssueCommentPayload('@ai-reviewer pause'))
     const r = await dispatchCommentEvent({execCtx: currentCtx, options: stubOptions})
     expect(r).toEqual({kind: 'executed', command: 'pause', ok: true})

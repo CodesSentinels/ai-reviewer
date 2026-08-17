@@ -6,6 +6,7 @@
  * 这样即使回滚到旧版本，旧版本仍能读到自己认识的暂停状态。
  */
 import {getPlatform} from './platform/git-platform'
+import {updateDescriptionSection} from './description-state'
 import {STATE_MARKERS, stateMarker} from './state-markers'
 
 export type ReviewState = 'active' | 'paused'
@@ -78,12 +79,26 @@ export async function setReviewState(
   pullNumber: number,
   state: ReviewState
 ): Promise<void> {
-  const platform = getPlatform()
-  const cr = await platform.getChangeRequest(owner, repo, pullNumber)
-  await platform.updateChangeRequestBody(
+  // STATE-016：与 release notes 共用分区更新路径。
+  // 早先两边各自「读整份 body → 拼 → 整份写回」，交错时后写方会用旧快照
+  // 覆盖掉对方刚落下的区块——pause 状态被 release notes 抹掉是最典型的表现。
+  //
+  // 区块内已有的历史标签形态由 writeSection 保留，因此这里传当前命名空间标签
+  // 即可，不会把在途 PR 的旧区块改名。
+  const tags = reviewStateTags()
+  const outcome = await updateDescriptionSection({
     owner,
     repo,
-    pullNumber,
-    writeReviewStateToBody(cr.body ?? '', state)
-  )
+    changeRequestId: pullNumber,
+    startTag: tags.start,
+    endTag: tags.end,
+    render: () => `state: ${state}`
+  })
+
+  if (!outcome.ok) {
+    // pause/resume 是用户显式下达的命令，静默失败会让他以为已经生效
+    throw new Error(
+      `Failed to persist review state "${state}" (${outcome.reason}, ${outcome.attempts} attempt(s))`
+    )
+  }
 }
