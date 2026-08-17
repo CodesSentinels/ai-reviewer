@@ -287,6 +287,36 @@ describe('GitLab 入口 → 共享核心（真实分发，不看日志）', () =
     })
   })
 
+  /**
+   * CMD-002：GitLab 上 bot 通常以个人 PAT 身份发言，用户凭直觉 @ 的是那个真实
+   * 账号，而不是文本别名。`deps.botMentions` 此前从未被传过，两个平台都只吃默认
+   * 别名——注入回退验证时把接线删掉，纯函数用例一条都不红，所以在这里钉住。
+   */
+  describe('CMD-002：@ 配置的真实 PAT 账号也能触发命令', () => {
+    beforeEach(() => {
+      process.env.AI_REVIEWER_BOT_GITLAB_LOGIN = 'my-reviewer-pat'
+      credentialIdentity = 'my-reviewer-pat'
+    })
+
+    test('@my-reviewer-pat help（别人发）→ 命令被执行', async () => {
+      await runTrigger(notePayload({note: '@my-reviewer-pat help', author: 'alice'}))
+
+      expect(platformCalls.createComment).toHaveBeenCalled()
+    })
+
+    test('文本别名同时仍然有效', async () => {
+      await runTrigger(notePayload({note: '@ai-reviewer help', author: 'alice'}))
+
+      expect(platformCalls.createComment).toHaveBeenCalled()
+    })
+
+    test('@ 别的账号不触发（防止上面两条其实是「什么都能触发」）', async () => {
+      await runTrigger(notePayload({note: '@someone-else help', author: 'alice'}))
+
+      expect(platformCalls.createComment).not.toHaveBeenCalled()
+    })
+  })
+
   test('非命令的普通 note → 不触发任何命令回复', async () => {
     await runTrigger(notePayload({note: '这段代码看起来没问题'}))
 

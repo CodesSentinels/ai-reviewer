@@ -20,19 +20,17 @@
 import {info} from '../actions-log'
 import {bootstrapCommands} from './bootstrap'
 import {getRegistry} from './registry'
-import {parse, DEFAULT_BOT_MENTIONS} from './parser'
+import {parse, resolveBotMentions} from './parser'
 import {addAckReaction} from './reaction'
 import type {CommandEventName} from './types'
 import type {ExecutionContext} from '../platform/execution-context'
+import type {Options} from '../options'
 
 /**
  * 尝试在 Bot 初始化前尽快给用户评论打 ACK 表情。
  * 失败或非命令场景下静默返回，不影响后续流程。
  */
-export async function tryEarlyReaction(
-  execCtx: ExecutionContext,
-  rawReaction: string | undefined
-): Promise<void> {
+export async function tryEarlyReaction(execCtx: ExecutionContext, options: Options): Promise<void> {
   try {
     if (execCtx.eventKind !== 'comment_created' && execCtx.eventKind !== 'review_comment_created') {
       return
@@ -52,7 +50,7 @@ export async function tryEarlyReaction(
     const registry = getRegistry()
     const outcome = parse(comment.body, {
       registeredCommands: registry.getRegisteredNames(),
-      botMentions: DEFAULT_BOT_MENTIONS
+      botMentions: resolveBotMentions(options.botLogin)
     })
 
     // 命令（@bot <cmd>）与对话式追问（@bot <自然语言>）都先打 ACK 表情：
@@ -72,7 +70,7 @@ export async function tryEarlyReaction(
       changeRequestId: execCtx.changeRequestId,
       commentId: comment.id,
       eventName,
-      rawReaction
+      rawReaction: options.commandAckReaction
     })
 
     info(`early ack reaction sent for commentId=${comment.id}`)

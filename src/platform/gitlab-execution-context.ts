@@ -7,10 +7,12 @@
  * 那些属于 EVENT-002/EVENT-003 任务，届时只需要"解析出 payload JSON 后调用
  * 本文件的函数"，不需要重新设计字段映射。
  *
- * `isBot` 恒为 false：GitLab MVP 使用个人 PAT 身份评论，没有天然的 bot 账号标记；
- * 真正的自反馈过滤需要将 actor.login 与配置好的 PAT 用户名比较（EVENT-018，
- * 见 `gitlab-note-hook-rules.ts` 的 `isSelfNote()`），故意不放进 ExecutionContext
- * 构造阶段判断——构造阶段不应依赖外部配置输入（呼应 ARCH-002 的字段设计边界）。
+ * `isBot` 只依据 GitLab 的**权威命名**判定（access token 账号与内置系统账号，
+ * 见 `isGitLabBotUsername`）。判不出「这是不是 reviewer 自己」——那需要把
+ * actor.login 与配置好的 PAT 用户名比较（EVENT-018，见
+ * `gitlab-note-hook-rules.ts` 的 `isSelfNote()`），故意不放进构造阶段：
+ * 构造阶段不应依赖外部配置输入（呼应 ARCH-002 的字段设计边界），该判定由
+ * `gitlab-trigger.ts` 在配置就绪后补上。
  *
  * GitLab Webhook 字段映射依据 GitLab 官方 Webhook events 文档整理，尚未经真实
  * Webhook 验证（ai-reviewer-test 项目尚未接入），EVENT-002 对接真实环境时需要
@@ -79,7 +81,7 @@ function buildFromMergeRequestHook(p: Record<string, any>): ExecutionContext {
     projectId: String(project.id),
     changeRequestId: attrs.iid,
     eventKind,
-    actor: {login: p.user?.username ?? '', isBot: false},
+    actor: makeGitLabActor(p.user?.username),
     baseSha: attrs.oldrev ?? '',
     headSha: attrs.last_commit?.id ?? '',
     raw: p
@@ -145,7 +147,7 @@ function buildFromNoteHook(p: Record<string, any>): ExecutionContext {
     projectId: String(p.project_id ?? p.project?.id ?? ''),
     changeRequestId: mr.iid,
     eventKind: attrs.discussion_id ? 'review_comment_created' : 'comment_created',
-    actor: {login: p.user?.username ?? '', isBot: false},
+    actor: makeGitLabActor(p.user?.username),
     baseSha: '',
     headSha: mr.diff_head_sha ?? '',
     comment: {
@@ -160,6 +162,42 @@ function buildFromNoteHook(p: Record<string, any>): ExecutionContext {
     raw: p
   }
 }
+
+/**
+ * GitLab 侧的 bot 识别（CMD-006）。
+ *
+ * GitLab 的 webhook payload 里 user 只有 username/name，**没有** bot 标记
+ * （`user.bot` 只在 REST 的用户表示里出现），所以拿不到 GitHub
+ * `user.type === 'Bot'` 那样的确定信号。这里只认 GitLab 自己保证的命名：
+ *
+ *   project_{id}_bot / project_{id}_bot_{hash}   —— 项目 access token
+ *   group_{id}_bot / group_{id}_bot_{hash}       —— 群组 access token
+ *   支持/告警等内置系统账号
+ *
+ * **刻意不匹配**泛化的 `-bot` / `_bot` 后缀：那会把用户名恰好以 bot 结尾的真人
+ * 一并挡掉，让他再也用不了命令。反向的漏判危害小得多——reviewer 自己造成的
+ * 反馈循环已由 gitlab-trigger.ts 的 isSelfNote 过滤（EVENT-018）。
+ */
+function makeGitLabActor(username: string | undefined | null): {login: string; isBot: boolean} {
+  const login = username ?? ''
+  return {login, isBot: isGitLabBotUsername(login)}
+}
+
+export function isGitLabBotUsername(username: string | undefined | null): boolean {
+  const name = (username ?? '').trim().toLowerCase()
+  if (name === '') return false
+  if (/^(project|group)_\d+_bot(_.*)?$/.test(name)) return true
+  return GITLAB_SYSTEM_BOTS.has(name)
+}
+
+/** GitLab 内置系统账号（发 note 时同样不该进入权限与模型流程） */
+const GITLAB_SYSTEM_BOTS = new Set([
+  'support-bot',
+  'alert-bot',
+  'automation-bot',
+  'security-bot',
+  'ghost'
+])
 
 function mapMergeRequestAction(attrs: Record<string, any>, changes: any): EventKind {
   if (attrs.action === 'open') return 'pr_opened'

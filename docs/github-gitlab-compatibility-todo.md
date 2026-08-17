@@ -638,13 +638,13 @@
 
 ### 9.1 共用解析和身份
 
-- [ ] `CMD-001` 保留 `@ai-reviewer` 和 `@codesentinel` 文本别名。
-- [ ] `CMD-002` GitLab 支持配置真实 PAT 用户 mention 或纯文本前缀。
+- [x] `CMD-001` 保留 `@ai-reviewer` 和 `@codesentinel` 文本别名。
+- [x] `CMD-002` GitLab 支持配置真实 PAT 用户 mention 或纯文本前缀。
 - [x] `CMD-003` 共用 parser、registry 和 handler 语义，事件/回复操作位于平台
       adapter。
-- [ ] `CMD-004` 命令 mention 必须具有合法文本边界。
-- [ ] `CMD-005` 未知命令返回帮助，不执行任意文本或 shell。
-- [ ] `CMD-006` system/bot/self note 不进入权限和模型流程。
+- [x] `CMD-004` 命令 mention 必须具有合法文本边界。
+- [x] `CMD-005` 未知命令返回帮助，不执行任意文本或 shell。
+- [x] `CMD-006` system/bot/self note 不进入权限和模型流程。
 
 ### 9.2 权限
 

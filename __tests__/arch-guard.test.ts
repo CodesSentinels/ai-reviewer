@@ -485,7 +485,10 @@ describe('SYNC-009: GitLab 运行代码不得读取同步 Token', () => {
   test('src/ 下不出现 GITLAB_TOKEN（与 GITLAB_PAT/CI_JOB_TOKEN 是两个不同凭据）', () => {
     const violations: string[] = []
     for (const f of allFiles) {
-      const code = fs.readFileSync(f, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*/g, '')
+      const code = fs
+        .readFileSync(f, 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/\/\/.*/g, '')
       if (/\bGITLAB_TOKEN\b/.test(code)) {
         violations.push(path.relative(SRC, f).replace(/\\/g, '/'))
       }

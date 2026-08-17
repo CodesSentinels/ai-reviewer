@@ -23,6 +23,33 @@ import type {ParseOutcome, ParsedCommand} from './types'
 /** 默认支持的 bot mention 别名（小写，已带 @）。共享自 constants.BOT_MENTIONS。 */
 export const DEFAULT_BOT_MENTIONS: string[] = [...BOT_MENTIONS]
 
+/**
+ * 本次运行认可的全部 mention（CMD-001 / CMD-002）。
+ *
+ * 两类来源：
+ *
+ * 1. **文本别名** `@ai-reviewer` / `@codesentinel`——平台无关，两边都保留
+ *    （CMD-001）。GitLab 上 bot 常以个人 PAT 身份发言，`@` 一个不存在的用户
+ *    不会产生通知，但作为纯文本前缀依然可用，这正是 CMD-002 里「或纯文本前缀」
+ *    的含义。
+ * 2. **真实账号 mention** `@{botLogin}`——GitLab 是 PAT 用户名
+ *    （`AI_REVIEWER_BOT_GITLAB_LOGIN`），GitHub 是 `bot_github_login`。
+ *    用户凭直觉 @ 真实账号时也应该能触发。
+ *
+ * 未配置 botLogin 时退化为纯别名，与迁移前行为一致。
+ *
+ * 入参容忍 undefined：这条链路一崩，**所有**命令都会失效，不值得为了类型上的
+ * 洁癖去赌每个调用方都传了值。
+ */
+export function resolveBotMentions(botLogin: string | undefined | null): string[] {
+  const login = (botLogin ?? '').trim().replace(/^@/, '')
+  if (login === '') return [...DEFAULT_BOT_MENTIONS]
+  const real = `@${login.toLowerCase()}`
+  return DEFAULT_BOT_MENTIONS.includes(real)
+    ? [...DEFAULT_BOT_MENTIONS]
+    : [...DEFAULT_BOT_MENTIONS, real]
+}
+
 /** 命令行长度上限 */
 export const MAX_COMMAND_LINE_LENGTH = 512
 /** 单个 arg 长度上限 */
@@ -34,6 +61,34 @@ export const MAX_ARGS_COUNT = 16
 const SAFE_TOKEN_RE = /^[A-Za-z0-9_\-./:=]+$/
 /** shell 元字符黑名单（补充检查，用于生成更明确的错误信息） */
 const SHELL_METACHARS_RE = /[`$(){}|&;<>\\'"]/
+
+/**
+ * mention 两侧必须都是边界（CMD-004）。
+ *
+ * 只看前一个字符是不够的：`@ai-reviewerX help` 会命中 `@ai-reviewer` 并把
+ * `X help` 当成命令体，等于替另一个用户执行命令。两侧都要卡：
+ *
+ *   前：行首、空白或标点          —— 挡住 `foo@ai-reviewer`
+ *   后：非标识符字符              —— 挡住 `@ai-reviewerX` / `@ai-reviewer-bot`
+ *
+ * 尾部的 `.` 单独处理：`@ai-reviewer.` 句末是合法的，但 GitLab 用户名允许含
+ * `.`，所以 `.` 后面若紧跟标识符字符（`@ai-reviewer.bot`）仍判为另一个用户。
+ */
+function hasMentionBoundary(body: string, idx: number, len: number): boolean {
+  if (idx > 0) {
+    const prev = body[idx - 1]
+    if (!/\s|[,.;:，。；：]/.test(prev)) return false
+  }
+
+  const next = body[idx + len]
+  if (next === undefined) return true
+  if (/[A-Za-z0-9_-]/.test(next)) return false
+  if (next === '.') {
+    const after = body[idx + len + 1]
+    if (after !== undefined && /[A-Za-z0-9_-]/.test(after)) return false
+  }
+  return true
+}
 
 export interface ParserOptions {
   /** 已注册的命令名集合（用于命中检测），应包含复合命令 */
@@ -52,19 +107,26 @@ export function parse(body: string, opts: ParserOptions): ParseOutcome {
 
   const mentions = (opts.botMentions ?? DEFAULT_BOT_MENTIONS).map(m => m.toLowerCase())
 
-  // 1. 找到第一个 bot mention 出现的位置（忽略大小写）
+  // 1. 找到第一个**边界合法**的 bot mention（忽略大小写）
   const lower = body.toLowerCase()
   let mentionIdx = -1
   let mentionLen = 0
   for (const m of mentions) {
-    const idx = lower.indexOf(m)
-    if (idx !== -1 && (mentionIdx === -1 || idx < mentionIdx)) {
-      // 要求 mention 前是行首/空白/标点，避免匹配到 foo@ai-reviewer
-      const prev = idx === 0 ? ' ' : body[idx - 1]
-      if (/\s|[,.;:，。；：]/.test(prev) || idx === 0) {
+    // 必须遍历该 mention 的**每一次**出现：早先只取 indexOf 的第一处，
+    // 首次出现边界不合法就整个放弃，于是
+    //   "邮箱 a@ai-reviewer.com\n@ai-reviewer help"
+    // 里第二行真正的命令被完全吞掉（返回 none）。
+    let from = 0
+    for (;;) {
+      const idx = lower.indexOf(m, from)
+      if (idx === -1) break
+      from = idx + 1
+      if (!hasMentionBoundary(body, idx, m.length)) continue
+      if (mentionIdx === -1 || idx < mentionIdx) {
         mentionIdx = idx
         mentionLen = m.length
       }
+      break // 该别名的首个合法位置即可，更靠前的由其他别名比较得出
     }
   }
   if (mentionIdx === -1) {

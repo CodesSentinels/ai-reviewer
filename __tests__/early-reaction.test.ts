@@ -44,7 +44,10 @@ describe('tryEarlyReaction subgroup 路径拆分', () => {
   })
 
   test('二级路径 group/repo → owner=group, repo=repo', async () => {
-    await tryEarlyReaction(makeExecCtx({projectPath: 'group/repo'}), 'eyes')
+    await tryEarlyReaction(makeExecCtx({projectPath: 'group/repo'}), {
+      commandAckReaction: 'eyes',
+      botLogin: ''
+    } as any)
     expect(mockAddAckReaction).toHaveBeenCalledTimes(1)
     const params = mockAddAckReaction.mock.calls[0][0] as any
     expect(params.owner).toBe('group')
@@ -53,7 +56,10 @@ describe('tryEarlyReaction subgroup 路径拆分', () => {
   })
 
   test('三级路径 group/subgroup/repo → owner=group/subgroup, repo=repo', async () => {
-    await tryEarlyReaction(makeExecCtx({projectPath: 'group/subgroup/repo'}), 'eyes')
+    await tryEarlyReaction(makeExecCtx({projectPath: 'group/subgroup/repo'}), {
+      commandAckReaction: 'eyes',
+      botLogin: ''
+    } as any)
     expect(mockAddAckReaction).toHaveBeenCalledTimes(1)
     const params = mockAddAckReaction.mock.calls[0][0] as any
     expect(params.owner).toBe('group/subgroup')
@@ -62,7 +68,10 @@ describe('tryEarlyReaction subgroup 路径拆分', () => {
   })
 
   test('四级路径 a/b/c/repo → owner=a/b/c, repo=repo', async () => {
-    await tryEarlyReaction(makeExecCtx({projectPath: 'a/b/c/repo'}), 'eyes')
+    await tryEarlyReaction(makeExecCtx({projectPath: 'a/b/c/repo'}), {
+      commandAckReaction: 'eyes',
+      botLogin: ''
+    } as any)
     const params = mockAddAckReaction.mock.calls[0][0] as any
     expect(params.owner).toBe('a/b/c')
     expect(params.repo).toBe('repo')

@@ -77,7 +77,7 @@ export interface OrchestratorDeps {
 
   createBots: (options: Options) => {lightBot: Bot; heavyBot: Bot} | null
 
-  earlyReaction?: (execCtx: ExecutionContext, reaction: string) => Promise<void>
+  earlyReaction?: (execCtx: ExecutionContext, options: Options) => Promise<void>
 }
 
 /**
@@ -126,7 +126,7 @@ export async function runOrchestrator(deps: OrchestratorDeps): Promise<void> {
     deps.earlyReaction &&
     (execCtx.eventKind === 'comment_created' || execCtx.eventKind === 'review_comment_created')
   ) {
-    await deps.earlyReaction(execCtx, options.commandAckReaction)
+    await deps.earlyReaction(execCtx, options)
   }
 
   // 4. 构建提示词
