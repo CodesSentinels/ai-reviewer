@@ -356,12 +356,17 @@
       和 HEAD SHA。`validateTriggerPayload()`（`gitlab-trigger-validation.ts`）
       现在对 HEAD SHA 做 fail closed 校验：`merge_request` 事件要求
       `object_attributes.last_commit.id` 是非空字符串，`note` 事件（仅当
-      `noteable_type === 'MergeRequest'`）要求 `merge_request.diff_head_sha`
+      `noteable_type === 'MergeRequest'`）要求 `merge_request.last_commit.id`
       是非空字符串，缺失/空值/类型错误统一返回 `ok:false`。此前误勾为已完成，
       经 GitHub Issue [#88](https://github.com/CodesSentinels/ai-reviewer/issues/88)
       P1 复核指出缺口后改回未完成；现已补齐 HEAD SHA 校验并重新验证通过（GitHub
       Issue [#109](https://github.com/CodesSentinels/ai-reviewer/issues/109)
       跟踪，汇总见 Issue [#75](https://github.com/CodesSentinels/ai-reviewer/issues/75)）。
+      ⚠️ **2026-08-18 真实环境验证更正**（Issue #118）：note 事件那半句原写
+      `merge_request.diff_head_sha`，真实 Note Hook payload 里根本没有这个
+      字段，已改为读 `merge_request.last_commit.id` 并用真实捕获的 payload
+      补了回归测试，见 Issue #118 与 `docs/tasks/execution-context-design.md`
+      第 5.1 节的更正说明。
 - [x] `EVENT-004` 无关事件快速成功退出，不调用模型、不写评论。
 - [x] `EVENT-005` 所有错误日志脱敏，不输出完整 payload 或 Token。
 

@@ -149,7 +149,11 @@ function buildFromNoteHook(p: Record<string, any>): ExecutionContext {
     eventKind: attrs.discussion_id ? 'review_comment_created' : 'comment_created',
     actor: makeGitLabActor(p.user?.username),
     baseSha: '',
-    headSha: mr.diff_head_sha ?? '',
+    // 2026-08-18 真实环境验证（Issue #118）纠正：真实 Note Hook payload 里
+    // merge_request 对象没有 diff_head_sha 字段，HEAD SHA 实际在
+    // merge_request.last_commit.id（与 MR Hook 的 object_attributes.
+    // last_commit.id 同构）。
+    headSha: mr.last_commit?.id ?? '',
     comment: {
       kind: attrs.discussion_id ? 'review_thread' : 'top_level',
       id: attrs.id,

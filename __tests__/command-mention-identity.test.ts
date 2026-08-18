@@ -206,7 +206,7 @@ describe('CMD-006: system/bot/self note 不进入权限和模型流程', () => {
       project: {id: 77, path_with_namespace: 'group/demo'},
       project_id: 77,
       user: {username},
-      merge_request: {iid: 42, diff_head_sha: 'a'.repeat(40)},
+      merge_request: {iid: 42, last_commit: {id: 'a'.repeat(40)}},
       object_attributes: {
         id: 9001,
         action: 'create',
