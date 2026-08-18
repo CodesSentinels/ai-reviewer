@@ -80863,7 +80863,10 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
                 for (let i = 0; i < response.output.length; i++) {
                     const item = response.output[i];
                     (0,actions_log.info)(`[analysis_chain_debug] output[${i}] type="${item.type}", keys=${JSON.stringify(Object.keys(item))}`);
-                    if (item.type === 'web_search_call') {
+                    // WS-003：开关必须同时校验。只看响应项类型的话，兼容 API 返回了意外的
+                    // web_search_call、或响应协议漂移时，开关为 false 也会记下 web search
+                    // analysis step——那条 step 会进 PR 评论，等于对外宣称做过搜索。
+                    if (this.enableWebSearch && item.type === 'web_search_call') {
                         (0,actions_log.info)(`[web_search] executed, id: ${item.id}, status: ${item.status}`);
                         analysisSteps.push({
                             type: 'web_search',

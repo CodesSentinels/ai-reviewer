@@ -40532,30 +40532,41 @@ function mapMergeRequestAction(attrs) {
     return 'unknown';
 }
 
+// EXTERNAL MODULE: ./lib/redact.js
+var redact = __nccwpck_require__(1173);
 ;// CONCATENATED MODULE: ./lib/platform/gitlab-logger.js
 /**
  * platform/gitlab-logger.ts - GitLab CI Logger（ARCH-014）
  *
  * 输出到 stdout/stderr，不 import @actions/core（ARCH-015）。
  * GitLab CI job log 天然支持 ANSI 颜色，但 MVP 阶段只输出纯文本。
+ *
+ * SEC-008：所有输出经 redactForLog() 脱敏——与 GitHubLogger 同一层设计，
+ * 放在 Logger 边界而不是各调用点，避免有人新增日志时忘记脱敏。
+ *
+ * 这里此前是漏的：GitHubLogger 四个方法全过脱敏，GitLabLogger 一个都没有。
+ * 后果在 debug 模式下最明显——sanitize-model-output 会把清理前后的**完整模型
+ * 文本**写进 debug 日志，其中可能含搜索结果、源码内容，以及模型回显的 token；
+ * 在 GitLab job log 里就是明文（WS-004）。
  */
+
 class GitLabLogger {
     info(msg) {
         // eslint-disable-next-line no-console
-        console.log(msg);
+        console.log((0,redact/* redactForLog */.vS)(msg));
     }
     warning(msg) {
         // eslint-disable-next-line no-console
-        console.warn(`[WARNING] ${msg}`);
+        console.warn(`[WARNING] ${(0,redact/* redactForLog */.vS)(msg)}`);
     }
     error(msg) {
         // eslint-disable-next-line no-console
-        console.error(`[ERROR] ${msg}`);
+        console.error(`[ERROR] ${(0,redact/* redactForLog */.vS)(msg)}`);
     }
     debug(msg) {
         if (process.env.AI_REVIEWER_DEBUG === 'true') {
             // eslint-disable-next-line no-console
-            console.log(`[DEBUG] ${msg}`);
+            console.log(`[DEBUG] ${(0,redact/* redactForLog */.vS)(msg)}`);
         }
     }
 }
@@ -48248,8 +48259,6 @@ var { Gitlab: dist_Gitlab } = API;
 
 
 
-// EXTERNAL MODULE: ./lib/redact.js
-var redact = __nccwpck_require__(1173);
 ;// CONCATENATED MODULE: ./lib/platform/logger.js
 /**
  * platform/logger.ts - 平台无关 Logger 接口（ARCH-012）
@@ -72031,7 +72040,10 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
                 for (let i = 0; i < response.output.length; i++) {
                     const item = response.output[i];
                     (0,actions_log.info)(`[analysis_chain_debug] output[${i}] type="${item.type}", keys=${JSON.stringify(Object.keys(item))}`);
-                    if (item.type === 'web_search_call') {
+                    // WS-003：开关必须同时校验。只看响应项类型的话，兼容 API 返回了意外的
+                    // web_search_call、或响应协议漂移时，开关为 false 也会记下 web search
+                    // analysis step——那条 step 会进 PR 评论，等于对外宣称做过搜索。
+                    if (this.enableWebSearch && item.type === 'web_search_call') {
                         (0,actions_log.info)(`[web_search] executed, id: ${item.id}, status: ${item.status}`);
                         analysisSteps.push({
                             type: 'web_search',
