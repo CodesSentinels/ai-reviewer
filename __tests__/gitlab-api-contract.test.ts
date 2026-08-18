@@ -674,3 +674,70 @@ describe('GitLab adapter 稳定性契约', () => {
     })
   })
 })
+
+/**
+ * GitLab 没有批量 review：adapter 内部逐条创建 discussion，行级失败时降级为顶层
+ * note。早先它只回一个「成功几条」的数字，调用方无从知道**哪几条**没发出去，
+ * 于是会误删那些位置上被取代的 resolved 旧讨论（REVIEW-013），失败项也进不了
+ * 统一的顶层降级（REVIEW-014）。这里钉住逐条汇报。
+ */
+describe('REVIEW-013/014: submitReviewComments 必须逐条汇报成败', () => {
+  let platform: any
+
+  beforeEach(() => {
+    jest.clearAllMocks()
+    platform = new GitLabPlatform(TEST_CLIENT_CONFIG)
+    mockMergeRequests.show.mockResolvedValue({
+      diff_refs: {base_sha: 'b', head_sha: 'h', start_sha: 's'}
+    })
+  })
+
+  const drafts = [
+    {path: 'a.ts', line: 1, body: 'A'},
+    {path: 'b.ts', line: 2, body: 'B'},
+    {path: 'c.ts', line: 3, body: 'C'}
+  ]
+
+  test('全部成功 → delivered 三条，failed 为空', async () => {
+    mockMergeRequestDiscussions.create.mockResolvedValue({id: 'd1'})
+
+    const r = await platform.submitReviewComments('g', 'p', 1, 'sha', drafts)
+
+    expect(r.delivered.map((d: any) => d.path)).toEqual(['a.ts', 'b.ts', 'c.ts'])
+    expect(r.failed).toEqual([])
+  })
+
+  test('行级失败但顶层降级成功 → 仍算 delivered', async () => {
+    mockMergeRequestDiscussions.create.mockRejectedValue(new Error('400 position invalid'))
+    mockMergeRequestNotes.create.mockResolvedValue({id: 9})
+
+    const r = await platform.submitReviewComments('g', 'p', 1, 'sha', drafts)
+
+    expect(r.delivered).toHaveLength(3)
+    expect(r.failed).toEqual([])
+  })
+
+  test('部分条目两层都失败 → 精确出现在 failed 里', async () => {
+    // 正文是第 3 个位置参数（不是 options.body），按它区分条目
+    mockMergeRequestDiscussions.create.mockImplementation(async (_p: any, _i: any, body: any) => {
+      if (String(body ?? '').includes('B')) throw new Error('400 position invalid')
+      return {id: 'd1'}
+    })
+    mockMergeRequestNotes.create.mockRejectedValue(new Error('403 forbidden'))
+
+    const r = await platform.submitReviewComments('g', 'p', 1, 'sha', drafts)
+
+    expect(r.delivered.map((d: any) => d.path)).toEqual(['a.ts', 'c.ts'])
+    expect(r.failed.map((d: any) => d.path)).toEqual(['b.ts'])
+  })
+
+  test('全部两层皆败 → failed 含全部条目，且不谎报成功', async () => {
+    mockMergeRequestDiscussions.create.mockRejectedValue(new Error('400'))
+    mockMergeRequestNotes.create.mockRejectedValue(new Error('403'))
+
+    const r = await platform.submitReviewComments('g', 'p', 1, 'sha', drafts)
+
+    expect(r.delivered).toEqual([])
+    expect(r.failed).toHaveLength(3)
+  })
+})

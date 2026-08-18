@@ -556,10 +556,10 @@
 
 ### 8.3 行级问题
 
-- [ ] `REVIEW-011` 发布 GitHub review comment 和 GitLab diff discussion。
-- [ ] `REVIEW-012` 相同位置的未解决问题不重复发布。
-- [ ] `REVIEW-013` 已解决问题重新出现时按统一策略重发。
-- [ ] `REVIEW-014` 行号映射失败时降级到顶层评论。
+- [x] `REVIEW-011` 发布 GitHub review comment 和 GitLab diff discussion。
+- [x] `REVIEW-012` 相同位置的未解决问题不重复发布。
+- [x] `REVIEW-013` 已解决问题重新出现时按统一策略重发。
+- [x] `REVIEW-014` 行号映射失败时降级到顶层评论。
 
 ### 8.4 自然语言对话
 

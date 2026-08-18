@@ -19,6 +19,7 @@ import {type AnalysisStep, type Bot} from './bot'
 import {
   Commenter,
   bodyHasMarker,
+  isOwnAuthor,
   commentReplyTag,
   commentTag,
   rawSummaryEndTag,
@@ -923,6 +924,14 @@ ${
         const allReviewComments = await commenter.listReviewComments(pr.number)
         for (const c of allReviewComments) {
           if (!bodyHasMarker(c.body, 'comment')) continue
+          // REVIEW-012：用户引用回复也带 marker。把它算成「已有我们的评论」，
+          // 该位置本次的新发现就会被当成重复而丢弃。
+          //
+          // 只有**确认**是自己发的才建立去重范围。false 和 null 都不抑制审查：
+          // 身份查不到时若把 null 当成「是自己的」，任何人只要引用一条带 marker
+          // 的评论，就能让对应 patch 跳过模型审查——那是可被伪造的抑制通道。
+          // 这与 submitReview() 里「身份未知则不去重」的方向也保持一致。
+          if ((await isOwnAuthor(c.user?.login)) !== true) continue
           const key = `${c.path}:${c.line}`
           const isResolved = threadStatusMap.get(key)
           if (isResolved === true) continue

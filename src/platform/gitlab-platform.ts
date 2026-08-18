@@ -44,6 +44,7 @@ import {
   type PlatformComment,
   type ReviewComment,
   type ReviewCommentDraft,
+  type SubmitReviewResult,
   type ReviewThreadInfo,
   type TreeResult,
   type PlatformPermission,
@@ -579,14 +580,19 @@ export class GitLabPlatform implements IGitPlatform {
     commitSha: string,
     comments: ReviewCommentDraft[],
     _reviewBody?: string
-  ): Promise<number> {
-    // GitLab 无 batch review 概念，逐条创建 discussion
-    let submitted = 0
+  ): Promise<SubmitReviewResult> {
+    // GitLab 无 batch review 概念，逐条创建 discussion。
+    //
+    // 必须逐条汇报成败：只回一个总数的话，调用方无从知道**哪几条**没发出去，
+    // 于是会把那些位置上被取代的 resolved 旧讨论一并删掉——新发现没发成，
+    // 历史也没了（REVIEW-013）。失败项交回调用方统一做顶层降级（REVIEW-014）。
+    const delivered: ReviewCommentDraft[] = []
+    const failed: ReviewCommentDraft[] = []
     for (const comment of comments) {
       try {
         await this.createReviewComment(owner, repo, changeRequestId, commitSha, comment)
-        submitted++
-      } catch {
+        delivered.push(comment)
+      } catch (lineError) {
         // GLAPI-015: 行级位置无法映射时降级为顶层 note（同样带幂等 marker）
         try {
           await this.createComment(
@@ -595,13 +601,18 @@ export class GitLabPlatform implements IGitPlatform {
             changeRequestId,
             `**${comment.path}** (line ${comment.line})\n\n${comment.body}`
           )
-          submitted++
-        } catch {
-          // 降级也失败，跳过该条
+          delivered.push(comment)
+        } catch (topLevelError) {
+          getLogger().warning(
+            `submitReviewComments: both line-level and top-level delivery failed for ` +
+              `${comment.path}:${comment.line} — line: ${String(lineError)}; ` +
+              `top-level: ${String(topLevelError)}`
+          )
+          failed.push(comment)
         }
       }
     }
-    return submitted
+    return {delivered, failed}
   }
 
   async createReviewComment(

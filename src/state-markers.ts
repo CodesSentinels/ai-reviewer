@@ -110,6 +110,13 @@ export const STATE_MARKERS = {
     legacy: '<!-- commit_ids_reviewed_end -->',
     current: () => buildStateMarker('commit-ids-reviewed-end')
   },
+  undeliverableFindings: {
+    kind: 'undeliverable-findings',
+    // 新增 marker，没有历史形态；legacy 留空串会被 includes('') 恒真命中，
+    // 因此用一个不可能出现在正文里的占位
+    legacy: '<!-- ai-reviewer:__no-legacy:undeliverable-findings -->',
+    current: () => buildStateMarker('undeliverable-findings')
+  },
   reviewStateStart: {
     kind: 'review-state-start',
     legacy: '<!-- codesentinel-review-state:start -->',

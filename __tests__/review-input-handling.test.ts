@@ -42,6 +42,7 @@ jest.mock('../src/platform/logger', () => ({
 }))
 
 import {codeReview} from '../src/review'
+import {_resetBotIdentity} from '../src/commenter'
 import {setExecCtx} from '../src/platform/run-context'
 import {setStateNamespace} from '../src/platform/state-namespace'
 import {Prompts} from '../src/prompts'
@@ -157,7 +158,14 @@ beforeEach(() => {
   platformState.createComment.mockResolvedValue({id: 1, body: '', author: 'bot'})
   platformState.updateComment.mockResolvedValue(undefined)
   platformState.listChangeRequestCommits.mockResolvedValue([])
-  platformState.submitReviewComments.mockResolvedValue(undefined)
+  // 批量提交返回 {delivered, failed}（REVIEW-013/014）。
+  // 返回旧形状（数字/undefined）会让 result.delivered.length 抛 TypeError，
+  // 被生产代码的外层 catch 吞掉转去走逐条 fallback——测试照样绿，
+  // 但验的是 fallback 路径，批量成功路径从没被覆盖。
+  platformState.submitReviewComments.mockImplementation(async (..._a: any[]) => ({
+    delivered: [...((_a[4] ?? []) as any[])],
+    failed: []
+  }))
   platformState.updateChangeRequestBody.mockResolvedValue(undefined)
   platformState.deletePendingReview.mockResolvedValue(undefined)
   setDiff([{filename: 'a.ts', status: 'modified', patch: '@@ -1,2 +1,3 @@\n a\n+x\n b'}])
@@ -517,5 +525,70 @@ describe('REVIEW-004：配置语义在两个平台一致', () => {
     expect(processed.gitlab).toEqual(processed.github)
     // 防空跑：确实处理了文件，且二进制被两边一致地排除
     expect(processed.github).toEqual(['gone.ts', 'src/a.ts', 'src/b.ts'])
+  })
+})
+
+/**
+ * full review 的「已覆盖范围」计算同样按 marker 找自己的旧评论。
+ *
+ * 若把「身份判断不了」当成「是自己的」，任何人只要引用一条带 marker 的评论，
+ * 就能让对应位置的 patch 跳过模型审查——一条可被伪造的抑制通道。
+ */
+describe('REVIEW-012：full review 的去重范围不得被伪造 marker 抑制', () => {
+  /**
+   * 断言必须落在 **patch 级**的去重日志上。
+   *
+   * 第一版断言的是「reviewing a.ts」——那条日志在 patch 去重之前就打了，
+   * 改不改代码都通过；而且夹具的行号范围（line 2）压根覆盖不到 patch 的
+   * 1-3 行，去重从来没被触发过。两个问题叠加，用例完全是空的。
+   */
+  async function runFullReview(): Promise<string> {
+    const ctx = useCtx()
+    logs.length = 0
+    await codeReview(ctx, makeBot(), makeBot(), makeOptions(), new Prompts('', ''), {mode: 'full'})
+    return logs.join('\n')
+  }
+
+  /** 覆盖住 patch 全部行（1-3）的既有评论 */
+  function coveringComment(author: string): any {
+    return {
+      id: 60,
+      body: '<!-- ai-reviewer:github:comment -->',
+      path: 'a.ts',
+      line: 3,
+      startLine: 1,
+      originalLine: 3,
+      author
+    }
+  }
+
+  beforeEach(() => {
+    // 身份解析结果是模块级缓存，跨用例保留。不重置的话，先跑的对照组会把
+    // 'bot' 缓存下来，后面「身份未知」那条根本进不了未知分支——用例看着绿，
+    // 其实什么都没验。
+    _resetBotIdentity()
+    setDiff([{filename: 'a.ts', status: 'modified', patch: '@@ -1,2 +1,3 @@\n a\n+x\n b'}])
+  })
+
+  test('身份已知 + 确实是自己的旧评论 → 该 patch 被跳过（对照组，证明去重真的会触发）', async () => {
+    platformState.getAuthenticatedLogin.mockResolvedValue('bot')
+    platformState.listReviewComments.mockResolvedValue([coveringComment('bot')])
+
+    expect(await runFullReview()).toContain('[full-review-dedup] skipping patch')
+  })
+
+  test('身份未知 + 用户引用带 marker → 不建立去重范围，patch 仍要审查', async () => {
+    platformState.getAuthenticatedLogin.mockRejectedValue(new Error('401'))
+    platformState.listReviewComments.mockResolvedValue([coveringComment('alice')])
+
+    // 把 null 当成「是自己的」时，任何人引用一条带 marker 的评论就能抑制审查
+    expect(await runFullReview()).not.toContain('[full-review-dedup] skipping patch')
+  })
+
+  test('身份已知 + 是用户的评论 → 同样不抑制', async () => {
+    platformState.getAuthenticatedLogin.mockResolvedValue('bot')
+    platformState.listReviewComments.mockResolvedValue([coveringComment('alice')])
+
+    expect(await runFullReview()).not.toContain('[full-review-dedup] skipping patch')
   })
 })

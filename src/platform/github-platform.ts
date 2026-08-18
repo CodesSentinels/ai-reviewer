@@ -23,6 +23,7 @@ import {
   type ReactionContent,
   type ReviewComment,
   type ReviewCommentDraft,
+  type SubmitReviewResult,
   type ReviewThreadInfo,
   type TreeResult
 } from './git-platform'
@@ -396,8 +397,10 @@ export class GitHubPlatform implements IGitPlatform {
     commitSha: string,
     comments: ReviewCommentDraft[],
     reviewBody?: string
-  ): Promise<number> {
-    if (comments.length === 0) return 0
+  ): Promise<SubmitReviewResult> {
+    // GitHub 的 createReview 是原子的：要么整批进去，要么抛错。
+    // 因此结果只有「全部投递」或「异常上抛由调用方降级」两种。
+    if (comments.length === 0) return {delivered: [], failed: []}
     try {
       const review = await octokit.pulls.createReview({
         owner,
@@ -427,7 +430,7 @@ export class GitHubPlatform implements IGitPlatform {
         event: 'COMMENT',
         body: reviewBody ?? ''
       })
-      return comments.length
+      return {delivered: [...comments], failed: []}
     } catch (e) {
       throw toGitPlatformError(e)
     }

@@ -109,12 +109,50 @@ export function _resetBotIdentity(): void {
   _resolvedBotLogin = undefined
 }
 
+/** 行级评论的位置键，用于把「待清理的旧评论」和「这次要发的新评论」对上 */
+function commentKey(c: {path: string; startLine: number; endLine: number}): string {
+  return `${c.path}:${c.startLine}-${c.endLine}`
+}
+
+/**
+ * 平台 draft 的位置键，必须与 commentKey 算出同一个值。
+ *
+ * toDraft 在单行时会把 startLine 置成 undefined（平台要求），所以这里要还原成
+ * endLine，否则单行评论的失败项对不回本地缓冲。
+ */
+function draftKey(d: {path: string; line: number; startLine?: number}): string {
+  return `${d.path}:${d.startLine ?? d.line}-${d.line}`
+}
+
+/** 缓冲中的一条行级评论 */
+export interface ReviewCommentBuffer {
+  /** 文件路径 */
+  path: string
+  /** 评论起始行号 */
+  startLine: number
+  /** 评论结束行号 */
+  endLine: number
+  /** 评论内容 */
+  message: string
+}
+
 /** 这条评论是不是我们自己发的（身份未知时返回 null，表示无法判断） */
 function isOwnComment(comment: {user?: {login?: string}}, botLogin: string | null): boolean | null {
   if (botLogin == null) return null
   const author = (comment.user?.login ?? '').trim()
   if (author === '') return null
   return author.toLowerCase() === botLogin.toLowerCase()
+}
+
+/**
+ * 按作者判断某条评论是否出自本 reviewer（REVIEW-012/013）。
+ *
+ * 供 commenter 之外的去重逻辑复用（如 review.ts 的 full review 覆盖范围计算）。
+ * 返回 null 表示「判断不了」——调用方必须自己决定保守方向，不要当成 false。
+ */
+export async function isOwnAuthor(author: string | undefined | null): Promise<boolean | null> {
+  const botLogin = await resolveBotLogin()
+  return isOwnComment({user: {login: author ?? undefined}}, botLogin)
 }
 
 // 状态 marker 清单集中在 state-markers.ts（GH-014），此处 re-export 保持调用方 import 不变
@@ -245,13 +283,20 @@ export class Commenter {
    * @param tag - HTML 标签，用于标识和查找评论
    * @param mode - "create"（新建）或 "replace"（查找并替换已有评论）
    */
-  async comment(message: string, tag: string, mode: string) {
+  /**
+   * 发布/更新一条顶层评论。
+   *
+   * 返回是否真的投递成功。此前内部 create()/replace() 各自吞掉异常，调用方拿不到
+   * 任何信号——REVIEW-014 的降级路径因此在评论创建失败时仍打印「已发布」，
+   * 发现照样静默丢失。
+   */
+  async comment(message: string, tag: string, mode: string): Promise<boolean> {
     // PR number / MR iid 已由 ExecutionContext 归一化（GitHub 的 payload 里
     // 它可能来自 pull_request 也可能来自 issue，两者在构造阶段已经合流）
     const target = getExecCtx().changeRequestId
     if (!target) {
       getLogger().warning('Skipped: execution context carries no change request id')
-      return
+      return false
     }
 
     if (!tag) {
@@ -266,12 +311,12 @@ ${message}
 ${tag}`
 
     if (mode === 'create') {
-      await this.create(body, target)
+      return await this.create(body, target)
     } else if (mode === 'replace') {
-      await this.replace(body, tag, target)
+      return await this.replace(body, tag, target)
     } else {
       getLogger().warning(`Unknown mode: ${mode}, use "replace" instead`)
-      await this.replace(body, tag, target)
+      return await this.replace(body, tag, target)
     }
   }
 
@@ -362,12 +407,7 @@ ${tag}`
   // ==================== 代码审查评论缓冲区 ====================
 
   /** 审查评论缓冲区：在内存中暂存所有审查评论，最后一次性提交 */
-  private readonly reviewCommentsBuffer: Array<{
-    path: string // 文件路径
-    startLine: number // 评论起始行号
-    endLine: number // 评论结束行号
-    message: string // 评论内容
-  }> = []
+  private readonly reviewCommentsBuffer: ReviewCommentBuffer[] = []
 
   /**
    * 将审查评论添加到缓冲区（不立即提交）
@@ -435,6 +475,8 @@ ${statusMsg}
 
     // 去重：跳过同位置已有未 resolved bot 评论的新评论，避免重复
     const commentsToSubmit: typeof this.reviewCommentsBuffer = []
+    // REVIEW-013：位置 → 待清理的旧评论 id。发布成功后才真正删除。
+    const pendingDeletions = new Map<string, number[]>()
     for (const comment of this.reviewCommentsBuffer) {
       const existingComments = await this.getCommentsAtRange(
         pullNumber,
@@ -442,7 +484,32 @@ ${statusMsg}
         comment.startLine,
         comment.endLine
       )
-      const existingBotComments = existingComments.filter(c => bodyHasMarker(c.body, 'comment'))
+      // REVIEW-012/013：带 marker 不等于是我们发的。用户引用回复会把 marker 一起
+      // 复制过去，只按 marker 判定会造成两种损失：
+      //   未 resolved → 误判为「同位置已有我们的评论」，本次发现被丢弃；
+      //   已 resolved → 把用户那条评论当成自己的旧评论**删掉**。
+      const taggedAtRange = existingComments.filter(c => bodyHasMarker(c.body, 'comment'))
+      // 注意字段：listReviewComments 映射后作者在 user.login，不是 c.author
+      const ownership = await Promise.all(
+        taggedAtRange.map(async c => await isOwnAuthor(c.user?.login))
+      )
+      const existingBotComments = taggedAtRange.filter((_c, i) => ownership[i] === true)
+      // 身份判断不了时 ownership 全是 null，existingBotComments 因此为空，
+      // 于是这条发现会被照常发布——可能与旧评论重复，但绝不会删掉任何东西。
+      // 这个方向是刻意选的：重复可以人工清理，删错的内容找不回来。
+      if (ownership.some(o => o == null)) {
+        logger.warning(
+          `[submit-dedup] bot identity is unknown — publishing at ` +
+            `${comment.path}:${comment.startLine}-${comment.endLine} without deduplication; ` +
+            'existing comments are left untouched'
+        )
+      } else if (taggedAtRange.length > existingBotComments.length) {
+        logger.info(
+          `[submit-dedup] ignoring ${taggedAtRange.length - existingBotComments.length} ` +
+            `comment(s) at ${comment.path}:${comment.startLine}-${comment.endLine} that carry our ` +
+            'marker but were authored by someone else'
+        )
+      }
       if (existingBotComments.length > 0) {
         // 检查该位置是否已 resolved
         const key = `${comment.path}:${comment.endLine}`
@@ -453,17 +520,15 @@ ${statusMsg}
           )
           continue
         }
-        // 已 resolved 的旧评论：删除后重新发布
-        for (const c of existingBotComments) {
-          logger.info(
-            `Deleting resolved review comment for ${comment.path}:${comment.startLine}-${comment.endLine}`
-          )
-          try {
-            await platform.deleteReviewComment(repo.owner, repo.repo, c.id)
-          } catch (e) {
-            logger.warning(`Failed to delete review comment: ${e}`)
-          }
-        }
+        // 已 resolved 的旧评论要被新发现取代，但**不能在这里就删**。
+        //
+        // 真正的发布发生在后面的批量/逐条请求里；先删后发的话，一旦平台拒收新
+        // 行号（422），旧讨论已经没了，新发现也发不出去——历史和新内容一起丢。
+        // 这里只登记，等确认新评论落地后再清理。
+        pendingDeletions.set(
+          commentKey(comment),
+          existingBotComments.map(c => c.id)
+        )
       }
       commentsToSubmit.push(comment)
     }
@@ -488,7 +553,7 @@ ${statusMsg}
     })
 
     try {
-      const submitted = await platform.submitReviewComments(
+      const result = await platform.submitReviewComments(
         repo.owner,
         repo.repo,
         pullNumber,
@@ -497,12 +562,33 @@ ${statusMsg}
         body
       )
 
-      logger.info(`Submitting review for PR #${pullNumber}, total comments: ${submitted}`)
+      logger.info(
+        `Submitting review for PR #${pullNumber}, delivered: ${result.delivered.length}, ` +
+          `failed: ${result.failed.length}`
+      )
+
+      // adapter 可能部分成功：GitHub 的 createReview 是原子的，GitLab 则逐条创建
+      // discussion，部分失败时只返回一个总数是不够的。按位置对回本地缓冲，
+      // **只清理确认投递成功的那些**，否则新发现没发成、被取代的旧讨论却已经删了。
+      const failedKeys = new Set(result.failed.map(d => draftKey(d)))
+      const deliveredComments = commentsToSubmit.filter(c => !failedKeys.has(commentKey(c)))
+      await this.flushPendingDeletions(deliveredComments, pendingDeletions)
+
+      // 两层都没送出去的，交给统一的顶层降级（REVIEW-014），
+      // 而不是让 adapter 各自静默跳过
+      if (result.failed.length > 0) {
+        const undelivered = commentsToSubmit.filter(c => failedKeys.has(commentKey(c)))
+        await this.postUndeliverableAsTopLevel(pullNumber, undelivered)
+      }
     } catch (e) {
       // 批量提交失败时，降级为逐条提交
       logger.warning(`Failed to create review: ${e}. Falling back to individual comments.`)
       await this.deletePendingReview(pullNumber)
       let commentCounter = 0
+      // REVIEW-014：逐条也发不出去的（最常见是行号不在 diff 内，平台返回 422），
+      // 原先只打一条 warning 就没了——审查发现被静默丢弃。收集起来，最后统一
+      // 降级到顶层评论：位置精度不如行级，但至少内容不会消失。
+      const undeliverable: ReviewCommentBuffer[] = []
       for (const comment of commentsToSubmit) {
         logger.info(
           `Creating new review comment for ${comment.path}:${comment.startLine}-${comment.endLine}: ${comment.message}`
@@ -517,12 +603,93 @@ ${statusMsg}
             toDraft(comment)
           )
         } catch (ee) {
-          logger.warning(`Failed to create review comment: ${ee}`)
+          logger.warning(
+            `Failed to create review comment at ${comment.path}:${comment.startLine}-${comment.endLine}: ${ee}`
+          )
+          undeliverable.push(comment)
         }
 
         commentCounter++
         logger.info(`Comment ${commentCounter}/${commentsToSubmit.length} posted`)
       }
+
+      // 只清理「新评论确实发出去了」的那些位置；发不出去的保留旧讨论，
+      // 否则用户既看不到新发现，也失去了历史上下文
+      const undeliverableKeys = new Set(undeliverable.map(commentKey))
+      const delivered = commentsToSubmit.filter(c => !undeliverableKeys.has(commentKey(c)))
+      await this.flushPendingDeletions(delivered, pendingDeletions)
+
+      if (undeliverable.length > 0) {
+        await this.postUndeliverableAsTopLevel(pullNumber, undeliverable)
+      }
+    }
+  }
+
+  /**
+   * 清理被新评论取代的旧讨论（REVIEW-013）。
+   *
+   * 只对**确认已发布**的位置执行——见 submitReview 里登记 pendingDeletions 的
+   * 注释：先删后发会在平台拒收新行号时把历史和新发现一起弄丢。
+   */
+  private async flushPendingDeletions(
+    published: ReviewCommentBuffer[],
+    pending: Map<string, number[]>
+  ): Promise<void> {
+    const platform = getPlatform()
+    const logger = getLogger()
+    for (const comment of published) {
+      const ids = pending.get(commentKey(comment))
+      if (ids == null) continue
+      for (const id of ids) {
+        logger.info(`Deleting superseded resolved review comment ${id} at ${commentKey(comment)}`)
+        try {
+          await platform.deleteReviewComment(repo.owner, repo.repo, id)
+        } catch (e) {
+          logger.warning(`Failed to delete review comment: ${e}`)
+        }
+      }
+    }
+  }
+
+  /**
+   * 把发不出去的行级评论降级为一条顶层评论（REVIEW-014）。
+   *
+   * 触发场景是行号映射失败：模型给出的行不在本次 diff 的可评论范围内，平台
+   * 直接拒收（GitHub 422 "line must be part of the diff"）。这类失败无法靠重试
+   * 解决，但发现本身是有价值的——把文件与行号写进正文，用户照样能定位。
+   *
+   * 用 replace 模式发，避免每次审查都堆一条新的。
+   */
+  private async postUndeliverableAsTopLevel(
+    pullNumber: number,
+    comments: ReviewCommentBuffer[]
+  ): Promise<void> {
+    const logger = getLogger()
+    const items = comments
+      .map(c => {
+        const range = c.startLine === c.endLine ? `${c.endLine}` : `${c.startLine}-${c.endLine}`
+        return `<details>\n<summary><code>${c.path}:${range}</code></summary>\n\n${c.message}\n\n</details>`
+      })
+      .join('\n')
+
+    const body = `> ⚠️ 以下 ${comments.length} 条发现无法作为行级评论发布（通常是行号不在本次 diff 的可评论范围内），改以顶层评论呈现：\n\n${items}`
+
+    const delivered = await this.comment(body, stateMarker('undeliverableFindings'), 'replace')
+    if (delivered) {
+      logger.info(
+        `[review-014] posted ${comments.length} undeliverable finding(s) as a top-level comment`
+      )
+      return
+    }
+    // 最后一层也没送出去：如实报告「彻底丢失」，并把内容写进日志，让运维至少能
+    // 从 job 日志里捞回来。此前这里靠 try/catch 判断成功，而 comment() 内部把
+    // 异常吞了，于是失败也照样打印「已发布」。
+    logger.error(
+      `[review-014] failed to deliver ${comments.length} finding(s) — they are NOT visible on the ` +
+        'pull request. Contents follow so they are at least recoverable from this log:'
+    )
+    for (const c of comments) {
+      logger.error(`  ${commentKey(c)}: ${c.message}`)
     }
   }
 
@@ -769,7 +936,7 @@ ${chain}
   }
 
   /** 创建新的 issue comment */
-  async create(body: string, target: number) {
+  async create(body: string, target: number): Promise<boolean> {
     try {
       const result = await getPlatform().createComment(repo.owner, repo.repo, target, body)
       const data = {
@@ -786,13 +953,15 @@ ${chain}
       } else {
         this.issueCommentsCache[target] = [data]
       }
+      return true
     } catch (e) {
       getLogger().warning(`Failed to create comment: ${e}`)
+      return false
     }
   }
 
   /** 查找并替换已有评论；如果不存在则新建。同时清理并发运行产生的重复评论 */
-  async replace(body: string, tag: string, target: number) {
+  async replace(body: string, tag: string, target: number): Promise<boolean> {
     const platform = getPlatform()
     const logger = getLogger()
     try {
@@ -817,8 +986,7 @@ ${chain}
             `${taggedComments.length} existing match(es), to avoid overwriting user comments. ` +
             'Set the bot login in configuration to restore in-place updates.'
         )
-        await this.create(body, target)
-        return
+        return await this.create(body, target)
       }
 
       const ownComments = taggedComments.filter((cmt: any) => isOwnComment(cmt, botLogin) === true)
@@ -841,11 +1009,12 @@ ${chain}
             logger.warning(`Failed to delete duplicate comment: ${e}`)
           }
         }
-      } else {
-        await this.create(body, target)
+        return true
       }
+      return await this.create(body, target)
     } catch (e) {
       logger.warning(`Failed to replace comment: ${e}`)
+      return false
     }
   }
 

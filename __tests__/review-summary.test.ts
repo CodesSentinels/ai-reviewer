@@ -146,7 +146,14 @@ beforeEach(() => {
   platformState.updateComment.mockResolvedValue(undefined)
   platformState.deleteComment.mockResolvedValue(undefined)
   platformState.listChangeRequestCommits.mockResolvedValue([])
-  platformState.submitReviewComments.mockResolvedValue(undefined)
+  // 批量提交返回 {delivered, failed}（REVIEW-013/014）。
+  // 返回旧形状（数字/undefined）会让 result.delivered.length 抛 TypeError，
+  // 被生产代码的外层 catch 吞掉转去走逐条 fallback——测试照样绿，
+  // 但验的是 fallback 路径，批量成功路径从没被覆盖。
+  platformState.submitReviewComments.mockImplementation(async (..._a: any[]) => ({
+    delivered: [...((_a[4] ?? []) as any[])],
+    failed: []
+  }))
   platformState.updateChangeRequestBody.mockResolvedValue(undefined)
   platformState.deletePendingReview.mockResolvedValue(undefined)
   platformState.getAuthenticatedLogin.mockResolvedValue(BOT)

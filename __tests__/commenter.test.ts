@@ -98,7 +98,14 @@ beforeEach(() => {
   platform.deleteComment.mockResolvedValue(undefined)
   platform.listComments.mockResolvedValue([])
   platform.listReviewComments.mockResolvedValue([])
-  platform.submitReviewComments.mockResolvedValue(1)
+  // 批量提交返回 {delivered, failed}（REVIEW-013/014）。
+  // 返回旧形状（数字/undefined）会让 result.delivered.length 抛 TypeError，
+  // 被生产代码的外层 catch 吞掉转去走逐条 fallback——测试照样绿，
+  // 但验的是 fallback 路径，批量成功路径从没被覆盖。
+  platform.submitReviewComments.mockImplementation(async (..._a: any[]) => ({
+    delivered: [...((_a[4] ?? []) as any[])],
+    failed: []
+  }))
   platform.createReviewComment.mockResolvedValue(undefined)
   platform.deleteReviewComment.mockResolvedValue(undefined)
   platform.updateReviewComment.mockResolvedValue(undefined)
@@ -162,9 +169,9 @@ describe('GH-006: PR 顶层 summary 评论的查找、创建与更新', () => {
     ])
     platform.deleteComment.mockRejectedValue(new Error('403 Forbidden'))
 
-    await expect(
-      new Commenter().comment('merged', summarizeTag(), 'replace')
-    ).resolves.toBeUndefined()
+    // comment() 现在返回投递结果（REVIEW-014 需要它来判断降级是否真的落地）；
+    // 删重复失败不影响主评论已成功更新
+    await expect(new Commenter().comment('merged', summarizeTag(), 'replace')).resolves.toBe(true)
     expect(platform.updateComment).toHaveBeenCalledTimes(1)
     expect(logs.warning).toHaveBeenCalledWith(expect.stringContaining('Failed to delete duplicate'))
   })

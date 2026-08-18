@@ -101,6 +101,20 @@ export interface ReviewCommentDraft {
   startSide?: string
 }
 
+/**
+ * 批量提交行级评论的结果（REVIEW-013/014）。
+ *
+ * 只返回「成功了几条」是不够的：GitLab 没有批量 review 的概念，adapter 内部
+ * 逐条创建，部分失败时调用方无从知道**哪几条**没发出去。于是既会误删那些位置
+ * 上被取代的 resolved 旧讨论，也没法对失败项做顶层降级。
+ */
+export interface SubmitReviewResult {
+  /** 成功投递的评论（含 adapter 内部降级为顶层评论的那些） */
+  delivered: ReviewCommentDraft[]
+  /** 两层都没送出去的评论，调用方需自行决定如何呈现 */
+  failed: ReviewCommentDraft[]
+}
+
 /** review thread 状态 */
 export interface ReviewThreadInfo {
   id: string
@@ -217,7 +231,7 @@ export interface IGitPlatform {
     commitSha: string,
     comments: ReviewCommentDraft[],
     reviewBody?: string
-  ): Promise<number>
+  ): Promise<SubmitReviewResult>
 
   /** 创建单条行级评论 */
   createReviewComment(
