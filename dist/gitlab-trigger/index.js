@@ -52580,6 +52580,19 @@ const STATE_MARKERS = {
         kind: 'review-state-end',
         legacy: '<!-- codesentinel-review-state:end -->',
         current: () => buildStateMarker('review-state-end')
+    },
+    noteHookMarkersStart: {
+        kind: 'note-hook-markers-start',
+        // 这个 marker 是随命名空间一起引入的（STATE-005），没有真正的历史无前缀形态；
+        // legacy 只是占位，保持字段完整性和 tagPairVariants 回退逻辑一致，不会在真实
+        // 数据里命中。
+        legacy: '<!-- ai-reviewer-note-hook-markers-start -->',
+        current: () => buildStateMarker('note-hook-markers-start')
+    },
+    noteHookMarkersEnd: {
+        kind: 'note-hook-markers-end',
+        legacy: '<!-- ai-reviewer-note-hook-markers-end -->',
+        current: () => buildStateMarker('note-hook-markers-end')
     }
 };
 /** 当前平台命名空间下的 marker（用于写入） */
@@ -72135,6 +72148,64 @@ function buildMrIdempotencyKey(projectId, mrIid, headSha) {
     return `gitlab:${projectId}:${mrIid}:head:${headSha}`;
 }
 
+;// CONCATENATED MODULE: ./lib/gitlab-mr-idempotency.js
+/**
+ * gitlab-mr-idempotency.ts - MR 自动审查幂等判断（EVENT-013）
+ *
+ * `gitlab-mr-hook-rules.ts` 的 `buildMrIdempotencyKey()` 只生成
+ * `gitlab:{project_id}:{mr_iid}:head:{head_sha}` 这个幂等键字符串，供日志/排查
+ * 使用；本文件负责"这个 headSha 到底判没判过"的真正判断。
+ *
+ * 设计要点：
+ *
+ * - **复用 summary note 里已有的 reviewed-commit-ids marker，不新建独立存储。**
+ *   `review.ts` 每次成功审查后已经会把 `pr.head.sha` 写进 summary comment 的
+ *   `commit_ids_reviewed` 区块（`commenter.addReviewedCommitId()`），这是
+ *   GitHub/GitLab 共用的既有机制。TODO 文档原文"MR 自动审查幂等键...并与
+ *   summary note 中的 reviewed SHA marker 一起判断"明确要求接到这一套上，而不是
+ *   像 Note Hook（`gitlab-note-idempotency.ts`）那样另起一条独立记账 note——
+ *   两者场景不同：Note Hook 的幂等键要按事件 note_id 逐条区分，天然不适合塞进
+ *   会被整体重写的 summary comment；MR 幂等只关心"这个 headSha 审过没有"，
+ *   而这正是 summary comment 已经在维护的信息，重新发明一套只会产生两份可能
+ *   互相不一致的状态。
+ * - **只用 `getPlatform()` + `Commenter` 的纯字符串方法，不依赖 execCtx 已经
+ *   ready。** 本文件在 `gitlab-trigger.ts` 里于 `runOrchestrator()`（真正
+ *   `setExecCtx()` 的地方）之前调用，这时候 `getExecCtx()` 还不可用。
+ *   `Commenter.getReviewedCommitIds()` 只解析传入的字符串正文，不touch
+ *   `this`/`execCtx`，可以在 execCtx 就绪前安全调用；但 `Commenter.
+ *   findCommentWithTag()`/`listComments()` 依赖模块级 `repo` 绑定，同样不能用，
+ *   所以查找 summary comment 这一步改用 `getPlatform().listComments()` 直接查。
+ * - **找不到/查询失败时的语义是"未审查过"，不是抛错。** 与 Note Hook 幂等
+ *   同样的理由：这里防的是"重复投递浪费一次模型调用"，不是安全边界；查询失败
+ *   时宁可再审一次（下游 review.ts 自身的增量逻辑仍会尽量减少重复工作），也不能
+ *   因为这层读取失败就让正常的审查停摆。
+ */
+
+
+
+
+/**
+ * 判断给定 MR 的 headSha 是否已经被自动审查过（EVENT-013 的判断依据）。
+ *
+ * 读取 summary comment（`summarizeTag()` 标识）里既有的 reviewed-commit-ids
+ * marker，检查 headSha 是否已在其中——这条 marker 由 `review.ts` 每次成功审查
+ * 后写入，语义与"这个 commit 是否已经被增量审查覆盖过"完全一致。
+ */
+async function hasHeadBeenReviewed(owner, repo, changeRequestId, headSha) {
+    try {
+        const comments = await getPlatform().listComments(owner, repo, changeRequestId);
+        const summaryComment = comments.find(c => bodyHasMarker(c.body, 'summarize'));
+        if (summaryComment == null)
+            return false;
+        const reviewedIds = new Commenter().getReviewedCommitIds(summaryComment.body ?? '');
+        return reviewedIds.includes(headSha);
+    }
+    catch (e) {
+        getLogger().warning(`gitlab-mr-idempotency: failed to check reviewed headSha: ${String(e)}`);
+        return false;
+    }
+}
+
 ;// CONCATENATED MODULE: ./lib/gitlab-note-hook-rules.js
 /**
  * gitlab-note-hook-rules.ts - GitLab Note Hook 业务规则（EVENT-018/020）
@@ -72157,6 +72228,123 @@ function isSelfNote(actorLogin, configuredPatUsername) {
 }
 function buildNoteIdempotencyKey(projectId, mrIid, noteId) {
     return `gitlab:${projectId}:${mrIid}:note:${noteId}:create`;
+}
+
+;// CONCATENATED MODULE: ./lib/gitlab-note-idempotency.js
+/**
+ * gitlab-note-idempotency.ts - Note Hook 幂等 marker 的存储与接线（STATE-005 / EVENT-020/021）
+ *
+ * `gitlab-note-hook-rules.ts` 的 `buildNoteIdempotencyKey()` 只生成幂等键字符串，
+ * 不做任何 IO——本文件负责"这个键存在哪、怎么查、怎么写"。
+ *
+ * 设计要点：
+ *
+ * - **独立的专用 note，不复用 summary note。** `commenter.ts` 的
+ *   `addReviewedCommitId()` 系列函数把"已审查 commit ID"写进 summary
+ *   comment（`summarizeTag()` 定位），而 `codeReview()` 每次全量/增量审查都会
+ *   `comment(..., 'replace')` 整体重写这条评论正文。如果把 Note Hook 幂等键也塞
+ *   进同一条评论，就必须让 `review.ts` 的每一处重写逻辑都额外小心保留这段
+ *   marker，任何一处遗漏都会静默清空已处理记录，导致 Note Hook 事件重放。
+ *   用一条完全独立的 note（只由本文件读写，`codeReview()` 从不触碰）从架构上
+ *   排除这个耦合——这也正是 TODO 文档原文"GitLab **reviewer note** 保存已处理
+ *   Note Hook 幂等键 marker；自动 MR 审查**继续使用** summary note 中的
+ *   reviewed SHA marker"这句话里，特意把两种 marker 分开表述的原因。
+ * - **只用 `getPlatform()`，不经过 `Commenter` 类。** `Commenter` 依赖
+ *   `getExecCtx()` 且承载大量 GitHub 历史逻辑；本文件只需要顶层 note 的
+ *   增删查改，直接用 `IGitPlatform` 更少牵连、更容易独立测试。
+ * - **找不到/API 失败时的语义是"未处理过"，不是抛错。** 幂等检查的目的是防止
+ *   重复调用模型或重复回复，不是新增一个可能 fail closed 拦住正常审查的关卡；
+ *   查询失败时宁可退化为"当作没处理过"重新走一次（模型调用/回复本身若真的
+ *   已经完成过，其下游逻辑仍有各自的去重保护），也不能因为这层账本读取失败就
+ *   让整个事件处理停摆。
+ */
+
+
+
+const MARKER_COMMENT_HEADER = '_Internal bookkeeping by AI Reviewer — tracks which Note Hook events have already been ' +
+    'processed to avoid duplicate replies. Safe to ignore._';
+/** 从 marker 区块正文中提取已记录的幂等键列表 */
+function extractProcessedKeys(body) {
+    const block = locateMarkerBlock(body, 'noteHookMarkersStart', 'noteHookMarkersEnd');
+    if (block == null)
+        return [];
+    const inner = body.slice(block.start + block.startTag.length, block.end);
+    return inner
+        .split('<!--')
+        .map(s => s.replace('-->', '').trim())
+        .filter(s => s !== '');
+}
+/**
+ * 把一个幂等键追加进 marker 区块；区块不存在则新建（连同人类可读的说明头）。
+ * 键已存在时原样返回，调用方据此判断是否需要真的发起一次写请求。
+ */
+function appendProcessedKey(body, key) {
+    const block = locateMarkerBlock(body, 'noteHookMarkersStart', 'noteHookMarkersEnd');
+    if (block == null) {
+        const start = stateMarker('noteHookMarkersStart');
+        const end = stateMarker('noteHookMarkersEnd');
+        const base = body.trim() === '' ? MARKER_COMMENT_HEADER : body.trim();
+        return `${base}\n\n${start}\n<!-- ${key} -->\n${end}`;
+    }
+    if (extractProcessedKeys(body).includes(key))
+        return body;
+    const inner = body.slice(block.start + block.startTag.length, block.end);
+    return (body.slice(0, block.start + block.startTag.length) +
+        inner +
+        `<!-- ${key} -->\n` +
+        body.slice(block.end));
+}
+async function findMarkerComment(owner, repo, changeRequestId) {
+    const comments = await getPlatform().listComments(owner, repo, changeRequestId);
+    for (const c of comments) {
+        if (bodyHasMarker(c.body, 'noteHookMarkersStart')) {
+            return { id: c.id, body: c.body ?? '' };
+        }
+    }
+    return null;
+}
+/**
+ * 查询给定幂等键是否已经处理过（EVENT-021 的判断依据）。
+ *
+ * 找不到记账 note、或查询本身失败时返回 false（"未处理过"）——见文件头说明，
+ * 这里刻意不 fail closed。
+ */
+async function hasNoteBeenProcessed(owner, repo, changeRequestId, idempotencyKey) {
+    try {
+        const comment = await findMarkerComment(owner, repo, changeRequestId);
+        if (comment == null)
+            return false;
+        return extractProcessedKeys(comment.body).includes(idempotencyKey);
+    }
+    catch (e) {
+        getLogger().warning(`gitlab-note-idempotency: failed to check processed key: ${String(e)}`);
+        return false;
+    }
+}
+/**
+ * 把幂等键记为已处理（在成功完成一次 Note Hook 事件处理之后调用）。
+ *
+ * 写入失败只记警告，不向上抛错——记账失败不应该让已经成功的事件处理结果
+ * （已调用模型、已发布回复）反过来显示为失败。代价是这次记账没生效，下次
+ * 重复投递可能被重新处理一次，比起让成功的操作显示失败，这是更安全的一侧。
+ */
+async function markNoteAsProcessed(owner, repo, changeRequestId, idempotencyKey) {
+    const platform = getPlatform();
+    try {
+        const existing = await findMarkerComment(owner, repo, changeRequestId);
+        if (existing == null) {
+            const body = appendProcessedKey('', idempotencyKey);
+            await platform.createComment(owner, repo, changeRequestId, body);
+            return;
+        }
+        const updated = appendProcessedKey(existing.body, idempotencyKey);
+        if (updated === existing.body)
+            return; // 已经记过，避免无意义的写请求
+        await platform.updateComment(owner, repo, existing.id, updated);
+    }
+    catch (e) {
+        getLogger().warning(`gitlab-note-idempotency: failed to record processed key: ${String(e)}`);
+    }
 }
 
 ;// CONCATENATED MODULE: ./lib/gitlab-trigger.js
@@ -72186,7 +72374,22 @@ function buildNoteIdempotencyKey(projectId, mrIid, noteId) {
 
 
 
+
+
+
 const logger = new GitLabLogger();
+/**
+ * 从 GitLab 项目路径拆出 owner/repo——subgroup 项目路径可能含多级 namespace
+ * （如 group/subgroup/repo），用 lastIndexOf 确保 owner 保留完整 namespace。
+ * 与 commands/early-reaction.ts 的同名逻辑保持一致。
+ */
+function splitProjectPath(projectPath) {
+    const lastSlash = projectPath.lastIndexOf('/');
+    return {
+        owner: projectPath.substring(0, lastSlash),
+        repo: projectPath.substring(lastSlash + 1)
+    };
+}
 /**
  * 启动期身份自检（GLAPI-022/029）。
  *
@@ -72322,6 +72525,80 @@ async function run() {
         execCtx = { ...execCtx, actor: { ...execCtx.actor, isBot: true } };
         logger.info(`Note authored by the reviewer itself (@${execCtx.actor.login}) — will be ignored`);
     }
+    // ─── EVENT-012：MR HEAD 陈旧检查 ─────────────────────────────────────────
+    //
+    // GitLab webhook 不保证顺序投递，CI job 排队期间也可能被更新的 push 事件
+    // 抢先执行完。若此时仍按 payload 里那个（已经不是最新的）headSha 跑审查，
+    // 审查的是过期代码，且容易和随后处理的新事件互相覆盖评论。写操作前重新
+    // 读取当前 HEAD，与事件不一致就跳过——真正最新的 commit 有自己的 webhook
+    // 投递，不会因为这次跳过而丢失。
+    //
+    // 重新读取失败（网络错误等）时不 fail closed：这里防的是「审查陈旧代码」
+    // 的浪费/噪音，不是安全边界，查询失败就按事件自带的 headSha 继续，比因为
+    // 一次探测失败连正常的审查都拦下更安全。
+    const isMrEvent = execCtx.eventKind === 'pr_opened' ||
+        execCtx.eventKind === 'pr_synchronize' ||
+        execCtx.eventKind === 'pr_reopened';
+    if (isMrEvent) {
+        const { owner, repo } = splitProjectPath(execCtx.projectPath);
+        try {
+            const current = await platform.getChangeRequest(owner, repo, execCtx.changeRequestId);
+            const staleCheck = isHeadStale(execCtx.headSha, current.headSha);
+            if (staleCheck.stale) {
+                logger.info(`MR ${execCtx.changeRequestId} HEAD has moved since this event was emitted ` +
+                    `(event=${staleCheck.eventHeadSha} current=${staleCheck.currentHeadSha}) — ` +
+                    'skipping stale delivery (EVENT-012)');
+                return;
+            }
+        }
+        catch (e) {
+            logger.warning(`gitlab-trigger: failed to re-check current MR HEAD before review, proceeding with the ` +
+                `event's own headSha: ${gitlab_trigger_redact_redact(String(e))}`);
+        }
+        // ─── EVENT-013：MR 自动审查幂等 ───────────────────────────────────────
+        //
+        // GitLab webhook 不保证恰好投递一次；CI job 也可能被重试。重复投递同一个
+        // headSha 不得重复调模型跑同一次审查。判断依据是 summary note 里已有的
+        // reviewed-commit-ids marker（review.ts 每次成功审查后都会写入），见
+        // gitlab-mr-idempotency.ts 的文件头说明——不新建独立存储，直接复用这一条
+        // 既有机制。
+        const alreadyReviewed = await hasHeadBeenReviewed(owner, repo, execCtx.changeRequestId, execCtx.headSha);
+        if (alreadyReviewed) {
+            logger.info(`MR ${execCtx.changeRequestId} headSha ${execCtx.headSha} already reviewed ` +
+                `(idempotency key ${buildMrIdempotencyKey(execCtx.projectId, execCtx.changeRequestId, execCtx.headSha)}) — skipping duplicate delivery (EVENT-013)`);
+            return;
+        }
+    }
+    // ─── EVENT-020/021：Note Hook 幂等 ───────────────────────────────────────
+    //
+    // GitLab webhook 不保证恰好投递一次；CI job 也可能被重试。重复投递同一条
+    // note（相同 note_id）不得重复调模型或重复回复。幂等键的记账位置见
+    // gitlab-note-idempotency.ts 的文件头说明（独立 note，不与 summary note
+    // 混用）。自评论（isBot=true）已经会被下游 dispatcher 过滤掉、不产生任何
+    // 调用/回复，这里不必再为它多查一次幂等账本。
+    //
+    // 只对「确实 @ 了 bot」的 note 记账：完全不提 bot 的普通讨论无论被重复投递
+    // 多少次，dispatcher 都会走 `{kind: 'ignored', reason: 'no bot mention'}`
+    // 原地跳过，本来就没有副作用可去重——为它写一条记账评论纯属浪费一次 API
+    // 调用，还会在 MR 上留下与内容无关的噪音评论。判断标准复用 dispatcher 自己
+    // 用来识别命令/对话触发的同一个 parse()，避免这里另起一套 mention 规则
+    // 和共享核心的判定跑偏。
+    let noteIdempotencyKey = null;
+    if (isCommentEvent && !execCtx.actor.isBot && execCtx.comment != null) {
+        const mentions = resolveBotMentions(process.env.AI_REVIEWER_BOT_GITLAB_LOGIN);
+        const mentionsBot = typeof execCtx.comment.body === 'string' &&
+            parse(execCtx.comment.body, { registeredCommands: new Set(), botMentions: mentions }).kind !==
+                'none';
+        if (mentionsBot) {
+            noteIdempotencyKey = buildNoteIdempotencyKey(execCtx.projectId, execCtx.changeRequestId, execCtx.comment.id);
+            const { owner, repo } = splitProjectPath(execCtx.projectPath);
+            const alreadyProcessed = await hasNoteBeenProcessed(owner, repo, execCtx.changeRequestId, noteIdempotencyKey);
+            if (alreadyProcessed) {
+                logger.info(`Note ${execCtx.comment.id} already processed (idempotency key ${noteIdempotencyKey}) — skipping duplicate delivery (EVENT-021)`);
+                return;
+            }
+        }
+    }
     // ─── 执行审查 / 命令（ARCH-025）──────────────────────────────────────────
     //
     // 走与 GitHub 入口完全相同的编排层：配置 → 事件分发 → codeReview 或
@@ -72345,6 +72622,12 @@ async function run() {
         },
         createBots: options => createBots(options, (msg) => logger.warning(gitlab_trigger_redact_redact(msg)))
     });
+    // 只在真正跑成功之后才记账——onFailed 会把 exitCode 设成 1，失败的这次不能
+    // 被记成"已处理"，否则下次重试会被幂等检查拦住，永远无法真正跑成功。
+    if (noteIdempotencyKey != null && process.exitCode !== 1) {
+        const { owner, repo } = splitProjectPath(execCtx.projectPath);
+        await markNoteAsProcessed(owner, repo, execCtx.changeRequestId, noteIdempotencyKey);
+    }
 }
 // 不用顶层 await（同 main.ts 的既有原因）
 void (async () => {

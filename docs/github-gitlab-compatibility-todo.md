@@ -375,9 +375,12 @@
 > `src/gitlab-mr-hook-rules.ts`（`checkForkMergeRequest()`/`isHeadStale()`/
 > `buildMrIdempotencyKey()`）+ `mapMergeRequestAction()`
 > （`src/platform/gitlab-execution-context.ts`），并接入 `gitlab-trigger.ts`。
-> `isHeadStale()`/`buildMrIdempotencyKey()` 目前只是纯函数，真正的"写前重新读取
-> HEAD"和"幂等键与 summary note marker 比对"落地属于 `GLAPI-*`/`STATE-*`，尚未接
-> 线。⚠️ Issue #75 复核（2026-08-05）指出 `mapMergeRequestAction()` 用
+> `isHeadStale()`/`buildMrIdempotencyKey()` 的"写前重新读取 HEAD"和"幂等键与
+> summary note marker 比对"已由 Issue
+> [#111](https://github.com/CodesSentinels/ai-reviewer/issues/111)（实现 PR
+> [#113](https://github.com/CodesSentinels/ai-reviewer/pull/113)）接入
+> `gitlab-trigger.ts`，见下方 `EVENT-012`/`EVENT-013` 状态说明。⚠️ Issue #75
+> 复核（2026-08-05）指出 `mapMergeRequestAction()` 用
 > `changes.last_commit`/`changes.source_branch` 判断代码变更，与 GitLab 官方
 > Webhook 契约（应看 `object_attributes.oldrev`）可能不符，真实 push 事件有被误
 > 判为 `metadata_updated` 而跳过审查的风险；现有 fixture 是人工构造的，未覆盖官方
@@ -390,17 +393,26 @@
 - [x] `EVENT-009` 标题、label、assignee 等纯元数据更新不调用模型。
 - [x] `EVENT-010` MVP 拒绝 source project 与 target project 不同的 fork MR。
 - [x] `EVENT-011` 同项目 MR 内容仍按不可信数据处理。
-- [ ] `EVENT-012` 每次写操作前重新读取当前 MR HEAD；不一致时退出且不写旧结果。
-      `isHeadStale()` 已实现比较逻辑，但调用方（写操作前重新读取 GLAPI）尚未接
-      入，不得勾选完成。跟踪见 GitHub Issue
-      [#111](https://github.com/CodesSentinels/ai-reviewer/issues/111)（暂无
-      实现 PR，依赖 `STATE-005`）。
-- [ ] `EVENT-013` MR 自动审查幂等键使用
+- [x] `EVENT-012` 每次写操作前重新读取当前 MR HEAD；不一致时退出且不写旧结果。
+      `gitlab-trigger.ts` 在 `runOrchestrator()` 之前用 `platform.
+      getChangeRequest()` 重新读取当前 HEAD，与 `isHeadStale()` 比较，陈旧则提
+      前 return 不进入审查流程。重新读取失败时不 fail closed（浪费/噪音问题，
+      非安全边界），按事件自带 headSha 继续。单元测试见
+      `gitlab-trigger.test.ts` 的 `EVENT-012` describe 块（4 用例）。跟踪见
+      GitHub Issue [#111](https://github.com/CodesSentinels/ai-reviewer/issues/111)，
+      实现 PR [#113](https://github.com/CodesSentinels/ai-reviewer/pull/113)。
+      ⚠️ 仅 mock 单元/集成测试验证，未在真实 GitLab 环境验证。
+- [x] `EVENT-013` MR 自动审查幂等键使用
       `gitlab:{project_id}:{mr_iid}:head:{head_sha}`，并与 summary note 中的
       reviewed SHA marker 一起判断；不得依赖未明确进入 `TRIGGER_PAYLOAD` 的
-      Webhook Header。`buildMrIdempotencyKey()` 已实现格式生成，但与 summary
-      note marker 的比对属于 `STATE-005`，尚未接入，不得勾选完成。跟踪见
-      Issue [#111](https://github.com/CodesSentinels/ai-reviewer/issues/111)。
+      Webhook Header。新增 `src/gitlab-mr-idempotency.ts`
+      的 `hasHeadBeenReviewed()`，复用 `review.ts` 已在维护的 summary note
+      `commit_ids_reviewed` marker（不新建独立存储）判断 headSha 是否已审查
+      过，命中则跳过。单元测试见 `gitlab-mr-idempotency.test.ts`（5 用例）+
+      `gitlab-trigger.test.ts` 的 `EVENT-013` describe 块（3 用例）。跟踪见
+      Issue [#111](https://github.com/CodesSentinels/ai-reviewer/issues/111)，
+      实现 PR [#113](https://github.com/CodesSentinels/ai-reviewer/pull/113)。
+      ⚠️ 仅 mock 单元/集成测试验证，未在真实 GitLab 环境验证。
 
 ### 6.3 Note Hook
 
@@ -418,9 +430,11 @@
 > 状态仍为 open，将在 `develop` 合回 `main` 时由 PR #73 的 `Closes #66` 关键词自
 > 动关闭。交付 `src/gitlab-note-hook-rules.ts`（`isSelfNote()`/
 > `buildNoteIdempotencyKey()`），命令语法解析确认可直接复用现有
-> `src/commands/parser.ts`（`EVENT-019`，无需改动）。`isSelfNote()`/
-> `buildNoteIdempotencyKey()` 同样只是纯函数，尚未接入 `gitlab-trigger.ts` 的实
-> 际调用路径。
+> `src/commands/parser.ts`（`EVENT-019`，无需改动）。`isSelfNote()` 已接入
+> `gitlab-trigger.ts`；`buildNoteIdempotencyKey()` 的记账存储由 Issue
+> [#111](https://github.com/CodesSentinels/ai-reviewer/issues/111)（实现 PR
+> [#113](https://github.com/CodesSentinels/ai-reviewer/pull/113)）接入，见下方
+> `EVENT-020`/`EVENT-021` 状态说明。
 
 - [x] `EVENT-014` 支持 MR 顶层 note 命令。
 - [x] `EVENT-015` 支持 discussion note/reply 命令和对话上下文。
@@ -429,16 +443,28 @@
 - [x] `EVENT-018` 忽略 reviewer/PAT 账号自己的 note。
 - [x] `EVENT-019` 不符合严格命令语法的文本不触发命令或模型（复用
       `commands/parser.ts`，见 `gitlab-note-hook-parser-reuse.test.ts`）。
-- [ ] `EVENT-020` Note Hook 幂等键固定为
+- [x] `EVENT-020` Note Hook 幂等键固定为
       `gitlab:{project_id}:{mr_iid}:note:{note_id}:create`；只使用
       `TRIGGER_PAYLOAD` body 中可验证的字段，不假定 job 能读取
-      `Idempotency-Key`、`X-Gitlab-Event-UUID` 等 Webhook Header。
-      `buildNoteIdempotencyKey()` 已实现格式生成，与 marker 存储的对接属于
-      `STATE-005`，尚未接入，不得勾选完成。跟踪见 Issue
-      [#111](https://github.com/CodesSentinels/ai-reviewer/issues/111)。
-- [ ] `EVENT-021` 重复 webhook 投递不得重复调用模型或重复回复。依赖
-      `EVENT-020`/`STATE-*` 幂等存储接入，尚未完成。跟踪见 Issue
-      [#111](https://github.com/CodesSentinels/ai-reviewer/issues/111)。
+      `Idempotency-Key`、`X-Gitlab-Event-UUID` 等 Webhook Header。新增
+      `src/gitlab-note-idempotency.ts`（`hasNoteBeenProcessed()`/
+      `markNoteAsProcessed()`），用独立记账 note（不复用 summary note，避免被
+      `codeReview()` 整体重写覆盖）存储已处理键，配套两个新 marker
+      `noteHookMarkersStart`/`noteHookMarkersEnd`（`state-markers.ts`）。只对
+      确实 @ 了 bot 的 note 记账（复用 dispatcher 自己的 `parse()`/
+      `resolveBotMentions()` 判断触发条件）。单元测试见
+      `gitlab-note-idempotency.test.ts`（13 用例）。跟踪见 Issue
+      [#111](https://github.com/CodesSentinels/ai-reviewer/issues/111)，实现
+      PR [#113](https://github.com/CodesSentinels/ai-reviewer/pull/113)。
+      ⚠️ 仅 mock 单元/集成测试验证，未在真实 GitLab 环境验证。
+- [x] `EVENT-021` 重复 webhook 投递不得重复调用模型或重复回复。
+      `gitlab-trigger.ts` 在 `runOrchestrator()` 之前查询 `EVENT-020` 的记账
+      note，命中则提前 return（不调模型、不回复），成功完成后才记账。单元
+      测试见 `gitlab-trigger.test.ts` 的 `EVENT-020/021` describe 块（3 用
+      例）。跟踪见 Issue
+      [#111](https://github.com/CodesSentinels/ai-reviewer/issues/111)，实现
+      PR [#113](https://github.com/CodesSentinels/ai-reviewer/pull/113)。
+      ⚠️ 仅 mock 单元/集成测试验证，未在真实 GitLab 环境验证。
 
 ---
 
@@ -701,11 +727,14 @@
 - [x] `STATE-002` GitHub 保留 PR body/summary/review thread marker。
 - [x] `STATE-003` GitLab MR description 保存 pause/resume marker。
 - [x] `STATE-004` GitLab summary note 保存 reviewed SHA marker。
-- [ ] `STATE-005` GitLab reviewer note 保存已处理 Note Hook 幂等键 marker；自动
-      MR 审查继续使用 summary note 中的 reviewed SHA marker。Issue #108
-      （`STATE-001~009`）明确标注本项"属于 §6 领地"未认领；跟踪见 Issue
-      [#111](https://github.com/CodesSentinels/ai-reviewer/issues/111)（连同
-      `EVENT-012/013/020/021` 一并跟踪，暂无实现 PR）。
+- [x] `STATE-005` GitLab reviewer note 保存已处理 Note Hook 幂等键 marker；自动
+      MR 审查继续使用 summary note 中的 reviewed SHA marker。前半句由
+      `src/gitlab-note-idempotency.ts`（独立记账 note）实现；后半句由
+      `src/gitlab-mr-idempotency.ts` 的 `hasHeadBeenReviewed()` 实现（直接复用
+      既有 `STATE-004` marker，未新建存储）。跟踪见 Issue
+      [#111](https://github.com/CodesSentinels/ai-reviewer/issues/111)，实现
+      PR [#113](https://github.com/CodesSentinels/ai-reviewer/pull/113)。
+      ⚠️ 仅 mock 单元/集成测试验证，未在真实 GitLab 环境验证。
 - [x] `STATE-006` marker 和幂等键包含 `github:` 或 `gitlab:` 命名空间。
 - [x] `STATE-007` 禁止通过相同 commit SHA 合并 GitHub PR 和 GitLab MR 的任务状态
       。

@@ -19,6 +19,7 @@ import unknownEvent from './fixtures/gitlab-unknown-event.json'
 import noteNonCreate from './fixtures/gitlab-note-hook-non-create.json'
 import noteSystem from './fixtures/gitlab-note-hook-system.json'
 import noteNonMr from './fixtures/gitlab-note-hook-non-mr.json'
+import noteToplevel from './fixtures/gitlab-note-hook-toplevel.json'
 
 const fsState = {readFileSync: jest.fn<(...a: any[]) => string>()}
 // 只替换 readFileSync，其余原样透传。
@@ -46,8 +47,36 @@ jest.mock('../src/tokenizer', () => ({getTokenCount: () => 0}))
 // 凭据自检会真的调 Users.showCurrentUser()，必须 mock 掉，
 // 否则测试会朝 gitlab.com 发真实请求
 const mockUsers = {showCurrentUser: jest.fn<() => Promise<any>>()}
+// EVENT-012 陈旧检查会调 MergeRequests.show() 重新读取当前 HEAD；不 mock 时
+// 直接抛错，恰好落入「读取失败→放行」分支，掩盖了「读取成功→比较结果」这条
+// 真正要测的路径，所以这里显式给出可控的默认返回值。
+const mockMergeRequests = {show: jest.fn<(...a: any[]) => Promise<any>>()}
 jest.mock('@gitbeaker/rest', () => ({
-  Gitlab: jest.fn().mockImplementation(() => ({Users: mockUsers}))
+  Gitlab: jest.fn().mockImplementation(() => ({Users: mockUsers, MergeRequests: mockMergeRequests}))
+}))
+
+// EVENT-020/021 幂等账本的存储机制（gitlab-note-idempotency.ts）已有独立单元
+// 测试覆盖其自身的读写正确性；这里只关心 gitlab-trigger.ts 有没有在正确的
+// 位置调用它、参数对不对、命中时是否真的短路——不需要真的经过
+// GitLabPlatform/@gitbeaker 才能验证这件事。
+const noteIdempotencyState = {
+  hasNoteBeenProcessed: jest.fn<(...a: any[]) => Promise<boolean>>(),
+  markNoteAsProcessed: jest.fn<(...a: any[]) => Promise<void>>()
+}
+jest.mock('../src/gitlab-note-idempotency', () => ({
+  hasNoteBeenProcessed: (...a: any[]) => noteIdempotencyState.hasNoteBeenProcessed(...a),
+  markNoteAsProcessed: (...a: any[]) => noteIdempotencyState.markNoteAsProcessed(...a)
+}))
+
+// EVENT-013 幂等判断的读取机制（gitlab-mr-idempotency.ts）已有独立单元测试
+// 覆盖其自身的 marker 解析正确性；这里同样只关心 gitlab-trigger.ts 有没有在
+// EVENT-012 陈旧检查之后、runOrchestrator 之前调用它、参数对不对、命中时是否
+// 真的短路。
+const mrIdempotencyState = {
+  hasHeadBeenReviewed: jest.fn<(...a: any[]) => Promise<boolean>>()
+}
+jest.mock('../src/gitlab-mr-idempotency', () => ({
+  hasHeadBeenReviewed: (...a: any[]) => mrIdempotencyState.hasHeadBeenReviewed(...a)
 }))
 
 async function runTrigger(): Promise<void> {
@@ -63,11 +92,27 @@ describe('gitlab-trigger.ts run()', () => {
 
   beforeEach(() => {
     jest.clearAllMocks()
+    // clearAllMocks 只清 mock.calls，不清 mockResolvedValue/mockRejectedValue
+    // 配置的实现；EVENT-012/013 用例会显式给 mockMergeRequests.show 配置返回值，
+    // 不在这里 mockReset() 的话，那份配置会原样"泄漏"进文件里排在它们之后的
+    // 用例（如「身份自检」），让那些原本依赖"调用 MergeRequests 会失败"这个
+    // 前提的用例意外变成"调用成功"，进而在没被完整 mock 的下游 codeReview 里
+    // 产生这里根本不关心的 errorSpy/exitCode 噪音。
+    mockMergeRequests.show.mockReset()
     delete process.env.TRIGGER_PAYLOAD
     // GitLabPlatform 初始化需要 token
     process.env.GITLAB_PAT = 'glpat-test-token'
     delete process.env.AI_REVIEWER_BOT_GITLAB_LOGIN
     mockUsers.showCurrentUser.mockResolvedValue({username: 'ai-reviewer-bot'})
+    // 故意不给 mockMergeRequests.show 配置默认返回值：本文件的既有用例（EVENT-012
+    // 之外）依赖的是「@gitbeaker/rest 没被完整 mock、调用 MergeRequests 会失败」这个
+    // 原有前提本身被下游（codeReview / dispatcher）优雅吞掉，不产生 errorSpy/exitCode。
+    // 只在 EVENT-012/013 describe 块内部按需显式配置 resolve/reject，避免影响其余用例。
+    // 默认"未处理过"，让不关心幂等这条线的既有用例保持原有行为
+    noteIdempotencyState.hasNoteBeenProcessed.mockResolvedValue(false)
+    noteIdempotencyState.markNoteAsProcessed.mockResolvedValue(undefined)
+    // 默认"未审查过"，让不关心 EVENT-013 这条线的既有用例保持原有行为
+    mrIdempotencyState.hasHeadBeenReviewed.mockResolvedValue(false)
     process.exitCode = undefined
     logSpy = jest.spyOn(console, 'log').mockImplementation(() => {})
     warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {})
@@ -212,6 +257,205 @@ describe('gitlab-trigger.ts run()', () => {
     expect(errorSpy).not.toHaveBeenCalled()
     expect(process.exitCode).toBeUndefined()
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('is not MergeRequest'))
+  })
+
+  // ─── EVENT-012：MR HEAD 陈旧检查 ─────────────────────────────────────────
+
+  describe('EVENT-012：MR HEAD 陈旧检查', () => {
+    /**
+     * 这四个用例只关心「陈旧判断本身对不对」，不断言 codeReview 之后能否
+     * 全须全尾跑完——本文件刻意不完整 mock @gitbeaker/rest 的全部 resource
+     * （见文件头说明），"未陈旧"分支之后 codeReview 会继续调用其他没配置的
+     * API 而失败，那是本文件既有的、与 EVENT-012 无关的 mocking 缺口，
+     * 完整平台行为覆盖属于 gitlab-trigger-dispatch.integration.test.ts。
+     */
+    test('重新读取到的 HEAD 与事件一致 → 不判定为陈旧，不提前跳过', async () => {
+      process.env.TRIGGER_PAYLOAD = '/tmp/payload.json'
+      fsState.readFileSync.mockReturnValue(JSON.stringify(mrOpen))
+      mockMergeRequests.show.mockResolvedValue({
+        iid: 7,
+        title: 'MR title',
+        description: 'MR body',
+        state: 'opened',
+        target_branch: 'main',
+        source_branch: 'feature',
+        diff_refs: {base_sha: 'base-sha-0001', head_sha: 'head-sha-0001'},
+        author: {username: 'alice'}
+      })
+
+      await runTrigger()
+
+      expect(mockMergeRequests.show).toHaveBeenCalledWith('octo/demo', 7)
+      const logged = logSpy.mock.calls.map(c => String(c[0])).join('\n')
+      expect(logged).not.toContain('skipping stale delivery')
+    })
+
+    test('重新读取到的 HEAD 已经变化 → 跳过，不进入编排层', async () => {
+      process.env.TRIGGER_PAYLOAD = '/tmp/payload.json'
+      fsState.readFileSync.mockReturnValue(JSON.stringify(mrOpen))
+      mockMergeRequests.show.mockResolvedValue({
+        iid: 7,
+        title: 'MR title',
+        description: 'MR body',
+        state: 'opened',
+        target_branch: 'main',
+        source_branch: 'feature',
+        diff_refs: {base_sha: 'base-sha-0001', head_sha: 'head-sha-9999'},
+        author: {username: 'alice'}
+      })
+
+      await runTrigger()
+
+      // 判定为陈旧后提前 return，不会走到 runOrchestrator/codeReview，
+      // 这条路径本身不触碰任何未 mock 的 API，因此可以放心断言干净退出。
+      expect(errorSpy).not.toHaveBeenCalled()
+      expect(process.exitCode).toBeUndefined()
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'event=head-sha-0001 current=head-sha-9999) — skipping stale delivery (EVENT-012)'
+        )
+      )
+    })
+
+    test('重新读取 HEAD 失败 → 记警告但不 fail closed，不提前跳过', async () => {
+      process.env.TRIGGER_PAYLOAD = '/tmp/payload.json'
+      fsState.readFileSync.mockReturnValue(JSON.stringify(mrOpen))
+      mockMergeRequests.show.mockRejectedValue(new Error('502 Bad Gateway'))
+
+      await runTrigger()
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('failed to re-check current MR HEAD before review')
+      )
+      const logged = logSpy.mock.calls.map(c => String(c[0])).join('\n')
+      expect(logged).not.toContain('skipping stale delivery')
+    })
+
+    test('评论类事件不触发 HEAD 陈旧检查', async () => {
+      process.env.TRIGGER_PAYLOAD = '/tmp/payload.json'
+      fsState.readFileSync.mockReturnValue(JSON.stringify(noteToplevel))
+
+      await runTrigger()
+
+      // dispatcher.ts 自己也会查一次 head/base sha + 作者（与陈旧检查无关），
+      // 这里断言只发生了那一次，证明 EVENT-012 没有对评论事件多查一次陈旧账本。
+      expect(mockMergeRequests.show).toHaveBeenCalledTimes(1)
+      const logged = logSpy.mock.calls.map(c => String(c[0])).join('\n')
+      expect(logged).not.toContain('skipping stale delivery')
+    })
+  })
+
+  // ─── EVENT-013：MR 自动审查幂等 ─────────────────────────────────────────
+
+  describe('EVENT-013：MR 自动审查幂等', () => {
+    beforeEach(() => {
+      // 让 EVENT-012 陈旧检查判定为「未陈旧」，走到 EVENT-013 这一步
+      mockMergeRequests.show.mockResolvedValue({
+        iid: 7,
+        title: 'MR title',
+        description: 'MR body',
+        state: 'opened',
+        target_branch: 'main',
+        source_branch: 'feature',
+        diff_refs: {base_sha: 'base-sha-0001', head_sha: 'head-sha-0001'},
+        author: {username: 'alice'}
+      })
+    })
+
+    test('未审查过 → 不跳过，按正确参数查询过一次', async () => {
+      process.env.TRIGGER_PAYLOAD = '/tmp/payload.json'
+      fsState.readFileSync.mockReturnValue(JSON.stringify(mrOpen))
+      mrIdempotencyState.hasHeadBeenReviewed.mockResolvedValue(false)
+
+      await runTrigger()
+
+      expect(mrIdempotencyState.hasHeadBeenReviewed).toHaveBeenCalledWith(
+        'octo',
+        'demo',
+        7,
+        'head-sha-0001'
+      )
+      const logged = logSpy.mock.calls.map(c => String(c[0])).join('\n')
+      expect(logged).not.toContain('already reviewed')
+    })
+
+    test('已审查过 → 跳过，不进入编排层', async () => {
+      process.env.TRIGGER_PAYLOAD = '/tmp/payload.json'
+      fsState.readFileSync.mockReturnValue(JSON.stringify(mrOpen))
+      mrIdempotencyState.hasHeadBeenReviewed.mockResolvedValue(true)
+
+      await runTrigger()
+
+      expect(errorSpy).not.toHaveBeenCalled()
+      expect(process.exitCode).toBeUndefined()
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'headSha head-sha-0001 already reviewed (idempotency key ' +
+            'gitlab:42:7:head:head-sha-0001) — skipping duplicate delivery (EVENT-013)'
+        )
+      )
+    })
+
+    test('评论类事件不触发 EVENT-013 检查', async () => {
+      process.env.TRIGGER_PAYLOAD = '/tmp/payload.json'
+      fsState.readFileSync.mockReturnValue(JSON.stringify(noteToplevel))
+
+      await runTrigger()
+
+      expect(mrIdempotencyState.hasHeadBeenReviewed).not.toHaveBeenCalled()
+    })
+  })
+
+  // ─── EVENT-020/021：Note Hook 幂等 ───────────────────────────────────────
+
+  describe('EVENT-020/021：Note Hook 幂等', () => {
+    test('首次投递（未处理过）→ 正常走完编排层，成功后记账', async () => {
+      process.env.TRIGGER_PAYLOAD = '/tmp/payload.json'
+      fsState.readFileSync.mockReturnValue(JSON.stringify(noteToplevel))
+      noteIdempotencyState.hasNoteBeenProcessed.mockResolvedValue(false)
+
+      await runTrigger()
+
+      expect(noteIdempotencyState.hasNoteBeenProcessed).toHaveBeenCalledWith(
+        'octo',
+        'demo',
+        7,
+        'gitlab:42:7:note:5001:create'
+      )
+      // 未失败（onFailed 没被触发）才应该记账
+      expect(process.exitCode).not.toBe(1)
+      expect(noteIdempotencyState.markNoteAsProcessed).toHaveBeenCalledWith(
+        'octo',
+        'demo',
+        7,
+        'gitlab:42:7:note:5001:create'
+      )
+    })
+
+    test('重复投递（已处理过）→ 直接跳过，不记第二次账', async () => {
+      process.env.TRIGGER_PAYLOAD = '/tmp/payload.json'
+      fsState.readFileSync.mockReturnValue(JSON.stringify(noteToplevel))
+      noteIdempotencyState.hasNoteBeenProcessed.mockResolvedValue(true)
+
+      await runTrigger()
+
+      expect(errorSpy).not.toHaveBeenCalled()
+      expect(process.exitCode).toBeUndefined()
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining('already processed (idempotency key gitlab:42:7:note:5001:create)')
+      )
+      expect(noteIdempotencyState.markNoteAsProcessed).not.toHaveBeenCalled()
+    })
+
+    test('MR 事件（非评论类）不触发幂等检查', async () => {
+      process.env.TRIGGER_PAYLOAD = '/tmp/payload.json'
+      fsState.readFileSync.mockReturnValue(JSON.stringify(mrOpen))
+
+      await runTrigger()
+
+      expect(noteIdempotencyState.hasNoteBeenProcessed).not.toHaveBeenCalled()
+      expect(noteIdempotencyState.markNoteAsProcessed).not.toHaveBeenCalled()
+    })
   })
 
   // ─── GLAPI-022/029：凭据自检 ─────────────────────────────────────────────
