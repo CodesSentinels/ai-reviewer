@@ -60,6 +60,11 @@ ai_review_trigger:
     # CI-007/008：强制全新 clone，workspace 里不会残留任何其他分支（尤其是
     # 触发这次 pipeline 的那个 MR 分支）的内容。
     GIT_STRATEGY: clone
+    # CI-013 的祖先链校验需要完整历史才能可靠判断——GitLab 默认浅克隆
+    # （实测 depth=20），SOURCE_SHA 稍微老一点就会因为本地历史不全被误判为
+    # "不是祖先"而拒绝执行，即便它其实是。GIT_DEPTH: 0 = 不限制深度，做一次
+    # 完整 clone。
+    GIT_DEPTH: '0'
   resource_group: ai-reviewer-mvp
   timeout: 10m
   retry:
@@ -67,13 +72,24 @@ ai_review_trigger:
     when: [runner_system_failure, stuck_or_timeout_failure]
   script:
     - test -f dist/gitlab-trigger/SOURCE_SHA
-    # CI-013：bundle 记录的 source commit 必须等于这次 job 自己的
-    # CI_COMMIT_SHA（即 protected default branch 上的当前 commit），
-    # 拒绝执行任何来源不明或陈旧的 bundle。
+    # CI-013：bundle 记录的 source commit 必须是这次 job 自己的
+    # CI_COMMIT_SHA（即 protected default branch 上的当前 commit）的祖先——
+    # 不能要求完全相等：`git rev-parse HEAD` 写入 SOURCE_SHA 时那个 commit
+    # 还不包含这次写入本身，随后无论是"重新打包 dist"的单独提交，还是
+    # GitHub 侧 PR 合并产生的 merge commit，都会让 CI_COMMIT_SHA 与写入时
+    # 的 HEAD 不再相等——这是任何"先算 HEAD 再提交"的流程都绕不开的结构性
+    # 现实，不是构建疏漏。祖先链校验保留的安全属性是：SOURCE_SHA 必须是这条
+    # 受保护分支真实历史上的一个 commit（挡住伪造/来自其他分支的 SHA），
+    # 但不要求它是刚好等于当前 HEAD 那一个。
     - |
       RECORDED_SHA=$(cat dist/gitlab-trigger/SOURCE_SHA)
-      if [ "$RECORDED_SHA" != "$CI_COMMIT_SHA" ]; then
-        echo "REFUSED: dist/gitlab-trigger/SOURCE_SHA ($RECORDED_SHA) != CI_COMMIT_SHA ($CI_COMMIT_SHA) — refusing to run untrusted/stale bundle" >&2
+      if ! git cat-file -e "${RECORDED_SHA}^{commit}" 2>/dev/null; then
+        echo "REFUSED: dist/gitlab-trigger/SOURCE_SHA ($RECORDED_SHA) is not a known commit in this repository's history — refusing to run untrusted/stale bundle" >&2
         exit 1
       fi
+      if ! git merge-base --is-ancestor "$RECORDED_SHA" "$CI_COMMIT_SHA"; then
+        echo "REFUSED: dist/gitlab-trigger/SOURCE_SHA ($RECORDED_SHA) is not an ancestor of CI_COMMIT_SHA ($CI_COMMIT_SHA) — refusing to run untrusted/stale bundle" >&2
+        exit 1
+      fi
+      echo "ok: dist/gitlab-trigger/SOURCE_SHA ($RECORDED_SHA) is a real ancestor of CI_COMMIT_SHA ($CI_COMMIT_SHA)"
     - node dist/gitlab-trigger/index.js

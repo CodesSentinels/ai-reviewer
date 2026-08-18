@@ -115,6 +115,30 @@ describe('CI-013: ai_review_trigger 校验 bundle 来源', () => {
     expect(script).toContain('dist/gitlab-trigger/SOURCE_SHA')
     expect(script).toContain('CI_COMMIT_SHA')
   })
+
+  /**
+   * 2026-08-18 真实 GitLab 环境验证（Issue #118）暴露：`[ "$RECORDED_SHA" !=
+   * "$CI_COMMIT_SHA" ]` 精确相等校验永远无法自洽——`git rev-parse HEAD` 写入
+   * SOURCE_SHA 时那个 commit 还不包含这次写入本身，随后无论是单独的"重新打包
+   * dist"提交，还是 PR 合并产生的 merge commit，都会让 CI_COMMIT_SHA 与写入
+   * 时的 HEAD 不再相等，导致这个 job 在受保护分支上永远拒绝执行。改为祖先链
+   * 校验（`git merge-base --is-ancestor`），保留"必须是真实历史上的 commit，
+   * 挡住伪造/其他分支的 SHA"这条安全属性，但不再要求恰好等于当前 HEAD。
+   */
+  test('用祖先链校验（git merge-base --is-ancestor）而不是精确字符串相等', () => {
+    const script = scriptOf(job(TRIGGER))
+    expect(script).toContain('git merge-base --is-ancestor')
+    expect(script).not.toMatch(/\["\$RECORDED_SHA"\s*!=\s*"\$CI_COMMIT_SHA"\]/)
+  })
+
+  test('先校验 RECORDED_SHA 确实是仓库里的真实 commit，再做祖先链判断', () => {
+    const script = scriptOf(job(TRIGGER))
+    expect(script).toContain('git cat-file -e')
+  })
+
+  test('GIT_DEPTH 设为 0（完整历史），否则浅克隆会让祖先链校验误判', () => {
+    expect(job(TRIGGER).variables?.GIT_DEPTH).toBe('0')
+  })
 })
 
 describe('CI-009: ai_review_trigger 配置 resource_group', () => {
