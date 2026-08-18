@@ -285,6 +285,100 @@ export const codeReview = async (
     return
   }
 
+  // ── REVIEW-003：只发布针对最新 HEAD 的结果 ──────────────────────────────
+  //
+  // 基线用「审查开始时读到的 HEAD」而不是事件里的：评论触发的运行 execCtx.headSha
+  // 固定为空（见 github-execution-context.ts），拿事件值做基线会让 @ai-reviewer
+  // review 永远发不出结果；而且真正要防的是「分析跑了几分钟，期间又推了新 commit」，
+  // 那正是分析基线与当前 HEAD 的差异。
+  const reviewedHeadSha = pr.head.sha
+
+  /**
+   * 写入阶段的准入判断。返回 false 表示本次结果已作废，调用方必须放弃全部写入。
+   *
+   * 拦的是**全部**写入而不只是行级评论：危害最大的恰恰不是行级评论（GitHub 会把
+   * 它标成 Outdated，本就是历史记录），而是 reviewed SHA marker——它记的是现查的
+   * 新 SHA，而分析内容来自旧 SHA，等于宣称「新 HEAD 已审过」，下次增量审查会跳过
+   * 这段，发现被永久吞掉。摘要与 release notes 同理，都是 replace 语义。
+   */
+  interface HeadCheck {
+    fresh: boolean
+    currentHeadSha: string
+    reason: string
+  }
+
+  /**
+   * 写入前的准入判断。返回 fresh=false 表示本次结果已作废，调用方必须放弃写入。
+   *
+   * **查询失败一律判为不新鲜（fail closed）。** 早先这里返回「放行」，理由是
+   * 「一次 API 抖动不该让整轮审查白跑」——那是错的：REVIEW-003 的要求是「旧任务
+   * 不得写摘要或行级评论」，读不到当前 HEAD 就等于无法确认自己是不是旧任务，
+   * 此时继续写入正是它要防的事。整个代码库在权限、幂等、归属判定上都是 fail
+   * closed，唯独这里 fail open 说不通。
+   *
+   * 返回 currentHeadSha 供调用方直接用，避免检测到 stale 后再查一次。
+   */
+  const ensureHeadFresh = async (phase: string): Promise<HeadCheck> => {
+    let currentHeadSha = ''
+    try {
+      const fresh = await getPlatform().getChangeRequest(prOwner, prRepo, execCtx.changeRequestId)
+      currentHeadSha = fresh.headSha
+    } catch (e) {
+      getLogger().warning(
+        `[review-003] cannot confirm current HEAD before ${phase} (${String(e)}) — ` +
+          'discarding results rather than risking a stale write'
+      )
+      return {fresh: false, currentHeadSha: '', reason: '无法确认当前 HEAD'}
+    }
+
+    const check = isHeadStale(reviewedHeadSha, currentHeadSha)
+    if (!check.stale) return {fresh: true, currentHeadSha, reason: ''}
+
+    getLogger().warning(
+      `[review-003] HEAD moved from ${check.eventHeadSha} to ${check.currentHeadSha} — ` +
+        `discarding results before ${phase}`
+    )
+    return {fresh: false, currentHeadSha, reason: 'HEAD 已变化'}
+  }
+
+  /**
+   * 发布「本次结果已作废」提示（幂等）。
+   *
+   * **只写自己的 marker 区块，绝不碰摘要评论。** 早先这里还会去读改写摘要评论
+   * 来清掉进度横幅——那正是 REVIEW-003 要防的事：旧任务读改写共享摘要，可能把
+   * 新任务刚写好的结果覆盖掉。进度横幅的问题改为从源头避免：写它之前就先检查，
+   * 陈旧任务根本不会留下横幅。
+   */
+  const publishInvalidationNotice = async (currentHeadSha: string): Promise<void> => {
+    const body =
+      `> ⚠️ 本次审查的结果已作废：分析基于 \`${reviewedHeadSha.slice(0, 8)}\`，` +
+      `发布前 HEAD 已变为 \`${currentHeadSha.slice(0, 8)}\`。\n>\n` +
+      '> 针对新 HEAD 的审查会自动运行；本条提示会被下一次结果覆盖。\n'
+    const delivered = await commenter.comment(body, stateMarker('reviewInvalidated'), 'replace')
+    if (!delivered) {
+      // comment() 内部会吞异常，只能靠返回值判断（同 REVIEW-014 的教训）
+      getLogger().warning('[review-003] failed to publish invalidation notice')
+    }
+  }
+
+  /**
+   * 放弃本次运行。
+   *
+   * 只有**确认 HEAD 变了**才发作废提示。查询失败时不发：那种情况下没有任何证据
+   * 表明结果真的过期，贸然贴一条「已作废」反而会误导用户（新审查未必会来）。
+   * 此时只记 error 级日志，让运维能查到这轮为什么没有产出。
+   */
+  const abortStaleRun = async (check: HeadCheck): Promise<void> => {
+    if (check.currentHeadSha === '') {
+      getLogger().error(
+        `[review-003] discarded this run: ${check.reason}. No invalidation notice was posted ` +
+          'because there is no evidence the results are actually outdated.'
+      )
+      return
+    }
+    await publishInvalidationNotice(check.currentHeadSha)
+  }
+
   // ==================== 填充 PR 基本信息 ====================
   const inputs: Inputs = new Inputs()
   inputs.title = pr.title
@@ -628,6 +722,14 @@ ${
 }
 `
 
+  // REVIEW-003 第一道：进度横幅本身就是对**共享摘要评论**的一次 replace 写入，
+  // 陈旧任务写它同样会覆盖新任务的结果。所以检查必须在它之前，而不是等到阶段三。
+  const beforeBanner = await ensureHeadFresh('in-progress banner')
+  if (!beforeBanner.fresh) {
+    await abortStaleRun(beforeBanner)
+    return
+  }
+
   // 更新摘要评论为"审查进行中"状态
   const inProgressSummarizeCmt = commenter.addInProgressStatus(existingSummarizeCmtBody, statusMsg)
 
@@ -669,74 +771,6 @@ ${
       getLogger().warning(`${label} failed: ${e instanceof Error ? e.message : String(e)}`)
       degradations.push(`${label}未完成（模型调用失败，详情见运行日志）`)
       return null
-    }
-  }
-
-  // ── REVIEW-003：只发布针对最新 HEAD 的结果 ──────────────────────────────
-  //
-  // 基线用「审查开始时读到的 HEAD」而不是事件里的：评论触发的运行 execCtx.headSha
-  // 固定为空（见 github-execution-context.ts），拿事件值做基线会让 @ai-reviewer
-  // review 永远发不出结果；而且真正要防的是「分析跑了几分钟，期间又推了新 commit」，
-  // 那正是分析基线与当前 HEAD 的差异。
-  const reviewedHeadSha = pr.head.sha
-
-  /**
-   * 写入阶段的准入判断。返回 false 表示本次结果已作废，调用方必须放弃全部写入。
-   *
-   * 拦的是**全部**写入而不只是行级评论：危害最大的恰恰不是行级评论（GitHub 会把
-   * 它标成 Outdated，本就是历史记录），而是 reviewed SHA marker——它记的是现查的
-   * 新 SHA，而分析内容来自旧 SHA，等于宣称「新 HEAD 已审过」，下次增量审查会跳过
-   * 这段，发现被永久吞掉。摘要与 release notes 同理，都是 replace 语义。
-   */
-  const ensureHeadFresh = async (phase: string): Promise<boolean> => {
-    let currentHeadSha = ''
-    try {
-      const fresh = await getPlatform().getChangeRequest(prOwner, prRepo, execCtx.changeRequestId)
-      currentHeadSha = fresh.headSha
-    } catch (e) {
-      // 读不到当前 HEAD 时不阻断：宁可发一次可能陈旧的结果，也不因为一次 API
-      // 抖动就让整轮审查白跑
-      getLogger().warning(`[review-003] failed to re-read HEAD before ${phase}: ${String(e)}`)
-      return true
-    }
-
-    const check = isHeadStale(reviewedHeadSha, currentHeadSha)
-    if (!check.stale) return true
-
-    getLogger().warning(
-      `[review-003] HEAD moved from ${check.eventHeadSha} to ${check.currentHeadSha} — ` +
-        `discarding results before ${phase}`
-    )
-    return false
-  }
-
-  /**
-   * 发布「本次结果已作废」提示（幂等）。
-   *
-   * 用固定 marker + replace 模式：同一个 PR 上连续几次被超越时只留一条，不堆积。
-   * 同时清掉进度横幅——否则 PR 上会一直挂着「Currently reviewing...」。
-   */
-  const publishInvalidationNotice = async (currentHeadSha: string): Promise<void> => {
-    const body =
-      `> ⚠️ 本次审查的结果已作废：分析基于 \`${reviewedHeadSha.slice(0, 8)}\`，` +
-      `但发布前 HEAD 已变为 \`${currentHeadSha.slice(0, 8)}\`。\n>\n` +
-      '> 针对新 HEAD 的审查会自动运行；本条提示会被下一次结果覆盖。\n'
-    try {
-      await commenter.comment(body, stateMarker('reviewInvalidated'), 'replace')
-    } catch (e) {
-      getLogger().warning(`[review-003] failed to publish invalidation notice: ${String(e)}`)
-    }
-    // 清掉进度横幅：审查已作废，不能让 PR 上一直显示「进行中」
-    try {
-      const existing = await commenter.findCommentWithTag(summarizeTag(), pr.number)
-      if (existing != null) {
-        const cleaned = commenter.removeInProgressStatus(existing.body)
-        if (cleaned !== existing.body) {
-          await commenter.comment(cleaned, summarizeTag(), 'replace')
-        }
-      }
-    } catch (e) {
-      getLogger().warning(`[review-003] failed to clear in-progress banner: ${String(e)}`)
     }
   }
 
@@ -863,13 +897,6 @@ ${filename}: ${summary}
 
   const botName = options.botName
 
-  // REVIEW-003 第一道：release notes 是分析之后的第一处持久化写入
-  if (!(await ensureHeadFresh('release notes'))) {
-    const fresh = await getPlatform().getChangeRequest(prOwner, prRepo, execCtx.changeRequestId)
-    await publishInvalidationNotice(fresh.headSha)
-    return
-  }
-
   // 生成发布说明并写入 PR 描述
   if (options.disableReleaseNotes === false) {
     const releaseNotesResponse =
@@ -878,6 +905,13 @@ ${filename}: ${summary}
     if (releaseNotesResponse === '') {
       getLogger().info('release notes: nothing obtained from openai')
     } else {
+      // REVIEW-003 第二道：**紧贴写入**。放在模型调用之前等于没挡——
+      // 生成 release notes 本身就是一次重量模型调用，期间完全可能又推了新 commit。
+      const beforeNotes = await ensureHeadFresh('release notes')
+      if (!beforeNotes.fresh) {
+        await abortStaleRun(beforeNotes)
+        return
+      }
       let message = `### Summary by ${botName}\n\n`
       message += releaseNotesResponse
       try {
@@ -944,14 +978,6 @@ ${
   // 提到函数作用域：最终摘要评论在审查阶段**之后**发布，需要读这份失败清单
   // 来生成「本次审查不完整」提示（REVIEW-006）
   const reviewsFailed: string[] = []
-
-  // REVIEW-003 第二道：阶段三通常要几分钟，期间完全可能又推了新 commit。
-  // 一处判断挡不住整条流水线，按**写入阶段**各设一道。
-  if (!(await ensureHeadFresh('line-level review and final summary'))) {
-    const fresh = await getPlatform().getChangeRequest(prOwner, prRepo, execCtx.changeRequestId)
-    await publishInvalidationNotice(fresh.headSha)
-    return
-  }
 
   // ==================== 阶段四：逐文件代码审查 ====================
   if (!options.disableReview && runOptions.summaryOnly !== true) {
@@ -1388,6 +1414,15 @@ ${
 
 </details>
 `
+    // REVIEW-003 第三道：**阶段四跑完之后**才检查。
+    // 逐文件模型审查是整条流水线最耗时的一段（每个文件一次重量模型调用），
+    // 把门禁设在它之前等于什么都没挡——期间推的新 commit 照样会被旧结果覆盖。
+    const beforePublish = await ensureHeadFresh('line-level review')
+    if (!beforePublish.fresh) {
+      await abortStaleRun(beforePublish)
+      return
+    }
+
     // 将最新的 head commit SHA 添加到已审查列表
     summarizeComment += `\n${commenter.addReviewedCommitId(existingCommitIdsBlock, pr.head.sha)}`
 
@@ -1429,6 +1464,14 @@ ${
       `\n\n> ⚠️ 本次审查不完整，共 ${incomplete.length} 项未能完成：\n>\n` +
       incomplete.map(d => `> - ${d}`).join('\n') +
       '\n>\n> 已发布的部分仍然有效；重新触发审查可以重试失败的环节。\n'
+  }
+
+  // REVIEW-003 第四道：最终摘要是最后一次写入，且是 replace 语义——
+  // 上一道之后还隔着评论提交与摘要组装，这里再确认一次
+  const beforeSummary = await ensureHeadFresh('final summary')
+  if (!beforeSummary.fresh) {
+    await abortStaleRun(beforeSummary)
+    return
   }
 
   // 发布最终的摘要评论

@@ -65,6 +65,22 @@ import type {ExecutionContext} from '../src/platform/execution-context'
  * 返回，`expect(submitReviewComments).not.toHaveBeenCalled()` 就成了恒真断言。
  * 格式见 parseReview：`起始-结束:` 后跟正文。
  */
+/**
+ * 可辨识的提示词存根。
+ *
+ * `new Prompts('', '')` 渲染出来的内容无法区分阶段，按调用序号切换 HEAD 又会
+ * 命中错误的阶段——先前那条 release notes 用例就是这么假绿的：它在 heavyBot
+ * 第 1 次调用（摘要合并）时就把 HEAD 换了，门禁放在模型调用前后都会拦。
+ */
+const taggedPrompts: any = {
+  renderSummarizeFileDiff: () => 'PROMPT_FILE_SUMMARY',
+  renderSummarizeChangesets: () => 'PROMPT_MERGE',
+  renderSummarize: () => 'PROMPT_FINAL_SUMMARY',
+  renderSummarizeReleaseNotes: () => 'PROMPT_RELEASE_NOTES',
+  renderSummarizeShort: () => 'PROMPT_SHORT',
+  renderReviewFileDiff: () => 'PROMPT_REVIEW ---new_hunk---'
+}
+
 function makeBot(): any {
   return {
     chat: jest.fn<any>(async (prompt: string) => {
@@ -233,17 +249,6 @@ describe('REVIEW-003：HEAD 变化后全拦，不只是拦行级评论', () => {
     expect(platformState.submitReviewComments).toHaveBeenCalled()
     expect(logs.join('\n')).not.toContain('[review-003] HEAD moved')
   })
-
-  test('阶段三之后才变化 → 第二道门禁拦住行级评论与最终摘要', async () => {
-    const ctx = ctxWith(OLD_HEAD)
-    // 放过第一道（release notes 之前），在第二道之前才变
-    headMovesAfter(3)
-
-    await codeReview(ctx, makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
-
-    expect(platformState.submitReviewComments).not.toHaveBeenCalled()
-    expect(logs.join('\n')).toContain('line-level review and final summary')
-  })
 })
 
 describe('REVIEW-003：基线取自审查开始时读到的 HEAD', () => {
@@ -299,36 +304,26 @@ describe('REVIEW-003：作废提示是幂等的，且清掉进度横幅', () => 
     expect(updatedIds).toContain(900)
   })
 
-  test('清掉「审查进行中」横幅，不让 PR 一直挂着进行中', async () => {
-    const ctx = ctxWith(OLD_HEAD)
-    headMovesAfter(1)
-    platformState.listComments.mockResolvedValue([
-      {
-        id: 800,
-        body: `${stateMarker('inProgressStart')}\nCurrently reviewing...\n${stateMarker(
-          'inProgressEnd'
-        )}\n\n---\n\n旧摘要\n${stateMarker('summarize')}`,
-        author: BOT
-      }
-    ])
-
-    await codeReview(ctx, makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
-
-    const summaryUpdates = platformState.updateComment.mock.calls
-      .filter((c: any[]) => c[2] === 800)
-      .map((c: any[]) => String(c[3]))
-    expect(summaryUpdates.length).toBeGreaterThan(0)
-    expect(summaryUpdates.at(-1)).not.toContain('Currently reviewing')
-    expect(summaryUpdates.at(-1)).toContain('旧摘要') // 既有摘要必须保住
+  test('不再去清进度横幅——陈旧任务根本不会写下它（从源头避免）', () => {
+    // 早先这里会读改写摘要评论来清掉横幅。那本身就是旧任务对共享摘要的一次
+    // read-modify-write，可能覆盖新任务刚写好的结果——正是 REVIEW-003 要防的。
+    // 现在改为在写横幅**之前**就检查，陈旧任务不留痕迹，也就无需清理。
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const fs = require('fs')
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const path = require('path')
+    const src: string = fs.readFileSync(path.resolve(__dirname, '../src/review.ts'), 'utf8')
+    const notice = src.slice(src.indexOf('const publishInvalidationNotice'))
+    const body = notice.slice(0, notice.indexOf('\n  }\n'))
+    expect(body).not.toContain('removeInProgressStatus')
+    expect(body).not.toContain('summarizeTag()')
   })
 })
 
-describe('REVIEW-003：读不到当前 HEAD 时不阻断', () => {
-  test('重新读取抛错 → 照常发布，只记 warning（一次 API 抖动不该让整轮白跑）', async () => {
+describe('REVIEW-003：读不到当前 HEAD 时 fail closed', () => {
+  test('重新读取抛错 → 判为不新鲜，放弃全部写入', async () => {
     const ctx = ctxWith(OLD_HEAD)
-    // 只让第 2 次调用（第一道门禁的重新读取）抛错，模拟一次瞬时抖动。
-    // 全程抛错会连带打断审查流程里其它对 getChangeRequest 的依赖，
-    // 那验的就不是「门禁不阻断」了。
+    // 第 2 次调用（第一道门禁的重新读取）抛错
     let calls = 0
     platformState.getChangeRequest.mockImplementation(async () => {
       calls += 1
@@ -338,7 +333,138 @@ describe('REVIEW-003：读不到当前 HEAD 时不阻断', () => {
 
     await codeReview(ctx, makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
 
-    expect(logs.join('\n')).toContain('failed to re-read HEAD')
+    // 早先这里返回「放行」，理由是「一次 API 抖动不该让整轮白跑」——那是 fail
+    // open：读不到当前 HEAD 就无法确认自己是不是旧任务，此时继续写入正是
+    // REVIEW-003 要防的事
+    expect(platformState.updateChangeRequestBody).not.toHaveBeenCalled()
+    expect(platformState.submitReviewComments).not.toHaveBeenCalled()
+    expect(logs.join('\n')).toContain('cannot confirm current HEAD')
+  })
+})
+
+describe('REVIEW-003：进度横幅之前就要检查', () => {
+  test('审查开始后 HEAD 已变 → 连进度横幅都不写（它也是对共享摘要的 replace）', async () => {
+    const ctx = ctxWith(OLD_HEAD)
+    headMovesAfter(1)
+
+    await codeReview(ctx, makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
+
+    // 摘要评论只应出现作废提示，不应出现「Currently reviewing」横幅
+    expect(postedText()).not.toContain('Currently reviewing')
+    expect(postedText()).toContain(stateMarker('reviewInvalidated'))
+  })
+
+  test('作废提示不去读改写摘要评论（旧任务不得覆盖新任务结果）', async () => {
+    const ctx = ctxWith(OLD_HEAD)
+    headMovesAfter(1)
+    platformState.listComments.mockResolvedValue([
+      {id: 700, body: `新任务刚写好的摘要\n${stateMarker('summarize')}`, author: BOT}
+    ])
+
+    await codeReview(ctx, makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
+
+    // 携带 summarize marker 的那条评论一次都不能被更新
+    const touchedSummary = platformState.updateComment.mock.calls.filter((c: any[]) => c[2] === 700)
+    expect(touchedSummary).toEqual([])
+  })
+})
+
+/**
+ * 门禁必须**紧贴写入**，不能只是「在某个阶段之前」。
+ *
+ * 先前那条用例用 headMovesAfter(4) 按 getChangeRequest 调用次数切换 HEAD，
+ * 而第 4 次调用正好就是当时设在阶段四之前的那道门禁——测的是那道门禁本身，
+ * 根本没模拟「模型执行期间」变化。这里改为让 bot 的 Promise 真正挂起，
+ * 在挂起期间切换平台返回的 HEAD，再释放。
+ */
+describe('REVIEW-003：耗时阶段执行期间 HEAD 变化', () => {
+  /** 让指定阶段的模型调用挂起，期间把 HEAD 换掉 */
+  function botThatMovesHeadWhileRunning(matchPrompt: (p: string) => boolean): any {
+    let moved = false
+    return {
+      chat: jest.fn<any>(async (prompt: string) => {
+        if (!moved && matchPrompt(String(prompt))) {
+          moved = true
+          // 真实的异步间隙：模型调用期间平台侧 HEAD 前进
+          await new Promise(r => setTimeout(r, 0))
+          platformState.getChangeRequest.mockResolvedValue(cr(NEW_HEAD))
+        }
+        return [String(prompt).includes('---new_hunk---') ? '2-2:\n有问题\n' : 'LGTM', {}, []]
+      })
+    }
+  }
+
+  test('逐文件审查（阶段四）执行期间推了新 commit → 行级评论与摘要都不写', async () => {
+    const ctx = ctxWith(OLD_HEAD)
+    platformState.getChangeRequest.mockResolvedValue(cr(OLD_HEAD))
+    const heavy = botThatMovesHeadWhileRunning(p => p.includes('---new_hunk---'))
+
+    await codeReview(ctx, makeBot(), heavy, makeOptions(), taggedPrompts)
+
+    expect(platformState.submitReviewComments).not.toHaveBeenCalled()
+    expect(postedText()).not.toContain(stateMarker('commitIdsStart'))
+    expect(logs.join('\n')).toContain('[review-003] HEAD moved')
+  })
+
+  test('release notes 生成期间推了新 commit → 不写 PR 描述', async () => {
+    const ctx = ctxWith(OLD_HEAD)
+    platformState.getChangeRequest.mockResolvedValue(cr(OLD_HEAD))
+    // 精确在**生成 release notes 那次调用**期间切换 HEAD：
+    // 门禁若仍在模型调用之前，此刻它已经放行，旧 release notes 就会写进描述
+    const heavy = botThatMovesHeadWhileRunning(p => p === 'PROMPT_RELEASE_NOTES')
+
+    await codeReview(ctx, makeBot(), heavy, makeOptions(), taggedPrompts)
+
+    expect(platformState.updateChangeRequestBody).not.toHaveBeenCalled()
+  })
+
+  test('对照组：全程 HEAD 不变 → 三处写入都发生', async () => {
+    const ctx = ctxWith(OLD_HEAD)
+    platformState.getChangeRequest.mockResolvedValue(cr(OLD_HEAD))
+
+    await codeReview(ctx, makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
+
+    expect(platformState.updateChangeRequestBody).toHaveBeenCalled()
     expect(platformState.submitReviewComments).toHaveBeenCalled()
+    expect(postedText()).toContain(stateMarker('commitIdsStart'))
+  })
+})
+
+describe('REVIEW-003：查询失败不发作废提示', () => {
+  test('读不到 HEAD → 放弃写入，但不贴「已作废」（没有证据说明结果过期）', async () => {
+    const ctx = ctxWith(OLD_HEAD)
+    let calls = 0
+    platformState.getChangeRequest.mockImplementation(async () => {
+      calls += 1
+      if (calls === 2) throw new Error('503 service unavailable')
+      return cr(OLD_HEAD)
+    })
+
+    await codeReview(ctx, makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
+
+    expect(platformState.updateChangeRequestBody).not.toHaveBeenCalled()
+    expect(postedText()).not.toContain(stateMarker('reviewInvalidated'))
+    // 但必须留下可查的记录
+    expect(logs.join('\n')).toContain('No invalidation notice was posted')
+  })
+
+  test('确认 HEAD 变化 → 才发作废提示（对照组）', async () => {
+    const ctx = ctxWith(OLD_HEAD)
+    headMovesAfter(1)
+
+    await codeReview(ctx, makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
+
+    expect(postedText()).toContain(stateMarker('reviewInvalidated'))
+  })
+
+  test('作废提示发布失败 → 记 warning（comment() 会吞异常，只能看返回值）', async () => {
+    const ctx = ctxWith(OLD_HEAD)
+    headMovesAfter(1)
+    platformState.createComment.mockRejectedValue(new Error('403'))
+    platformState.updateComment.mockRejectedValue(new Error('403'))
+
+    await codeReview(ctx, makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
+
+    expect(logs.join('\n')).toContain('failed to publish invalidation notice')
   })
 })
