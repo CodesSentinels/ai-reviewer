@@ -83619,7 +83619,11 @@ function createGitHubExecutionContext() {
             kind: eventKind === 'review_comment_created' ? 'review_thread' : 'top_level',
             id: comment.id,
             body: typeof comment.body === 'string' ? comment.body : undefined,
-            nodeId: typeof comment.node_id === 'string' ? comment.node_id : undefined
+            nodeId: typeof comment.node_id === 'string' ? comment.node_id : undefined,
+            // 行级对话定位所需（REVIEW-015）
+            path: typeof comment.path === 'string' ? comment.path : undefined,
+            line: typeof comment.line === 'number' ? comment.line : undefined,
+            diffHunk: typeof comment.diff_hunk === 'string' ? comment.diff_hunk : undefined
             // threadId 故意不填充——见 CommentRef.threadId 的文档注释（ARCH-021/Issue #88 P2）。
         },
         raw: github.context.payload
@@ -90200,6 +90204,75 @@ const codeReview = async (execCtx, lightBot, heavyBot, options, prompts, runOpti
         getLogger().info('Skipped: review automation is paused for this PR');
         return;
     }
+    // ── REVIEW-003：只发布针对最新 HEAD 的结果 ──────────────────────────────
+    //
+    // 基线用「审查开始时读到的 HEAD」而不是事件里的：评论触发的运行 execCtx.headSha
+    // 固定为空（见 github-execution-context.ts），拿事件值做基线会让 @ai-reviewer
+    // review 永远发不出结果；而且真正要防的是「分析跑了几分钟，期间又推了新 commit」，
+    // 那正是分析基线与当前 HEAD 的差异。
+    const reviewedHeadSha = pr.head.sha;
+    /**
+     * 写入前的准入判断。返回 fresh=false 表示本次结果已作废，调用方必须放弃写入。
+     *
+     * **查询失败一律判为不新鲜（fail closed）。** 早先这里返回「放行」，理由是
+     * 「一次 API 抖动不该让整轮审查白跑」——那是错的：REVIEW-003 的要求是「旧任务
+     * 不得写摘要或行级评论」，读不到当前 HEAD 就等于无法确认自己是不是旧任务，
+     * 此时继续写入正是它要防的事。整个代码库在权限、幂等、归属判定上都是 fail
+     * closed，唯独这里 fail open 说不通。
+     *
+     * 返回 currentHeadSha 供调用方直接用，避免检测到 stale 后再查一次。
+     */
+    const ensureHeadFresh = async (phase) => {
+        let currentHeadSha = '';
+        try {
+            const fresh = await getPlatform().getChangeRequest(prOwner, prRepo, execCtx.changeRequestId);
+            currentHeadSha = fresh.headSha;
+        }
+        catch (e) {
+            getLogger().warning(`[review-003] cannot confirm current HEAD before ${phase} (${String(e)}) — ` +
+                'discarding results rather than risking a stale write');
+            return { fresh: false, currentHeadSha: '', reason: '无法确认当前 HEAD' };
+        }
+        const check = isHeadStale(reviewedHeadSha, currentHeadSha);
+        if (!check.stale)
+            return { fresh: true, currentHeadSha, reason: '' };
+        getLogger().warning(`[review-003] HEAD moved from ${check.eventHeadSha} to ${check.currentHeadSha} — ` +
+            `discarding results before ${phase}`);
+        return { fresh: false, currentHeadSha, reason: 'HEAD 已变化' };
+    };
+    /**
+     * 发布「本次结果已作废」提示（幂等）。
+     *
+     * **只写自己的 marker 区块，绝不碰摘要评论。** 早先这里还会去读改写摘要评论
+     * 来清掉进度横幅——那正是 REVIEW-003 要防的事：旧任务读改写共享摘要，可能把
+     * 新任务刚写好的结果覆盖掉。进度横幅的问题改为从源头避免：写它之前就先检查，
+     * 陈旧任务根本不会留下横幅。
+     */
+    const publishInvalidationNotice = async (currentHeadSha) => {
+        const body = `> ⚠️ 本次审查的结果已作废：分析基于 \`${reviewedHeadSha.slice(0, 8)}\`，` +
+            `发布前 HEAD 已变为 \`${currentHeadSha.slice(0, 8)}\`。\n>\n` +
+            '> 针对新 HEAD 的审查会自动运行；本条提示会被下一次结果覆盖。\n';
+        const delivered = await commenter.comment(body, stateMarker('reviewInvalidated'), 'replace');
+        if (!delivered) {
+            // comment() 内部会吞异常，只能靠返回值判断（同 REVIEW-014 的教训）
+            getLogger().warning('[review-003] failed to publish invalidation notice');
+        }
+    };
+    /**
+     * 放弃本次运行。
+     *
+     * 只有**确认 HEAD 变了**才发作废提示。查询失败时不发：那种情况下没有任何证据
+     * 表明结果真的过期，贸然贴一条「已作废」反而会误导用户（新审查未必会来）。
+     * 此时只记 error 级日志，让运维能查到这轮为什么没有产出。
+     */
+    const abortStaleRun = async (check) => {
+        if (check.currentHeadSha === '') {
+            getLogger().error(`[review-003] discarded this run: ${check.reason}. No invalidation notice was posted ` +
+                'because there is no evidence the results are actually outdated.');
+            return;
+        }
+        await publishInvalidationNotice(check.currentHeadSha);
+    };
     // ==================== 填充 PR 基本信息 ====================
     const inputs = new Inputs();
     inputs.title = pr.title;
@@ -90458,6 +90531,13 @@ ${filterIgnoredFiles.length > 0
 `
         : ''}
 `;
+    // REVIEW-003 第一道：进度横幅本身就是对**共享摘要评论**的一次 replace 写入，
+    // 陈旧任务写它同样会覆盖新任务的结果。所以检查必须在它之前，而不是等到阶段三。
+    const beforeBanner = await ensureHeadFresh('in-progress banner');
+    if (!beforeBanner.fresh) {
+        await abortStaleRun(beforeBanner);
+        return;
+    }
     // 更新摘要评论为"审查进行中"状态
     const inProgressSummarizeCmt = commenter.addInProgressStatus(existingSummarizeCmtBody, statusMsg);
     await commenter.comment(`${inProgressSummarizeCmt}`, summarizeTag(), 'replace');
@@ -90496,70 +90576,6 @@ ${filterIgnoredFiles.length > 0
             getLogger().warning(`${label} failed: ${e instanceof Error ? e.message : String(e)}`);
             degradations.push(`${label}未完成（模型调用失败，详情见运行日志）`);
             return null;
-        }
-    };
-    // ── REVIEW-003：只发布针对最新 HEAD 的结果 ──────────────────────────────
-    //
-    // 基线用「审查开始时读到的 HEAD」而不是事件里的：评论触发的运行 execCtx.headSha
-    // 固定为空（见 github-execution-context.ts），拿事件值做基线会让 @ai-reviewer
-    // review 永远发不出结果；而且真正要防的是「分析跑了几分钟，期间又推了新 commit」，
-    // 那正是分析基线与当前 HEAD 的差异。
-    const reviewedHeadSha = pr.head.sha;
-    /**
-     * 写入阶段的准入判断。返回 false 表示本次结果已作废，调用方必须放弃全部写入。
-     *
-     * 拦的是**全部**写入而不只是行级评论：危害最大的恰恰不是行级评论（GitHub 会把
-     * 它标成 Outdated，本就是历史记录），而是 reviewed SHA marker——它记的是现查的
-     * 新 SHA，而分析内容来自旧 SHA，等于宣称「新 HEAD 已审过」，下次增量审查会跳过
-     * 这段，发现被永久吞掉。摘要与 release notes 同理，都是 replace 语义。
-     */
-    const ensureHeadFresh = async (phase) => {
-        let currentHeadSha = '';
-        try {
-            const fresh = await getPlatform().getChangeRequest(prOwner, prRepo, execCtx.changeRequestId);
-            currentHeadSha = fresh.headSha;
-        }
-        catch (e) {
-            // 读不到当前 HEAD 时不阻断：宁可发一次可能陈旧的结果，也不因为一次 API
-            // 抖动就让整轮审查白跑
-            getLogger().warning(`[review-003] failed to re-read HEAD before ${phase}: ${String(e)}`);
-            return true;
-        }
-        const check = isHeadStale(reviewedHeadSha, currentHeadSha);
-        if (!check.stale)
-            return true;
-        getLogger().warning(`[review-003] HEAD moved from ${check.eventHeadSha} to ${check.currentHeadSha} — ` +
-            `discarding results before ${phase}`);
-        return false;
-    };
-    /**
-     * 发布「本次结果已作废」提示（幂等）。
-     *
-     * 用固定 marker + replace 模式：同一个 PR 上连续几次被超越时只留一条，不堆积。
-     * 同时清掉进度横幅——否则 PR 上会一直挂着「Currently reviewing...」。
-     */
-    const publishInvalidationNotice = async (currentHeadSha) => {
-        const body = `> ⚠️ 本次审查的结果已作废：分析基于 \`${reviewedHeadSha.slice(0, 8)}\`，` +
-            `但发布前 HEAD 已变为 \`${currentHeadSha.slice(0, 8)}\`。\n>\n` +
-            '> 针对新 HEAD 的审查会自动运行；本条提示会被下一次结果覆盖。\n';
-        try {
-            await commenter.comment(body, stateMarker('reviewInvalidated'), 'replace');
-        }
-        catch (e) {
-            getLogger().warning(`[review-003] failed to publish invalidation notice: ${String(e)}`);
-        }
-        // 清掉进度横幅：审查已作废，不能让 PR 上一直显示「进行中」
-        try {
-            const existing = await commenter.findCommentWithTag(summarizeTag(), pr.number);
-            if (existing != null) {
-                const cleaned = commenter.removeInProgressStatus(existing.body);
-                if (cleaned !== existing.body) {
-                    await commenter.comment(cleaned, summarizeTag(), 'replace');
-                }
-            }
-        }
-        catch (e) {
-            getLogger().warning(`[review-003] failed to clear in-progress banner: ${String(e)}`);
         }
     };
     const doSummary = async (filename, fileContent, fileDiff) => {
@@ -90658,12 +90674,6 @@ ${filename}: ${summary}
         getLogger().info('summarize: nothing obtained from openai');
     }
     const botName = options.botName;
-    // REVIEW-003 第一道：release notes 是分析之后的第一处持久化写入
-    if (!(await ensureHeadFresh('release notes'))) {
-        const fresh = await getPlatform().getChangeRequest(prOwner, prRepo, execCtx.changeRequestId);
-        await publishInvalidationNotice(fresh.headSha);
-        return;
-    }
     // 生成发布说明并写入 PR 描述
     if (options.disableReleaseNotes === false) {
         const releaseNotesResponse = (await chatOrNull(heavyBot, prompts.renderSummarizeReleaseNotes(inputs), '发布说明生成')) ??
@@ -90672,6 +90682,13 @@ ${filename}: ${summary}
             getLogger().info('release notes: nothing obtained from openai');
         }
         else {
+            // REVIEW-003 第二道：**紧贴写入**。放在模型调用之前等于没挡——
+            // 生成 release notes 本身就是一次重量模型调用，期间完全可能又推了新 commit。
+            const beforeNotes = await ensureHeadFresh('release notes');
+            if (!beforeNotes.fresh) {
+                await abortStaleRun(beforeNotes);
+                return;
+            }
             let message = `### Summary by ${botName}\n\n`;
             message += releaseNotesResponse;
             try {
@@ -90731,13 +90748,6 @@ ${summariesFailed.length > 0
     // 提到函数作用域：最终摘要评论在审查阶段**之后**发布，需要读这份失败清单
     // 来生成「本次审查不完整」提示（REVIEW-006）
     const reviewsFailed = [];
-    // REVIEW-003 第二道：阶段三通常要几分钟，期间完全可能又推了新 commit。
-    // 一处判断挡不住整条流水线，按**写入阶段**各设一道。
-    if (!(await ensureHeadFresh('line-level review and final summary'))) {
-        const fresh = await getPlatform().getChangeRequest(prOwner, prRepo, execCtx.changeRequestId);
-        await publishInvalidationNotice(fresh.headSha);
-        return;
-    }
     // ==================== 阶段四：逐文件代码审查 ====================
     if (!options.disableReview && runOptions.summaryOnly !== true) {
         // 筛选出需要审查的文件（分类为 NEEDS_REVIEW 的文件）
@@ -91087,6 +91097,14 @@ ${reviewsSkipped.length > 0
 
 </details>
 `;
+        // REVIEW-003 第三道：**阶段四跑完之后**才检查。
+        // 逐文件模型审查是整条流水线最耗时的一段（每个文件一次重量模型调用），
+        // 把门禁设在它之前等于什么都没挡——期间推的新 commit 照样会被旧结果覆盖。
+        const beforePublish = await ensureHeadFresh('line-level review');
+        if (!beforePublish.fresh) {
+            await abortStaleRun(beforePublish);
+            return;
+        }
         // 将最新的 head commit SHA 添加到已审查列表
         summarizeComment += `\n${commenter.addReviewedCommitId(existingCommitIdsBlock, pr.head.sha)}`;
         // 批量提交所有缓冲的审查评论（严重级别已内嵌在每条评论顶部，不再单独发汇总评论）
@@ -91120,6 +91138,13 @@ ${reviewsSkipped.length > 0
             `\n\n> ⚠️ 本次审查不完整，共 ${incomplete.length} 项未能完成：\n>\n` +
                 incomplete.map(d => `> - ${d}`).join('\n') +
                 '\n>\n> 已发布的部分仍然有效；重新触发审查可以重试失败的环节。\n';
+    }
+    // REVIEW-003 第四道：最终摘要是最后一次写入，且是 replace 语义——
+    // 上一道之后还隔着评论提交与摘要组装，这里再确认一次
+    const beforeSummary = await ensureHeadFresh('final summary');
+    if (!beforeSummary.fresh) {
+        await abortStaleRun(beforeSummary);
+        return;
     }
     // 发布最终的摘要评论
     await commenter.comment(`${summarizeComment}`, summarizeTag(), 'replace');
@@ -91506,6 +91531,9 @@ ${review.comment}`;
 
 
 
+
+
+
 /** 默认的 bot mention 别名（小写匹配，与命令解析器保持一致）。共享自 constants。 */
 
 /**
@@ -91557,15 +91585,78 @@ function issueConvReplyTagVariants(originalCommentId) {
  *
  * @returns true 表示需要 bot 介入回复
  */
+/**
+ * 自然语言追问所需的最低权限（REVIEW-017）。
+ *
+ * 与 `review` 命令同基线：两者触发的是同一个重量模型，成本相当。选 write 而不是
+ * read，是因为「能看见仓库的人都能让 bot 跑模型」在私有仓库/大群组里等于把
+ * 模型预算敞开给所有可见成员。
+ */
+const CONVERSATION_MIN_PERMISSION = 'write';
+/**
+ * 追问者是否有权触发对话（REVIEW-017）。
+ *
+ * 三条规则，与命令路径保持一致：
+ *   1. 权限达标 → 放行；
+ *   2. 未达标但本人是 PR/MR 作者 → 放行（对自己的变更提问是主要场景）；
+ *   3. **权限查询失败 → 拒绝**。不能因为「看起来是作者」就在权限未知时放行，
+ *      那是 fail open——同 CMD-016 的教训。
+ */
+async function canConverse(execCtx, prAuthor) {
+    const { owner, repo } = repoCoordsOf(execCtx);
+    const actor = execCtx.actor.login;
+    const { level, queryFailed } = await getPermissionResult({ owner, repo, username: actor });
+    if (queryFailed) {
+        return { allowed: false, reason: '权限查询失败' };
+    }
+    if (permissionAtLeast(level, CONVERSATION_MIN_PERMISSION)) {
+        return { allowed: true, reason: `权限 ${level}` };
+    }
+    if (actor !== '' && actor === prAuthor) {
+        return { allowed: true, reason: '变更作者豁免' };
+    }
+    return { allowed: false, reason: `权限不足（${level}）` };
+}
+/**
+ * 这条评论是不是 reviewer 自己发的（REVIEW-018）。
+ *
+ * 判定顺序有讲究：
+ *
+ * 1. **构造阶段归一化的 actor.isBot** —— GitHub 认 `user.type === 'Bot'` 与
+ *    `xxx[bot]` 后缀，GitLab 认 access token 账号的权威命名（CMD-006）。
+ * 2. **作者是否等于本 reviewer** —— 权威信号，覆盖「以个人 PAT 身份发言」的
+ *    GitLab 常见形态。
+ * 3. **正文带 bot marker** —— 仅在前两条都判不出时作为兜底。
+ *
+ * 第 3 条单独用是有害的：用户「引用回复」会把 marker 一起复制过去，于是他带着
+ * 引用提问就永远得不到回复（§8.3 留下的尾巴）。所以只有在**身份完全判不出**时
+ * 才退回到它——那种情况下宁可少答一次，也不能让 bot 自问自答绕成死循环。
+ */
+async function isSelfAuthoredComment(execCtx, commentBody) {
+    if (execCtx.actor.isBot)
+        return true;
+    const own = await isOwnAuthor(execCtx.actor.login);
+    if (own === true)
+        return true;
+    // 身份可解析且确认不是自己 → 就是真人，哪怕正文里带着引用来的 marker
+    if (own === false)
+        return false;
+    // 身份判不出：退回 marker 兜底，宁可少答一次也不能形成反馈循环
+    return bodyHasMarker(commentBody, 'comment') || bodyHasMarker(commentBody, 'commentReply');
+}
 function isFollowUpQuestion(opts) {
     const { commentBody, authorIsBot } = opts;
     if (authorIsBot) {
         return false;
     }
     const body = commentBody ?? '';
-    // bot 自动生成的内容带有专属标签，二次保险，避免把 bot 文案当成追问
+    // marker 兜底：默认开启，用于调用方没做作者判定的场景。
+    //
+    // 注意它会误伤「引用回复」——用户引用 bot 的话再提问，正文里就带着 marker。
+    // 生产调用方已在上游用 isSelfAuthoredComment 做过作者判定（REVIEW-018），
+    // 那里才是权威信号，因此显式传 `botCommentTags: []` 关掉这层兜底。
     const botTags = opts.botCommentTags ?? botCommentTagVariants();
-    if (botTags.some(tag => body.includes(tag))) {
+    if (botTags.length > 0 && botTags.some(tag => body.includes(tag))) {
         return false;
     }
     const mentions = (opts.mentions ?? BOT_MENTIONS).map(m => m.toLowerCase());
@@ -91647,45 +91738,55 @@ function truncateConversationChain(chain, maxChars = MAX_CHAIN_CHARS) {
 const handleConversation = async (execCtx, heavyBot, options, prompts) => {
     const commenter = new Commenter();
     const inputs = new Inputs();
-    const [repoOwner, repoName] = execCtx.projectPath.split('/');
+    // 按**最后**一个斜杠切：GitLab 子组项目是 group/subgroup/project，
+    // split('/') 取前两段会把 owner/repo 切错（repoCoordsOf 的既有语义）
+    const { owner: repoOwner, repo: repoName } = repoCoordsOf(execCtx);
     const logger = getLogger();
     // ===== 1. 事件与 payload 校验 =====
     if (execCtx.eventKind !== 'review_comment_created') {
         logger.info(`conversation: skip non review_comment event (${execCtx.eventKind})`);
         return;
     }
-    const payload = execCtx.raw;
-    if (!payload || payload.action !== 'created') {
-        logger.info('conversation: skip (missing payload or action != created)');
-        return;
-    }
-    const comment = payload.comment;
-    if (comment == null || typeof comment.body !== 'string') {
+    // REVIEW-015/016：改读归一化字段。原先直接读 GitHub 的 review comment payload
+    // （action / pull_request / repository / diff_hunk），GitLab 的 diff discussion
+    // note 在第一道校验就被拒。
+    //
+    // 「action != created」已在 ExecutionContext 构造阶段判掉。
+    const commentRef = execCtx.comment;
+    if (commentRef == null || typeof commentRef.body !== 'string') {
         logger.warning('conversation: skip (missing comment body)');
         return;
     }
-    if (payload.pull_request == null || payload.repository == null) {
-        logger.warning('conversation: skip (missing pull_request/repository)');
-        return;
-    }
-    // ===== 2. 过滤 bot 自身评论 =====
-    const authorIsBot = comment.user?.type === 'Bot' ||
-        /\[bot\]$/i.test(comment.user?.login ?? '') ||
-        bodyHasMarker(comment.body, 'comment') ||
-        bodyHasMarker(comment.body, 'commentReply');
-    if (authorIsBot) {
+    // ===== 2. 过滤 bot 自身评论（REVIEW-018）=====
+    if (await isSelfAuthoredComment(execCtx, commentRef.body)) {
         logger.info('conversation: skip (comment from bot itself)');
         return;
     }
-    const pullNumber = payload.pull_request.number;
-    // 填充 PR 基本信息
-    inputs.title = payload.pull_request.title;
-    if (payload.pull_request.body) {
-        inputs.description = commenter.getDescription(payload.pull_request.body);
+    const pullNumber = execCtx.changeRequestId;
+    // 对话链查找需要「评论自身」的形状（沿 in_reply_to_id 上溯、按 path/line 匹配），
+    // 由归一化字段重建，不再依赖平台 payload
+    const comment = {
+        id: commentRef.id,
+        body: commentRef.body,
+        path: commentRef.path ?? '',
+        line: commentRef.line,
+        user: { login: execCtx.actor.login }
+    };
+    inputs.comment = `${execCtx.actor.login || 'unknown'}: ${commentRef.body}`;
+    // GitLab 的 note payload 没有 diff_hunk，留空即可——少一段上下文，不影响对话
+    inputs.diff = commentRef.diffHunk ?? '';
+    inputs.filename = commentRef.path ?? '';
+    // PR 基本信息改由 IGitPlatform 现查（payload 形状两个平台不同）
+    try {
+        const cr = await getPlatform().getChangeRequest(repoOwner, repoName, pullNumber);
+        inputs.title = cr.title;
+        if (cr.body) {
+            inputs.description = commenter.getDescription(cr.body);
+        }
     }
-    inputs.comment = `${comment.user.login}: ${comment.body}`;
-    inputs.diff = comment.diff_hunk ?? '';
-    inputs.filename = comment.path ?? '';
+    catch (e) {
+        logger.warning(`conversation: failed to load change request details: ${String(e)}`);
+    }
     // ===== 3. Thread 对话历史收集 =====
     const { chain: rawChain, topLevelComment } = await commenter.getCommentChain(pullNumber, comment);
     if (!topLevelComment) {
@@ -91695,9 +91796,26 @@ const handleConversation = async (execCtx, heavyBot, options, prompts) => {
     // ===== 4. 追问意图识别（必须 @bot） =====
     if (!isFollowUpQuestion({
         commentBody: comment.body,
-        authorIsBot: false
+        // 作者判定已在上游完成（isSelfAuthoredComment），这里关掉 marker 兜底，
+        // 否则用户「引用回复」后提问会被误判成 bot 文案
+        authorIsBot: false,
+        botCommentTags: []
     })) {
         logger.info('conversation: not a follow-up question (no @mention), skip');
+        return;
+    }
+    // ===== 4. 权限校验（REVIEW-017）=====
+    // 放在意图识别之后：无关评论不必为它多查一次权限 API
+    let prAuthor = '';
+    try {
+        prAuthor = (await getPlatform().getChangeRequest(repoOwner, repoName, pullNumber)).author;
+    }
+    catch (e) {
+        logger.warning(`conversation: failed to resolve change request author: ${String(e)}`);
+    }
+    const perm = await canConverse(execCtx, prAuthor);
+    if (!perm.allowed) {
+        logger.info(`conversation: skip (${perm.reason})`);
         return;
     }
     // ===== 5. 对话轮次上限控制 =====
@@ -91712,7 +91830,10 @@ const handleConversation = async (execCtx, heavyBot, options, prompts) => {
     // ===== 7. 关联代码行及扩展上下文（文件完整 diff） =====
     let fileDiff = '';
     try {
-        const diffResult = await getPlatform().compareDiff(repoOwner, repoName, payload.pull_request.base.sha, payload.pull_request.head.sha);
+        // base/head 同样改为现查：评论事件的 payload 在两个平台形状不同，
+        // 而 execCtx 对评论事件本就不带 base/head（构造阶段固定留空）
+        const cr = await getPlatform().getChangeRequest(repoOwner, repoName, pullNumber);
+        const diffResult = await getPlatform().compareDiff(repoOwner, repoName, cr.baseSha, cr.headSha);
         const file = diffResult.files.find(f => f.filename === comment.path);
         if (file?.patch) {
             fileDiff = file.patch;
@@ -91823,46 +91944,59 @@ function composeIssueCommentChain(comments, currentCommentId) {
 const handleIssueConversation = async (execCtx, heavyBot, options, prompts) => {
     const commenter = new Commenter();
     const inputs = new Inputs();
-    const [repoOwner, repoName] = execCtx.projectPath.split('/');
+    // 按**最后**一个斜杠切：GitLab 子组项目是 group/subgroup/project，
+    // split('/') 取前两段会把 owner/repo 切错（repoCoordsOf 的既有语义）
+    const { owner: repoOwner, repo: repoName } = repoCoordsOf(execCtx);
     const logger = getLogger();
     // ===== 1. 事件与 payload 校验 =====
     if (execCtx.eventKind !== 'comment_created') {
         logger.info(`issue-conversation: skip non issue_comment event (${execCtx.eventKind})`);
         return;
     }
-    const payload = execCtx.raw;
-    if (!payload || payload.action !== 'created') {
-        logger.info('issue-conversation: skip (missing payload or action != created)');
-        return;
-    }
-    // 只处理 PR 上的评论（GitHub 中 PR 复用 issue 模型）
-    if (!payload.issue?.pull_request) {
-        logger.info('issue-conversation: skip (issue_comment on non-PR issue)');
-        return;
-    }
-    const comment = payload.comment;
-    if (comment == null || typeof comment.body !== 'string') {
+    // REVIEW-016：改读归一化字段。原先直接读 GitHub payload（`payload.action`、
+    // `payload.issue.pull_request`），GitLab 的 note 事件在第一道校验就被拒——
+    // 对话功能在 GitLab 上完全不可用。
+    //
+    // 「action != created」和「评论挂在非 PR issue 上」这两条判断已经在
+    // ExecutionContext 构造阶段做掉（抛 ignorable_event），走到这里的一定是新建的
+    // PR/MR 顶层评论，不必重复判断。
+    const commentRef = execCtx.comment;
+    if (commentRef == null || typeof commentRef.body !== 'string') {
         logger.warning('issue-conversation: skip (missing comment body)');
         return;
     }
-    // ===== 2. 过滤 bot 自身评论 =====
-    const authorIsBot = comment.user?.type === 'Bot' ||
-        /\[bot\]$/i.test(comment.user?.login ?? '') ||
-        bodyHasMarker(comment.body, 'comment') ||
-        bodyHasMarker(comment.body, 'commentReply');
-    if (authorIsBot) {
+    // 收窄 body 类型：CommentRef.body 是可选的（GitLab 早期未填充），上面已校验
+    const comment = { id: commentRef.id, body: commentRef.body };
+    // ===== 2. 过滤 bot 自身评论（REVIEW-018）=====
+    if (await isSelfAuthoredComment(execCtx, comment.body)) {
         logger.info('issue-conversation: skip (comment from bot itself)');
         return;
     }
     // ===== 3. 追问意图识别（必须 @bot） =====
     if (!isFollowUpQuestion({
         commentBody: comment.body,
-        authorIsBot: false
+        // 作者判定已在上游完成（isSelfAuthoredComment），这里关掉 marker 兜底，
+        // 否则用户「引用回复」后提问会被误判成 bot 文案
+        authorIsBot: false,
+        botCommentTags: []
     })) {
         logger.info('issue-conversation: not a follow-up question (no @mention), skip');
         return;
     }
-    const pullNumber = payload.issue.number;
+    const pullNumber = execCtx.changeRequestId;
+    // ===== 4. 权限校验（REVIEW-017）=====
+    let prAuthor = '';
+    try {
+        prAuthor = (await getPlatform().getChangeRequest(repoOwner, repoName, pullNumber)).author;
+    }
+    catch (e) {
+        logger.warning(`issue-conversation: failed to resolve change request author: ${String(e)}`);
+    }
+    const issuePerm = await canConverse(execCtx, prAuthor);
+    if (!issuePerm.allowed) {
+        logger.info(`issue-conversation: skip (${issuePerm.reason})`);
+        return;
+    }
     // ===== 4. 幂等去重（连续提问不丢/不重复的关键） =====
     const allComments = await commenter.listComments(pullNumber);
     const replyTagVariants = issueConvReplyTagVariants(comment.id);
@@ -91876,22 +92010,23 @@ const handleIssueConversation = async (execCtx, heavyBot, options, prompts) => {
     const turns = countBotTurns(rawChain);
     if (turns >= MAX_CONVERSATION_TURNS) {
         logger.info(`issue-conversation: turn limit reached (${turns}/${MAX_CONVERSATION_TURNS})`);
-        await postIssueReply(commenter, pullNumber, comment, `本话题的自动对话轮次已达上限（${MAX_CONVERSATION_TURNS} 轮）。如需继续深入，请新开一条评论或联系人工 reviewer。`);
+        await postIssueReply(commenter, pullNumber, comment, execCtx.actor.login, `本话题的自动对话轮次已达上限（${MAX_CONVERSATION_TURNS} 轮）。如需继续深入，请新开一条评论或联系人工 reviewer。`);
         return;
     }
     // ===== 6. 上下文组装（PR 级） =====
-    inputs.title = payload.pull_request?.title ?? payload.issue.title ?? '';
-    const prBody = payload.pull_request?.body ?? payload.issue.body;
-    if (prBody) {
-        inputs.description = commenter.getDescription(prBody);
-    }
-    inputs.comment = `${comment.user?.login ?? 'unknown'}: ${comment.body}`;
+    // 标题/描述改由 IGitPlatform 现查：payload 形状两个平台不同，而下面本来就要
+    // 调 getChangeRequest 拿 diff，顺带取回即可，不多一次 API
+    inputs.comment = `${execCtx.actor.login || 'unknown'}: ${comment.body}`;
     inputs.commentChain = truncateConversationChain(rawChain);
     // ===== 7. 拉取整个 PR 的 diff（可选，受 token 预算约束） =====
     let prDiff = '';
     try {
         const platform = getPlatform();
         const cr = await platform.getChangeRequest(repoOwner, repoName, pullNumber);
+        inputs.title = cr.title;
+        if (cr.body) {
+            inputs.description = commenter.getDescription(cr.body);
+        }
         const diffResult = await platform.compareDiff(repoOwner, repoName, cr.baseSha, cr.headSha);
         prDiff = diffResult.files
             .map(f => (f.patch ? `--- ${f.filename}\n${f.patch}` : ''))
@@ -91909,7 +92044,7 @@ const handleIssueConversation = async (execCtx, heavyBot, options, prompts) => {
         tokens = getTokenCount(prompts.renderCommentIssue(inputs));
     }
     if (tokens > options.heavyTokenLimits.requestTokens) {
-        await postIssueReply(commenter, pullNumber, comment, '无法回复该评论：关联的上下文过大，超出了模型的 token 限制。');
+        await postIssueReply(commenter, pullNumber, comment, execCtx.actor.login, '无法回复该评论：关联的上下文过大，超出了模型的 token 限制。');
         return;
     }
     // 预算允许时补充整个 PR diff
@@ -91939,7 +92074,7 @@ const handleIssueConversation = async (execCtx, heavyBot, options, prompts) => {
         return;
     }
     const cleanedReply = reply.replace(/^\s*@user[，,：:\s]*/i, '').trimStart();
-    await postIssueReply(commenter, pullNumber, comment, cleanedReply);
+    await postIssueReply(commenter, pullNumber, comment, execCtx.actor.login, cleanedReply);
     logger.info(`issue-conversation: replied on PR #${pullNumber} main thread`);
 };
 /**
@@ -91948,8 +92083,9 @@ const handleIssueConversation = async (execCtx, heavyBot, options, prompts) => {
  *
  * 幂等标签使回复能稳定对应到触发它的提问（连续提问场景下不丢不重）。
  */
-async function postIssueReply(commenter, pullNumber, comment, body) {
-    const authorLogin = comment.user?.login ?? '';
+async function postIssueReply(commenter, pullNumber, comment, authorLogin, body) {
+    // 作者显式传入而不是从 comment.user 读：顶层对话的评论对象现在来自
+    // ExecutionContext 的归一化字段，那里作者在 execCtx.actor 上（REVIEW-016）
     const mention = authorLogin ? `@${authorLogin} ` : '';
     const quotedQuestion = comment.body
         .split('\n')
