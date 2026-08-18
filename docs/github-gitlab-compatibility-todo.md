@@ -379,17 +379,18 @@
 > summary note marker 比对"已由 Issue
 > [#111](https://github.com/CodesSentinels/ai-reviewer/issues/111)（实现 PR
 > [#113](https://github.com/CodesSentinels/ai-reviewer/pull/113)）接入
-> `gitlab-trigger.ts`，见下方 `EVENT-012`/`EVENT-013` 状态说明。⚠️ Issue #75
-> 复核（2026-08-05）指出 `mapMergeRequestAction()` 用
-> `changes.last_commit`/`changes.source_branch` 判断代码变更，与 GitLab 官方
-> Webhook 契约（应看 `object_attributes.oldrev`）可能不符，真实 push 事件有被误
-> 判为 `metadata_updated` 而跳过审查的风险；现有 fixture 是人工构造的，未覆盖官方
-> 契约，修复前 `EVENT-008` 不应视为完全验证。
+> `gitlab-trigger.ts`，见下方 `EVENT-012`/`EVENT-013` 状态说明。Issue #75
+> 复核（2026-08-05）指出的 `mapMergeRequestAction()` 判定信号偏差已修复：改为
+> 只信 `object_attributes.oldrev`（GitLab 官方契约里唯一承诺"push 触发的
+> update 才会带这个字段"的信号），不再依赖未被文档承诺的
+> `changes.last_commit`/`changes.source_branch`。回归测试见
+> `gitlab-mr-hook-mapping.test.ts` 新增的 `gitlab-mr-hook-update-oldrev-only`
+> 用例（`oldrev` 存在但 `changes` 为空，验证不再误判为 `metadata_updated`）。
 
 - [x] `EVENT-006` 支持 MR 创建事件。
 - [x] `EVENT-007` 支持 MR reopen 事件。
-- [x] `EVENT-008` 支持 MR HEAD SHA 更新事件（⚠️ 见上方状态说明，判定信号与官方
-      Webhook 契约可能不符）。
+- [x] `EVENT-008` 支持 MR HEAD SHA 更新事件（判定改为只信 `object_attributes.
+      oldrev`，见上方状态说明；⚠️ 仍未经真实 GitLab webhook 回放验证）。
 - [x] `EVENT-009` 标题、label、assignee 等纯元数据更新不调用模型。
 - [x] `EVENT-010` MVP 拒绝 source project 与 target project 不同的 fork MR。
 - [x] `EVENT-011` 同项目 MR 内容仍按不可信数据处理。
