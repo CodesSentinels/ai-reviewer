@@ -93,7 +93,7 @@ export async function runOrchestrator(deps: OrchestratorDeps): Promise<void> {
   let options: Options
   try {
     options = configProvider.getOptions()
-    initBotGreeting(options.botIcon, options.botName)
+    initBotGreeting(options.botIcon, options.botName, options.botLogin)
     configProvider.print((msg: string) => logger.info(msg))
   } catch (e) {
     if (e instanceof ConfigError) {

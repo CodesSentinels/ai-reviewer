@@ -25,7 +25,9 @@ const platformState: any = {
   listChangeRequestCommits: jest.fn<any>(),
   submitReviewComments: jest.fn<any>(),
   updateChangeRequestBody: jest.fn<any>(),
-  deletePendingReview: jest.fn<any>()
+  deletePendingReview: jest.fn<any>(),
+  // REVIEW-008：定位既有摘要要校验作者，身份解析不了就不会恢复历史状态
+  getAuthenticatedLogin: jest.fn<any>(async () => 'bot')
 }
 jest.mock('../src/platform/git-platform', () => ({getPlatform: () => platformState}))
 

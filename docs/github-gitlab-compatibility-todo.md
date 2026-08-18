@@ -549,10 +549,10 @@
 
 ### 8.2 摘要
 
-- [ ] `REVIEW-007` 自动生成 PR/MR 顶层摘要。
-- [ ] `REVIEW-008` 更新既有摘要而不是重复发布。
-- [ ] `REVIEW-009` 摘要包含平台隔离的 reviewed SHA marker。
-- [ ] `REVIEW-010` `summary` 命令可重新生成摘要。
+- [x] `REVIEW-007` 自动生成 PR/MR 顶层摘要。
+- [x] `REVIEW-008` 更新既有摘要而不是重复发布。
+- [x] `REVIEW-009` 摘要包含平台隔离的 reviewed SHA marker。
+- [x] `REVIEW-010` `summary` 命令可重新生成摘要。
 
 ### 8.3 行级问题
 

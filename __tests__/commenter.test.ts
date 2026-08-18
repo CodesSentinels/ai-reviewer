@@ -54,11 +54,20 @@ const platform = {
   deleteReviewComment: jest.fn<any>(),
   updateReviewComment: jest.fn<any>(),
   replyToReviewComment: jest.fn<any>(),
-  deletePendingReview: jest.fn<any>()
+  deletePendingReview: jest.fn<any>(),
+  // REVIEW-008：定位既有评论要校验作者，桩必须能回答「我是谁」
+  getAuthenticatedLogin: jest.fn<any>(async () => 'ai-reviewer')
 }
 jest.mock('../src/platform/git-platform', () => ({getPlatform: () => platform}))
 
-import {Commenter, STATE_MARKERS, commentTag, commentReplyTag, summarizeTag} from '../src/commenter'
+import {
+  Commenter,
+  STATE_MARKERS,
+  _resetBotIdentity,
+  commentTag,
+  commentReplyTag,
+  summarizeTag
+} from '../src/commenter'
 
 /** 平台返回的 issue comment 形状 */
 function issueComment(id: number, body: string): any {
@@ -82,6 +91,7 @@ function reviewComment(id: number, path: string, line: number, body: string, sta
 beforeEach(() => {
   jest.clearAllMocks()
   resetExecCtx()
+  _resetBotIdentity()
   setExecCtx(execCtx({changeRequestId: 7}))
   platform.createComment.mockResolvedValue(issueComment(100, 'created'))
   platform.updateComment.mockResolvedValue(undefined)
