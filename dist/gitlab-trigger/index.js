@@ -40377,7 +40377,7 @@ function buildFromMergeRequestHook(p) {
     if (attrs == null || project == null || attrs.iid == null) {
         throw new ExecutionContextError('merge_request payload missing object_attributes/project/iid', 'gitlab', 'missing_required_field');
     }
-    const eventKind = mapMergeRequestAction(attrs, p.changes);
+    const eventKind = mapMergeRequestAction(attrs);
     return {
         platform: 'gitlab',
         projectPath: project.path_with_namespace,
@@ -40482,14 +40482,26 @@ const GITLAB_SYSTEM_BOTS = new Set([
     'security-bot',
     'ghost'
 ]);
-function mapMergeRequestAction(attrs, changes) {
+/**
+ * `action=update` 事件区分"代码真的变了"（需要重新审查）还是"只改了标题/
+ * label 等元数据"（不该触发模型）。
+ *
+ * 2026-08-05 复核（Issue #75/#88）指出：此前只看 `changes.last_commit`/
+ * `changes.source_branch` 是否存在，但 GitLab 官方 Webhook events 文档里
+ * `changes` 是否包含这两个字段并未被文档承诺为"push 是否发生"的判据——按官方
+ * 契约，`object_attributes.oldrev` 才是权威信号：只有由 push 触发的 update
+ * 事件才会带这个字段（记录 push 前的 HEAD），单纯的标题/label 修改不会有它。
+ * 依赖未经承诺的 `changes` 结构有被真实 webhook 误判为 `metadata_updated`
+ * 而漏审的风险；当前 fixture 是人工构造的，未覆盖过这个偏差。
+ */
+function mapMergeRequestAction(attrs) {
     if (attrs.action === 'open')
         return 'pr_opened';
     if (attrs.action === 'reopen')
         return 'pr_reopened';
     if (attrs.action === 'update') {
-        const headChanged = changes?.last_commit != null || changes?.source_branch != null;
-        return headChanged ? 'pr_synchronize' : 'metadata_updated';
+        const pushed = typeof attrs.oldrev === 'string' && attrs.oldrev !== '';
+        return pushed ? 'pr_synchronize' : 'metadata_updated';
     }
     return 'unknown';
 }
