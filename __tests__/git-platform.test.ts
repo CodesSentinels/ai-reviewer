@@ -313,7 +313,8 @@ describe('GitHubPlatform', () => {
   describe('submitReviewComments', () => {
     test('空评论列表直接返回 0', async () => {
       const count = await platform.submitReviewComments('o', 'r', 1, 'sha', [])
-      expect(count).toBe(0)
+      // REVIEW-013/014：接口改为返回逐条结果，调用方要知道哪几条没发出去
+      expect(count).toEqual({delivered: [], failed: []})
       expect(mockOctokit.pulls.createReview).not.toHaveBeenCalled()
     })
 
@@ -324,7 +325,9 @@ describe('GitHubPlatform', () => {
       const count = await platform.submitReviewComments('o', 'r', 1, 'sha', [
         {path: 'a.ts', body: 'fix', line: 5}
       ])
-      expect(count).toBe(1)
+      // GitHub 的 createReview 是原子的：整批成功
+      expect(count.delivered).toHaveLength(1)
+      expect(count.failed).toEqual([])
       expect(mockOctokit.pulls.submitReview).toHaveBeenCalledWith(
         expect.objectContaining({review_id: 999, event: 'COMMENT'})
       )

@@ -69997,6 +69997,13 @@ const STATE_MARKERS = {
         legacy: '<!-- commit_ids_reviewed_end -->',
         current: () => buildStateMarker('commit-ids-reviewed-end')
     },
+    undeliverableFindings: {
+        kind: 'undeliverable-findings',
+        // 新增 marker，没有历史形态；legacy 留空串会被 includes('') 恒真命中，
+        // 因此用一个不可能出现在正文里的占位
+        legacy: '<!-- ai-reviewer:__no-legacy:undeliverable-findings -->',
+        current: () => buildStateMarker('undeliverable-findings')
+    },
     reviewStateStart: {
         kind: 'review-state-start',
         legacy: '<!-- codesentinel-review-state:start -->',
@@ -70535,10 +70542,90 @@ function getCommentGreeting() {
     return _commentGreeting;
 }
 /**
- * 初始化 bot 问候语。由 main.ts 在构建 Options 后调用一次。
+ * 配置的 bot 登录名（GitHub: bot_github_login；GitLab: PAT 用户名）。
+ * 空串表示未配置，此时退化为向平台查询。
  */
-function initBotGreeting(icon, name) {
+let _configuredBotLogin = '';
+/**
+ * 初始化 bot 问候语与身份。由入口在构建 Options 后调用一次。
+ */
+function initBotGreeting(icon, name, botLogin = '') {
     _commentGreeting = `${icon}   ${name}`;
+    _configuredBotLogin = botLogin.trim();
+    _resolvedBotLogin = undefined;
+}
+/** 解析结果缓存：undefined = 还没查过，null = 查不到 */
+let _resolvedBotLogin;
+/**
+ * 本次运行的 bot 登录名（REVIEW-008 / STATE-008）。
+ *
+ * 为什么必须知道「我是谁」：定位既有摘要评论靠的是正文里的 marker，而用户用
+ * 「引用回复」会把整段正文连同 marker 一起复制过去。不校验作者的话：
+ *
+ *   - 用户那条引用可能被当成我们的摘要**覆盖**掉；
+ *   - 匹配到多条时，除第一条外全部会被**删除**；
+ *   - findCommentWithTag 可能读到用户引用里的旧 reviewed SHA，污染增量审查状态。
+ *
+ * 优先用配置值（省一次 API），否则查一次并缓存。两者都拿不到时返回 null，
+ * 调用方按「身份未知」fail closed。
+ */
+async function resolveBotLogin() {
+    if (_resolvedBotLogin !== undefined)
+        return _resolvedBotLogin;
+    if (_configuredBotLogin !== '') {
+        _resolvedBotLogin = _configuredBotLogin;
+        return _resolvedBotLogin;
+    }
+    try {
+        const login = await getPlatform().getAuthenticatedLogin();
+        // adapter 理论上返回 string，但真实现可能因 API 变更/降级返回空值。
+        // 靠 try/catch 兜 TypeError 会把「身份拿不到」和「调用出错」混成一件事，
+        // 这里显式判类型，两种情况都 fail closed。
+        const trimmed = typeof login === 'string' ? login.trim() : '';
+        _resolvedBotLogin = trimmed === '' ? null : trimmed;
+    }
+    catch (e) {
+        getLogger().warning(`Failed to resolve bot identity: ${String(e)} — comment ownership checks will fail closed`);
+        _resolvedBotLogin = null;
+    }
+    return _resolvedBotLogin;
+}
+/** 仅供测试重置身份缓存 */
+function _resetBotIdentity() {
+    _configuredBotLogin = '';
+    _resolvedBotLogin = undefined;
+}
+/** 行级评论的位置键，用于把「待清理的旧评论」和「这次要发的新评论」对上 */
+function commentKey(c) {
+    return `${c.path}:${c.startLine}-${c.endLine}`;
+}
+/**
+ * 平台 draft 的位置键，必须与 commentKey 算出同一个值。
+ *
+ * toDraft 在单行时会把 startLine 置成 undefined（平台要求），所以这里要还原成
+ * endLine，否则单行评论的失败项对不回本地缓冲。
+ */
+function draftKey(d) {
+    return `${d.path}:${d.startLine ?? d.line}-${d.line}`;
+}
+/** 这条评论是不是我们自己发的（身份未知时返回 null，表示无法判断） */
+function isOwnComment(comment, botLogin) {
+    if (botLogin == null)
+        return null;
+    const author = (comment.user?.login ?? '').trim();
+    if (author === '')
+        return null;
+    return author.toLowerCase() === botLogin.toLowerCase();
+}
+/**
+ * 按作者判断某条评论是否出自本 reviewer（REVIEW-012/013）。
+ *
+ * 供 commenter 之外的去重逻辑复用（如 review.ts 的 full review 覆盖范围计算）。
+ * 返回 null 表示「判断不了」——调用方必须自己决定保守方向，不要当成 false。
+ */
+async function isOwnAuthor(author) {
+    const botLogin = await resolveBotLogin();
+    return isOwnComment({ user: { login: author ?? undefined } }, botLogin);
 }
 // 状态 marker 清单集中在 state-markers.ts（GH-014），此处 re-export 保持调用方 import 不变
 
@@ -70634,13 +70721,20 @@ class Commenter {
      * @param tag - HTML 标签，用于标识和查找评论
      * @param mode - "create"（新建）或 "replace"（查找并替换已有评论）
      */
+    /**
+     * 发布/更新一条顶层评论。
+     *
+     * 返回是否真的投递成功。此前内部 create()/replace() 各自吞掉异常，调用方拿不到
+     * 任何信号——REVIEW-014 的降级路径因此在评论创建失败时仍打印「已发布」，
+     * 发现照样静默丢失。
+     */
     async comment(message, tag, mode) {
         // PR number / MR iid 已由 ExecutionContext 归一化（GitHub 的 payload 里
         // 它可能来自 pull_request 也可能来自 issue，两者在构造阶段已经合流）
         const target = getExecCtx().changeRequestId;
         if (!target) {
             getLogger().warning('Skipped: execution context carries no change request id');
-            return;
+            return false;
         }
         if (!tag) {
             tag = commentTag();
@@ -70652,14 +70746,14 @@ ${message}
 
 ${tag}`;
         if (mode === 'create') {
-            await this.create(body, target);
+            return await this.create(body, target);
         }
         else if (mode === 'replace') {
-            await this.replace(body, tag, target);
+            return await this.replace(body, tag, target);
         }
         else {
             getLogger().warning(`Unknown mode: ${mode}, use "replace" instead`);
-            await this.replace(body, tag, target);
+            return await this.replace(body, tag, target);
         }
     }
     /**
@@ -70787,9 +70881,31 @@ ${statusMsg}
         }
         // 去重：跳过同位置已有未 resolved bot 评论的新评论，避免重复
         const commentsToSubmit = [];
+        // REVIEW-013：位置 → 待清理的旧评论 id。发布成功后才真正删除。
+        const pendingDeletions = new Map();
         for (const comment of this.reviewCommentsBuffer) {
             const existingComments = await this.getCommentsAtRange(pullNumber, comment.path, comment.startLine, comment.endLine);
-            const existingBotComments = existingComments.filter(c => bodyHasMarker(c.body, 'comment'));
+            // REVIEW-012/013：带 marker 不等于是我们发的。用户引用回复会把 marker 一起
+            // 复制过去，只按 marker 判定会造成两种损失：
+            //   未 resolved → 误判为「同位置已有我们的评论」，本次发现被丢弃；
+            //   已 resolved → 把用户那条评论当成自己的旧评论**删掉**。
+            const taggedAtRange = existingComments.filter(c => bodyHasMarker(c.body, 'comment'));
+            // 注意字段：listReviewComments 映射后作者在 user.login，不是 c.author
+            const ownership = await Promise.all(taggedAtRange.map(async (c) => await isOwnAuthor(c.user?.login)));
+            const existingBotComments = taggedAtRange.filter((_c, i) => ownership[i] === true);
+            // 身份判断不了时 ownership 全是 null，existingBotComments 因此为空，
+            // 于是这条发现会被照常发布——可能与旧评论重复，但绝不会删掉任何东西。
+            // 这个方向是刻意选的：重复可以人工清理，删错的内容找不回来。
+            if (ownership.some(o => o == null)) {
+                logger.warning(`[submit-dedup] bot identity is unknown — publishing at ` +
+                    `${comment.path}:${comment.startLine}-${comment.endLine} without deduplication; ` +
+                    'existing comments are left untouched');
+            }
+            else if (taggedAtRange.length > existingBotComments.length) {
+                logger.info(`[submit-dedup] ignoring ${taggedAtRange.length - existingBotComments.length} ` +
+                    `comment(s) at ${comment.path}:${comment.startLine}-${comment.endLine} that carry our ` +
+                    'marker but were authored by someone else');
+            }
             if (existingBotComments.length > 0) {
                 // 检查该位置是否已 resolved
                 const key = `${comment.path}:${comment.endLine}`;
@@ -70798,16 +70914,12 @@ ${statusMsg}
                     logger.info(`[submit-dedup] skipping comment for ${comment.path}:${comment.startLine}-${comment.endLine} — existing unresolved bot comment found`);
                     continue;
                 }
-                // 已 resolved 的旧评论：删除后重新发布
-                for (const c of existingBotComments) {
-                    logger.info(`Deleting resolved review comment for ${comment.path}:${comment.startLine}-${comment.endLine}`);
-                    try {
-                        await platform.deleteReviewComment(repo.owner, repo.repo, c.id);
-                    }
-                    catch (e) {
-                        logger.warning(`Failed to delete review comment: ${e}`);
-                    }
-                }
+                // 已 resolved 的旧评论要被新发现取代，但**不能在这里就删**。
+                //
+                // 真正的发布发生在后面的批量/逐条请求里；先删后发的话，一旦平台拒收新
+                // 行号（422），旧讨论已经没了，新发现也发不出去——历史和新内容一起丢。
+                // 这里只登记，等确认新评论落地后再清理。
+                pendingDeletions.set(commentKey(comment), existingBotComments.map(c => c.id));
             }
             commentsToSubmit.push(comment);
         }
@@ -70826,25 +70938,107 @@ ${statusMsg}
             startSide: comment.startLine !== comment.endLine ? 'RIGHT' : undefined
         });
         try {
-            const submitted = await platform.submitReviewComments(repo.owner, repo.repo, pullNumber, commitId, commentsToSubmit.map(toDraft), body);
-            logger.info(`Submitting review for PR #${pullNumber}, total comments: ${submitted}`);
+            const result = await platform.submitReviewComments(repo.owner, repo.repo, pullNumber, commitId, commentsToSubmit.map(toDraft), body);
+            logger.info(`Submitting review for PR #${pullNumber}, delivered: ${result.delivered.length}, ` +
+                `failed: ${result.failed.length}`);
+            // adapter 可能部分成功：GitHub 的 createReview 是原子的，GitLab 则逐条创建
+            // discussion，部分失败时只返回一个总数是不够的。按位置对回本地缓冲，
+            // **只清理确认投递成功的那些**，否则新发现没发成、被取代的旧讨论却已经删了。
+            const failedKeys = new Set(result.failed.map(d => draftKey(d)));
+            const deliveredComments = commentsToSubmit.filter(c => !failedKeys.has(commentKey(c)));
+            await this.flushPendingDeletions(deliveredComments, pendingDeletions);
+            // 两层都没送出去的，交给统一的顶层降级（REVIEW-014），
+            // 而不是让 adapter 各自静默跳过
+            if (result.failed.length > 0) {
+                const undelivered = commentsToSubmit.filter(c => failedKeys.has(commentKey(c)));
+                await this.postUndeliverableAsTopLevel(pullNumber, undelivered);
+            }
         }
         catch (e) {
             // 批量提交失败时，降级为逐条提交
             logger.warning(`Failed to create review: ${e}. Falling back to individual comments.`);
             await this.deletePendingReview(pullNumber);
             let commentCounter = 0;
+            // REVIEW-014：逐条也发不出去的（最常见是行号不在 diff 内，平台返回 422），
+            // 原先只打一条 warning 就没了——审查发现被静默丢弃。收集起来，最后统一
+            // 降级到顶层评论：位置精度不如行级，但至少内容不会消失。
+            const undeliverable = [];
             for (const comment of commentsToSubmit) {
                 logger.info(`Creating new review comment for ${comment.path}:${comment.startLine}-${comment.endLine}: ${comment.message}`);
                 try {
                     await platform.createReviewComment(repo.owner, repo.repo, pullNumber, commitId, toDraft(comment));
                 }
                 catch (ee) {
-                    logger.warning(`Failed to create review comment: ${ee}`);
+                    logger.warning(`Failed to create review comment at ${comment.path}:${comment.startLine}-${comment.endLine}: ${ee}`);
+                    undeliverable.push(comment);
                 }
                 commentCounter++;
                 logger.info(`Comment ${commentCounter}/${commentsToSubmit.length} posted`);
             }
+            // 只清理「新评论确实发出去了」的那些位置；发不出去的保留旧讨论，
+            // 否则用户既看不到新发现，也失去了历史上下文
+            const undeliverableKeys = new Set(undeliverable.map(commentKey));
+            const delivered = commentsToSubmit.filter(c => !undeliverableKeys.has(commentKey(c)));
+            await this.flushPendingDeletions(delivered, pendingDeletions);
+            if (undeliverable.length > 0) {
+                await this.postUndeliverableAsTopLevel(pullNumber, undeliverable);
+            }
+        }
+    }
+    /**
+     * 清理被新评论取代的旧讨论（REVIEW-013）。
+     *
+     * 只对**确认已发布**的位置执行——见 submitReview 里登记 pendingDeletions 的
+     * 注释：先删后发会在平台拒收新行号时把历史和新发现一起弄丢。
+     */
+    async flushPendingDeletions(published, pending) {
+        const platform = getPlatform();
+        const logger = getLogger();
+        for (const comment of published) {
+            const ids = pending.get(commentKey(comment));
+            if (ids == null)
+                continue;
+            for (const id of ids) {
+                logger.info(`Deleting superseded resolved review comment ${id} at ${commentKey(comment)}`);
+                try {
+                    await platform.deleteReviewComment(repo.owner, repo.repo, id);
+                }
+                catch (e) {
+                    logger.warning(`Failed to delete review comment: ${e}`);
+                }
+            }
+        }
+    }
+    /**
+     * 把发不出去的行级评论降级为一条顶层评论（REVIEW-014）。
+     *
+     * 触发场景是行号映射失败：模型给出的行不在本次 diff 的可评论范围内，平台
+     * 直接拒收（GitHub 422 "line must be part of the diff"）。这类失败无法靠重试
+     * 解决，但发现本身是有价值的——把文件与行号写进正文，用户照样能定位。
+     *
+     * 用 replace 模式发，避免每次审查都堆一条新的。
+     */
+    async postUndeliverableAsTopLevel(pullNumber, comments) {
+        const logger = getLogger();
+        const items = comments
+            .map(c => {
+            const range = c.startLine === c.endLine ? `${c.endLine}` : `${c.startLine}-${c.endLine}`;
+            return `<details>\n<summary><code>${c.path}:${range}</code></summary>\n\n${c.message}\n\n</details>`;
+        })
+            .join('\n');
+        const body = `> ⚠️ 以下 ${comments.length} 条发现无法作为行级评论发布（通常是行号不在本次 diff 的可评论范围内），改以顶层评论呈现：\n\n${items}`;
+        const delivered = await this.comment(body, stateMarker('undeliverableFindings'), 'replace');
+        if (delivered) {
+            logger.info(`[review-014] posted ${comments.length} undeliverable finding(s) as a top-level comment`);
+            return;
+        }
+        // 最后一层也没送出去：如实报告「彻底丢失」，并把内容写进日志，让运维至少能
+        // 从 job 日志里捞回来。此前这里靠 try/catch 判断成功，而 comment() 内部把
+        // 异常吞了，于是失败也照样打印「已发布」。
+        logger.error(`[review-014] failed to deliver ${comments.length} finding(s) — they are NOT visible on the ` +
+            'pull request. Contents follow so they are at least recoverable from this log:');
+        for (const c of comments) {
+            logger.error(`  ${commentKey(c)}: ${c.message}`);
         }
     }
     /**
@@ -71061,9 +71255,11 @@ ${chain}
             else {
                 this.issueCommentsCache[target] = [data];
             }
+            return true;
         }
         catch (e) {
             getLogger().warning(`Failed to create comment: ${e}`);
+            return false;
         }
     }
     /** 查找并替换已有评论；如果不存在则新建。同时清理并发运行产生的重复评论 */
@@ -71073,25 +71269,45 @@ ${chain}
         try {
             const comments = await this.listComments(target);
             const variants = variantsForTag(tag);
-            const matchedComments = comments.filter((cmt) => cmt.body && variants.some(v => cmt.body.includes(v)));
-            if (matchedComments.length > 0) {
-                await platform.updateComment(repo.owner, repo.repo, matchedComments[0].id, body);
-                for (let i = 1; i < matchedComments.length; i++) {
-                    logger.info(`Deleting duplicate comment ${matchedComments[i].id} with tag ${tag}`);
+            const taggedComments = comments.filter((cmt) => cmt.body && variants.some(v => cmt.body.includes(v)));
+            // REVIEW-008：带 marker 不等于是我们发的。用户「引用回复」会把整段正文连同
+            // marker 一起复制过去，不校验作者就会覆盖甚至删掉用户自己的评论。
+            const botLogin = await resolveBotLogin();
+            // 身份未知时 fail closed：既不更新也不删除任何既有评论，直接新发一条。
+            //
+            // 只挡删除是不够的——覆盖比删除破坏性更大：被删的评论用户还能从邮件通知里
+            // 找回原文，被覆盖的内容彻底消失。宁可留下重复的摘要（下次身份可解析时会
+            // 自动收敛），也不能赌「第一条带 marker 的评论就是我们自己的」。
+            if (botLogin == null) {
+                logger.warning(`Bot identity is unknown — posting a new comment with tag ${tag} instead of updating ` +
+                    `${taggedComments.length} existing match(es), to avoid overwriting user comments. ` +
+                    'Set the bot login in configuration to restore in-place updates.');
+                return await this.create(body, target);
+            }
+            const ownComments = taggedComments.filter((cmt) => isOwnComment(cmt, botLogin) === true);
+            const foreignCount = taggedComments.length - ownComments.length;
+            if (foreignCount > 0) {
+                logger.info(`Ignoring ${foreignCount} comment(s) carrying tag ${tag} but authored by someone else ` +
+                    '(likely a quoted reply)');
+            }
+            if (ownComments.length > 0) {
+                await platform.updateComment(repo.owner, repo.repo, ownComments[0].id, body);
+                for (let i = 1; i < ownComments.length; i++) {
+                    logger.info(`Deleting duplicate comment ${ownComments[i].id} with tag ${tag}`);
                     try {
-                        await platform.deleteComment(repo.owner, repo.repo, matchedComments[i].id);
+                        await platform.deleteComment(repo.owner, repo.repo, ownComments[i].id);
                     }
                     catch (e) {
                         logger.warning(`Failed to delete duplicate comment: ${e}`);
                     }
                 }
+                return true;
             }
-            else {
-                await this.create(body, target);
-            }
+            return await this.create(body, target);
         }
         catch (e) {
             logger.warning(`Failed to replace comment: ${e}`);
+            return false;
         }
     }
     /** 查找包含指定标签的 issue comment */
@@ -71099,10 +71315,23 @@ ${chain}
         try {
             const comments = await this.listComments(target);
             const variants = variantsForTag(tag);
+            // 同 replace()：用户引用回复里的 marker 不能被当成我们自己的状态，
+            // 否则会从中读出过期的 reviewed SHA，把增量审查的起点带偏。
+            //
+            // 身份未知时返回 null 而不是「第一条带 marker 的」：拿不准归属就不恢复
+            // 状态。代价是这次退化成全量审查，比从用户引用里读出错误的起点安全。
+            const botLogin = await resolveBotLogin();
+            if (botLogin == null) {
+                getLogger().warning(`Bot identity is unknown — not restoring state from comments with tag ${tag}; ` +
+                    'this run will not use previous review state.');
+                return null;
+            }
             for (const cmt of comments) {
-                if (cmt.body && variants.some(v => cmt.body.includes(v))) {
-                    return cmt;
-                }
+                if (!cmt.body || !variants.some(v => cmt.body.includes(v)))
+                    continue;
+                if (isOwnComment(cmt, botLogin) !== true)
+                    continue;
+                return cmt;
             }
             return null;
         }
@@ -84127,8 +84356,10 @@ class GitHubPlatform {
         }
     }
     async submitReviewComments(owner, repo, changeRequestId, commitSha, comments, reviewBody) {
+        // GitHub 的 createReview 是原子的：要么整批进去，要么抛错。
+        // 因此结果只有「全部投递」或「异常上抛由调用方降级」两种。
         if (comments.length === 0)
-            return 0;
+            return { delivered: [], failed: [] };
         try {
             const review = await octokit.pulls.createReview({
                 owner,
@@ -84158,7 +84389,7 @@ class GitHubPlatform {
                 event: 'COMMENT',
                 body: reviewBody ?? ''
             });
-            return comments.length;
+            return { delivered: [...comments], failed: [] };
         }
         catch (e) {
             throw toGitPlatformError(e);
@@ -90432,6 +90663,15 @@ ${summariesFailed.length > 0
                 for (const c of allReviewComments) {
                     if (!bodyHasMarker(c.body, 'comment'))
                         continue;
+                    // REVIEW-012：用户引用回复也带 marker。把它算成「已有我们的评论」，
+                    // 该位置本次的新发现就会被当成重复而丢弃。
+                    //
+                    // 只有**确认**是自己发的才建立去重范围。false 和 null 都不抑制审查：
+                    // 身份查不到时若把 null 当成「是自己的」，任何人只要引用一条带 marker
+                    // 的评论，就能让对应 patch 跳过模型审查——那是可被伪造的抑制通道。
+                    // 这与 submitReview() 里「身份未知则不去重」的方向也保持一致。
+                    if ((await isOwnAuthor(c.user?.login)) !== true)
+                        continue;
                     const key = `${c.path}:${c.line}`;
                     const isResolved = threadStatusMap.get(key);
                     if (isResolved === true)
@@ -92346,7 +92586,7 @@ async function runOrchestrator(deps) {
     let options;
     try {
         options = configProvider.getOptions();
-        initBotGreeting(options.botIcon, options.botName);
+        initBotGreeting(options.botIcon, options.botName, options.botLogin);
         configProvider.print((msg) => logger.info(msg));
     }
     catch (e) {

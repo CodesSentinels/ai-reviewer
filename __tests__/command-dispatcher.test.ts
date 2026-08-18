@@ -40,7 +40,8 @@ const platformState: Record<string, any> = {
   getChangeRequest: jest.fn(),
   updateChangeRequestBody: jest.fn(),
   replyToReviewComment: jest.fn(),
-  addReaction: jest.fn()
+  addReaction: jest.fn(),
+  getAuthenticatedLogin: jest.fn(async () => 'bot')
 }
 
 jest.mock('../src/platform/git-platform', () => ({
@@ -178,6 +179,8 @@ beforeEach(() => {
     author: ''
   })
   platformState.addReaction.mockResolvedValue(undefined)
+  // REVIEW-008：定位既有摘要要校验作者；身份解析不了就不会恢复历史 reviewed SHA
+  platformState.getAuthenticatedLogin.mockResolvedValue('bot')
   platformState.updateChangeRequestBody.mockResolvedValue(undefined)
   // 默认: alice 有 write 权限
   platformState.getCollaboratorPermission.mockResolvedValue('write')
