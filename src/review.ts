@@ -20,6 +20,7 @@ import {
   Commenter,
   bodyHasMarker,
   isOwnAuthor,
+  stateMarker,
   commentReplyTag,
   commentTag,
   rawSummaryEndTag,
@@ -62,6 +63,7 @@ import {mergeReviewsByTopic, type Review} from './review-dedup'
 import {ensureFixSuggestionHeaders} from './fix-suggestion-header'
 import {getRepoFileTree, type DirectoryLister, type TreeFetcher} from './repo-tree'
 import {getReviewStateFromBody} from './review-state'
+import {isHeadStale} from './head-staleness'
 import {getRepoCoords, repoCoordsOf, setExecCtx} from './platform/run-context'
 import {getTokenCount} from './tokenizer'
 import {fetchThreadStatusMap, type ThreadStatusMap} from './github/review-thread'
@@ -670,6 +672,74 @@ ${
     }
   }
 
+  // ── REVIEW-003：只发布针对最新 HEAD 的结果 ──────────────────────────────
+  //
+  // 基线用「审查开始时读到的 HEAD」而不是事件里的：评论触发的运行 execCtx.headSha
+  // 固定为空（见 github-execution-context.ts），拿事件值做基线会让 @ai-reviewer
+  // review 永远发不出结果；而且真正要防的是「分析跑了几分钟，期间又推了新 commit」，
+  // 那正是分析基线与当前 HEAD 的差异。
+  const reviewedHeadSha = pr.head.sha
+
+  /**
+   * 写入阶段的准入判断。返回 false 表示本次结果已作废，调用方必须放弃全部写入。
+   *
+   * 拦的是**全部**写入而不只是行级评论：危害最大的恰恰不是行级评论（GitHub 会把
+   * 它标成 Outdated，本就是历史记录），而是 reviewed SHA marker——它记的是现查的
+   * 新 SHA，而分析内容来自旧 SHA，等于宣称「新 HEAD 已审过」，下次增量审查会跳过
+   * 这段，发现被永久吞掉。摘要与 release notes 同理，都是 replace 语义。
+   */
+  const ensureHeadFresh = async (phase: string): Promise<boolean> => {
+    let currentHeadSha = ''
+    try {
+      const fresh = await getPlatform().getChangeRequest(prOwner, prRepo, execCtx.changeRequestId)
+      currentHeadSha = fresh.headSha
+    } catch (e) {
+      // 读不到当前 HEAD 时不阻断：宁可发一次可能陈旧的结果，也不因为一次 API
+      // 抖动就让整轮审查白跑
+      getLogger().warning(`[review-003] failed to re-read HEAD before ${phase}: ${String(e)}`)
+      return true
+    }
+
+    const check = isHeadStale(reviewedHeadSha, currentHeadSha)
+    if (!check.stale) return true
+
+    getLogger().warning(
+      `[review-003] HEAD moved from ${check.eventHeadSha} to ${check.currentHeadSha} — ` +
+        `discarding results before ${phase}`
+    )
+    return false
+  }
+
+  /**
+   * 发布「本次结果已作废」提示（幂等）。
+   *
+   * 用固定 marker + replace 模式：同一个 PR 上连续几次被超越时只留一条，不堆积。
+   * 同时清掉进度横幅——否则 PR 上会一直挂着「Currently reviewing...」。
+   */
+  const publishInvalidationNotice = async (currentHeadSha: string): Promise<void> => {
+    const body =
+      `> ⚠️ 本次审查的结果已作废：分析基于 \`${reviewedHeadSha.slice(0, 8)}\`，` +
+      `但发布前 HEAD 已变为 \`${currentHeadSha.slice(0, 8)}\`。\n>\n` +
+      '> 针对新 HEAD 的审查会自动运行；本条提示会被下一次结果覆盖。\n'
+    try {
+      await commenter.comment(body, stateMarker('reviewInvalidated'), 'replace')
+    } catch (e) {
+      getLogger().warning(`[review-003] failed to publish invalidation notice: ${String(e)}`)
+    }
+    // 清掉进度横幅：审查已作废，不能让 PR 上一直显示「进行中」
+    try {
+      const existing = await commenter.findCommentWithTag(summarizeTag(), pr.number)
+      if (existing != null) {
+        const cleaned = commenter.removeInProgressStatus(existing.body)
+        if (cleaned !== existing.body) {
+          await commenter.comment(cleaned, summarizeTag(), 'replace')
+        }
+      }
+    } catch (e) {
+      getLogger().warning(`[review-003] failed to clear in-progress banner: ${String(e)}`)
+    }
+  }
+
   const doSummary = async (
     filename: string,
     fileContent: string,
@@ -793,6 +863,13 @@ ${filename}: ${summary}
 
   const botName = options.botName
 
+  // REVIEW-003 第一道：release notes 是分析之后的第一处持久化写入
+  if (!(await ensureHeadFresh('release notes'))) {
+    const fresh = await getPlatform().getChangeRequest(prOwner, prRepo, execCtx.changeRequestId)
+    await publishInvalidationNotice(fresh.headSha)
+    return
+  }
+
   // 生成发布说明并写入 PR 描述
   if (options.disableReleaseNotes === false) {
     const releaseNotesResponse =
@@ -867,6 +944,14 @@ ${
   // 提到函数作用域：最终摘要评论在审查阶段**之后**发布，需要读这份失败清单
   // 来生成「本次审查不完整」提示（REVIEW-006）
   const reviewsFailed: string[] = []
+
+  // REVIEW-003 第二道：阶段三通常要几分钟，期间完全可能又推了新 commit。
+  // 一处判断挡不住整条流水线，按**写入阶段**各设一道。
+  if (!(await ensureHeadFresh('line-level review and final summary'))) {
+    const fresh = await getPlatform().getChangeRequest(prOwner, prRepo, execCtx.changeRequestId)
+    await publishInvalidationNotice(fresh.headSha)
+    return
+  }
 
   // ==================== 阶段四：逐文件代码审查 ====================
   if (!options.disableReview && runOptions.summaryOnly !== true) {

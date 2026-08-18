@@ -110,6 +110,12 @@ export const STATE_MARKERS = {
     legacy: '<!-- commit_ids_reviewed_end -->',
     current: () => buildStateMarker('commit-ids-reviewed-end')
   },
+  reviewInvalidated: {
+    kind: 'review-invalidated',
+    // 新增 marker，无历史形态（空串会被 includes('') 恒真命中，故用占位）
+    legacy: '<!-- ai-reviewer:__no-legacy:review-invalidated -->',
+    current: () => buildStateMarker('review-invalidated')
+  },
   undeliverableFindings: {
     kind: 'undeliverable-findings',
     // 新增 marker，没有历史形态；legacy 留空串会被 includes('') 恒真命中，
