@@ -12,6 +12,7 @@ import {createGitLabExecutionContext} from '../src/platform/gitlab-execution-con
 
 import noteToplevel from './fixtures/gitlab-note-hook-toplevel.json'
 import noteDiscussion from './fixtures/gitlab-note-hook-discussion.json'
+import noteRealPayload from './fixtures/gitlab-note-hook-real-payload-2026-08-18.json'
 
 describe('EVENT-014: 顶层 MR note → comment.kind=top_level, eventKind=comment_created', () => {
   test('顶层 note（无 discussion_id）映射正确，且携带命令路由所需的全部字段', () => {
@@ -24,10 +25,24 @@ describe('EVENT-014: 顶层 MR note → comment.kind=top_level, eventKind=commen
     // 这里确认原始 note body 保留在 raw 里，供 adapter 层取出后传给 parser
     expect((execCtx.raw as any).object_attributes.note).toBe('@ai-reviewer review')
   })
+
+  /**
+   * 2026-08-18 真实环境验证（Issue #118）回归：真实捕获的 payload 证实
+   * discussion_id 现在所有 note 都会带，不再是行级回复的专属信号；此前用
+   * `discussion_id` 是否存在判断会把这条真实的顶层命令误判为
+   * review_comment_created，导致 replyToReviewComment() 在 gitlab-platform.ts
+   * 的 noteToDiscussion 缓存里查不到（该缓存只收录 DiffNote）而报错降级。
+   */
+  test('真实捕获的顶层命令（带 discussion_id 但无 type=DiffNote）→ 仍判定为 comment_created', () => {
+    const execCtx = createGitLabExecutionContext(noteRealPayload)
+
+    expect(execCtx.eventKind).toBe('comment_created')
+    expect(execCtx.comment?.kind).toBe('top_level')
+  })
 })
 
 describe('EVENT-015: discussion note/reply → comment.kind=review_thread, eventKind=review_comment_created', () => {
-  test('discussion 回复（有 discussion_id）映射正确，携带对话上下文所需的 threadId', () => {
+  test('行级 diff 回复（object_attributes.type=DiffNote）映射正确，携带对话上下文所需的 threadId', () => {
     const execCtx = createGitLabExecutionContext(noteDiscussion)
 
     expect(execCtx.eventKind).toBe('review_comment_created')
