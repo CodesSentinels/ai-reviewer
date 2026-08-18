@@ -70522,10 +70522,67 @@ function getCommentGreeting() {
     return _commentGreeting;
 }
 /**
- * 初始化 bot 问候语。由 main.ts 在构建 Options 后调用一次。
+ * 配置的 bot 登录名（GitHub: bot_github_login；GitLab: PAT 用户名）。
+ * 空串表示未配置，此时退化为向平台查询。
  */
-function initBotGreeting(icon, name) {
+let _configuredBotLogin = '';
+/**
+ * 初始化 bot 问候语与身份。由入口在构建 Options 后调用一次。
+ */
+function initBotGreeting(icon, name, botLogin = '') {
     _commentGreeting = `${icon}   ${name}`;
+    _configuredBotLogin = botLogin.trim();
+    _resolvedBotLogin = undefined;
+}
+/** 解析结果缓存：undefined = 还没查过，null = 查不到 */
+let _resolvedBotLogin;
+/**
+ * 本次运行的 bot 登录名（REVIEW-008 / STATE-008）。
+ *
+ * 为什么必须知道「我是谁」：定位既有摘要评论靠的是正文里的 marker，而用户用
+ * 「引用回复」会把整段正文连同 marker 一起复制过去。不校验作者的话：
+ *
+ *   - 用户那条引用可能被当成我们的摘要**覆盖**掉；
+ *   - 匹配到多条时，除第一条外全部会被**删除**；
+ *   - findCommentWithTag 可能读到用户引用里的旧 reviewed SHA，污染增量审查状态。
+ *
+ * 优先用配置值（省一次 API），否则查一次并缓存。两者都拿不到时返回 null，
+ * 调用方按「身份未知」fail closed。
+ */
+async function resolveBotLogin() {
+    if (_resolvedBotLogin !== undefined)
+        return _resolvedBotLogin;
+    if (_configuredBotLogin !== '') {
+        _resolvedBotLogin = _configuredBotLogin;
+        return _resolvedBotLogin;
+    }
+    try {
+        const login = await getPlatform().getAuthenticatedLogin();
+        // adapter 理论上返回 string，但真实现可能因 API 变更/降级返回空值。
+        // 靠 try/catch 兜 TypeError 会把「身份拿不到」和「调用出错」混成一件事，
+        // 这里显式判类型，两种情况都 fail closed。
+        const trimmed = typeof login === 'string' ? login.trim() : '';
+        _resolvedBotLogin = trimmed === '' ? null : trimmed;
+    }
+    catch (e) {
+        getLogger().warning(`Failed to resolve bot identity: ${String(e)} — comment ownership checks will fail closed`);
+        _resolvedBotLogin = null;
+    }
+    return _resolvedBotLogin;
+}
+/** 仅供测试重置身份缓存 */
+function _resetBotIdentity() {
+    _configuredBotLogin = '';
+    _resolvedBotLogin = undefined;
+}
+/** 这条评论是不是我们自己发的（身份未知时返回 null，表示无法判断） */
+function isOwnComment(comment, botLogin) {
+    if (botLogin == null)
+        return null;
+    const author = (comment.user?.login ?? '').trim();
+    if (author === '')
+        return null;
+    return author.toLowerCase() === botLogin.toLowerCase();
 }
 // 状态 marker 清单集中在 state-markers.ts（GH-014），此处 re-export 保持调用方 import 不变
 
@@ -71060,13 +71117,34 @@ ${chain}
         try {
             const comments = await this.listComments(target);
             const variants = variantsForTag(tag);
-            const matchedComments = comments.filter((cmt) => cmt.body && variants.some(v => cmt.body.includes(v)));
-            if (matchedComments.length > 0) {
-                await platform.updateComment(repo.owner, repo.repo, matchedComments[0].id, body);
-                for (let i = 1; i < matchedComments.length; i++) {
-                    logger.info(`Deleting duplicate comment ${matchedComments[i].id} with tag ${tag}`);
+            const taggedComments = comments.filter((cmt) => cmt.body && variants.some(v => cmt.body.includes(v)));
+            // REVIEW-008：带 marker 不等于是我们发的。用户「引用回复」会把整段正文连同
+            // marker 一起复制过去，不校验作者就会覆盖甚至删掉用户自己的评论。
+            const botLogin = await resolveBotLogin();
+            // 身份未知时 fail closed：既不更新也不删除任何既有评论，直接新发一条。
+            //
+            // 只挡删除是不够的——覆盖比删除破坏性更大：被删的评论用户还能从邮件通知里
+            // 找回原文，被覆盖的内容彻底消失。宁可留下重复的摘要（下次身份可解析时会
+            // 自动收敛），也不能赌「第一条带 marker 的评论就是我们自己的」。
+            if (botLogin == null) {
+                logger.warning(`Bot identity is unknown — posting a new comment with tag ${tag} instead of updating ` +
+                    `${taggedComments.length} existing match(es), to avoid overwriting user comments. ` +
+                    'Set the bot login in configuration to restore in-place updates.');
+                await this.create(body, target);
+                return;
+            }
+            const ownComments = taggedComments.filter((cmt) => isOwnComment(cmt, botLogin) === true);
+            const foreignCount = taggedComments.length - ownComments.length;
+            if (foreignCount > 0) {
+                logger.info(`Ignoring ${foreignCount} comment(s) carrying tag ${tag} but authored by someone else ` +
+                    '(likely a quoted reply)');
+            }
+            if (ownComments.length > 0) {
+                await platform.updateComment(repo.owner, repo.repo, ownComments[0].id, body);
+                for (let i = 1; i < ownComments.length; i++) {
+                    logger.info(`Deleting duplicate comment ${ownComments[i].id} with tag ${tag}`);
                     try {
-                        await platform.deleteComment(repo.owner, repo.repo, matchedComments[i].id);
+                        await platform.deleteComment(repo.owner, repo.repo, ownComments[i].id);
                     }
                     catch (e) {
                         logger.warning(`Failed to delete duplicate comment: ${e}`);
@@ -71086,10 +71164,23 @@ ${chain}
         try {
             const comments = await this.listComments(target);
             const variants = variantsForTag(tag);
+            // 同 replace()：用户引用回复里的 marker 不能被当成我们自己的状态，
+            // 否则会从中读出过期的 reviewed SHA，把增量审查的起点带偏。
+            //
+            // 身份未知时返回 null 而不是「第一条带 marker 的」：拿不准归属就不恢复
+            // 状态。代价是这次退化成全量审查，比从用户引用里读出错误的起点安全。
+            const botLogin = await resolveBotLogin();
+            if (botLogin == null) {
+                getLogger().warning(`Bot identity is unknown — not restoring state from comments with tag ${tag}; ` +
+                    'this run will not use previous review state.');
+                return null;
+            }
             for (const cmt of comments) {
-                if (cmt.body && variants.some(v => cmt.body.includes(v))) {
-                    return cmt;
-                }
+                if (!cmt.body || !variants.some(v => cmt.body.includes(v)))
+                    continue;
+                if (isOwnComment(cmt, botLogin) !== true)
+                    continue;
+                return cmt;
             }
             return null;
         }
@@ -92333,7 +92424,7 @@ async function runOrchestrator(deps) {
     let options;
     try {
         options = configProvider.getOptions();
-        initBotGreeting(options.botIcon, options.botName);
+        initBotGreeting(options.botIcon, options.botName, options.botLogin);
         configProvider.print((msg) => logger.info(msg));
     }
     catch (e) {
