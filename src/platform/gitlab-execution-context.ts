@@ -141,12 +141,26 @@ function buildFromNoteHook(p: Record<string, any>): ExecutionContext {
       'missing_required_field'
     )
   }
+  // 2026-08-18 真实环境验证（Issue #118）纠正：此前用 `attrs.discussion_id`
+  // 是否存在判断"这是不是行级 diff 评论回复"，但真实 GitLab 上**所有** note
+  // （包括顶层评论）现在都会带 discussion_id——不再是行级回复的专属信号。
+  // 真实捕获的 payload 证实：行级 diff 评论的 `object_attributes.type` 是
+  // `'DiffNote'`，顶层评论这个字段完全不存在。用 type 判断才准确，这也是
+  // `gitlab-platform.ts` 的 `getAllDiffDiscussions()` 内部一直在用的同一个
+  // 字段（`note.type !== 'DiffNote'` 过滤）——两处判据不一致正是这次真实验证
+  // 暴露出的 bug：顶层命令因为 discussion_id 存在被误判为
+  // review_comment_created，走 `replyToReviewComment()` 时在
+  // `noteToDiscussion` 缓存里查不到（该缓存只收录 DiffNote），报
+  // "discussion ID unknown" 后降级为普通评论——命令最终能执行成功，但走的是
+  // 非预期的降级路径，且行级 diff 评论的真实回复功能同样会因为这个误判被
+  // 破坏（顶层评论会被错误当成行级回复处理）。
+  const isDiffNoteReply = attrs.type === 'DiffNote'
   return {
     platform: 'gitlab',
     projectPath: p.project?.path_with_namespace ?? '',
     projectId: String(p.project_id ?? p.project?.id ?? ''),
     changeRequestId: mr.iid,
-    eventKind: attrs.discussion_id ? 'review_comment_created' : 'comment_created',
+    eventKind: isDiffNoteReply ? 'review_comment_created' : 'comment_created',
     actor: makeGitLabActor(p.user?.username),
     baseSha: '',
     // 2026-08-18 真实环境验证（Issue #118）纠正：真实 Note Hook payload 里
@@ -155,7 +169,7 @@ function buildFromNoteHook(p: Record<string, any>): ExecutionContext {
     // last_commit.id 同构）。
     headSha: mr.last_commit?.id ?? '',
     comment: {
-      kind: attrs.discussion_id ? 'review_thread' : 'top_level',
+      kind: isDiffNoteReply ? 'review_thread' : 'top_level',
       id: attrs.id,
       // 正文必须填：共享 dispatcher 以 `typeof comment.body === 'string'` 作为
       // 「这是一条可解析的评论」的判据，缺了它所有 GitLab 命令都会在解析前

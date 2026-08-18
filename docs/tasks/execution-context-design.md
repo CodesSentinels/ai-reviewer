@@ -346,12 +346,14 @@ export function createGitHubExecutionContext(): ExecutionContext {
 | `project.path_with_namespace` / `project_id` | `projectPath` / `projectId` |
 | `merge_request.iid` | `changeRequestId` |
 | `user.username` | `actor.login` |
-| `object_attributes.noteable_type === 'MergeRequest'` 且 `object_attributes.action === 'create'` | `eventKind = 'comment_created'`（顶层）或 `'review_comment_created'`（`object_attributes.discussion_id` 存在时，即回复行级 discussion） |
+| `object_attributes.noteable_type === 'MergeRequest'` 且 `object_attributes.action === 'create'` | `eventKind = 'comment_created'`（顶层）或 `'review_comment_created'`（`object_attributes.type === 'DiffNote'` 时，即行级 diff 评论） |
 | `object_attributes.id` | `comment.id` |
 | `object_attributes.discussion_id` | `comment.threadId` |
 | `merge_request.last_commit.id` | `headSha` |
 
 > ⚠️ **2026-08-18 真实环境验证更正**（Issue #118）：此表原写 `merge_request.diff_head_sha`，是照 GitLab 官方文档推断的字段名，未经真实 Webhook 验证；真实 Note Hook payload 里 `merge_request` 对象根本不存在这个字段，HEAD SHA 实际在 `merge_request.last_commit.id`（与 MR Hook 的 `object_attributes.last_commit.id` 同构）。代码已修正，见 `src/platform/gitlab-execution-context.ts`。
+>
+> ⚠️ **同日第二次更正**：`eventKind`/`comment.kind` 原写"`object_attributes.discussion_id` 存在则为行级回复"，真实捕获的 payload 证实**所有** note（含顶层评论）现在都会带 `discussion_id`，不再是行级回复的专属信号；真正区分行级 diff 评论的字段是 `object_attributes.type === 'DiffNote'`。此前的误判会导致顶层命令走 `replyToReviewComment()` 在 `gitlab-platform.ts` 的 `noteToDiscussion` 缓存里查不到而报错降级（命令仍能执行成功，但走的是非预期路径），且会让真正的行级评论回复功能被顶层评论误伤。代码已修正。
 
 ### 5.2 工厂函数
 
@@ -432,12 +434,12 @@ function buildFromNoteHook(p: Record<string, any>): ExecutionContext {
     projectPath: p.project?.path_with_namespace ?? '',
     projectId: String(p.project_id ?? p.project?.id ?? ''),
     changeRequestId: mr.iid,
-    eventKind: attrs.discussion_id ? 'review_comment_created' : 'comment_created',
+    eventKind: attrs.type === 'DiffNote' ? 'review_comment_created' : 'comment_created', // 2026-08-18 真实环境验证更正，见上方表格备注
     actor: {login: p.user?.username ?? '', isBot: false},
     baseSha: '',
     headSha: mr.last_commit?.id ?? '', // 2026-08-18 真实环境验证更正，见上方表格备注
     comment: {
-      kind: attrs.discussion_id ? 'review_thread' : 'top_level',
+      kind: attrs.type === 'DiffNote' ? 'review_thread' : 'top_level',
       id: attrs.id,
       threadId: attrs.discussion_id
     },

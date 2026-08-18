@@ -130,7 +130,12 @@ function notePayload(over: {note: string; author?: string; discussionId?: string
       note: over.note,
       noteable_type: 'MergeRequest',
       system: false,
-      discussion_id: over.discussionId
+      discussion_id: over.discussionId,
+      // 2026-08-18 真实环境验证（Issue #118）纠正：真实 GitLab 上所有 note
+      // 都带 discussion_id，只有行级 diff 评论会带 type: 'DiffNote'——用
+      // discussionId 是否传入模拟"这是不是行级回复"时，两个字段必须一起给，
+      // 否则不代表真实场景。
+      type: over.discussionId != null ? 'DiffNote' : undefined
     }
   }
 }

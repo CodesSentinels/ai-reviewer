@@ -12,7 +12,8 @@
     "note": "@ai-reviewer 这里为什么这样写？",
     "noteable_type": "MergeRequest",
     "action": "create",
-    "discussion_id": "abc123discussionid"
+    "discussion_id": "abc123discussionid",
+    "type": "DiffNote"
   },
   "merge_request": {
     "iid": 7,
