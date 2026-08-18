@@ -244,14 +244,73 @@ describe('SEC-008: 日志出口统一接线', () => {
     }
   })
 
-  test('GitHubLogger 的四个级别同样经 redactForLog（源码断言）', () => {
+  /**
+   * 门禁必须覆盖**每一个** Logger 实现。
+   *
+   * 早先这条只查 github-logger.ts，于是 GitLabLogger 四个方法一个都没脱敏也照样
+   * 全绿——debug 模式下 sanitize-model-output 会把完整模型文本写进日志，在
+   * GitLab job log 里就是明文（WS-004）。这里改为扫描目录，新增实现自动纳入。
+   */
+  test('每个 Logger 实现的四个级别都经 redactForLog（不能漏掉任何一个平台）', () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const fs = require('fs')
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const path = require('path')
-    const src = fs.readFileSync(path.resolve(__dirname, '../src/platform/github-logger.ts'), 'utf8')
-    for (const level of ['info', 'warning', 'error', 'debug']) {
-      expect(src).toMatch(new RegExp(`${level}\\(redactForLog\\(msg\\)\\)`))
+    const dir = path.resolve(__dirname, '../src/platform')
+    const loggerFiles: string[] = fs.readdirSync(dir).filter((f: string) => /-logger\.ts$/.test(f))
+
+    // 防空跑：确实扫到了两个平台的实现
+    expect(loggerFiles.sort()).toEqual(['github-logger.ts', 'gitlab-logger.ts'])
+
+    const missing: string[] = []
+    for (const file of loggerFiles) {
+      const src: string = fs.readFileSync(path.join(dir, file), 'utf8')
+      for (const level of ['info', 'warning', 'error', 'debug']) {
+        if (!new RegExp(`redactForLog\\(msg\\)`).test(src)) {
+          missing.push(`${file}:${level}`)
+          continue
+        }
+        // 逐个级别确认，而不是「文件里出现过一次就算」
+        const body = src.slice(src.indexOf(`${level}(msg: string)`))
+        const untilNext = body.slice(0, body.indexOf('\n  }'))
+        if (!untilNext.includes('redactForLog(msg)')) missing.push(`${file}:${level}`)
+      }
+    }
+    expect(missing).toEqual([])
+  })
+
+  test('真实 GitLabLogger 的输出确实被脱敏（不只是源码里写了）', () => {
+    const saved = process.env.AI_REVIEWER_DEBUG
+    process.env.AI_REVIEWER_DEBUG = 'true'
+    const secret = 'glpat-AAAAAAAAAAAAAAAAAAAA'
+    process.env.GITLAB_PAT = secret
+
+    const out: string[] = []
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(m => out.push(String(m)))
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(m => out.push(String(m)))
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(m => out.push(String(m)))
+
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const {GitLabLogger} = require('../src/platform/gitlab-logger')
+      const logger = new GitLabLogger()
+      logger.info(`token=${secret}`)
+      logger.warning(`token=${secret}`)
+      logger.error(`token=${secret}`)
+      logger.debug(`模型输出回显 token=${secret}`)
+
+      expect(out).toHaveLength(4)
+      for (const line of out) {
+        expect(`${line} | contains-secret=${line.includes(secret)}`).toBe(
+          `${line} | contains-secret=false`
+        )
+      }
+    } finally {
+      logSpy.mockRestore()
+      warnSpy.mockRestore()
+      errSpy.mockRestore()
+      if (saved === undefined) delete process.env.AI_REVIEWER_DEBUG
+      else process.env.AI_REVIEWER_DEBUG = saved
     }
   })
 })

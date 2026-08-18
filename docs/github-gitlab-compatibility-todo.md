@@ -602,16 +602,16 @@
 
 ### 8.5 Web Search
 
-- [ ] `WS-001` **高**：将 `web_search` 保留为平台无关的模型能力；共享 Bot/审查核
+- [x] `WS-001` **高**：将 `web_search` 保留为平台无关的模型能力；共享 Bot/审查核
       心只读取规范化后的 `enable_web_search`；GitHub 和 GitLab 默认值均为
       `true`，两个 ConfigProvider 均完成映射和默认值测试。
-- [ ] `WS-002` **高**：GitLab secret-bearing trigger 只接受受信任默认分支配置或
+- [x] `WS-002` **高**：GitLab secret-bearing trigger 只接受受信任默认分支配置或
       受保护部署配置中的 `enable_web_search`；MR/Note payload 不得覆盖该开关。
-- [ ] `WS-003` `enable_web_search=false` 时不得把 `web_search` tool 传给模型，也
+- [x] `WS-003` `enable_web_search=false` 时不得把 `web_search` tool 传给模型，也
       不得产生 web search analysis step。
-- [ ] `WS-004` 明确 web search 不执行 Runner 本地代码；其调用失败、citation 清理
+- [x] `WS-004` 明确 web search 不执行 Runner 本地代码；其调用失败、citation 清理
       失败或 analysis step 记录失败不得泄露 secret。
-- [ ] `WS-005` GitHub/GitLab 对相同 `enable_web_search` 配置保持相同工具启用语义
+- [x] `WS-005` GitHub/GitLab 对相同 `enable_web_search` 配置保持相同工具启用语义
       ，允许模型搜索结果本身存在非确定性。
 
 ### 8.6 Release Notes
