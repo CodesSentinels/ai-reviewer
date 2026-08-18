@@ -113,7 +113,7 @@ rm -f "$GITLAB_SMOKE_PAYLOAD"
 GITLAB_NOTE_PAYLOAD="$(mktemp)"
 cat > "$GITLAB_NOTE_PAYLOAD" <<'PAYLOAD'
 {"object_kind":"note","project":{"id":77,"path_with_namespace":"group/demo"},"project_id":77,
- "user":{"username":"alice"},"merge_request":{"iid":42,"diff_head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+ "user":{"username":"alice"},"merge_request":{"iid":42,"last_commit":{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
  "object_attributes":{"id":9001,"action":"create","note":"@ai-reviewer help",
  "noteable_type":"MergeRequest","system":false}}
 PAYLOAD

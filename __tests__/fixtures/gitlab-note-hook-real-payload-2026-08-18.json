@@ -1,0 +1,32 @@
+{
+  "object_kind": "note",
+  "event_type": "note",
+  "user": {"id": 10095020, "name": "Doge Mo", "username": "myz.defi1"},
+  "project_id": 84620932,
+  "project": {
+    "id": 84620932,
+    "path_with_namespace": "CodesSentinels/ai-reviewer-test"
+  },
+  "object_attributes": {
+    "id": 3698435574,
+    "note": "@myz.defi1 help",
+    "noteable_type": "MergeRequest",
+    "action": "create",
+    "discussion_id": "6f9325e6793db707487d617d41093745ecd58170",
+    "noteable_id": 520565344
+  },
+  "merge_request": {
+    "id": 520565344,
+    "iid": 1,
+    "title": "test: real-env verification (Issue #118)",
+    "source_branch": "test/real-env-verification-2026-08-18",
+    "target_branch": "main",
+    "source_project_id": 84620932,
+    "target_project_id": 84620932,
+    "state": "opened",
+    "last_commit": {
+      "id": "e4e2c25aa02cf8ceff3573760fafbd7869154f22",
+      "message": "test: add average() to trigger incremental review (Issue #118)\n"
+    }
+  }
+}

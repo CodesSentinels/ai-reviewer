@@ -23,6 +23,7 @@ import noteSystem from './fixtures/gitlab-note-hook-system.json'
 import noteNonMr from './fixtures/gitlab-note-hook-non-mr.json'
 import unknownEvent from './fixtures/gitlab-unknown-event.json'
 import malformed from './fixtures/gitlab-malformed.json'
+import noteRealPayload from './fixtures/gitlab-note-hook-real-payload-2026-08-18.json'
 
 /** 捕获 fn 抛出的异常并返回，未抛出时让测试失败（避免依赖非标准全局 fail()） */
 function getThrownError(fn: () => unknown): unknown {
@@ -111,7 +112,7 @@ describe('createGitLabExecutionContext()', () => {
     expect(execCtx.platform).toBe('gitlab')
     expect(execCtx.eventKind).toBe('comment_created')
     expect(execCtx.changeRequestId).toBe(7)
-    expect(execCtx.headSha).toBe('head-sha-0001') // merge_request.diff_head_sha
+    expect(execCtx.headSha).toBe('head-sha-0001') // merge_request.last_commit.id
     expect(execCtx.baseSha).toBe('')
     expect(execCtx.actor).toEqual({login: 'alice', isBot: false})
     expect(execCtx.comment).toEqual({
@@ -174,5 +175,15 @@ describe('createGitLabExecutionContext()', () => {
   test('isBot 恒为 false（GitLab MVP 用个人 PAT，无天然 bot 标记，见 EVENT-018）', () => {
     const execCtx = createGitLabExecutionContext(mrOpen)
     expect(execCtx.actor.isBot).toBe(false)
+  })
+
+  /**
+   * 2026-08-18 真实环境验证（Issue #118）：真实 payload 里没有
+   * merge_request.diff_head_sha，headSha 取自 merge_request.last_commit.id。
+   */
+  test('真实捕获的 note payload → headSha 取自 merge_request.last_commit.id', () => {
+    const execCtx = createGitLabExecutionContext(noteRealPayload)
+    expect(execCtx.headSha).toBe('e4e2c25aa02cf8ceff3573760fafbd7869154f22')
+    expect(execCtx.changeRequestId).toBe(1)
   })
 })

@@ -349,7 +349,9 @@ export function createGitHubExecutionContext(): ExecutionContext {
 | `object_attributes.noteable_type === 'MergeRequest'` 且 `object_attributes.action === 'create'` | `eventKind = 'comment_created'`（顶层）或 `'review_comment_created'`（`object_attributes.discussion_id` 存在时，即回复行级 discussion） |
 | `object_attributes.id` | `comment.id` |
 | `object_attributes.discussion_id` | `comment.threadId` |
-| `merge_request.diff_head_sha` | `headSha` |
+| `merge_request.last_commit.id` | `headSha` |
+
+> ⚠️ **2026-08-18 真实环境验证更正**（Issue #118）：此表原写 `merge_request.diff_head_sha`，是照 GitLab 官方文档推断的字段名，未经真实 Webhook 验证；真实 Note Hook payload 里 `merge_request` 对象根本不存在这个字段，HEAD SHA 实际在 `merge_request.last_commit.id`（与 MR Hook 的 `object_attributes.last_commit.id` 同构）。代码已修正，见 `src/platform/gitlab-execution-context.ts`。
 
 ### 5.2 工厂函数
 
@@ -433,7 +435,7 @@ function buildFromNoteHook(p: Record<string, any>): ExecutionContext {
     eventKind: attrs.discussion_id ? 'review_comment_created' : 'comment_created',
     actor: {login: p.user?.username ?? '', isBot: false},
     baseSha: '',
-    headSha: mr.diff_head_sha ?? '',
+    headSha: mr.last_commit?.id ?? '', // 2026-08-18 真实环境验证更正，见上方表格备注
     comment: {
       kind: attrs.discussion_id ? 'review_thread' : 'top_level',
       id: attrs.id,

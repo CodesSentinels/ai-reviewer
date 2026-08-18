@@ -71,10 +71,16 @@ export function validateTriggerPayload(payload: unknown): TriggerPayloadValidati
     if (mr?.iid == null) {
       return {ok: false, reason: 'missing merge_request.iid'}
     }
-    // EVENT-003：Note Hook 里 HEAD SHA 对应字段是 merge_request.diff_head_sha
+    // EVENT-003：Note Hook 里 HEAD SHA 对应字段是 merge_request.last_commit.id
     // （见 gitlab-execution-context.ts 的 headSha 取值），同样不允许缺失/空值。
-    if (!isNonEmptyString(mr?.diff_head_sha)) {
-      return {ok: false, reason: 'missing or invalid merge_request.diff_head_sha'}
+    //
+    // 2026-08-18 真实环境验证（Issue #118）纠正：此前这里读的是
+    // `merge_request.diff_head_sha`，是当初照 GitLab 官方文档推断出的字段名，
+    // 但真实 Note Hook webhook payload 里 `merge_request` 对象根本不存在这个
+    // 字段（不是空值，是完全没有）。真实字段跟 MR Hook 用的
+    // `object_attributes.last_commit.id` 同名同构，改为读它。
+    if (!isNonEmptyString(mr?.last_commit?.id)) {
+      return {ok: false, reason: 'missing or invalid merge_request.last_commit.id'}
     }
   }
   return {ok: true}

@@ -13,6 +13,7 @@ import malformed from './fixtures/gitlab-malformed.json'
 import unknownEvent from './fixtures/gitlab-unknown-event.json'
 import noteToplevel from './fixtures/gitlab-note-hook-toplevel.json'
 import noteNonCreate from './fixtures/gitlab-note-hook-non-create.json'
+import noteRealPayload from './fixtures/gitlab-note-hook-real-payload-2026-08-18.json'
 
 describe('validateTriggerPayload()', () => {
   test('非对象 payload → ok:false', () => {
@@ -181,7 +182,7 @@ describe('validateTriggerPayload()', () => {
       })
     })
 
-    test('note（noteable_type=MergeRequest）缺少 merge_request.diff_head_sha → ok:false', () => {
+    test('note（noteable_type=MergeRequest）缺少 merge_request.last_commit.id → ok:false', () => {
       const payload = {
         object_kind: 'note',
         project: {id: 42},
@@ -190,17 +191,27 @@ describe('validateTriggerPayload()', () => {
       }
       expect(validateTriggerPayload(payload)).toEqual({
         ok: false,
-        reason: 'missing or invalid merge_request.diff_head_sha'
+        reason: 'missing or invalid merge_request.last_commit.id'
       })
     })
 
-    test('note（noteable_type=Issue）不要求 diff_head_sha 存在 → ok:true（沿用既有 ignorable 分支）', () => {
+    test('note（noteable_type=Issue）不要求 last_commit.id 存在 → ok:true（沿用既有 ignorable 分支）', () => {
       const payload = {
         object_kind: 'note',
         project: {id: 42},
         object_attributes: {id: 1, noteable_type: 'Issue', action: 'create'}
       }
       expect(validateTriggerPayload(payload)).toEqual({ok: true})
+    })
+
+    /**
+     * 2026-08-18 真实 GitLab 环境验证（Issue #118）：在真实项目上 @ bot 发了
+     * 一条 `help` 命令评论，第一次触发时被这条校验 fail closed 拒绝——
+     * `merge_request.diff_head_sha` 在真实 payload 里根本不存在。这条 fixture
+     * 是那次真实投递的原始 payload（已脱敏用户邮箱等字段），锁定回归。
+     */
+    test('真实捕获的 payload（Issue #118 事故现场）→ ok:true', () => {
+      expect(validateTriggerPayload(noteRealPayload)).toEqual({ok: true})
     })
   })
 })
