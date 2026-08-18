@@ -54,6 +54,20 @@ export interface CommentRef {
    */
   nodeId?: string
   /**
+   * 行级评论所在的文件与行号（`kind === 'review_thread'` 时有值）。
+   *
+   * 行级对话要靠它定位所在 diff 位置。GitHub 来自 review comment payload 的
+   * `path`/`line`，GitLab 来自 note 的 `position.new_path`/`new_line`。
+   */
+  path?: string
+  line?: number
+  /**
+   * 评论锚定处的 diff 片段。GitHub 的 review comment payload 直接给
+   * （`diff_hunk`）；GitLab 的 note payload 没有对应字段，会留空——
+   * 对话仍能进行，只是少了这一段上下文。
+   */
+  diffHunk?: string
+  /**
    * 评论所属"讨论线程"的真正平台 ID，与 comment/note 自身的 ID 是两个不同概念
    * （ARCH-021 类型边界；GitHub Issue #88 P2 复核指出过混用风险）：
    * - GitHub: 真正的 thread ID 是 `PullRequestReviewThread` 的 GraphQL node ID，

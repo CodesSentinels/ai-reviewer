@@ -139,7 +139,11 @@ export function createGitHubExecutionContext(): ExecutionContext {
       kind: eventKind === 'review_comment_created' ? 'review_thread' : 'top_level',
       id: comment.id,
       body: typeof comment.body === 'string' ? comment.body : undefined,
-      nodeId: typeof comment.node_id === 'string' ? comment.node_id : undefined
+      nodeId: typeof comment.node_id === 'string' ? comment.node_id : undefined,
+      // 行级对话定位所需（REVIEW-015）
+      path: typeof comment.path === 'string' ? comment.path : undefined,
+      line: typeof comment.line === 'number' ? comment.line : undefined,
+      diffHunk: typeof comment.diff_hunk === 'string' ? comment.diff_hunk : undefined
       // threadId 故意不填充——见 CommentRef.threadId 的文档注释（ARCH-021/Issue #88 P2）。
     },
     raw: githubContext.payload

@@ -45,9 +45,7 @@ describe('hasHeadBeenReviewed()', () => {
   })
 
   test('摘要评论存在但 headSha 不在已审查列表里 → false', async () => {
-    platform.listComments.mockResolvedValue([
-      {id: 1, body: summaryCommentBody(['head-sha-0000'])}
-    ])
+    platform.listComments.mockResolvedValue([{id: 1, body: summaryCommentBody(['head-sha-0000'])}])
     const result = await hasHeadBeenReviewed('g', 'demo', 7, 'head-sha-0001')
     expect(result).toBe(false)
   })

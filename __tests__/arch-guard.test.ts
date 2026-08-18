@@ -134,12 +134,12 @@ describe('ARCH-023: 共享核心不得新增直接平台依赖', () => {
 
 /** 粗粒度剥离注释（块注释/行注释），避免文档里提到 "execCtx.raw" 这几个字触发假阳性 */
 describe('ARCH-005: 共享业务层不得新增 execCtx.raw 读取（GitHub Issue #88 P2 复核）', () => {
-  // 已知例外：conversation.ts 需要 review comment 的 diff_hunk/path 等深层 GitHub
-  // 字段，以及完整 PR title/body/base/head sha——这些依赖 Commenter（本身仍直接
-  // import @actions/github，见上方 LEGACY_ALLOWLIST）提供的上下文，是比本次修复
-  // 范围更大的独立迁移任务（尚无 GLAPI-*/REVIEW-* 对应任务落地），暂不消除，
-  // 只冻结在这份 allowlist 里，防止新文件继续蔓延同类读取。
-  const RAW_READ_ALLOWLIST = new Set(['conversation.ts'])
+  // 名单已清空。原先唯一的例外是 conversation.ts——它要 review comment 的
+  // diff_hunk/path 等深层 GitHub 字段。REVIEW-015/016 把这些纳入 CommentRef
+  // 的归一化字段（path/line/diffHunk），PR 标题、描述与 base/head 改为经
+  // IGitPlatform 现查，读取随之消除。GitLab 的 note 事件此前在第一道 payload
+  // 校验就被拒，对话功能完全不可用，正是同一个根因。
+  const RAW_READ_ALLOWLIST = new Set<string>([])
 
   const allFiles = collectTsFiles(SRC)
   const coreFiles = allFiles.filter(f => {

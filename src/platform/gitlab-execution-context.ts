@@ -175,6 +175,15 @@ function buildFromNoteHook(p: Record<string, any>): ExecutionContext {
       // 「这是一条可解析的评论」的判据，缺了它所有 GitLab 命令都会在解析前
       // 就被当成「missing comment body」静默丢弃。
       body: typeof attrs.note === 'string' ? attrs.note : undefined,
+      // 行级对话定位所需（REVIEW-016）。GitLab 的 note payload 用 position
+      // 描述锚点，没有 GitHub 那样的 diff_hunk——留空即可，对话仍能进行。
+      path: attrs.position?.new_path ?? attrs.position?.old_path ?? undefined,
+      line:
+        typeof attrs.position?.new_line === 'number'
+          ? attrs.position.new_line
+          : typeof attrs.position?.old_line === 'number'
+          ? attrs.position.old_line
+          : undefined,
       threadId: attrs.discussion_id
     },
     raw: p

@@ -595,10 +595,10 @@
 
 ### 8.4 自然语言对话
 
-- [ ] `REVIEW-015` 获取 GitHub 顶层/行级对话上下文。
-- [ ] `REVIEW-016` 获取 GitLab MR note/discussion 上下文。
-- [ ] `REVIEW-017` 确认并实现 GitLab 自然语言追问权限；未确认前 fail closed。
-- [ ] `REVIEW-018` reviewer 自身回复不得触发新的对话。
+- [x] `REVIEW-015` 获取 GitHub 顶层/行级对话上下文。
+- [x] `REVIEW-016` 获取 GitLab MR note/discussion 上下文。
+- [x] `REVIEW-017` 确认并实现 GitLab 自然语言追问权限；未确认前 fail closed。
+- [x] `REVIEW-018` reviewer 自身回复不得触发新的对话。
 
 ### 8.5 Web Search
 

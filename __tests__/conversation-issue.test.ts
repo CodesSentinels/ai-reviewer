@@ -34,6 +34,30 @@ const mockExecCtx: any = {
   raw: {}
 }
 
+// REVIEW-015/016：PR 标题/描述/base/head 改由 IGitPlatform 现查，
+// 不再从平台 payload 里读
+const platformState: Record<string, any> = {
+  getChangeRequest: jest.fn(async () => ({
+    number: 42,
+    title: 'PR 标题',
+    body: 'PR 描述',
+    state: 'open',
+    baseSha: 'base-sha',
+    headSha: 'head-sha',
+    baseRef: 'main',
+    headRef: 'feature',
+    author: 'alice'
+  })),
+  compareDiff: jest.fn(async () => ({files: [], commits: []})),
+  listComments: jest.fn(async () => []),
+  listReviewComments: jest.fn(async () => []),
+  createComment: jest.fn(async () => ({id: 1})),
+  getAuthenticatedLogin: jest.fn(async () => 'ai-reviewer'),
+  // REVIEW-017：自然语言追问现在要过权限（与 review 命令同基线）
+  getCollaboratorPermission: jest.fn(async () => 'write')
+}
+jest.mock('../src/platform/git-platform', () => ({getPlatform: () => platformState}))
+
 const octokitState: Record<string, any> = {
   getPull: jest.fn(),
   compareCommits: jest.fn()
@@ -62,6 +86,8 @@ jest.mock('../src/commenter', () => ({
     getDescription = (...a: any[]) => commenterState.getDescription(...a)
   },
   getCommentGreeting: () => '🤖 AI Reviewer',
+  // REVIEW-018：自评论过滤改用作者归属判定
+  isOwnAuthor: jest.fn(async (login: string) => login === 'ai-reviewer'),
   initBotGreeting: jest.fn(),
   commentTag: () => '<!-- BOT_COMMENT -->',
   commentReplyTag: () => '<!-- BOT_REPLY -->',
@@ -80,6 +106,7 @@ jest.mock('../src/commenter', () => ({
 
 jest.mock('../src/tokenizer', () => ({getTokenCount: () => 0}))
 
+import {_resetPermissionCache} from '../src/commands/permission'
 import {
   composeIssueCommentChain,
   handleIssueConversation,
@@ -98,27 +125,24 @@ function makeBot(reply = '这是模型给出的回答'): any {
   return {chat: jest.fn(async () => [reply, {}, []])}
 }
 
+/**
+ * REVIEW-015/016：对话入口改读归一化字段，不再解析平台 payload。
+ *
+ * `raw` 仍然保留但**故意填成空对象**——它是「不再读 raw」的活证据：一旦有人
+ * 把读取加回去，这些用例会立刻失败。PR 标题/描述改由 getChangeRequest 现查。
+ */
 function setPayload(commentBody: string, overrides: any = {}) {
-  mockExecCtx.eventKind = 'comment_created'
-  mockExecCtx.raw = {
-    action: 'created',
-    issue: {
-      number: 42,
-      pull_request: {},
-      title: 'PR 标题',
-      body: 'PR 描述'
-    },
-    pull_request: {title: 'PR 标题', body: 'PR 描述'},
-    comment: {
-      id: 2001,
-      body: commentBody,
-      user: {login: 'alice', type: 'User'}
-    },
-    ...overrides
-  }
+  mockExecCtx.eventKind = overrides.eventKind ?? 'comment_created'
+  mockExecCtx.actor = overrides.actor ?? {login: 'alice', isBot: false}
+  mockExecCtx.comment =
+    overrides.comment === null
+      ? undefined
+      : {kind: 'top_level', id: 2001, body: commentBody, ...(overrides.comment ?? {})}
+  mockExecCtx.raw = {}
 }
 
 beforeEach(() => {
+  _resetPermissionCache()
   for (const fn of Object.values(octokitState)) (fn as jest.Mock).mockReset()
   for (const fn of Object.values(commenterState)) (fn as jest.Mock).mockReset()
   commenterState.listComments.mockResolvedValue([])
@@ -169,21 +193,24 @@ describe('composeIssueCommentChain', () => {
 })
 
 describe('handleIssueConversation — 编排', () => {
-  test('非 PR 上的 issue_comment → 跳过', async () => {
-    setPayload('@ai-reviewer 这个改动为啥这样写', {
-      issue: {number: 42, title: 't'} // 无 pull_request 字段
-    })
+  // 「issue_comment 挂在非 PR issue 上」的判断已上移到
+  // createGitHubExecutionContext（抛 ignorable_event），覆盖在
+  // github-execution-context.test.ts。这一层剩下的契约是：非评论事件不处理。
+  test('非评论事件 → 跳过', async () => {
+    setPayload('@ai-reviewer 这个改动为啥这样写', {eventKind: 'pr_opened'})
+    await handleIssueConversation(mockExecCtx, makeBot(), stubOptions, stubPrompts)
+    expect(commenterState.create).not.toHaveBeenCalled()
+  })
+
+  test('缺评论正文 → 跳过', async () => {
+    setPayload('x', {comment: null})
     await handleIssueConversation(mockExecCtx, makeBot(), stubOptions, stubPrompts)
     expect(commenterState.create).not.toHaveBeenCalled()
   })
 
   test('bot 自评论 → 跳过', async () => {
     setPayload('@ai-reviewer 问题', {
-      comment: {
-        id: 2001,
-        body: '@ai-reviewer 问题',
-        user: {login: 'ai-reviewer[bot]', type: 'Bot'}
-      }
+      actor: {login: 'ai-reviewer[bot]', isBot: true}
     })
     await handleIssueConversation(mockExecCtx, makeBot(), stubOptions, stubPrompts)
     expect(commenterState.create).not.toHaveBeenCalled()
