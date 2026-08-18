@@ -69997,6 +69997,12 @@ const STATE_MARKERS = {
         legacy: '<!-- commit_ids_reviewed_end -->',
         current: () => buildStateMarker('commit-ids-reviewed-end')
     },
+    reviewInvalidated: {
+        kind: 'review-invalidated',
+        // 新增 marker，无历史形态（空串会被 includes('') 恒真命中，故用占位）
+        legacy: '<!-- ai-reviewer:__no-legacy:review-invalidated -->',
+        current: () => buildStateMarker('review-invalidated')
+    },
     undeliverableFindings: {
         kind: 'undeliverable-findings',
         // 新增 marker，没有历史形态；legacy 留空串会被 includes('') 恒真命中，
@@ -89923,6 +89929,39 @@ function ensureFixSuggestionHeaders(commentBody) {
     return out.join('\n');
 }
 
+;// CONCATENATED MODULE: ./lib/head-staleness.js
+/**
+ * head-staleness.ts — HEAD 陈旧判定（REVIEW-003 / EVENT-012）
+ *
+ * 两个消费方、两个插入点，但必须共用同一套语义：
+ *
+ *   EVENT-012（§6，GitLab trigger）—— 事件分发**之前**判断，陈旧事件根本不进审查
+ *   REVIEW-003（§8.1，共享审查核心）—— 每个写入阶段**之前**判断，审查跑到一半
+ *                                    HEAD 变了就不写旧结果
+ *
+ * 原先这个纯函数放在 `gitlab-mr-hook-rules.ts` 里。审查核心是平台无关的，从一个
+ * GitLab 专有模块里 import 判定逻辑说不通；各写一份又会让两处语义漂移。
+ * 因此挪到这里，原路径继续 re-export，§6 的接线不受影响。
+ */
+/**
+ * 比较「分析所基于的 HEAD」与「当前 HEAD」。
+ *
+ * 只做比较，不做读取——重新读取当前 HEAD 是调用方的事（GitHub 走
+ * `getChangeRequest`，GitLab 走 GLAPI-006）。
+ *
+ * 任一侧为空时判为**不陈旧**：拿不到基准就无从比较，此时拒绝写入会让评论触发的
+ * 审查永远发不出结果（GitHub 构造评论事件时 execCtx.headSha 固定留空）。
+ * 真正的基准由调用方保证——REVIEW-003 用的是审查开始时读到的 HEAD，不是事件里的。
+ */
+function isHeadStale(eventHeadSha, currentHeadSha) {
+    const known = eventHeadSha !== '' && currentHeadSha !== '';
+    return {
+        stale: known && eventHeadSha !== currentHeadSha,
+        eventHeadSha,
+        currentHeadSha
+    };
+}
+
 // EXTERNAL MODULE: ./node_modules/@dqbd/tiktoken/tiktoken.cjs
 var tiktoken = __nccwpck_require__(3171);
 ;// CONCATENATED MODULE: ./lib/tokenizer.js
@@ -89971,6 +90010,7 @@ function getTokenCount(input) {
  * 支持增量审查：通过在摘要评论中存储已审查的 commit ID，
  * 后续运行只审查新增的变更，避免重复审查。
  */
+
 
 
 
@@ -90458,6 +90498,70 @@ ${filterIgnoredFiles.length > 0
             return null;
         }
     };
+    // ── REVIEW-003：只发布针对最新 HEAD 的结果 ──────────────────────────────
+    //
+    // 基线用「审查开始时读到的 HEAD」而不是事件里的：评论触发的运行 execCtx.headSha
+    // 固定为空（见 github-execution-context.ts），拿事件值做基线会让 @ai-reviewer
+    // review 永远发不出结果；而且真正要防的是「分析跑了几分钟，期间又推了新 commit」，
+    // 那正是分析基线与当前 HEAD 的差异。
+    const reviewedHeadSha = pr.head.sha;
+    /**
+     * 写入阶段的准入判断。返回 false 表示本次结果已作废，调用方必须放弃全部写入。
+     *
+     * 拦的是**全部**写入而不只是行级评论：危害最大的恰恰不是行级评论（GitHub 会把
+     * 它标成 Outdated，本就是历史记录），而是 reviewed SHA marker——它记的是现查的
+     * 新 SHA，而分析内容来自旧 SHA，等于宣称「新 HEAD 已审过」，下次增量审查会跳过
+     * 这段，发现被永久吞掉。摘要与 release notes 同理，都是 replace 语义。
+     */
+    const ensureHeadFresh = async (phase) => {
+        let currentHeadSha = '';
+        try {
+            const fresh = await getPlatform().getChangeRequest(prOwner, prRepo, execCtx.changeRequestId);
+            currentHeadSha = fresh.headSha;
+        }
+        catch (e) {
+            // 读不到当前 HEAD 时不阻断：宁可发一次可能陈旧的结果，也不因为一次 API
+            // 抖动就让整轮审查白跑
+            getLogger().warning(`[review-003] failed to re-read HEAD before ${phase}: ${String(e)}`);
+            return true;
+        }
+        const check = isHeadStale(reviewedHeadSha, currentHeadSha);
+        if (!check.stale)
+            return true;
+        getLogger().warning(`[review-003] HEAD moved from ${check.eventHeadSha} to ${check.currentHeadSha} — ` +
+            `discarding results before ${phase}`);
+        return false;
+    };
+    /**
+     * 发布「本次结果已作废」提示（幂等）。
+     *
+     * 用固定 marker + replace 模式：同一个 PR 上连续几次被超越时只留一条，不堆积。
+     * 同时清掉进度横幅——否则 PR 上会一直挂着「Currently reviewing...」。
+     */
+    const publishInvalidationNotice = async (currentHeadSha) => {
+        const body = `> ⚠️ 本次审查的结果已作废：分析基于 \`${reviewedHeadSha.slice(0, 8)}\`，` +
+            `但发布前 HEAD 已变为 \`${currentHeadSha.slice(0, 8)}\`。\n>\n` +
+            '> 针对新 HEAD 的审查会自动运行；本条提示会被下一次结果覆盖。\n';
+        try {
+            await commenter.comment(body, stateMarker('reviewInvalidated'), 'replace');
+        }
+        catch (e) {
+            getLogger().warning(`[review-003] failed to publish invalidation notice: ${String(e)}`);
+        }
+        // 清掉进度横幅：审查已作废，不能让 PR 上一直显示「进行中」
+        try {
+            const existing = await commenter.findCommentWithTag(summarizeTag(), pr.number);
+            if (existing != null) {
+                const cleaned = commenter.removeInProgressStatus(existing.body);
+                if (cleaned !== existing.body) {
+                    await commenter.comment(cleaned, summarizeTag(), 'replace');
+                }
+            }
+        }
+        catch (e) {
+            getLogger().warning(`[review-003] failed to clear in-progress banner: ${String(e)}`);
+        }
+    };
     const doSummary = async (filename, fileContent, fileDiff) => {
         getLogger().info(`summarize: ${filename}`);
         const ins = inputs.clone();
@@ -90554,6 +90658,12 @@ ${filename}: ${summary}
         getLogger().info('summarize: nothing obtained from openai');
     }
     const botName = options.botName;
+    // REVIEW-003 第一道：release notes 是分析之后的第一处持久化写入
+    if (!(await ensureHeadFresh('release notes'))) {
+        const fresh = await getPlatform().getChangeRequest(prOwner, prRepo, execCtx.changeRequestId);
+        await publishInvalidationNotice(fresh.headSha);
+        return;
+    }
     // 生成发布说明并写入 PR 描述
     if (options.disableReleaseNotes === false) {
         const releaseNotesResponse = (await chatOrNull(heavyBot, prompts.renderSummarizeReleaseNotes(inputs), '发布说明生成')) ??
@@ -90621,6 +90731,13 @@ ${summariesFailed.length > 0
     // 提到函数作用域：最终摘要评论在审查阶段**之后**发布，需要读这份失败清单
     // 来生成「本次审查不完整」提示（REVIEW-006）
     const reviewsFailed = [];
+    // REVIEW-003 第二道：阶段三通常要几分钟，期间完全可能又推了新 commit。
+    // 一处判断挡不住整条流水线，按**写入阶段**各设一道。
+    if (!(await ensureHeadFresh('line-level review and final summary'))) {
+        const fresh = await getPlatform().getChangeRequest(prOwner, prRepo, execCtx.changeRequestId);
+        await publishInvalidationNotice(fresh.headSha);
+        return;
+    }
     // ==================== 阶段四：逐文件代码审查 ====================
     if (!options.disableReview && runOptions.summaryOnly !== true) {
         // 筛选出需要审查的文件（分类为 NEEDS_REVIEW 的文件）
