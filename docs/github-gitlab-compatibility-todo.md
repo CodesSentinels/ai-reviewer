@@ -853,12 +853,16 @@
 > 精确相等，这个条件在"先写入 HEAD、再单独提交、再经 PR 合并产生 merge
 > commit"的正常流程下永远无法自洽，第一次真实触发就被自己的校验拒绝
 > （`REFUSED: ... != CI_COMMIT_SHA`）。改为 `git merge-base --is-ancestor`
-> 祖先链校验后修复，见 PR #119。`mr_verify`（CI-002~004/012）**未能验证**：
-> 该 job 需要在 GitLab `ai-reviewer` 项目上原生开一个 MR 才能触发
-> `merge_request_event`，但 `.github/workflows/sync-to-gitlab.yml` 明确写着
-> 团队策略"不再直接在 GitLab 上做任何代码改动，GitHub 是唯一真相源"——为测试
-> `mr_verify` 而在 GitLab 上手动推分支本身就违反这条策略，因此主动放弃，标记
-> 为已知限制，不强行打通。
+> 祖先链校验后修复，见 PR #119。`mr_verify`（CI-002~004/012）**2026-08-19 已
+> 验证通过**：本机 `git push` 到 GitLab 会被公司终端安全软件硬拦截（与"GitHub
+> 唯一真相源"团队策略无关，是这台机器的技术限制），改用 GitLab Commits/Merge
+> Requests REST API（`POST /repository/commits`+`POST /merge_requests`，走
+> HTTPS 请求而非本地 git，不受该限制影响）在 `ai-reviewer` 项目上开了一个真实
+> MR，`merge_request_event` 成功触发 `mr_verify`：`npm ci`/`build`/`test`
+> （92 passed）/`lint`/`package`/`smoke` 全部真实执行，
+> `check-ci-verify-bundle-provenance.js` 确认 bundle 来源正确，密钥不可见断言
+> （`GITLAB_PAT`/`OPENAI_API_KEY` correctly absent）真实通过。验证完成后 MR
+> 已关闭不合并（内容仅为触发用的无意义 README 注释）。
 >
 > ⚠️ **分支事故记录**：本章代码最初随 PR
 > [#103](https://github.com/CodesSentinels/ai-reviewer/pull/103)（`35464af`）
@@ -874,9 +878,11 @@
 > 交付内容与已知缺口跟原 PR #103 一致：`mr_verify`（无密钥）+
 > `ai_review_trigger`（有密钥）两个 job 靠 `CI_PIPELINE_SOURCE` 互斥，
 > `__tests__/gitlab-ci-config.test.ts`（22 项）+
-> `__tests__/gitlab-ci-verify-bundle-provenance.test.ts`（4 项）。未经真实
-> `CI_PIPELINE_SOURCE=trigger`/Protected Variable 回放，未跑过 GitLab 官方 CI
-> Lint。⚠️ 新发现的缺口：`develop` 上后续新增了第三个打包产物
+> `__tests__/gitlab-ci-verify-bundle-provenance.test.ts`（4 项）。（本段
+> "未经真实 `CI_PIPELINE_SOURCE=trigger`/Protected Variable 回放"是
+> 2026-08-14 事故修复时点的状态，已被上方 2026-08-18/19 的真实环境验证结果
+> 取代，保留仅作历史记录。）未跑过 GitLab 官方 CI Lint。⚠️ 新发现的缺口：
+> `develop` 上后续新增了第三个打包产物
 > `dist/lint-report/`（SEC-002 lint-only 执行器，GitHub 侧专用），
 > `check-ci-verify-bundle-provenance.js` 目前只校验
 > `dist/SOURCE_SHA`/`dist/gitlab-trigger/SOURCE_SHA` 两个——`ai_review_trigger`
@@ -885,10 +891,14 @@
 
 - [x] `CI-001` 新建根目录 `.gitlab-ci.yml`。
 - [x] `CI-002` 新增无密钥 MR verify job：从 MR SHA build、test、lint、双入口
-      package 和冒烟测试；产物只用于本次验证并在 job 结束后丢弃。
-- [x] `CI-003` MR verify job 只以“是否为空/不可访问”的布尔断言验证
+      package 和冒烟测试；产物只用于本次验证并在 job 结束后丢弃。✅
+      **2026-08-19 真实环境验证通过**（Issue #118）：真实 `merge_request_event`
+      触发，`npm ci`/`build`/`test`（92 passed）/`lint`/`package`/`smoke` 全部
+      真实执行成功。
+- [x] `CI-003` MR verify job 只以"是否为空/不可访问"的布尔断言验证
       `GITLAB_PAT`、`OPENAI_API_KEY` 和 Trigger token 不可用，禁止输出、展开或写
-      入这些变量的值。
+      入这些变量的值。✅ **2026-08-19 真实环境验证通过**：job 日志确认
+      `ok: GITLAB_PAT/OPENAI_API_KEY correctly absent from MR pipeline`。
 - [x] `CI-004` MR job 不产生供 protected `main` trigger job 执行的 artifact。
 - [x] `CI-005` 新增 protected `main` 的 `ai-review-trigger` job。
 - [x] `CI-006` trigger job 只允许 `CI_PIPELINE_SOURCE=trigger` 且 ref 为
@@ -901,10 +911,10 @@
 - [x] `CI-010` ignored payload 快速成功退出，不调用模型。
 - [x] `CI-011` 配置 job timeout、有限 retry 和脱敏日志。
 - [x] `CI-012` MR verify job 验证两个临时 bundle 均来自当前 MR 的
-      `CI_COMMIT_SHA`，但这些 bundle 不得被 secret-bearing trigger 消费。
-      ⚠️ 结构/单元测试验证，`mr_verify` job 本身未在真实 GitLab pipeline 上跑
-      过——见上方状态说明，需要在 GitLab 上原生开 MR 才能触发，与"GitHub 唯一
-      真相源"策略冲突，主动放弃，标记为已知限制。
+      `CI_COMMIT_SHA`，但这些 bundle 不得被 secret-bearing trigger 消费。✅
+      **2026-08-19 真实环境验证通过**：`check-ci-verify-bundle-provenance.js`
+      在真实 pipeline 里确认两个 bundle 的 `SOURCE_SHA` 均匹配
+      `CI_COMMIT_SHA`。
 - [x] `CI-013` protected `main` trigger job 只执行仓库中受信任的 GitLab bundle，
       并验证 bundle 记录的 source commit 是该 job 的 `CI_COMMIT_SHA` 的祖先；不
       要求精确相等（2026-08-18 真实环境验证发现原精确相等校验永远无法自洽，
