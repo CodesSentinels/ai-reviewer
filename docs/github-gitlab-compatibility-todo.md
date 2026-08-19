@@ -759,16 +759,16 @@
 
 ### 9.3 命令行为
 
-- [ ] `CMD-017` `review` 针对最新 HEAD 执行增量审查。
-- [ ] `CMD-018` `full review` 读取完整 MR diff 并执行全量审查。
-- [ ] `CMD-019` `summary` 更新或重建 summary note。
-- [ ] `CMD-020` `pause` 写入 GitLab MR description marker。
-- [ ] `CMD-021` `resume` 移除/更新 pause marker 并保持幂等。
-- [ ] `CMD-022` `configuration` 只显示生效后的非敏感配置和来源。
-- [ ] `CMD-023` `help` 显示命令、权限、前缀和评论身份。
-- [ ] `CMD-024` `resolve` 查询并解决 reviewer 创建的 GitLab discussions。
-- [ ] `CMD-025` 每个命令覆盖顶层 note 和 discussion reply。
-- [ ] `CMD-026` 每个命令覆盖无权限、重复事件、旧 SHA 和 API 部分失败。
+- [x] `CMD-017` `review` 针对最新 HEAD 执行增量审查。
+- [x] `CMD-018` `full review` 读取完整 MR diff 并执行全量审查。
+- [x] `CMD-019` `summary` 更新或重建 summary note。
+- [x] `CMD-020` `pause` 写入 GitLab MR description marker。
+- [x] `CMD-021` `resume` 移除/更新 pause marker 并保持幂等。
+- [x] `CMD-022` `configuration` 只显示生效后的非敏感配置和来源。
+- [x] `CMD-023` `help` 显示命令、权限、前缀和评论身份。
+- [x] `CMD-024` `resolve` 查询并解决 reviewer 创建的 GitLab discussions。
+- [x] `CMD-025` 每个命令覆盖顶层 note 和 discussion reply。
+- [x] `CMD-026` 每个命令覆盖无权限、重复事件、旧 SHA 和 API 部分失败。
 
 ### 9.4 命令速率限制
 
