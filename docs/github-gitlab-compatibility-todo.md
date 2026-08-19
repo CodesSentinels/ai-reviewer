@@ -411,9 +411,11 @@
       GitHub Issue [#111](https://github.com/CodesSentinels/ai-reviewer/issues/111)，
       实现 PR [#113](https://github.com/CodesSentinels/ai-reviewer/pull/113)。
       ✅ **2026-08-18 真实环境验证通过"未陈旧"分支**（Issue #118）：真实 job
-      正确重新读取 HEAD 并继续执行。⚠️ "陈旧则跳过"分支未在真实环境触发过
-      （测试过程中每次事件都是最新 push，没有构造出真正陈旧的投递时序），
-      仍只有 mock 单元测试覆盖。
+      正确重新读取 HEAD 并继续执行。✅ **2026-08-19 真实环境验证通过"陈旧则
+      跳过"分支**：连续 push 两个真实 commit（A 后 B），重试 A 那次 pipeline
+      对应的 job（此时 MR 真实 HEAD 已经是 B），真实 job 日志打印
+      `MR 1 HEAD has moved since this event was emitted (event=A current=B)
+      — skipping stale delivery (EVENT-012)`。
 - [x] `EVENT-013` MR 自动审查幂等键使用
       `gitlab:{project_id}:{mr_iid}:head:{head_sha}`，并与 summary note 中的
       reviewed SHA marker 一起判断；不得依赖未明确进入 `TRIGGER_PAYLOAD` 的
@@ -465,11 +467,19 @@
       "discussion ID unknown" 降级告警。对话上下文本身（`REVIEW-015~018`）
       当时仍未接入 GitLab，回复走了 `conversation: skip` 优雅降级——这条已知
       缺口，不在本次验证范围。
-- [x] `EVENT-016` 只处理 `action=create` 的用户 note。⚠️ 未在真实环境显式验证
-      （测试过程中没有构造真实的非 create action note），仅 mock 单元测试
-      覆盖。
-- [x] `EVENT-017` 忽略编辑、删除、system note 和非 MR note。⚠️ 同上，未在真实
-      环境显式验证。
+- [x] `EVENT-016` 只处理 `action=create` 的用户 note。✅ **2026-08-19 真实环境
+      验证通过**（Issue #118）：编辑一条真实 MR 上已有的 note，触发真实
+      `action=update` 的 Note Hook，job 日志打印
+      `Skipped: note action is 'update', not 'create' — ignorable`。
+- [x] `EVENT-017` 忽略编辑、删除、system note 和非 MR note。✅
+      **2026-08-19 真实环境验证通过**（Issue #118）：非 MR note——在
+      `ai-reviewer-test` 建了一个真实 Issue 并评论，job 日志打印
+      `Skipped: noteable_type 'Issue' is not MergeRequest — ignorable`。
+      system note——发现 GitLab 对"added commit"/"changed description"这类
+      自动生成的 system note **不会**触发 Note Hook webhook（查过 webhook
+      投递记录，完全没有 `system: true` 的投递），所以改用手动构造一个符合
+      官方 payload 格式的 system note、直接 POST 到真实 Pipeline Trigger
+      端点验证，job 日志打印 `Skipped: system note — ignorable`。
 - [x] `EVENT-018` 忽略 reviewer/PAT 账号自己的 note。✅ **2026-08-18 真实环境
       验证通过**（Issue #118）：用 `GITLAB_PAT` 对应账号本身发评论，job 日志
       确认 `command dispatcher: ignored comment from bot (login=...)`，正确
@@ -489,7 +499,8 @@
       `gitlab-note-idempotency.test.ts`（13 用例）。跟踪见 Issue
       [#111](https://github.com/CodesSentinels/ai-reviewer/issues/111)，实现
       PR [#113](https://github.com/CodesSentinels/ai-reviewer/pull/113)。
-      ⚠️ 仅 mock 单元/集成测试验证，未在真实 GitLab 环境验证。
+      ✅ **2026-08-19 真实环境验证通过**（Issue #118）：发一条真实命令 note，
+      记账 note 里确认记录了它的 ID。
 - [x] `EVENT-021` 重复 webhook 投递不得重复调用模型或重复回复。
       `gitlab-trigger.ts` 在 `runOrchestrator()` 之前查询 `EVENT-020` 的记账
       note，命中则提前 return（不调模型、不回复），成功完成后才记账。单元
@@ -497,7 +508,10 @@
       例）。跟踪见 Issue
       [#111](https://github.com/CodesSentinels/ai-reviewer/issues/111)，实现
       PR [#113](https://github.com/CodesSentinels/ai-reviewer/pull/113)。
-      ⚠️ 仅 mock 单元/集成测试验证，未在真实 GitLab 环境验证。
+      ✅ **2026-08-19 真实环境验证通过**（Issue #118）：对同一条 note 事件的
+      job 做 retry，第二次 job 日志打印 `Note ... already processed
+      (idempotency key gitlab:...:note:...) — skipping duplicate delivery
+      (EVENT-021)`。
 
 ---
 
