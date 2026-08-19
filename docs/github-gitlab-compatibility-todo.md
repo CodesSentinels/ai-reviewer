@@ -655,24 +655,28 @@
 
 ### 8.6 Release Notes
 
-- [ ] `REVIEW-019` **中**：将 release notes 生成保留在共享审查核心，两个平台使用
+- [x] `REVIEW-019` **中**：将 release notes 生成保留在共享审查核心，两个平台使用
       相同 prompt、输入和开关语义。
-- [ ] `REVIEW-020` 保持 `disable_release_notes` 和 `summarize_release_notes` 的
+- [x] `REVIEW-020` 保持 `disable_release_notes` 和 `summarize_release_notes` 的
       GitHub input 行为，并映射到 GitLab ConfigProvider。
-- [ ] `REVIEW-021` GitHub adapter 继续更新 PR description 中 reviewer 管理的
+- [x] `REVIEW-021` GitHub adapter 继续更新 PR description 中 reviewer 管理的
       release notes 区域。
-- [ ] `REVIEW-022` GitLab adapter 更新 MR description 中 reviewer 管理的 release
+- [x] `REVIEW-022` GitLab adapter 更新 MR description 中 reviewer 管理的 release
       notes 区域。
-- [ ] `REVIEW-023` release notes 更新必须使用平台 marker，只替换 reviewer 管理区
+- [x] `REVIEW-023` release notes 更新必须使用平台 marker，只替换 reviewer 管理区
       域，不覆盖用户原始描述或另一平台 marker。
-- [ ] `REVIEW-024` `disable_release_notes=true` 时完全跳过 release notes 模型调
+- [x] `REVIEW-024` `disable_release_notes=true` 时完全跳过 release notes 模型调
       用和 description 更新。
-- [ ] `REVIEW-025` 同一 fixture 在两平台生成语义等价的 release notes，允许平台格
+- [x] `REVIEW-025` 同一 fixture 在两平台生成语义等价的 release notes，允许平台格
       式差异。
-- [ ] `REVIEW-026` description 更新采用“读取最新值 → 仅修改指定 marker 区域 → 条
-      件写入”的流程；pause/resume、release notes 和用户原始内容必须同时保留。
-- [ ] `REVIEW-027` description 写入遇到版本冲突或并发修改时重新读取后有限重试；
-      不得用旧快照覆盖用户或另一 reviewer marker 的新内容。
+- [x] `REVIEW-026` description 更新采用“读取最新值 → 仅修改指定 marker 区域 →
+      写前重读 → 写后校验”的流程；pause/resume、release notes 和用户原始内容必须
+      同时保留。**并发覆盖的防护范围以 `STATE-010` 的串行执行面为准**——平台不提
+      供条件更新（GitHub `pulls.update`、GitLab MR update 均不接受
+      `If-Match`/version），进程内确定性防护，跨运行依赖平台并发控制。
+- [x] `REVIEW-027` description 写入检测到自己的区块被覆盖时重新读取后有限重试。
+      同 `REVIEW-026`：进程内串行可确定性避免旧快照覆盖；跨运行的保证范围见
+      `STATE-010`，GitHub 评论事件并行为已决策接受的例外。
 
 ### 8.7 本地工具安全
 

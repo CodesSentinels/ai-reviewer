@@ -25,6 +25,17 @@ const MARKER_PREFIX = 'ai-reviewer'
 
 let _namespace: Platform = 'github'
 
+/**
+ * 当前状态命名空间。
+ *
+ * 供需要按平台区分「历史格式归属」的地方使用（见 stateMarkerVariants 与
+ * state-markers.ts 的 tagPairVariants）。业务层不应用它做行为分支——
+ * 平台差异应当止于 adapter。
+ */
+export function currentNamespace(): Platform {
+  return _namespace
+}
+
 /** 入口在 setPlatform() 之后调用，声明本次运行的状态命名空间 */
 export function setStateNamespace(platform: Platform): void {
   _namespace = platform
@@ -52,16 +63,24 @@ export function buildStateMarker(kind: string, ...parts: Array<string | number>)
 }
 
 /**
- * 返回匹配时应接受的全部 marker 形态：当前命名空间的新格式 + 传入的历史格式。
+ * 返回匹配时应接受的全部 marker 形态：当前命名空间的新格式 + 历史格式。
  *
  * 只用于**读取/匹配**；写入必须只用 buildStateMarker() 的结果。
+ *
+ * **历史格式只归 GitHub。** legacy marker 产生于双平台改造之前——那时只有
+ * GitHub 版，所以正文里任何 legacy marker 必然是 GitHub 侧写下的。若 GitLab
+ * 也接受它，MR description 里一个升级前由 GitHub 写入的 release notes 区块，
+ * 会在 GitLab 首次运行时被识别成「自己的区块」而整段覆盖（REVIEW-023）。
+ *
+ * 代价：GitLab 读不到 legacy 状态。这不是损失——那些状态本来就不属于它。
  */
 export function stateMarkerVariants(
   kind: string,
   legacy: string,
   ...parts: Array<string | number>
 ): string[] {
-  return [buildStateMarker(kind, ...parts), legacy]
+  const current = buildStateMarker(kind, ...parts)
+  return _namespace === 'github' ? [current, legacy] : [current]
 }
 
 /** 判断正文是否包含某个状态 marker（新旧格式皆可） */

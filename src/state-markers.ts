@@ -5,7 +5,7 @@
  * 这样架构守卫等静态检查可以直接读取它，而不会因为 import 链上的
  * `context.repo` 而炸掉。commenter.ts 负责 re-export，调用方无需改 import。
  */
-import {buildStateMarker} from './platform/state-namespace'
+import {buildStateMarker, currentNamespace} from './platform/state-namespace'
 
 // ==================== 状态 marker 注册表（GH-014）====================
 //
@@ -188,10 +188,13 @@ export function tagPairVariants(startTag: string, endTag: string): Array<[string
       e => endTag === e.current() || endTag === e.legacy
     )
     if (endSpec == null) break
-    return [
-      [spec.current(), endSpec.current()],
-      [spec.legacy, endSpec.legacy]
-    ]
+    const pairs: Array<[string, string]> = [[spec.current(), endSpec.current()]]
+    // 历史格式只归 GitHub——见 stateMarkerVariants 的说明。GitLab 若也接受它，
+    // 会把升级前 GitHub 写入的区块当成自己的整段覆盖（REVIEW-023）。
+    if (currentNamespace() === 'github') {
+      pairs.push([spec.legacy, endSpec.legacy])
+    }
+    return pairs
   }
   return [[startTag, endTag]]
 }

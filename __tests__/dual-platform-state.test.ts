@@ -15,7 +15,8 @@ import {describe, expect, test, jest, beforeEach} from '@jest/globals'
 
 const platform = {
   getChangeRequest: jest.fn<(...a: any[]) => Promise<any>>(),
-  updateChangeRequestBody: jest.fn<(...a: any[]) => Promise<any>>()
+  updateChangeRequestBody: jest.fn<(...a: any[]) => Promise<any>>(),
+  listComments: jest.fn<(...a: any[]) => Promise<any>>(async () => [])
 }
 jest.mock('../src/platform/git-platform', () => ({getPlatform: () => platform}))
 jest.mock('../src/platform/logger', () => ({
@@ -26,6 +27,7 @@ import {setStateNamespace} from '../src/platform/state-namespace'
 import {getReviewState, setReviewState, getReviewStateFromBody} from '../src/review-state'
 import {stateMarker} from '../src/state-markers'
 import {Commenter} from '../src/commenter'
+import {hasBeenProcessed, legacyCmdReplyTag, buildCmdReplyTag} from '../src/commands/reply'
 import {setExecCtx} from '../src/platform/run-context'
 import type {ExecutionContext} from '../src/platform/execution-context'
 import type {Platform} from '../src/platform/execution-context'
@@ -172,5 +174,57 @@ describe('STATE-001：同一段状态代码在两个平台下走各自的 adapte
     statefulStore('')
     await setReviewState('o', 'r', 42, 'paused')
     expect(platform.updateChangeRequestBody).toHaveBeenCalled()
+  })
+})
+
+/**
+ * legacy marker 归属（STATE-007 的历史格式面）
+ *
+ * legacy marker 没有平台前缀——它产生于双平台改造之前，那时只有 GitHub 版跑在
+ * 线上。所以任何 legacy marker 必然是 GitHub 侧写下的，GitLab 不该认领。
+ *
+ * 早先「写新读旧」对两个平台一视同仁地接受 legacy 形态，后果不是 marker 长得
+ * 不好看，而是 **GitLab 上的命令会被静默吞掉**：GitHub PR #42 和 GitLab MR !42
+ * 各自的评论 ID 完全可能撞号，一旦撞上，GitLab 就把 GitHub 的历史回复当成
+ * 「我已经回过了」。
+ */
+describe('legacy marker 只归 GitHub，GitLab 不认领', () => {
+  const COMMENT_ID = 9527
+  const CMD = 'help'
+
+  function commentsContaining(body: string): void {
+    platform.listComments.mockResolvedValue([{id: 1, body, author: 'ai-reviewer'}])
+  }
+
+  test('GitLab 遇到 legacy cmd-reply tag → 判为未处理，命令照常执行', async () => {
+    useNamespace('gitlab', 'group/demo')
+    commentsContaining(`上次的回复\n${legacyCmdReplyTag(COMMENT_ID, CMD)}`)
+
+    expect(await hasBeenProcessed('o', 'r', 42, COMMENT_ID, CMD)).toBe(false)
+  })
+
+  test('GitHub 遇到 legacy cmd-reply tag → 仍判为已处理（升级不重复回复）', async () => {
+    useNamespace('github', 'octo/demo')
+    commentsContaining(`上次的回复\n${legacyCmdReplyTag(COMMENT_ID, CMD)}`)
+
+    expect(await hasBeenProcessed('o', 'r', 42, COMMENT_ID, CMD)).toBe(true)
+  })
+
+  test('对照组：带本平台命名空间的 tag，两边都认自己的', async () => {
+    for (const [ns, path] of PLATFORMS) {
+      useNamespace(ns, path)
+      const own = buildCmdReplyTag(COMMENT_ID, CMD)
+      commentsContaining(`回复\n${own}`)
+      expect(await hasBeenProcessed('o', 'r', 42, COMMENT_ID, CMD)).toBe(true)
+    }
+  })
+
+  test('对照组：GitHub 命名空间的 tag，GitLab 读不到（STATE-007）', async () => {
+    useNamespace('github', 'octo/demo')
+    const githubTag = buildCmdReplyTag(COMMENT_ID, CMD)
+
+    useNamespace('gitlab', 'group/demo')
+    commentsContaining(`回复\n${githubTag}`)
+    expect(await hasBeenProcessed('o', 'r', 42, COMMENT_ID, CMD)).toBe(false)
   })
 })
