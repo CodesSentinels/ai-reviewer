@@ -160,6 +160,17 @@ ai_review_trigger:
 
 ## 6. 风险与未决问题
 
-- **无法端到端验证**：没有真实 GitLab 测试项目，`CI_PIPELINE_SOURCE=trigger`、Protected Variable 的实际生效行为只能依据 GitLab 官方文档（已在 `github-to-gitlab-migration-plan.md` §0.8 引用）推导，未经真实 Pipeline 回放。接入 `ai-reviewer-test` 项目后需要补一轮真实验证，届时如与文档假设有出入，需回填本设计文档。
+- ~~**无法端到端验证**~~：**2026-08-18 已接入真实环境**（Issue #118）。
+  `CI_PIPELINE_SOURCE=trigger`、Protected Variable 的实际生效行为均已用真实
+  GitLab pipeline 验证，与官方文档推导一致。发现并修复一个真实缺口：
+  `CI-013` 的 bundle 来源校验原本要求 `dist/gitlab-trigger/SOURCE_SHA` 与
+  `CI_COMMIT_SHA` 精确相等——这个条件在"先写入 HEAD、再单独提交、再经 PR 合并
+  产生 merge commit"的正常流程下永远无法自洽，第一次真实触发就被自己的校验
+  拒绝。改为 `git merge-base --is-ancestor` 祖先链校验（仍要求 `SOURCE_SHA`
+  是 `CI_COMMIT_SHA` 真实历史上的一个 commit，但不要求恰好相等），见 PR #119。
+  `mr_verify` job 本身未能验证：需要在 GitLab `ai-reviewer` 项目上原生开 MR
+  才能触发，但 `sync-to-gitlab.yml` 明确了"不再直接在 GitLab 上做任何代码改
+  动，GitHub 是唯一真相源"的团队策略，为测试 `mr_verify` 手动推分支本身就违反
+  这条策略，主动放弃，标记为已知限制。
 - **谁构建 `main` 分支上的 `dist/gitlab-trigger/index.js`**：本任务明确界定为第 13 章 `SYNC-*` 的职责（见 3.3 节说明），但 `SYNC-*` 目前也未开始，这中间存在一个"配置已就绪、但没有东西真正把 bundle 放到 GitLab `main` 上"的空档，需要在第 13 章开工时明确衔接。
 - **Trigger token 的实际配置**：`.gitlab-ci.yml` 不包含 Trigger token 本身（按 0.7 契约它只应出现在 GitLab Project Webhook 的 URL 配置里，不是 CI/CD 变量），因此这部分无法在代码里体现或测试，只能在真实项目接入时靠人工配置 checklist 保证。

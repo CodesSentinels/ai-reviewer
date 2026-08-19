@@ -669,8 +669,8 @@ Mock 脚手架复用仓库已有约定（与 `__tests__/command-dispatcher.test.
 | 风险/问题 | 说明 | 处理方式 |
 |:---|:---|:---|
 | `review.ts` 40 处调用只做签名改造、不做内部替换 | 过渡期存在"两套数据源并存"的隐患，如果后续有人误改其中一套而没同步另一套，会引入难以察觉的 bug | 9.2 节 U5 加一致性断言测试兜底；阶段四任务需尽快排期，不宜长期维持双轨 |
-| GitLab Webhook 字段映射未经真实环境验证 | 第 5.1 节字段表基于 GitLab 官方文档整理，`ai-reviewer-test` 项目尚未接入真实 Webhook | 标注为"待确认"，`EVENT-002` 任务对接真实 Webhook 时需用真实 payload 复核字段名，如有出入回填本文档 |
-| `changes` 字段判断 `update` 是否为 HEAD SHA 变化的具体结构未经验证 | GitLab `merge_request` Hook 的 `changes` 对象字段因 GitLab 版本/配置可能有差异 | 同上，列入 `EVENT-002` 待确认事项，不阻塞本任务（本任务只需类型和骨架，非最终生产实现） |
+| ~~GitLab Webhook 字段映射未经真实环境验证~~ | **2026-08-18 已用真实 Webhook 验证**（Issue #118），发现两处字段名推断错误并修复：Note Hook 的 headSha 字段实际是 `merge_request.last_commit.id`（不是原推断的 `diff_head_sha`）；行级 diff 评论的判据是 `object_attributes.type === 'DiffNote'`（不是 `discussion_id` 是否存在——真实 GitLab 上所有 note 都带 `discussion_id`）。第 5.1 节字段表已更正 | 已回填本文档，见第 5.1 节两条 ⚠️ 更正说明 |
+| `changes` 字段判断 `update` 是否为 HEAD SHA 变化的具体结构未经验证 | GitLab `merge_request` Hook 的 `changes` 对象字段因 GitLab 版本/配置可能有差异，2026-08-05 复核已指出并改用官方承诺的 `object_attributes.oldrev` 判断（见 `docs/github-gitlab-compatibility-todo.md` EVENT-008 状态说明），**2026-08-18 已用真实 push 事件验证通过**（Issue #118） | 已解决 |
 | `CommandContext` 同时保留旧字段和新 `execCtx` 字段 | 存在字段冗余，9 个 command handler 文件短期内可能有的用旧字段有的用新字段，风格不统一 | 阶段四统一收口，删除 `CommandContext` 旧字段，全部改用 `execCtx.*`；本任务只新增不删除，避免一次性破坏 handler 签名 |
 
 ---

@@ -395,7 +395,10 @@
 - [x] `EVENT-006` 支持 MR 创建事件。
 - [x] `EVENT-007` 支持 MR reopen 事件。
 - [x] `EVENT-008` 支持 MR HEAD SHA 更新事件（判定改为只信 `object_attributes.
-      oldrev`，见上方状态说明；⚠️ 仍未经真实 GitLab webhook 回放验证）。
+      oldrev`，见上方状态说明）。✅ **2026-08-18 真实环境验证通过**（Issue
+      #118）：往真实 GitLab MR 的 source branch push 新 commit，真实 job 日志
+      打印 `Event: platform=gitlab eventKind=pr_synchronize`，确认 `oldrev`
+      在真实 push 事件里如预期出现。
 - [x] `EVENT-009` 标题、label、assignee 等纯元数据更新不调用模型。
 - [x] `EVENT-010` MVP 拒绝 source project 与 target project 不同的 fork MR。
 - [x] `EVENT-011` 同项目 MR 内容仍按不可信数据处理。
@@ -407,7 +410,10 @@
       `gitlab-trigger.test.ts` 的 `EVENT-012` describe 块（4 用例）。跟踪见
       GitHub Issue [#111](https://github.com/CodesSentinels/ai-reviewer/issues/111)，
       实现 PR [#113](https://github.com/CodesSentinels/ai-reviewer/pull/113)。
-      ⚠️ 仅 mock 单元/集成测试验证，未在真实 GitLab 环境验证。
+      ✅ **2026-08-18 真实环境验证通过"未陈旧"分支**（Issue #118）：真实 job
+      正确重新读取 HEAD 并继续执行。⚠️ "陈旧则跳过"分支未在真实环境触发过
+      （测试过程中每次事件都是最新 push，没有构造出真正陈旧的投递时序），
+      仍只有 mock 单元测试覆盖。
 - [x] `EVENT-013` MR 自动审查幂等键使用
       `gitlab:{project_id}:{mr_iid}:head:{head_sha}`，并与 summary note 中的
       reviewed SHA marker 一起判断；不得依赖未明确进入 `TRIGGER_PAYLOAD` 的
@@ -418,7 +424,10 @@
       `gitlab-trigger.test.ts` 的 `EVENT-013` describe 块（3 用例）。跟踪见
       Issue [#111](https://github.com/CodesSentinels/ai-reviewer/issues/111)，
       实现 PR [#113](https://github.com/CodesSentinels/ai-reviewer/pull/113)。
-      ⚠️ 仅 mock 单元/集成测试验证，未在真实 GitLab 环境验证。
+      ✅ **2026-08-18 真实环境验证通过**（Issue #118）：对同一 headSha 重复
+      触发 pipeline，真实 job 日志打印 `MR 1 headSha ... already reviewed
+      (idempotency key gitlab:...:head:...) — skipping duplicate delivery
+      (EVENT-013)`，核对 MR 上 note 数量确认没有产生第二次评论。
 
 ### 6.3 Note Hook
 
@@ -442,11 +451,29 @@
 > [#113](https://github.com/CodesSentinels/ai-reviewer/pull/113)）接入，见下方
 > `EVENT-020`/`EVENT-021` 状态说明。
 
-- [x] `EVENT-014` 支持 MR 顶层 note 命令。
-- [x] `EVENT-015` 支持 discussion note/reply 命令和对话上下文。
-- [x] `EVENT-016` 只处理 `action=create` 的用户 note。
-- [x] `EVENT-017` 忽略编辑、删除、system note 和非 MR note。
-- [x] `EVENT-018` 忽略 reviewer/PAT 账号自己的 note。
+- [x] `EVENT-014` 支持 MR 顶层 note 命令。✅ **2026-08-18 真实环境验证通过**
+      （Issue #118）：用第二个真实 GitLab 账号（非 bot 自身）在真实 MR 上发
+      `@ai-reviewer help`，job 日志确认
+      `commentEvent dispatcher outcome: {"kind":"executed","command":"help","ok":true}`，
+      MR 上出现真实的命令表格回复，marker 精确对应该条 note ID。
+- [x] `EVENT-015` 支持 discussion note/reply 命令和对话上下文。✅
+      **2026-08-18 真实环境验证通过**（Issue #118，且验证中发现并修复了一个
+      真实 bug——见 `EVENT-014`/`EVENT-015` 判据从 `discussion_id` 改为
+      `object_attributes.type === 'DiffNote'` 那次修复，PR #121）：修复后在
+      真实的行级 diff 评论下用第二个账号追问，`eventKind` 正确判定为
+      `review_comment_created`，回复正确留在原 discussion 内，不再出现
+      "discussion ID unknown" 降级告警。对话上下文本身（`REVIEW-015~018`）
+      当时仍未接入 GitLab，回复走了 `conversation: skip` 优雅降级——这条已知
+      缺口，不在本次验证范围。
+- [x] `EVENT-016` 只处理 `action=create` 的用户 note。⚠️ 未在真实环境显式验证
+      （测试过程中没有构造真实的非 create action note），仅 mock 单元测试
+      覆盖。
+- [x] `EVENT-017` 忽略编辑、删除、system note 和非 MR note。⚠️ 同上，未在真实
+      环境显式验证。
+- [x] `EVENT-018` 忽略 reviewer/PAT 账号自己的 note。✅ **2026-08-18 真实环境
+      验证通过**（Issue #118）：用 `GITLAB_PAT` 对应账号本身发评论，job 日志
+      确认 `command dispatcher: ignored comment from bot (login=...)`，正确
+      过滤，未产生任何调用/回复。
 - [x] `EVENT-019` 不符合严格命令语法的文本不触发命令或模型（复用
       `commands/parser.ts`，见 `gitlab-note-hook-parser-reuse.test.ts`）。
 - [x] `EVENT-020` Note Hook 幂等键固定为
@@ -475,6 +502,18 @@
 ---
 
 ## 7. GitLab API Adapter 开发
+
+> ✅ **2026-08-18 起部分接入真实环境验证**（Issue
+> [#118](https://github.com/CodesSentinels/ai-reviewer/issues/118)）：用真实
+> GitLab MR 走通了创建/更新 summary note（GLAPI-007~009）、创建行级 diff
+> discussion 并正确 resolvable（GLAPI-013~014）、回复 discussion（GLAPI-016）、
+> 身份自检（GLAPI-022/029）。过程中发现并修复了两个真实 bug（Note Hook
+> headSha 字段、eventKind 判据），详见第 6.3 章状态说明。resolve discussion
+> （GLAPI-018）、Award Emoji ACK（GLAPI-023，本次验证未观察到真实触发，已定位
+> 根因并建 Issue [#124](https://github.com/CodesSentinels/ai-reviewer/issues/124)
+> 跟踪：`gitlab-trigger.ts` 调用 `runOrchestrator()` 时没有传
+> `earlyReaction: tryEarlyReaction`，GitHub 侧 `main.ts` 有传）等条目仍未真实
+> 验证。
 
 ### 7.1 项目、MR 和仓库内容
 
@@ -797,11 +836,23 @@
 
 ## 12. GitLab CI 开发
 
-> **状态**：⚠️ 配置 + 结构性测试已完成，**未经真实 GitLab 项目/Pipeline 回放
-> 验证**（GitHub Issue
-> [#102](https://github.com/CodesSentinels/ai-reviewer/issues/102) 跟踪，汇总见
+> **状态**：✅ **2026-08-18 起部分接入真实 GitLab 环境验证**（GitHub Issue
+> [#102](https://github.com/CodesSentinels/ai-reviewer/issues/102) 跟踪，真实
+> 验证跟踪于 Issue
+> [#118](https://github.com/CodesSentinels/ai-reviewer/issues/118)，汇总见
 > Issue [#75](https://github.com/CodesSentinels/ai-reviewer/issues/75)；设计文档
-> `docs/tasks/gitlab-ci-design.md`）。
+> `docs/tasks/gitlab-ci-design.md`）。`ai_review_trigger`（CI-005~011/013）已
+> 在真实 GitLab pipeline 上跑通，过程中发现并修复一个真实 bug：CI-013 的
+> bundle 来源校验原本要求 `dist/gitlab-trigger/SOURCE_SHA` 与 `CI_COMMIT_SHA`
+> 精确相等，这个条件在"先写入 HEAD、再单独提交、再经 PR 合并产生 merge
+> commit"的正常流程下永远无法自洽，第一次真实触发就被自己的校验拒绝
+> （`REFUSED: ... != CI_COMMIT_SHA`）。改为 `git merge-base --is-ancestor`
+> 祖先链校验后修复，见 PR #119。`mr_verify`（CI-002~004/012）**未能验证**：
+> 该 job 需要在 GitLab `ai-reviewer` 项目上原生开一个 MR 才能触发
+> `merge_request_event`，但 `.github/workflows/sync-to-gitlab.yml` 明确写着
+> 团队策略"不再直接在 GitLab 上做任何代码改动，GitHub 是唯一真相源"——为测试
+> `mr_verify` 而在 GitLab 上手动推分支本身就违反这条策略，因此主动放弃，标记
+> 为已知限制，不强行打通。
 >
 > ⚠️ **分支事故记录**：本章代码最初随 PR
 > [#103](https://github.com/CodesSentinels/ai-reviewer/pull/103)（`35464af`）
@@ -845,16 +896,23 @@
 - [x] `CI-011` 配置 job timeout、有限 retry 和脱敏日志。
 - [x] `CI-012` MR verify job 验证两个临时 bundle 均来自当前 MR 的
       `CI_COMMIT_SHA`，但这些 bundle 不得被 secret-bearing trigger 消费。
+      ⚠️ 结构/单元测试验证，`mr_verify` job 本身未在真实 GitLab pipeline 上跑
+      过——见上方状态说明，需要在 GitLab 上原生开 MR 才能触发，与"GitHub 唯一
+      真相源"策略冲突，主动放弃，标记为已知限制。
 - [x] `CI-013` protected `main` trigger job 只执行仓库中受信任的 GitLab bundle，
-      并验证 bundle 记录的 source commit 与该 job 的 `CI_COMMIT_SHA` 一致；不得
-      从 MR artifact、cache 或工作区恢复可执行产物。
+      并验证 bundle 记录的 source commit 是该 job 的 `CI_COMMIT_SHA` 的祖先；不
+      要求精确相等（2026-08-18 真实环境验证发现原精确相等校验永远无法自洽，
+      已修复，见上方状态说明与 PR #119）；不得从 MR artifact、cache 或工作区
+      恢复可执行产物。✅ 已在真实 GitLab pipeline 上验证通过。
 
 ---
 
 ## 13. 单向发布 Workflow 开发
 
-> **状态**：⚠️ 配置 + 结构性测试已完成，**未经真实同步回放验证**（GitHub Issue
-> [#105](https://github.com/CodesSentinels/ai-reviewer/issues/105) 跟踪，汇总见
+> **状态**：✅ **2026-08-18 起真实同步回放验证通过**（GitHub Issue
+> [#105](https://github.com/CodesSentinels/ai-reviewer/issues/105) 跟踪，真实
+> 验证跟踪于 Issue
+> [#118](https://github.com/CodesSentinels/ai-reviewer/issues/118)，汇总见
 > Issue [#75](https://github.com/CodesSentinels/ai-reviewer/issues/75)；设计文档
 > `docs/tasks/gitlab-sync-hardening-design.md`）。在已有的
 > `.github/workflows/sync-to-gitlab.yml`（目标仓库 URL 固定字面量、自动触发只
@@ -863,17 +921,20 @@
 > 任意分支的漏洞）、`concurrency`（按目标分支分组、`cancel-in-progress`）、push
 > 后回读 GitLab HEAD 并比对 SHA。`__tests__/workflow-security.test.ts` 新增 7
 > 项结构性断言，`__tests__/arch-guard.test.ts` 新增 `GITLAB_TOKEN`（同步专用
-> 凭据）不得出现在 `src/` 的守卫（`SYNC-009`）。⚠️ 已知缺口：`SYNC-004` 新增的
-> `curl`/`jq` 调用 GitLab REST API 的逻辑，本地/CI 均没有真实有效的
-> `GITLAB_TOKEN` 和 `ai-reviewer-test` 项目可供回放，只做了脚本走查和 YAML 结
-> 构断言，未经真实执行验证；GitLab 项目的 Protected Branch 保护规则（拒绝直接
-> push/MR merge）是项目配置项，本任务无法在代码层面体现。接入真实项目前不应
-> 把本章视为"已验收"。
+> 凭据）不得出现在 `src/` 的守卫（`SYNC-009`）。2026-08-18 当天向 `develop`
+> 合并了 6 次真实 PR，`sync-to-gitlab.yml` 每次都在几十秒内成功把内容同步到
+> GitLab（`GET /repository/branches/develop` 回读确认 SHA 一致），`SYNC-004`
+> 的回读比对逻辑全部真实跑通，此前"未经真实执行验证"的缺口已解决。
+> `GitLab 项目的 Protected Branch 保护规则` 本次验证也用真实项目配置过（临时
+> 把 `develop` 设为 protected + 默认分支，用于承接 `ai_review_trigger`，详见
+> Issue #118）。
 
 - [x] `SYNC-001` 审查并加固 `.github/workflows/sync-to-gitlab.yml`。
 - [x] `SYNC-002` 固定源/目标仓库与 `main` 分支，禁止不受控 ref 和目标 URL。
 - [x] `SYNC-003` 增加 concurrency，防止旧同步覆盖新提交。
-- [x] `SYNC-004` push 后自动比较 GitHub/GitLab `main` SHA。
+- [x] `SYNC-004` push 后自动比较 GitHub/GitLab `main` SHA。✅ **2026-08-18 真实
+      环境验证通过**（Issue #118）：当天 6 次真实同步全部成功，回读比对逻辑
+      确认生效。
 - [x] `SYNC-005` 同步失败时 job 失败，但不得影响 GitHub Action 审查 workflow。
 - [x] `SYNC-006` 防止 GitLab pipeline 反向触发 GitHub 写入或形成同步循环。
 - [x] `SYNC-007` 重复同步保持幂等。

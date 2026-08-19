@@ -140,6 +140,12 @@ concurrency:
 
 ## 6. 风险与未决问题
 
-- **无法端到端验证**：`SYNC-004` 的 SHA 比对逻辑依赖真实调用 GitLab REST API，本地/CI 环境没有到期有效的 `GITLAB_TOKEN` 和真实 GitLab 项目可供回放，只能靠 shell 脚本走查 + `workflow-security.test.ts` 的静态断言，实际 `curl`/`jq` 调用链路未经真实执行验证。
-- **"GitLab 直接 push/MR merge 被保护规则拒绝"（实施方案 §2.4 验证方法之一）不属于代码改动范围**：这是 GitLab 项目的 Protected Branch 设置，需要在真实 `ai-reviewer-test` 项目里手动配置，本任务无法在代码层面体现或测试。
+- ~~**无法端到端验证**~~：**2026-08-18 已接入真实环境**（Issue #118）。当天
+  向 `develop` 合并了 6 次真实 PR，`sync-to-gitlab.yml` 每次都在几十秒内成功
+  把内容同步到 GitLab，`SYNC-004` 的 SHA 比对逻辑（`curl`/`jq` 调用真实
+  GitLab REST API）全部真实跑通，未发现与脚本假设有出入的地方。
+- **"GitLab 直接 push/MR merge 被保护规则拒绝"**：本次验证已用真实
+  `ai-reviewer` 项目配置过 Protected Branch（临时把 `develop` 设为
+  protected，用于承接 `ai_review_trigger`，详见 Issue #118）；`develop`→`main`
+  发布路径由于历史分支分叉尚未走过，仍待后续任务处理。
 - **`SYNC-006`"防止 GitLab pipeline 反向触发 GitHub 写入"**：当前架构下没有任何代码路径尝试这么做，本任务不新增代码，只加测试固化"现状如此"；如果未来有人往 `gitlab-platform.ts`/`gitlab-trigger.ts` 里加了调用 GitHub API 的代码，这条防线要靠 `arch-guard.test.ts` 一类的架构测试才能拦住，而不是本设计文档能覆盖的范围——留给后续任务补测试。
