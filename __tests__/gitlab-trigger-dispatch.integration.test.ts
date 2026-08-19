@@ -206,6 +206,17 @@ describe('GitLab 入口 → 共享核心（真实分发，不看日志）', () =
     expect(bodies.join('\n')).toMatch(/help|命令|Commands/i)
   })
 
+  /**
+   * Issue #124（2026-08-18 真实环境验证发现）：main.ts 一直传了 earlyReaction，
+   * gitlab-trigger.ts 没传，真实 GitLab 命令从未收到 Award Emoji ACK。修复后
+   * 用这条真实分发路径断言 addReaction 确实被调用，而不只是检查源码字符串。
+   */
+  test('顶层 note 的命令 → 触发 ACK 表情反应（Issue #124）', async () => {
+    await runTrigger(notePayload({note: '@ai-reviewer help'}))
+
+    expect(platformCalls.addReaction).toHaveBeenCalled()
+  })
+
   test('discussion note 的命令 → 回到线程，而不是主评论区', async () => {
     await runTrigger(notePayload({note: '@ai-reviewer help', discussionId: 'disc-abc'}))
 

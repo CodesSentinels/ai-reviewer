@@ -573,4 +573,23 @@ describe('gitlab-trigger.ts run()', () => {
     // 曾经的占位 TODO 必须已经消失
     expect(source).not.toContain('此处调用 runOrchestrator 或 dispatchEvent')
   })
+
+  /**
+   * Issue #124（2026-08-18 真实环境验证发现）：main.ts 一直传了
+   * earlyReaction，gitlab-trigger.ts 没传，导致 GitLab 侧命令/对话式追问从未
+   * 收到 Award Emoji ACK。tryEarlyReaction() 本身早已是平台无关实现，缺的只
+   * 是这一行接线——真实调用链路的断言放在
+   * gitlab-trigger-dispatch.integration.test.ts（那边已经完整 mock 了
+   * getPlatform()，能直接断言 addReaction 被调用；本文件只 mock 了部分
+   * @gitbeaker/rest 资源，不足以让 help 命令走完全程）。
+   */
+  test('earlyReaction 回调已作为 runOrchestrator 的参数传入（Issue #124）', () => {
+    const fs = jest.requireActual('fs') as typeof import('fs')
+    const path = require('path')
+    const source: string = fs.readFileSync(
+      path.resolve(__dirname, '../src/gitlab-trigger.ts'),
+      'utf8'
+    )
+    expect(source).toMatch(/earlyReaction:\s*tryEarlyReaction/)
+  })
 })

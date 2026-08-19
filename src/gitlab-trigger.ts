@@ -28,6 +28,7 @@ import {hasHeadBeenReviewed} from './gitlab-mr-idempotency'
 import {isSelfNote, buildNoteIdempotencyKey} from './gitlab-note-hook-rules'
 import {hasNoteBeenProcessed, markNoteAsProcessed} from './gitlab-note-idempotency'
 import {parse, resolveBotMentions} from './commands/parser'
+import {tryEarlyReaction} from './commands/early-reaction'
 
 const logger = new GitLabLogger()
 
@@ -319,7 +320,12 @@ export async function run(): Promise<void> {
       logger.error(redact(msg))
       process.exitCode = 1
     },
-    createBots: options => createBots(options, (msg: string) => logger.warning(redact(msg)))
+    createBots: options => createBots(options, (msg: string) => logger.warning(redact(msg))),
+    // Issue #124（2026-08-18 真实环境验证发现）：此前只有 main.ts（GitHub）传了
+    // 这个回调，GitLab 侧命令/对话式追问因此从未收到 Award Emoji ACK。
+    // tryEarlyReaction() 本身早就是平台无关实现（只读 ExecutionContext 归一化
+    // 字段，不 import @actions/github，不读 execCtx.raw），漏的只是接线。
+    earlyReaction: tryEarlyReaction
   })
 
   // 只在真正跑成功之后才记账——onFailed 会把 exitCode 设成 1，失败的这次不能
