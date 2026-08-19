@@ -508,12 +508,14 @@
 > GitLab MR 走通了创建/更新 summary note（GLAPI-007~009）、创建行级 diff
 > discussion 并正确 resolvable（GLAPI-013~014）、回复 discussion（GLAPI-016）、
 > 身份自检（GLAPI-022/029）。过程中发现并修复了两个真实 bug（Note Hook
-> headSha 字段、eventKind 判据），详见第 6.3 章状态说明。resolve discussion
-> （GLAPI-018）、Award Emoji ACK（GLAPI-023，本次验证未观察到真实触发，已定位
-> 根因并建 Issue [#124](https://github.com/CodesSentinels/ai-reviewer/issues/124)
-> 跟踪：`gitlab-trigger.ts` 调用 `runOrchestrator()` 时没有传
-> `earlyReaction: tryEarlyReaction`，GitHub 侧 `main.ts` 有传）等条目仍未真实
-> 验证。
+> headSha 字段、eventKind 判据），详见第 6.3 章状态说明。Award Emoji ACK
+> （GLAPI-023）此前验证未观察到真实触发，根因是 `gitlab-trigger.ts` 调用
+> `runOrchestrator()` 时没有传 `earlyReaction: tryEarlyReaction`（GitHub 侧
+> `main.ts` 有传）——已修复（Issue
+> [#124](https://github.com/CodesSentinels/ai-reviewer/issues/124)）并用真实
+> GitLab MR 重新验证通过：job 日志确认
+> `ack reaction "rocket" added on issue_comment ...`，GitLab Award Emoji API
+> 核对该 note 确实带上了表情。resolve discussion（GLAPI-018）仍未真实验证。
 
 ### 7.1 项目、MR 和仓库内容
 
