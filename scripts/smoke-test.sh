@@ -82,7 +82,7 @@ if [ "$FAIL" -ne 0 ]; then
   exit 1
 fi
 
-echo "冒烟测试全部通过"
+echo "bundle 启动冒烟通过"
 
 # ─── GitLab bundle 在零 GITHUB_* 环境下必须能跑到事件分发（ARCH-005）──────────
 #
@@ -146,3 +146,26 @@ else
   echo "$GITLAB_SMOKE_OUT" | head -5
   FAIL=1
 fi
+
+# ─── LINT-002：裸环境下的 API-only 审查 ───────────────────────────────────────
+#
+# 空 cwd、空缓存、PATH 只有 node、GitLab/OpenAI 都指向 loopback stub，跑真实
+# bundle 走完整条审查链；第二轮在 PATH 上摆可执行的假 lint 工具，确认一次都没
+# 被调到。详见脚本头部注释。
+echo ""
+if node scripts/bare-env-review-check.mjs; then
+  :
+else
+  FAIL=1
+fi
+
+# 收尾统一判定。
+#
+# 这个 exit 之前是缺的：上面 GitLab 事件分发那几段只置 FAIL=1，脚本却在最后一个
+# `fi` 处以 0 结束，于是分发回归会打印 FAIL 但 `npm run all` 照样绿。
+echo ""
+if [ "$FAIL" -ne 0 ]; then
+  echo "冒烟测试失败"
+  exit 1
+fi
+echo "冒烟测试全部通过"

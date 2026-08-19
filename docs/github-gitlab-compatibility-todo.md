@@ -690,7 +690,7 @@
 - [x] `LOCAL-003` 禁用本地工具时仍能完成 API-only 审查。
 - [x] `LINT-001` **高**：`enable_lint_tools=false` 时不得执行 lint adapter 检测
       、网络下载、动态安装、缓存恢复或扫描。
-- [ ] `LINT-002` 在无外网、空工具缓存和未安装 lint 工具的 GitLab trigger 测试环
+- [x] `LINT-002` 在无外网、空工具缓存和未安装 lint 工具的 GitLab trigger 测试环
       境中，API-only 审查仍须通过。
 - [x] `LINT-003` 当前 MVP 不为 secret-bearing trigger 实现 lint 工具网络、缓存或
       离线镜像安装策略；GitHub 侧改由 `LINT-004~008` 的独立低权限执行面承担，
