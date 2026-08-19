@@ -194,8 +194,16 @@ export async function dispatchCommentEvent(deps: DispatcherDeps): Promise<Dispat
     }
   }
 
-  // [速率限制] 按操作者维度限流；超限则回帖提示重试时间并结束。
-  const rl = checkRateLimit(actorLogin)
+  // [速率限制] 按 platform + project + PR/MR + actor 四元组限流（CMD-027/028）。
+  // key 全部取自规范化的 execCtx，不读平台 payload——两个平台共用这一个接口。
+  // 注意这步在幂等检查**之后**：重复投递不该消耗用户配额，防重复靠的是幂等
+  // 而不是限流（CMD-030）。
+  const rl = checkRateLimit({
+    platform: execCtx.platform,
+    projectPath: execCtx.projectPath,
+    changeRequestId: prNumber,
+    actor: actorLogin
+  })
   if (!rl.allowed) {
     await reply.error('RATE_LIMITED', `请 ${Math.ceil((rl.retryAfterMs ?? 0) / 1000)} 秒后再试`)
     return {

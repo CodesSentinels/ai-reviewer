@@ -72,7 +72,15 @@ const ERROR_MESSAGES: Record<ErrorCode, string> = {
   BOT_FORBIDDEN:
     '🚫 **Bot 权限不足**。请检查 workflow `permissions` 配置（pull-requests: write / contents: read）。',
   NOT_IMPLEMENTED: '🚧 **命令暂未实现**。该命令已在路线图中，等待实现。',
-  RATE_LIMITED: '⏱️ **请求过于频繁**。同一用户在 60 秒内最多执行 10 条命令，请稍后再试。',
+  // CMD-029：不能给出「N 条 / M 秒」这种配额承诺。
+  //
+  // 桶只活在单个 Node 进程里，而 GitHub comment 与 GitLab note 通常是一条事件一
+  // 个新进程——用户连发 10 条评论会起 10 个进程，每个桶都是空的，谁也限不住。
+  // 说成「同一用户 60 秒内最多 10 条」，用户照着数就会发现根本对不上。
+  //
+  // 它也不负责重复投递——那在 dispatcher 里先被幂等检查拦下了（CMD-030）。
+  // 所以文案只说作用范围，不说场景，也不给数字。
+  RATE_LIMITED: '⏱️ **请求过于频繁**。本次运行中检测到过多命令请求，请稍后再试。',
   DUPLICATE: 'ℹ️ **命令已处理**（重复事件已去重）。',
   INTERNAL: '💥 **命令执行失败**。错误已记录，请联系维护者。'
 }

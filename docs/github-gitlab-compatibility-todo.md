@@ -758,17 +758,17 @@
 
 ### 9.4 命令速率限制
 
-- [ ] `CMD-027` **中**：将进程内命令限流 key 规范化为
+- [x] `CMD-027` **中**：将进程内命令限流 key 规范化为
       `platform + project + PR/MR + actor`，避免不同平台、项目、变更和用户相互影
       响。
-- [ ] `CMD-028` GitHub comment 和 GitLab note 事件共用平台无关限流接口，但分别从
+- [x] `CMD-028` GitHub comment 和 GitLab note 事件共用平台无关限流接口，但分别从
       规范化事件上下文生成 key。
-- [ ] `CMD-029` 明确当前令牌桶只在单次 Node 进程内提供 best-effort 限流；不得声
+- [x] `CMD-029` 明确当前令牌桶只在单次 Node 进程内提供 best-effort 限流；不得声
       称它可以跨 GitLab pipeline 限制连续评论。
-- [ ] `CMD-030` GitLab 重复 Note Hook 的主要防护使用 event/note marker 幂等；进
+- [x] `CMD-030` GitLab 重复 Note Hook 的主要防护使用 event/note marker 幂等；进
       程内限流不能替代幂等检查。
-- [ ] `CMD-031` 为相同/不同平台、project、PR/MR、actor 组合增加限流隔离测试。
-- [ ] `CMD-032` 保持本轮不引入 Redis、数据库或持久化限流服务的范围约束。
+- [x] `CMD-031` 为相同/不同平台、project、PR/MR、actor 组合增加限流隔离测试。
+- [x] `CMD-032` 保持本轮不引入 Redis、数据库或持久化限流服务的范围约束。
 
 ---
 
