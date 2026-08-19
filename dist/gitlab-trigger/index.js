@@ -61350,7 +61350,7 @@ ${commentChain}
                     }
                     // 格式化 Analysis chain（模型执行的 shell / web_search 步骤）
                     getLogger().info(`[analysis_chain] ${filename}: received ${analysisSteps.length} analysis steps from bot`);
-                    const analysisChainMd = formatAnalysisChain(analysisSteps, resolveAnalysisRepositoryUrl());
+                    const analysisChainMd = formatAnalysisChain(analysisSteps, resolveAnalysisRepositoryUrl(options.enableShell));
                     getLogger().info(`[analysis_chain] ${filename}: formatted markdown length=${analysisChainMd.length}, empty=${analysisChainMd === ''}`);
                     // 解析 AI 响应，提取结构化的审查评论
                     // 然后做**议题级合并去重**：LLM 经常对同一个 tool finding 写出多条
@@ -61579,12 +61579,17 @@ function formatShellCommandForDisplay(command) {
  * 两个 CI 环境各自保证对应变量存在，因此覆盖面与原先等价；纯展示用途，
  * 取不到时返回空串，不影响审查本身。
  */
-function resolveAnalysisRepositoryUrl() {
+function resolveAnalysisRepositoryUrl(allowShell) {
     const candidates = [
         process.env.CI_PROJECT_URL,
         process.env.CI_REPOSITORY_URL,
         buildGithubRepositoryUrl(),
-        readOriginRemoteUrl()
+        // 最后这档要 fork 一个 git 进程。secret-bearing 执行面强制 enable_shell=false
+        // （LOCAL-001），这里必须跟着关——否则「强制关闭本地命令」就有一个绕过口，
+        // 而且执行的是 PATH 上第一个 git，纯展示用途不值得这个代价。
+        // 两个 CI 环境都保证前几档可用（GitLab 有 CI_PROJECT_URL，GitHub Actions 有
+        // GITHUB_SERVER_URL），关掉不影响实际取值。
+        allowShell ? readOriginRemoteUrl() : undefined
     ];
     return (candidates
         .map(candidate => normalizeRepositoryUrl(candidate))
