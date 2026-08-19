@@ -55105,23 +55105,26 @@ function _resetPermissionCache() {
 }
 
 ;// CONCATENATED MODULE: ./lib/commands/rate-limit.js
-/**
- * commands/rate-limit.ts - 命令速率限制
- *
- * 简单的进程内令牌桶: 同一 actor 在 WINDOW_MS 内最多 MAX_PER_WINDOW 条命令。
- *
- * 注意: Actions 是无状态环境，跨 run 无法限流；本实现仅在单次 run 内有效。
- * 这足以防止同一次 webhook 抖动下的重复处理，但不防"攻击者分多次提交评论"。
- * 后者需要在更上层做（例如 GitHub 自身的 abuse detection）。
- */
 const WINDOW_MS = 60_000;
 const MAX_PER_WINDOW = 10;
 const buckets = new Map();
-function checkRateLimit(actor, now = Date.now()) {
-    let bucket = buckets.get(actor);
+/**
+ * 组装桶 key。
+ *
+ * 各段单独 encodeURIComponent 再用 `:` 连接：分隔符不会被段内容伪造出来，
+ * 否则一个叫 `a:b` 的项目就能和另一个组合撞 key。
+ */
+function rateLimitKey(scope) {
+    return [scope.platform, scope.projectPath, String(scope.changeRequestId), scope.actor]
+        .map(part => encodeURIComponent(part))
+        .join(':');
+}
+function checkRateLimit(scope, now = Date.now()) {
+    const key = rateLimitKey(scope);
+    let bucket = buckets.get(key);
     if (!bucket) {
         bucket = { timestamps: [] };
-        buckets.set(actor, bucket);
+        buckets.set(key, bucket);
     }
     // 清理窗口外的记录
     const cutoff = now - WINDOW_MS;
@@ -55141,6 +55144,10 @@ function checkRateLimit(actor, now = Date.now()) {
 /** 仅供测试 */
 function _resetRateLimit() {
     buckets.clear();
+}
+/** 仅供测试：当前存在的桶数量，用来断言隔离而不是靠间接现象 */
+function _bucketCount() {
+    return buckets.size;
 }
 const _RATE_LIMIT_CONSTANTS = { WINDOW_MS, MAX_PER_WINDOW };
 
@@ -55193,7 +55200,15 @@ const ERROR_MESSAGES = {
     FORBIDDEN: '🚫 **权限不足**。执行该命令需要仓库 `write` 及以上权限。',
     BOT_FORBIDDEN: '🚫 **Bot 权限不足**。请检查 workflow `permissions` 配置（pull-requests: write / contents: read）。',
     NOT_IMPLEMENTED: '🚧 **命令暂未实现**。该命令已在路线图中，等待实现。',
-    RATE_LIMITED: '⏱️ **请求过于频繁**。同一用户在 60 秒内最多执行 10 条命令，请稍后再试。',
+    // CMD-029：不能给出「N 条 / M 秒」这种配额承诺。
+    //
+    // 桶只活在单个 Node 进程里，而 GitHub comment 与 GitLab note 通常是一条事件一
+    // 个新进程——用户连发 10 条评论会起 10 个进程，每个桶都是空的，谁也限不住。
+    // 说成「同一用户 60 秒内最多 10 条」，用户照着数就会发现根本对不上。
+    //
+    // 它也不负责重复投递——那在 dispatcher 里先被幂等检查拦下了（CMD-030）。
+    // 所以文案只说作用范围，不说场景，也不给数字。
+    RATE_LIMITED: '⏱️ **请求过于频繁**。本次运行中检测到过多命令请求，请稍后再试。',
     DUPLICATE: 'ℹ️ **命令已处理**（重复事件已去重）。',
     INTERNAL: '💥 **命令执行失败**。错误已记录，请联系维护者。'
 };
@@ -55515,8 +55530,16 @@ async function dispatchCommentEvent(deps) {
             error: 'DUPLICATE'
         };
     }
-    // [速率限制] 按操作者维度限流；超限则回帖提示重试时间并结束。
-    const rl = checkRateLimit(actorLogin);
+    // [速率限制] 按 platform + project + PR/MR + actor 四元组限流（CMD-027/028）。
+    // key 全部取自规范化的 execCtx，不读平台 payload——两个平台共用这一个接口。
+    // 注意这步在幂等检查**之后**：重复投递不该消耗用户配额，防重复靠的是幂等
+    // 而不是限流（CMD-030）。
+    const rl = checkRateLimit({
+        platform: execCtx.platform,
+        projectPath: execCtx.projectPath,
+        changeRequestId: prNumber,
+        actor: actorLogin
+    });
     if (!rl.allowed) {
         await reply.error('RATE_LIMITED', `请 ${Math.ceil((rl.retryAfterMs ?? 0) / 1000)} 秒后再试`);
         return {
