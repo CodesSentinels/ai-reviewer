@@ -69346,15 +69346,290 @@ const BOT_MENTIONS = ['@ai-reviewer', '@codesentinel'];
  */
 const PRIMARY_BOT_MENTION = BOT_MENTIONS[0];
 
+;// CONCATENATED MODULE: ./lib/commands/parser.js
+/**
+ * commands/parser.ts - 命令解析器
+ *
+ * 输入: 评论原文 + 已注册命令列表
+ * 输出: ParseOutcome，三种情形:
+ *   1. command      — 命中白名单的命令（可能带参数）
+ *   2. conversation — 包含 @bot 但未命中命令（走对话 fallback）
+ *   3. none         — 不包含 @bot 或没有任何有效触发
+ *
+ * 关键规则（见 §5.4 设计文档）:
+ *   - 默认支持 @ai-reviewer 与 @codesentinel 两个 mention 别名
+ *   - bot mention 不区分大小写
+ *   - 命令名不区分大小写（解析后归一化为小写）
+ *   - 复合命令按最长前缀匹配（例: "full review" 先于 "full"）
+ *   - 仅处理第一行的命令体，换行后的内容进入 rawAfter
+ *   - 单条评论只识别第一个命令，其余忽略
+ *   - 参数字符集白名单: [A-Za-z0-9_\-./:=]；出现 shell 元字符 → INVALID_ARGS
+ *   - 长度上限: 命令行 ≤ 512 字符, 单个 arg ≤ 128 字符, arg 数量 ≤ 16
+ */
+
+/** 默认支持的 bot mention 别名（小写，已带 @）。共享自 constants.BOT_MENTIONS。 */
+const DEFAULT_BOT_MENTIONS = [...BOT_MENTIONS];
+/**
+ * 本次运行认可的全部 mention（CMD-001 / CMD-002）。
+ *
+ * 两类来源：
+ *
+ * 1. **文本别名** `@ai-reviewer` / `@codesentinel`——平台无关，两边都保留
+ *    （CMD-001）。GitLab 上 bot 常以个人 PAT 身份发言，`@` 一个不存在的用户
+ *    不会产生通知，但作为纯文本前缀依然可用，这正是 CMD-002 里「或纯文本前缀」
+ *    的含义。
+ * 2. **真实账号 mention** `@{botLogin}`——GitLab 是 PAT 用户名
+ *    （`AI_REVIEWER_BOT_GITLAB_LOGIN`），GitHub 是 `bot_github_login`。
+ *    用户凭直觉 @ 真实账号时也应该能触发。
+ *
+ * 未配置 botLogin 时退化为纯别名，与迁移前行为一致。
+ *
+ * 入参容忍 undefined：这条链路一崩，**所有**命令都会失效，不值得为了类型上的
+ * 洁癖去赌每个调用方都传了值。
+ */
+function resolveBotMentions(botLogin) {
+    const login = (botLogin ?? '').trim().replace(/^@/, '');
+    if (login === '')
+        return [...DEFAULT_BOT_MENTIONS];
+    const real = `@${login.toLowerCase()}`;
+    return DEFAULT_BOT_MENTIONS.includes(real)
+        ? [...DEFAULT_BOT_MENTIONS]
+        : [...DEFAULT_BOT_MENTIONS, real];
+}
+/** 命令行长度上限 */
+const MAX_COMMAND_LINE_LENGTH = 512;
+/** 单个 arg 长度上限 */
+const MAX_ARG_LENGTH = 128;
+/** 参数个数上限 */
+const MAX_ARGS_COUNT = 16;
+/** 允许的参数字符集 */
+const SAFE_TOKEN_RE = /^[A-Za-z0-9_\-./:=]+$/;
+/** shell 元字符黑名单（补充检查，用于生成更明确的错误信息） */
+const SHELL_METACHARS_RE = /[`$(){}|&;<>\\'"]/;
+/**
+ * mention 两侧必须都是边界（CMD-004）。
+ *
+ * 只看前一个字符是不够的：`@ai-reviewerX help` 会命中 `@ai-reviewer` 并把
+ * `X help` 当成命令体，等于替另一个用户执行命令。两侧都要卡：
+ *
+ *   前：行首、空白或标点          —— 挡住 `foo@ai-reviewer`
+ *   后：非标识符字符              —— 挡住 `@ai-reviewerX` / `@ai-reviewer-bot`
+ *
+ * 尾部的 `.` 单独处理：`@ai-reviewer.` 句末是合法的，但 GitLab 用户名允许含
+ * `.`，所以 `.` 后面若紧跟标识符字符（`@ai-reviewer.bot`）仍判为另一个用户。
+ */
+function hasMentionBoundary(body, idx, len) {
+    if (idx > 0) {
+        const prev = body[idx - 1];
+        if (!/\s|[,.;:，。；：]/.test(prev))
+            return false;
+    }
+    const next = body[idx + len];
+    if (next === undefined)
+        return true;
+    if (/[A-Za-z0-9_-]/.test(next))
+        return false;
+    if (next === '.') {
+        const after = body[idx + len + 1];
+        if (after !== undefined && /[A-Za-z0-9_-]/.test(after))
+            return false;
+    }
+    return true;
+}
+/**
+ * 主解析入口
+ */
+function parse(body, opts) {
+    if (typeof body !== 'string' || body.length === 0) {
+        return { kind: 'none' };
+    }
+    const mentions = (opts.botMentions ?? DEFAULT_BOT_MENTIONS).map(m => m.toLowerCase());
+    // 1. 找到第一个**边界合法**的 bot mention（忽略大小写）
+    const lower = body.toLowerCase();
+    let mentionIdx = -1;
+    let mentionLen = 0;
+    for (const m of mentions) {
+        // 必须遍历该 mention 的**每一次**出现：早先只取 indexOf 的第一处，
+        // 首次出现边界不合法就整个放弃，于是
+        //   "邮箱 a@ai-reviewer.com\n@ai-reviewer help"
+        // 里第二行真正的命令被完全吞掉（返回 none）。
+        let from = 0;
+        for (;;) {
+            const idx = lower.indexOf(m, from);
+            if (idx === -1)
+                break;
+            from = idx + 1;
+            if (!hasMentionBoundary(body, idx, m.length))
+                continue;
+            if (mentionIdx === -1 || idx < mentionIdx) {
+                mentionIdx = idx;
+                mentionLen = m.length;
+            }
+            break; // 该别名的首个合法位置即可，更靠前的由其他别名比较得出
+        }
+    }
+    if (mentionIdx === -1) {
+        return { kind: 'none' };
+    }
+    // 2. 提取 mention 之后的剩余内容
+    let rest = body.slice(mentionIdx + mentionLen);
+    // 允许 mention 后紧跟标点分隔符
+    rest = rest.replace(/^[,:;，：；]+/, '');
+    // 按第一个换行切分：第一行是命令体，其余是 rawAfter
+    const firstNewline = rest.indexOf('\n');
+    const firstLineRaw = firstNewline === -1 ? rest : rest.slice(0, firstNewline);
+    const rawAfter = firstNewline === -1 ? '' : rest.slice(firstNewline + 1).trim();
+    // 3. 命令行长度校验
+    if (firstLineRaw.length > MAX_COMMAND_LINE_LENGTH) {
+        return {
+            kind: 'command',
+            error: {
+                code: 'INVALID_ARGS',
+                detail: `命令长度超过上限 (${MAX_COMMAND_LINE_LENGTH})`
+            }
+        };
+    }
+    const firstLine = firstLineRaw.trim();
+    if (firstLine.length === 0) {
+        // 仅 @bot 单独出现 → 视为对话触发
+        return { kind: 'conversation' };
+    }
+    // 4. 分词（空白分隔）
+    const tokens = firstLine.split(/\s+/);
+    // 5. 尝试匹配命令名（最长前缀匹配，最多看前 3 个 token）
+    const matched = matchCommandName(tokens, opts.registeredCommands);
+    if (!matched) {
+        // 未命中已注册命令。判断是"无效命令"还是"自然语言对话"：
+        // - 首 token 纯 ASCII 字母（看起来像命令名）→ UNKNOWN_COMMAND
+        // - 否则（含 CJK、标点开头等自然语言）→ conversation fallback
+        if (looksLikeCommandAttempt(tokens[0])) {
+            return {
+                kind: 'command',
+                error: { code: 'UNKNOWN_COMMAND', detail: firstLine }
+            };
+        }
+        return { kind: 'conversation' };
+    }
+    const { name, consumed } = matched;
+    const argTokens = tokens.slice(consumed);
+    // 6. 参数数量校验
+    if (argTokens.length > MAX_ARGS_COUNT) {
+        return {
+            kind: 'command',
+            error: {
+                code: 'INVALID_ARGS',
+                detail: `参数个数超过上限 (${MAX_ARGS_COUNT})`
+            },
+            command: { name, raw: firstLine, args: [], kv: {}, rawAfter }
+        };
+    }
+    // 7. 参数字符集校验
+    for (const t of argTokens) {
+        if (t.length > MAX_ARG_LENGTH) {
+            return {
+                kind: 'command',
+                error: {
+                    code: 'INVALID_ARGS',
+                    detail: `参数过长: \`${truncate(t, 32)}\``
+                },
+                command: { name, raw: firstLine, args: [], kv: {}, rawAfter }
+            };
+        }
+        if (SHELL_METACHARS_RE.test(t)) {
+            return {
+                kind: 'command',
+                error: {
+                    code: 'INVALID_ARGS',
+                    detail: `参数包含非法字符: \`${truncate(t, 32)}\``
+                },
+                command: { name, raw: firstLine, args: [], kv: {}, rawAfter }
+            };
+        }
+        if (!SAFE_TOKEN_RE.test(t)) {
+            return {
+                kind: 'command',
+                error: {
+                    code: 'INVALID_ARGS',
+                    detail: `参数包含不允许的字符: \`${truncate(t, 32)}\``
+                },
+                command: { name, raw: firstLine, args: [], kv: {}, rawAfter }
+            };
+        }
+    }
+    // 8. 拆分 kv
+    const args = [];
+    const kv = {};
+    for (const t of argTokens) {
+        const eq = t.indexOf('=');
+        if (eq > 0 && eq < t.length - 1) {
+            const k = t.slice(0, eq);
+            const v = t.slice(eq + 1);
+            kv[k] = v;
+        }
+        args.push(t);
+    }
+    const command = {
+        name,
+        raw: firstLine,
+        args,
+        kv,
+        rawAfter
+    };
+    return { kind: 'command', command };
+}
+/**
+ * 在已注册命令集合中对 token 序列做最长前缀匹配
+ *
+ * 例如: registered = {"review", "full review"}
+ * tokens = ["full", "review"] → 匹配到 "full review"
+ * tokens = ["review"]         → 匹配到 "review"
+ * tokens = ["full"]           → 不匹配（full 未注册）→ 返回 null
+ */
+function matchCommandName(tokens, registered) {
+    const maxDepth = Math.min(tokens.length, 3);
+    // 从最长开始尝试
+    for (let depth = maxDepth; depth >= 1; depth--) {
+        const candidate = tokens
+            .slice(0, depth)
+            .map(t => t.toLowerCase())
+            .join(' ');
+        if (registered.has(candidate)) {
+            return { name: candidate, consumed: depth };
+        }
+    }
+    return null;
+}
+/**
+ * 判断 token 是否"看起来像一条命令"。
+ * 纯 ASCII 字母（允许连字符）→ 极可能是用户尝试输入命令名；
+ * 含中文、日文、韩文等非 ASCII 字符 → 自然语言对话。
+ */
+function looksLikeCommandAttempt(token) {
+    return /^[A-Za-z][A-Za-z0-9_-]*$/.test(token);
+}
+function truncate(s, n) {
+    return s.length > n ? `${s.slice(0, n)}...` : s;
+}
+
 ;// CONCATENATED MODULE: ./lib/commands/handlers/help.js
+
 
 
 /**
  * 纯函数：根据命令列表生成 help Markdown。
  * 提取出来便于单元测试（不依赖 registry 单例）。
- * @param botIcon 可选 bot 图标，用于底部提示（CFG-005）
+ *
+ * CMD-023 要求 help 展示四样东西：命令、权限、**触发前缀**、**评论身份**。
+ * 后两样此前是缺的——底部只列了 BOT_MENTIONS 两个静态别名，而 GitLab 上
+ * reviewer 通常以某个 PAT 账号发言，@ 那个账号才是最自然的用法，用户从 help
+ * 里根本看不到它；权限列也只有 `write`/`triage` 这种词，GitLab 用户不知道对应
+ * 自己项目里的哪个角色。
  */
-function buildHelpMessage(commands, botIcon = '🤖') {
+function buildHelpMessage(commands, botIconOrIdentity = '🤖') {
+    const identity = typeof botIconOrIdentity === 'string'
+        ? { platform: 'github', botLogin: '', botIcon: botIconOrIdentity }
+        : botIconOrIdentity;
+    const botIcon = identity.botIcon;
     const lines = [];
     lines.push('## 支持的命令');
     lines.push('');
@@ -69382,8 +69657,34 @@ function buildHelpMessage(commands, botIcon = '🤖') {
             }
         }
     }
+    // ── 权限名对照（CMD-023）──
+    // 表格里的 `write` / `triage` 是平台无关的内部叫法。GitHub 用户看得懂，
+    // GitLab 用户得知道它对应 access level 才能自查。
     lines.push('');
-    lines.push(`> ${botIcon} Bot 同时支持 ${BOT_MENTIONS.map(m => `\`${m}\``).join(' 与 ')} 共 ${BOT_MENTIONS.length} 个 mention。`);
+    lines.push('### 权限说明');
+    lines.push(identity.platform === 'gitlab'
+        ? '- `write` → Developer(30) 及以上\n' +
+            '- `triage` → Reporter(20) 及以上\n' +
+            '- `read` → 对项目可见即可\n\n' +
+            '`review` / `full review` / `summary` 对 MR 作者豁免权限要求；' +
+            '`pause` / `resume` / `resolve` 不豁免。权限查询失败一律拒绝执行。'
+        : '- `write` → 仓库 write 及以上\n' +
+            '- `triage` → triage 及以上\n' +
+            '- `read` → 对仓库可见即可\n\n' +
+            '`review` / `full review` / `summary` 对 PR 作者豁免权限要求；' +
+            '`pause` / `resume` / `resolve` 不豁免。权限查询失败一律拒绝执行。');
+    // ── 触发前缀与评论身份（CMD-023）──
+    lines.push('');
+    lines.push('### 如何触发');
+    const mentions = resolveBotMentions(identity.botLogin);
+    lines.push(`把下面任一前缀写在评论行首即可：${mentions.map(m => `\`${m}\``).join('、')}`);
+    lines.push('');
+    lines.push(identity.botLogin === ''
+        ? `> ${botIcon} 本 reviewer 尚未配置账号标识，只能用上面的文本别名触发。`
+        : `> ${botIcon} 本 reviewer 以 \`@${identity.botLogin}\` 的身份发表评论，` +
+            `@ 这个账号同样可以触发命令。`);
+    lines.push('');
+    lines.push('顶层评论和行级评论（review thread / diff discussion）都支持。');
     return lines.join('\n');
 }
 /**
@@ -69417,7 +69718,13 @@ const helpHandler = {
     minPermission: 'read',
     async execute(ctx) {
         const cmds = registry_getRegistry().listCommands();
-        return { message: buildHelpMessage(cmds, ctx.options.botIcon) };
+        return {
+            message: buildHelpMessage(cmds, {
+                platform: ctx.execCtx?.platform ?? 'github',
+                botLogin: ctx.options.botLogin ?? '',
+                botIcon: ctx.options.botIcon
+            })
+        };
     }
 };
 
@@ -69806,26 +70113,43 @@ async function execute(ctx) {
     //   }
     // }
     const { ok, failed, failedItems } = await batchResolve(threads);
-    return { message: formatResult(ok, failed, threads.length, failedItems) };
+    const platform = ctx.execCtx?.platform ?? 'github';
+    return { message: formatResult(ok, failed, threads.length, failedItems, platform) };
 }
 // ─── Formatting ───────────────────────────────────────────────────────────────
 // TODO Refer to CodeRabbit for the original implementation of this formatting logic.
-function formatResult(ok, failed, total, failedItems) {
+/**
+ * 权限失败时给出的可操作建议（CMD-024）。
+ *
+ * 两个平台的失败原因和补救方式完全不同，此前只有 GitHub 那套：
+ *
+ *   GitHub — resolveReviewThread 是 GraphQL mutation，GITHUB_TOKEN 会被拒为
+ *            "Resource not accessible by integration"，需要用户 PAT
+ *   GitLab — discussion resolve 走 REST，需要 PAT 至少 Developer(30)，
+ *            且 MVP 里 reviewer 用的就是 GITLAB_PAT，没有 resolve_token 这一说
+ *
+ * 在 GitLab 上告诉用户「去配 resolve_token」是纯误导——那个 input 根本不存在。
+ */
+function permissionAdvice(platform) {
+    return platform === 'gitlab'
+        ? '请确认 `GITLAB_PAT` 对应的账号在本项目至少具有 Developer(30) 权限，或手动解决。'
+        : '请将 `resolve_token` 输入配置为具有 repo 权限的 classic PAT，' +
+            '或在 workflow 中授予 `permissions: pull-requests: write`，或手动解决。';
+}
+function formatResult(ok, failed, total, failedItems, platform) {
     if (failed === 0) {
         return `✅ 已解决 **${ok}** 条 CodeSentinel 审查意见`;
     }
     const errDetail = failedItems.length > 0
         ? `\n\n失败详情：\n${failedItems
             .map(({ thread, error }) => `- ${errorTag(error)} \`${threadLabel(thread)}\`：${flattenError(error.message)}`)
-            .join('\n')}${permissionHint(failedItems)}`
+            .join('\n')}${permissionHint(failedItems, platform)}`
         : '';
     if (ok === 0) {
-        // 全部失败时几乎一定是权限问题：resolveReviewThread mutation 需要用户 PAT，
-        // GITHUB_TOKEN 会被 GitHub 拒为 "Resource not accessible by integration"。
-        // 给出可操作提示，避免用户只看到一句干巴巴的 forbidden。
-        const permissionHint = '\n\n💡 这通常是权限不足：解决评论线程需要把用户 PAT 配置到 `resolve_token`，' +
-            '或在 workflow 中授予 `permissions: pull-requests: write`。';
-        return `❌ 解决失败（共 **${total}** 条）${errDetail}${permissionHint}`;
+        // 全部失败时几乎一定是权限问题，给出可操作提示，避免用户只看到一句干巴巴的
+        // forbidden。建议按平台分（见 permissionAdvice）。
+        const hint = `\n\n💡 这通常是权限不足：${permissionAdvice(platform)}`;
+        return `❌ 解决失败（共 **${total}** 条）${errDetail}${hint}`;
     }
     return `⚠️ 共 **${total}** 条，成功解决 **${ok}** 条，**${failed}** 条失败（可手动解决）${errDetail}`;
 }
@@ -69838,11 +70162,10 @@ function errorTag(error) {
     return '⚠️ 其他错误';
 }
 /** 存在权限错误时，追加可操作提示 */
-function permissionHint(failedItems) {
+function permissionHint(failedItems, platform) {
     if (!failedItems.some(({ error }) => isPermissionError(error)))
         return '';
-    return ('\n\n💡 存在权限不足导致的失败：当前 token 无法解决审查线程，' +
-        '请将 `resolve_token` 输入配置为具有 repo 权限的 classic PAT，或手动解决。');
+    return `\n\n💡 存在权限不足导致的失败：当前 token 无法解决审查线程，${permissionAdvice(platform)}`;
 }
 /** 将多行错误信息压成单行，避免错误中的 ` - ` 被 Markdown 当作嵌套列表渲染 */
 function flattenError(message) {
@@ -70670,7 +70993,7 @@ function commentReplyTag() {
     return stateMarker('commentReply');
 }
 /** 标识 bot 的摘要评论 */
-function summarizeTag() {
+function commenter_summarizeTag() {
     return stateMarker('summarize');
 }
 /** 标识审查进行中的状态标签（开始 / 结束） */
@@ -70719,7 +71042,7 @@ function commitIdTags() {
  * 返回命中的标签本身，调用方据此就地改写，不会把旧区块的标签换成新的——
  * 升级不需要重写在途 PR 已有的 marker。
  */
-function locateCommitIdBlock(body) {
+function commenter_locateCommitIdBlock(body) {
     const namespaced = commitIdTags();
     for (const { start: startTag, end: endTag } of [
         namespaced,
@@ -70741,7 +71064,7 @@ function locateCommitIdBlock(body) {
  * - 评论链的获取和组装
  * - 增量审查状态管理
  */
-class Commenter {
+class commenter_Commenter {
     /**
      * 创建或替换 PR 评论
      * @param message - 评论内容
@@ -71401,7 +71724,7 @@ ${chain}
      * @returns commit SHA 字符串数组
      */
     getReviewedCommitIds(commentBody) {
-        const block = locateCommitIdBlock(commentBody);
+        const block = commenter_locateCommitIdBlock(commentBody);
         if (block == null) {
             return [];
         }
@@ -71414,7 +71737,7 @@ ${chain}
     }
     /** 提取已审查 commit ID 的完整区块（包含标签） */
     getReviewedCommitIdsBlock(commentBody) {
-        const block = locateCommitIdBlock(commentBody);
+        const block = commenter_locateCommitIdBlock(commentBody);
         if (block == null) {
             return '';
         }
@@ -71425,7 +71748,7 @@ ${chain}
      * 如果标签不存在则创建新的区块
      */
     addReviewedCommitId(commentBody, commitId) {
-        const block = locateCommitIdBlock(commentBody);
+        const block = commenter_locateCommitIdBlock(commentBody);
         if (block == null) {
             // 新建区块用当前平台命名空间；已存在的旧区块保持原标签就地追加
             const tags = commitIdTags();
@@ -71495,8 +71818,8 @@ ${commentBody}`;
 ;// CONCATENATED MODULE: ./lib/review-commit-ids.js
 
 async function isHeadAlreadyReviewed(prNumber, headSha) {
-    const commenter = new Commenter();
-    const comment = await commenter.findCommentWithTag(summarizeTag(), prNumber);
+    const commenter = new commenter_Commenter();
+    const comment = await commenter.findCommentWithTag(commenter_summarizeTag(), prNumber);
     if (comment == null)
         return false;
     const reviewedIds = commenter.getReviewedCommitIds(comment.body);
@@ -71514,20 +71837,40 @@ async function clearReviewedCommitIds(prNumber) {
     await commenter.comment(newBody.trim(), summarizeTag(), 'replace');
 }
 
-;// CONCATENATED MODULE: ./lib/commands/handlers/stubs.js
+;// CONCATENATED MODULE: ./lib/commands/handlers/review.js
 
 
 
-function notImplemented(name) {
-    return async (_ctx) => {
-        // 调度器会把抛出的标记型错误转成 NOT_IMPLEMENTED 反馈
-        const e = new Error(`Command not implemented: ${name}`);
-        e.code = 'NOT_IMPLEMENTED';
-        throw e;
+
+/**
+ * 审查命令必须知道当前 HEAD 才能做正确的事。
+ *
+ * dispatcher 会在事件处理开头统一查一次 change request 补齐 head/base SHA
+ * （CMD-017 要求「针对最新 HEAD」，所以取的是现查值而不是 payload 里可能过期的
+ * 那个）。那次查询失败时 headSha 是空串——此时**不能**继续：
+ *
+ *   - `full review`：`isHeadAlreadyReviewed(pr, '')` 必然返回 false，于是明明
+ *     刚审过也会再跑一次全量，白烧一轮模型调用
+ *   - `review`：对着未知 HEAD 跑增量，结果写到哪个 SHA 上都说不清
+ *
+ * 宁可让用户重发一次命令。
+ */
+function requireHeadSha(ctx, command) {
+    if (ctx.headSha !== '')
+        return null;
+    getLogger().warning(`${command}: aborted — current HEAD is unknown (change request query failed)`);
+    return {
+        message: '⚠️ 无法获取当前 HEAD，已中止。这通常是平台 API 暂时不可用，请稍后重试；' +
+            '若持续出现请检查 token 权限。'
     };
 }
-/** 成员 C */
-const reviewStub = {
+/** triggerReview 未接线时（单测直接构造 ctx）走统一的 NOT_IMPLEMENTED */
+function notWired(name) {
+    const e = new Error(`Command not implemented: ${name}`);
+    e.code = 'NOT_IMPLEMENTED';
+    throw e;
+}
+const reviewHandler = {
     name: 'review',
     description: '触发增量审查（仅审查自上次审查以来的新增变更）',
     usage: `${PRIMARY_BOT_MENTION} review`,
@@ -71535,7 +71878,12 @@ const reviewStub = {
     minPermission: 'write',
     async execute(ctx) {
         if (ctx.triggerReview == null)
-            return await notImplemented('review')(ctx);
+            notWired('review');
+        const aborted = requireHeadSha(ctx, 'review');
+        if (aborted != null)
+            return aborted;
+        // 自动审查处于活跃状态时，增量审查本来就会随 push 事件发生，手动再触发一次
+        // 只会重复审已审过的 commit。这里直接说明，而不是空跑一轮。
         const state = await getReviewState(ctx.owner, ctx.repo, ctx.prNumber);
         if (state !== 'paused') {
             return {
@@ -71551,7 +71899,7 @@ const reviewStub = {
         return { message: '增量审查已完成' };
     }
 };
-const fullReviewStub = {
+const fullReviewHandler = {
     name: 'full review',
     description: '触发全量审查（从 base 到 HEAD 的完整 diff）',
     usage: `${PRIMARY_BOT_MENTION} full review`,
@@ -71559,18 +71907,22 @@ const fullReviewStub = {
     minPermission: 'write',
     async execute(ctx) {
         if (ctx.triggerReview == null)
-            return await notImplemented('full review')(ctx);
-        const alreadyReviewed = await isHeadAlreadyReviewed(ctx.prNumber, ctx.headSha);
-        if (alreadyReviewed) {
+            notWired('full review');
+        const aborted = requireHeadSha(ctx, 'full review');
+        if (aborted != null)
+            return aborted;
+        if (await isHeadAlreadyReviewed(ctx.prNumber, ctx.headSha)) {
             return {
-                message: `✅ Full review finished.\n\n> **Note:** The current HEAD (\`${ctx.headSha.slice(0, 7)}\`) has already been reviewed. No new changes detected since the last review.`
+                message: `✅ Full review finished.\n\n> **Note:** The current HEAD ` +
+                    `(\`${ctx.headSha.slice(0, 7)}\`) has already been reviewed. ` +
+                    `No new changes detected since the last review.`
             };
         }
         await ctx.triggerReview('full');
         return { message: '✅ Full review finished.' };
     }
 };
-const summaryStub = {
+const summaryHandler = {
     name: 'summary',
     description: '基于当前最新代码重新生成 PR 摘要',
     usage: `${PRIMARY_BOT_MENTION} summary`,
@@ -71578,86 +71930,150 @@ const summaryStub = {
     minPermission: 'write',
     async execute(ctx) {
         if (ctx.triggerReview == null)
-            return await notImplemented('summary')(ctx);
+            notWired('summary');
+        // summary 同样要基于最新 HEAD 重建，HEAD 未知时重建出来的摘要会指向错误的
+        // commit 范围（CMD-019）。
+        const aborted = requireHeadSha(ctx, 'summary');
+        if (aborted != null)
+            return aborted;
         await ctx.triggerReview('summary');
         return { message: 'PR 摘要已重新生成' };
     }
 };
-const pauseStub = {
+
+;// CONCATENATED MODULE: ./lib/commands/handlers/pause.js
+
+
+const pauseHandler = {
     name: 'pause',
     description: '暂停对当前 PR 的自动审查',
     usage: `${PRIMARY_BOT_MENTION} pause`,
     needsAck: false,
     minPermission: 'write',
     async execute(ctx) {
+        // 重复 pause 是幂等的：状态已是 paused 就不再写 description，避免无谓的
+        // 读改写把并发窗口拉长（CMD-021 的幂等要求对 pause 同样成立）。
+        const current = await getReviewState(ctx.owner, ctx.repo, ctx.prNumber);
+        if (current === 'paused') {
+            return {
+                message: `ℹ️ 当前 PR 的自动审查已处于暂停状态。使用 \`${PRIMARY_BOT_MENTION} resume\` 恢复。`
+            };
+        }
         await setReviewState(ctx.owner, ctx.repo, ctx.prNumber, 'paused');
-        await clearReviewedCommitIds(ctx.prNumber);
         return {
             message: `已暂停当前 PR 的自动审查。使用 \`${PRIMARY_BOT_MENTION} resume\` 恢复。`
         };
     }
 };
-const resumeStub = {
+const resumeHandler = {
     name: 'resume',
     description: '恢复对当前 PR 的自动审查',
     usage: `${PRIMARY_BOT_MENTION} resume`,
     needsAck: false,
     minPermission: 'write',
     async execute(ctx) {
+        const current = await getReviewState(ctx.owner, ctx.repo, ctx.prNumber);
+        if (current === 'active') {
+            return { message: 'ℹ️ 当前 PR 的自动审查已处于启用状态。' };
+        }
         await setReviewState(ctx.owner, ctx.repo, ctx.prNumber, 'active');
         return { message: '已恢复当前 PR 的自动审查。' };
     }
 };
-const configurationStub = {
+
+;// CONCATENATED MODULE: ./lib/commands/handlers/configuration.js
+
+
+const ROWS = [
+    { key: 'disable_review', value: o => o.disableReview },
+    { key: 'disable_release_notes', value: o => o.disableReleaseNotes },
+    { key: 'max_files', value: o => o.maxFiles },
+    { key: 'review_simple_changes', value: o => o.reviewSimpleChanges },
+    { key: 'review_comment_lgtm', value: o => o.reviewCommentLGTM },
+    { key: 'max_review_comments', value: o => o.maxReviewComments },
+    { key: 'openai_light_model', value: o => o.openaiLightModel },
+    { key: 'openai_heavy_model', value: o => o.openaiHeavyModel },
+    { key: 'openai_concurrency_limit', value: o => o.openaiConcurrencyLimit },
+    { key: 'github_concurrency_limit', value: o => o.githubConcurrencyLimit },
+    { key: 'enable_dependency_analysis', value: o => o.enableDependencyAnalysis },
+    { key: 'max_dependency_files', value: o => o.maxDependencyFiles },
+    { key: 'enable_web_search', value: o => o.enableWebSearch },
+    {
+        key: 'enable_shell',
+        value: o => o.enableShell,
+        forcedOn: { gitlab: 'trigger 强制关闭（LOCAL-001）' }
+    },
+    {
+        key: 'enable_lint_tools',
+        value: o => o.enableLintTools,
+        forcedOn: { gitlab: 'trigger 强制关闭（LOCAL-002）' }
+    },
+    { key: 'language', value: o => o.language }
+];
+/** 本平台上这一项的配置键；顺便说明未显式配置时会落到默认值 */
+function describeSource(platform, key) {
+    return platform === 'gitlab'
+        ? `CI 变量 \`AI_REVIEWER_${key.toUpperCase()}\``
+        : `Action input \`${key}\``;
+}
+/**
+ * 描述这一项的取值来源。
+ *
+ * **只有 GitLab 能区分「显式配置」与「默认值」。** GitLab CI 只为用户真正定义过
+ * 的变量注入环境变量，读不到就是没配。
+ *
+ * GitHub 不行：`action.yml` 里带 `default:` 的 input（本仓库 46 处）在 Actions
+ * 运行时同样会展开成 `INPUT_<KEY>`，无论用户在 `with:` 里写没写。按环境变量有无
+ * 判断，会把默认值一律标成「用户显式设置」——这比不标更糟，用户会照着一个并不
+ * 存在的配置去找。所以 GitHub 侧只给键名，不声称能区分。
+ *
+ * 要真正区分得在 ConfigProvider 阶段留下来源元数据，那属于 §4，不在本章范围。
+ */
+function describeValueSource(platform, key, env = process.env) {
+    const source = describeSource(platform, key);
+    if (platform !== 'gitlab')
+        return `${source}（或 action.yml 默认值）`;
+    const raw = env[`AI_REVIEWER_${key.toUpperCase()}`];
+    return raw != null && raw.trim() !== '' ? source : `默认值（未设置 ${source}）`;
+}
+function buildConfigurationMessage(platform, options, reviewState, env = process.env) {
+    const lines = [];
+    lines.push('## 当前审查配置');
+    lines.push('');
+    lines.push(`平台：\`${platform}\``);
+    lines.push('');
+    lines.push('| 配置 | 生效值 | 来源 |');
+    lines.push('| :--- | :--- | :--- |');
+    lines.push(`| 自动审查状态 | \`${reviewState}\` | PR/MR 描述中的 reviewer 区块 |`);
+    for (const row of ROWS) {
+        const forced = row.forcedOn?.[platform];
+        const source = forced ?? describeValueSource(platform, row.key, env);
+        lines.push(`| ${row.key} | \`${String(row.value(options))}\` | ${source} |`);
+    }
+    lines.push('');
+    lines.push('> 仅显示生效后的非敏感配置。API Key、PAT、Trigger token 不经过配置层，也不会在此显示。');
+    return lines.join('\n');
+}
+const configurationHandler = {
     name: 'configuration',
     description: '显示当前仓库的审查配置',
     usage: `${PRIMARY_BOT_MENTION} configuration`,
     needsAck: false,
     // CMD-012：Reporter+。GitLab 的 REPORTER(20) 映射为 'triage'，
-    // 与运行差异文档的权限基线一致（见 docs/github-vs-gitlab-runtime-differences.md
-    // 「configuration | 显示 Action inputs | ... | Reporter+」）。
-    // 此前是 'read'，等于放行 GitLab GUEST，比基线宽一级。
+    // 与运行差异文档的权限基线一致。此前是 'read'，等于放行 GitLab GUEST。
     minPermission: 'triage',
     async execute(ctx) {
         const state = await getReviewState(ctx.owner, ctx.repo, ctx.prNumber);
-        const o = ctx.options;
-        const message = `## 当前审查配置
-
-| 配置 | 值 |
-| :--- | :--- |
-| 自动审查状态 | \`${state}\` |
-| disable_review | \`${o.disableReview}\` |
-| disable_release_notes | \`${o.disableReleaseNotes}\` |
-| max_files | \`${o.maxFiles}\` |
-| review_simple_changes | \`${o.reviewSimpleChanges}\` |
-| review_comment_lgtm | \`${o.reviewCommentLGTM}\` |
-| openai_light_model | \`${o.openaiLightModel}\` |
-| openai_heavy_model | \`${o.openaiHeavyModel}\` |
-| openai_concurrency_limit | \`${o.openaiConcurrencyLimit}\` |
-| github_concurrency_limit | \`${o.githubConcurrencyLimit}\` |
-| enable_dependency_analysis | \`${o.enableDependencyAnalysis}\` |
-| max_dependency_files | \`${o.maxDependencyFiles}\` |
-| enable_web_search | \`${o.enableWebSearch}\` |
-| enable_shell | \`${o.enableShell}\` |
-| language | \`${o.language}\` |`;
-        return { message };
+        const platform = ctx.execCtx?.platform ?? 'github';
+        return { message: buildConfigurationMessage(platform, ctx.options, state) };
     }
 };
-const ALL_STUBS = [
-    reviewStub,
-    fullReviewStub,
-    summaryStub,
-    pauseStub,
-    resumeStub,
-    configurationStub
-];
 
 ;// CONCATENATED MODULE: ./lib/commands/bootstrap.js
 /**
  * commands/bootstrap.ts - 命令框架启动注册
  *
  * 统一在应用启动时把所有 handler 注册到 registry。
- * 后续 B/C/D 接入真实 handler 时，将对应的 stub 替换为正式实现即可。
  *
  * 注意: 注册表是单例，且 register 在重复注册时抛异常。
  * 因此 bootstrap 必须保证只被调用一次（用模块级 flag 保护）。
@@ -71666,14 +72082,28 @@ const ALL_STUBS = [
 
 
 
+
+
+/**
+ * 全部已实现的命令（§9.3 完成后 stubs.ts 不再存在）。
+ * 新增命令在这里挂上即可，registry 会拒绝重名注册。
+ */
+const ALL_HANDLERS = [
+    helpHandler,
+    resolveHandler,
+    reviewHandler,
+    fullReviewHandler,
+    summaryHandler,
+    pauseHandler,
+    resumeHandler,
+    configurationHandler
+];
 let bootstrapped = false;
 function bootstrapCommands() {
     if (bootstrapped)
         return;
     const reg = registry_getRegistry();
-    reg.register(helpHandler);
-    reg.register(resolveHandler);
-    for (const h of ALL_STUBS) {
+    for (const h of ALL_HANDLERS) {
         reg.register(h);
     }
     bootstrapped = true;
@@ -71682,271 +72112,6 @@ function bootstrapCommands() {
 function _resetBootstrap() {
     getRegistry()._reset();
     bootstrapped = false;
-}
-
-;// CONCATENATED MODULE: ./lib/commands/parser.js
-/**
- * commands/parser.ts - 命令解析器
- *
- * 输入: 评论原文 + 已注册命令列表
- * 输出: ParseOutcome，三种情形:
- *   1. command      — 命中白名单的命令（可能带参数）
- *   2. conversation — 包含 @bot 但未命中命令（走对话 fallback）
- *   3. none         — 不包含 @bot 或没有任何有效触发
- *
- * 关键规则（见 §5.4 设计文档）:
- *   - 默认支持 @ai-reviewer 与 @codesentinel 两个 mention 别名
- *   - bot mention 不区分大小写
- *   - 命令名不区分大小写（解析后归一化为小写）
- *   - 复合命令按最长前缀匹配（例: "full review" 先于 "full"）
- *   - 仅处理第一行的命令体，换行后的内容进入 rawAfter
- *   - 单条评论只识别第一个命令，其余忽略
- *   - 参数字符集白名单: [A-Za-z0-9_\-./:=]；出现 shell 元字符 → INVALID_ARGS
- *   - 长度上限: 命令行 ≤ 512 字符, 单个 arg ≤ 128 字符, arg 数量 ≤ 16
- */
-
-/** 默认支持的 bot mention 别名（小写，已带 @）。共享自 constants.BOT_MENTIONS。 */
-const DEFAULT_BOT_MENTIONS = [...BOT_MENTIONS];
-/**
- * 本次运行认可的全部 mention（CMD-001 / CMD-002）。
- *
- * 两类来源：
- *
- * 1. **文本别名** `@ai-reviewer` / `@codesentinel`——平台无关，两边都保留
- *    （CMD-001）。GitLab 上 bot 常以个人 PAT 身份发言，`@` 一个不存在的用户
- *    不会产生通知，但作为纯文本前缀依然可用，这正是 CMD-002 里「或纯文本前缀」
- *    的含义。
- * 2. **真实账号 mention** `@{botLogin}`——GitLab 是 PAT 用户名
- *    （`AI_REVIEWER_BOT_GITLAB_LOGIN`），GitHub 是 `bot_github_login`。
- *    用户凭直觉 @ 真实账号时也应该能触发。
- *
- * 未配置 botLogin 时退化为纯别名，与迁移前行为一致。
- *
- * 入参容忍 undefined：这条链路一崩，**所有**命令都会失效，不值得为了类型上的
- * 洁癖去赌每个调用方都传了值。
- */
-function resolveBotMentions(botLogin) {
-    const login = (botLogin ?? '').trim().replace(/^@/, '');
-    if (login === '')
-        return [...DEFAULT_BOT_MENTIONS];
-    const real = `@${login.toLowerCase()}`;
-    return DEFAULT_BOT_MENTIONS.includes(real)
-        ? [...DEFAULT_BOT_MENTIONS]
-        : [...DEFAULT_BOT_MENTIONS, real];
-}
-/** 命令行长度上限 */
-const MAX_COMMAND_LINE_LENGTH = 512;
-/** 单个 arg 长度上限 */
-const MAX_ARG_LENGTH = 128;
-/** 参数个数上限 */
-const MAX_ARGS_COUNT = 16;
-/** 允许的参数字符集 */
-const SAFE_TOKEN_RE = /^[A-Za-z0-9_\-./:=]+$/;
-/** shell 元字符黑名单（补充检查，用于生成更明确的错误信息） */
-const SHELL_METACHARS_RE = /[`$(){}|&;<>\\'"]/;
-/**
- * mention 两侧必须都是边界（CMD-004）。
- *
- * 只看前一个字符是不够的：`@ai-reviewerX help` 会命中 `@ai-reviewer` 并把
- * `X help` 当成命令体，等于替另一个用户执行命令。两侧都要卡：
- *
- *   前：行首、空白或标点          —— 挡住 `foo@ai-reviewer`
- *   后：非标识符字符              —— 挡住 `@ai-reviewerX` / `@ai-reviewer-bot`
- *
- * 尾部的 `.` 单独处理：`@ai-reviewer.` 句末是合法的，但 GitLab 用户名允许含
- * `.`，所以 `.` 后面若紧跟标识符字符（`@ai-reviewer.bot`）仍判为另一个用户。
- */
-function hasMentionBoundary(body, idx, len) {
-    if (idx > 0) {
-        const prev = body[idx - 1];
-        if (!/\s|[,.;:，。；：]/.test(prev))
-            return false;
-    }
-    const next = body[idx + len];
-    if (next === undefined)
-        return true;
-    if (/[A-Za-z0-9_-]/.test(next))
-        return false;
-    if (next === '.') {
-        const after = body[idx + len + 1];
-        if (after !== undefined && /[A-Za-z0-9_-]/.test(after))
-            return false;
-    }
-    return true;
-}
-/**
- * 主解析入口
- */
-function parse(body, opts) {
-    if (typeof body !== 'string' || body.length === 0) {
-        return { kind: 'none' };
-    }
-    const mentions = (opts.botMentions ?? DEFAULT_BOT_MENTIONS).map(m => m.toLowerCase());
-    // 1. 找到第一个**边界合法**的 bot mention（忽略大小写）
-    const lower = body.toLowerCase();
-    let mentionIdx = -1;
-    let mentionLen = 0;
-    for (const m of mentions) {
-        // 必须遍历该 mention 的**每一次**出现：早先只取 indexOf 的第一处，
-        // 首次出现边界不合法就整个放弃，于是
-        //   "邮箱 a@ai-reviewer.com\n@ai-reviewer help"
-        // 里第二行真正的命令被完全吞掉（返回 none）。
-        let from = 0;
-        for (;;) {
-            const idx = lower.indexOf(m, from);
-            if (idx === -1)
-                break;
-            from = idx + 1;
-            if (!hasMentionBoundary(body, idx, m.length))
-                continue;
-            if (mentionIdx === -1 || idx < mentionIdx) {
-                mentionIdx = idx;
-                mentionLen = m.length;
-            }
-            break; // 该别名的首个合法位置即可，更靠前的由其他别名比较得出
-        }
-    }
-    if (mentionIdx === -1) {
-        return { kind: 'none' };
-    }
-    // 2. 提取 mention 之后的剩余内容
-    let rest = body.slice(mentionIdx + mentionLen);
-    // 允许 mention 后紧跟标点分隔符
-    rest = rest.replace(/^[,:;，：；]+/, '');
-    // 按第一个换行切分：第一行是命令体，其余是 rawAfter
-    const firstNewline = rest.indexOf('\n');
-    const firstLineRaw = firstNewline === -1 ? rest : rest.slice(0, firstNewline);
-    const rawAfter = firstNewline === -1 ? '' : rest.slice(firstNewline + 1).trim();
-    // 3. 命令行长度校验
-    if (firstLineRaw.length > MAX_COMMAND_LINE_LENGTH) {
-        return {
-            kind: 'command',
-            error: {
-                code: 'INVALID_ARGS',
-                detail: `命令长度超过上限 (${MAX_COMMAND_LINE_LENGTH})`
-            }
-        };
-    }
-    const firstLine = firstLineRaw.trim();
-    if (firstLine.length === 0) {
-        // 仅 @bot 单独出现 → 视为对话触发
-        return { kind: 'conversation' };
-    }
-    // 4. 分词（空白分隔）
-    const tokens = firstLine.split(/\s+/);
-    // 5. 尝试匹配命令名（最长前缀匹配，最多看前 3 个 token）
-    const matched = matchCommandName(tokens, opts.registeredCommands);
-    if (!matched) {
-        // 未命中已注册命令。判断是"无效命令"还是"自然语言对话"：
-        // - 首 token 纯 ASCII 字母（看起来像命令名）→ UNKNOWN_COMMAND
-        // - 否则（含 CJK、标点开头等自然语言）→ conversation fallback
-        if (looksLikeCommandAttempt(tokens[0])) {
-            return {
-                kind: 'command',
-                error: { code: 'UNKNOWN_COMMAND', detail: firstLine }
-            };
-        }
-        return { kind: 'conversation' };
-    }
-    const { name, consumed } = matched;
-    const argTokens = tokens.slice(consumed);
-    // 6. 参数数量校验
-    if (argTokens.length > MAX_ARGS_COUNT) {
-        return {
-            kind: 'command',
-            error: {
-                code: 'INVALID_ARGS',
-                detail: `参数个数超过上限 (${MAX_ARGS_COUNT})`
-            },
-            command: { name, raw: firstLine, args: [], kv: {}, rawAfter }
-        };
-    }
-    // 7. 参数字符集校验
-    for (const t of argTokens) {
-        if (t.length > MAX_ARG_LENGTH) {
-            return {
-                kind: 'command',
-                error: {
-                    code: 'INVALID_ARGS',
-                    detail: `参数过长: \`${truncate(t, 32)}\``
-                },
-                command: { name, raw: firstLine, args: [], kv: {}, rawAfter }
-            };
-        }
-        if (SHELL_METACHARS_RE.test(t)) {
-            return {
-                kind: 'command',
-                error: {
-                    code: 'INVALID_ARGS',
-                    detail: `参数包含非法字符: \`${truncate(t, 32)}\``
-                },
-                command: { name, raw: firstLine, args: [], kv: {}, rawAfter }
-            };
-        }
-        if (!SAFE_TOKEN_RE.test(t)) {
-            return {
-                kind: 'command',
-                error: {
-                    code: 'INVALID_ARGS',
-                    detail: `参数包含不允许的字符: \`${truncate(t, 32)}\``
-                },
-                command: { name, raw: firstLine, args: [], kv: {}, rawAfter }
-            };
-        }
-    }
-    // 8. 拆分 kv
-    const args = [];
-    const kv = {};
-    for (const t of argTokens) {
-        const eq = t.indexOf('=');
-        if (eq > 0 && eq < t.length - 1) {
-            const k = t.slice(0, eq);
-            const v = t.slice(eq + 1);
-            kv[k] = v;
-        }
-        args.push(t);
-    }
-    const command = {
-        name,
-        raw: firstLine,
-        args,
-        kv,
-        rawAfter
-    };
-    return { kind: 'command', command };
-}
-/**
- * 在已注册命令集合中对 token 序列做最长前缀匹配
- *
- * 例如: registered = {"review", "full review"}
- * tokens = ["full", "review"] → 匹配到 "full review"
- * tokens = ["review"]         → 匹配到 "review"
- * tokens = ["full"]           → 不匹配（full 未注册）→ 返回 null
- */
-function matchCommandName(tokens, registered) {
-    const maxDepth = Math.min(tokens.length, 3);
-    // 从最长开始尝试
-    for (let depth = maxDepth; depth >= 1; depth--) {
-        const candidate = tokens
-            .slice(0, depth)
-            .map(t => t.toLowerCase())
-            .join(' ');
-        if (registered.has(candidate)) {
-            return { name: candidate, consumed: depth };
-        }
-    }
-    return null;
-}
-/**
- * 判断 token 是否"看起来像一条命令"。
- * 纯 ASCII 字母（允许连字符）→ 极可能是用户尝试输入命令名；
- * 含中文、日文、韩文等非 ASCII 字符 → 自然语言对话。
- */
-function looksLikeCommandAttempt(token) {
-    return /^[A-Za-z][A-Za-z0-9_-]*$/.test(token);
-}
-function truncate(s, n) {
-    return s.length > n ? `${s.slice(0, n)}...` : s;
 }
 
 ;// CONCATENATED MODULE: ./lib/commands/reaction.js
@@ -90209,7 +90374,7 @@ const codeReview = async (execCtx, lightBot, heavyBot, options, prompts, runOpti
     // 上下文。共享核心入口统一登记一次，调用方（main.ts / gitlab-trigger.ts /
     // 命令 handler）不必各自记得这件事。
     setExecCtx(execCtx);
-    const commenter = new Commenter();
+    const commenter = new commenter_Commenter();
     const fromCommand = runOptions.source === 'command';
     const reviewMode = runOptions.mode ?? 'incremental';
     // 初始化并发控制器：分别限制 OpenAI 和 GitHub API 的并发数
@@ -90335,7 +90500,7 @@ const codeReview = async (execCtx, lightBot, heavyBot, options, prompts, runOpti
     inputs.systemMessage = options.systemMessage;
     // ==================== 恢复增量审查状态 ====================
     // 从已有的摘要评论中恢复上次审查的状态
-    const existingSummarizeCmt = await commenter.findCommentWithTag(summarizeTag(), pr.number);
+    const existingSummarizeCmt = await commenter.findCommentWithTag(commenter_summarizeTag(), pr.number);
     let existingCommitIdsBlock = '';
     let existingSummarizeCmtBody = '';
     if (existingSummarizeCmt != null) {
@@ -90587,7 +90752,7 @@ ${filterIgnoredFiles.length > 0
     }
     // 更新摘要评论为"审查进行中"状态
     const inProgressSummarizeCmt = commenter.addInProgressStatus(existingSummarizeCmtBody, statusMsg);
-    await commenter.comment(`${inProgressSummarizeCmt}`, summarizeTag(), 'replace');
+    await commenter.comment(`${inProgressSummarizeCmt}`, commenter_summarizeTag(), 'replace');
     // ==================== 阶段一：并行文件摘要 ====================
     const summariesFailed = [];
     /**
@@ -91194,7 +91359,7 @@ ${reviewsSkipped.length > 0
         return;
     }
     // 发布最终的摘要评论
-    await commenter.comment(`${summarizeComment}`, summarizeTag(), 'replace');
+    await commenter.comment(`${summarizeComment}`, commenter_summarizeTag(), 'replace');
 };
 // ==================== Diff 解析辅助函数 ====================
 // ==================== Analysis Chain 格式化 ====================
@@ -91788,7 +91953,7 @@ function truncateConversationChain(chain, maxChars = MAX_CHAIN_CHARS) {
  * @param prompts  - 提示词模板
  */
 const handleConversation = async (execCtx, heavyBot, options, prompts) => {
-    const commenter = new Commenter();
+    const commenter = new commenter_Commenter();
     const inputs = new Inputs();
     // 按**最后**一个斜杠切：GitLab 子组项目是 group/subgroup/project，
     // split('/') 取前两段会把 owner/repo 切错（repoCoordsOf 的既有语义）
@@ -91927,7 +92092,7 @@ const handleConversation = async (execCtx, heavyBot, options, prompts) => {
         }
     }
     // 预算允许时补充 PR 精简摘要
-    const summary = await commenter.findCommentWithTag(summarizeTag(), pullNumber);
+    const summary = await commenter.findCommentWithTag(commenter_summarizeTag(), pullNumber);
     if (summary) {
         const shortSummary = commenter.getShortSummary(summary.body);
         const shortSummaryTokens = getTokenCount(shortSummary);
@@ -91994,7 +92159,7 @@ function composeIssueCommentChain(comments, currentCommentId) {
  * @param prompts  - 提示词模板
  */
 const handleIssueConversation = async (execCtx, heavyBot, options, prompts) => {
-    const commenter = new Commenter();
+    const commenter = new commenter_Commenter();
     const inputs = new Inputs();
     // 按**最后**一个斜杠切：GitLab 子组项目是 group/subgroup/project，
     // split('/') 取前两段会把 owner/repo 切错（repoCoordsOf 的既有语义）
@@ -92110,7 +92275,7 @@ const handleIssueConversation = async (execCtx, heavyBot, options, prompts) => {
         }
     }
     // 预算允许时补充 PR 精简摘要
-    const summary = await commenter.findCommentWithTag(summarizeTag(), pullNumber);
+    const summary = await commenter.findCommentWithTag(commenter_summarizeTag(), pullNumber);
     if (summary) {
         const shortSummary = commenter.getShortSummary(summary.body);
         const shortSummaryTokens = getTokenCount(shortSummary);
