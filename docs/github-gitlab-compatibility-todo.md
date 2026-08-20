@@ -1029,7 +1029,7 @@
       试。
 - [ ] `TEST-035` GitLab trigger 禁用 lint 后不检测、不下载、不安装、不恢复缓存且
       仍可完成审查的测试。
-- [ ] `TEST-036` 配置链路测试：
+- [x] `TEST-036` 配置链路测试：
   - `action.yml` 必须声明代码读取的 `semgrep_version` 和 `semgrep_config`；
   - 完整公开配置矩阵中的 GitHub input 与 GitLab 公开配置产生相同的规范化值；
   - `enable_<tool>` 正确转换为内部 `toolEnableOverrides`，`<tool>_version` 正确
@@ -1037,7 +1037,7 @@
   - 未填写或空版本使用唯一受控默认值，空字符串不进入 `resolvedToolVersions`；
   - 空 `semgrep_config` 回退到 `p/default`；
   - 规范化值正确传递到 `Options`、lint orchestrator 和 Semgrep adapter。
-- [ ] `TEST-037` 扫描生产代码的所有 Action input 读取点：每个读取值必须已在
+- [x] `TEST-037` 扫描生产代码的所有 Action input 读取点：每个读取值必须已在
       `action.yml` 声明并进入 `GitHubConfigProvider`，共享核心不得直接读取
       Action input。
 - [ ] `TEST-038` GitLab 幂等键测试：MR Hook 使用 project/MR/head SHA，Note Hook

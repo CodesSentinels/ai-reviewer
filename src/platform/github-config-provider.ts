@@ -12,7 +12,7 @@
 
 import {getBooleanInput, getInput, getMultilineInput} from '@actions/core'
 import type {BotConfig, ConfigProvider, PromptConfig} from './config-provider'
-import {validateFloatStr, validateIntStr} from './config-provider'
+import {CONFIG_DEFAULTS, validateFloatStr, validateIntStr} from './config-provider'
 import type {Platform} from './execution-context'
 import {Options} from '../options'
 
@@ -73,7 +73,11 @@ export class GitHubConfigProvider implements ConfigProvider {
         semgrep: getBooleanInput('enable_semgrep')
       },
       toolVersionOverrides,
-      getInput('semgrep_config'),
+      // 空值回退到受控默认。用户在 with: 里显式写成空串时 getInput 返回 ''，
+      // 而 Options 的默认参数只对 undefined 生效、SemgrepAdapter 用的是 `??`，
+      // 两处都接不住空串——最终会以 `semgrep --config=` 运行。
+      // GitLab 侧的 envStr() 已经把 '' 当作未设置，这里对齐同一语义。
+      getInput('semgrep_config').trim() || CONFIG_DEFAULTS.semgrepConfig,
       getInput('command_ack_reaction'),
       validateIntStr(getInput('max_review_comments'), P, 'max_review_comments'),
       validateIntStr(getInput('debug_resolve_inject_failures'), P, 'debug_resolve_inject_failures'),

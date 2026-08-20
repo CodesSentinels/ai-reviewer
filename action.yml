@@ -236,9 +236,9 @@ inputs:
         - Optimization
         - Best practices: DRY, SOLID, KISS
 
-      Do not comment on minor code style issues, missing 
-      comments/documentation. Identify and resolve significant 
-      concerns to improve overall code quality while deliberately 
+      Do not comment on minor code style issues, missing
+      comments/documentation. Identify and resolve significant
+      concerns to improve overall code quality while deliberately
       disregarding minor issues.
   summarize:
     required: false
@@ -246,12 +246,12 @@ inputs:
     default: |
       Provide your final response in markdown with the following content:
 
-      - **Walkthrough**: A high-level summary of the overall change instead of 
+      - **Walkthrough**: A high-level summary of the overall change instead of
         specific files within 80 words.
-      - **Changes**: A markdown table of files and their summaries. Group files 
+      - **Changes**: A markdown table of files and their summaries. Group files
         with similar changes together into a single row to save space.
 
-      Avoid additional commentary as this summary will be added as a comment on the 
+      Avoid additional commentary as this summary will be added as a comment on the
       GitHub pull request. Use the titles "Walkthrough" and "Changes" and they must be H2.
 
   summarize_release_notes:
@@ -260,10 +260,10 @@ inputs:
       'The prompt for generating release notes in the same chat as summarize
       stage'
     default: |
-      Craft concise release notes for the pull request. 
-      Focus on the purpose and user impact, categorizing changes as "New Feature", "Bug Fix", 
-      "Documentation", "Refactor", "Style", "Test", "Chore", or "Revert". Provide a bullet-point list, 
-      e.g., "- New Feature: Added search functionality to the UI". Limit your response to 50-100 words 
+      Craft concise release notes for the pull request.
+      Focus on the purpose and user impact, categorizing changes as "New Feature", "Bug Fix",
+      "Documentation", "Refactor", "Style", "Test", "Chore", or "Revert". Provide a bullet-point list,
+      e.g., "- New Feature: Added search functionality to the UI". Limit your response to 50-100 words
       and emphasize features visible to the end-user while omitting code-level details.
   enable_web_search:
     required: false
