@@ -84102,7 +84102,12 @@ class GitHubConfigProvider {
             tsc: (0,core.getBooleanInput)('enable_tsc'),
             prettier: (0,core.getBooleanInput)('enable_prettier'),
             semgrep: (0,core.getBooleanInput)('enable_semgrep')
-        }, toolVersionOverrides, (0,core.getInput)('semgrep_config'), (0,core.getInput)('command_ack_reaction'), validateIntStr((0,core.getInput)('max_review_comments'), P, 'max_review_comments'), validateIntStr((0,core.getInput)('debug_resolve_inject_failures'), P, 'debug_resolve_inject_failures'), (0,core.getInput)('bot_icon') || '🤖', (0,core.getInput)('bot_name') || 'AI Reviewer', (0,core.getInput)('bot_github_login'), (0,core.getInput)('lint_report_path'));
+        }, toolVersionOverrides, 
+        // 空值回退到受控默认。用户在 with: 里显式写成空串时 getInput 返回 ''，
+        // 而 Options 的默认参数只对 undefined 生效、SemgrepAdapter 用的是 `??`，
+        // 两处都接不住空串——最终会以 `semgrep --config=` 运行。
+        // GitLab 侧的 envStr() 已经把 '' 当作未设置，这里对齐同一语义。
+        (0,core.getInput)('semgrep_config').trim() || CONFIG_DEFAULTS.semgrepConfig, (0,core.getInput)('command_ack_reaction'), validateIntStr((0,core.getInput)('max_review_comments'), P, 'max_review_comments'), validateIntStr((0,core.getInput)('debug_resolve_inject_failures'), P, 'debug_resolve_inject_failures'), (0,core.getInput)('bot_icon') || '🤖', (0,core.getInput)('bot_name') || 'AI Reviewer', (0,core.getInput)('bot_github_login'), (0,core.getInput)('lint_report_path'));
         return this.cachedOptions;
     }
     getPromptConfig() {
