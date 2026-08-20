@@ -48755,37 +48755,45 @@ async function withGitLabRetry(operation, fn, overrides = {}) {
 
 // EXTERNAL MODULE: external "crypto"
 var external_crypto_ = __nccwpck_require__(6113);
-;// CONCATENATED MODULE: ./lib/platform/gitlab-write-marker.js
+;// CONCATENATED MODULE: ./lib/platform/write-marker.js
 /**
- * platform/gitlab-write-marker.ts — 写操作幂等 marker（GLAPI-027）
+ * platform/write-marker.ts — 写操作幂等 marker（GLAPI-027 / STATE-015）
  *
- * 超时/网络中断时无法区分「请求没到 GitLab」和「GitLab 已写入但响应丢了」。
- * 直接重试后者会产生重复 note/discussion。做法：
+ * 超时/网络中断时无法区分「请求没到平台」和「平台已写入但响应丢了」。
+ * 直接重试后者会产生重复 note/discussion/comment。做法：
  *
- * 1. 写入前给正文追加一个隐藏 marker（HTML 注释，GitLab Markdown 不渲染）；
+ * 1. 写入前给正文追加一个隐藏 marker（HTML 注释，两平台的 Markdown 都不渲染）；
  * 2. 重试前先按 marker 查询已有内容，命中说明上一次其实成功了，直接复用；
- * 3. 返回给共享核心前把 marker 去掉，核心看到的正文与 GitHub 侧语义一致。
+ * 3. 返回给共享核心前把 marker 去掉，核心看到的正文与平台无关。
+ *
+ * 原先只有 GitLab 版（`gitlab-write-marker.ts`）。STATE-015 要求三类重试共用同一
+ * 幂等规则，而 GitHub 侧当时只有 `@octokit/plugin-retry` 的**传输层**重试——它会
+ * 在网络错误时重发 POST，服务端已成功的话就多出一条评论，且无法事后察觉。
+ * 所以把这套 marker 泛化成双平台共用，而不是给 GitHub 再写一份平行实现。
  *
  * 两条不变式：
  *
  * - **marker 唯一标识「一次逻辑写入」，不是「一段正文」**：每次写入由
  *   `newWriteOperationId()` 生成随机 operationId，只在该次调用的重试之间复用。
- *   否则同一 MR 里再次合法发布相同正文时（如两次 pause 回复），重试探测会命中
+ *   否则同一 PR/MR 里再次合法发布相同正文时（如两次 pause 回复），重试探测会命中
  *   历史评论并误判为「本次已成功」，导致新评论丢失。
  * - **marker 文本只含受限字符**：projectPath、文件路径、正文等外部内容只以
  *   sha1 摘要形式参与，绝不原样进入 HTML 注释。Git 文件名允许 `>` 甚至 `-->`，
  *   直接拼接会提前闭合注释并让剥离正则失效，把内部标记暴露给用户。
  *
- * marker 带 `gitlab:` 命名空间（A4），不与 GitHub 侧 marker 混用；
- * 也带 MR IID，便于人工排查时定位。
+ * marker 带平台命名空间（A4），两平台不混用；也带 PR/MR 编号，便于人工排查。
  */
 
-const MARKER_PREFIX = 'ai-reviewer:gitlab:write';
+const MARKER_ROOT = 'ai-reviewer';
+/** 本平台写 marker 的前缀 */
+function markerPrefix(platform) {
+    return `${MARKER_ROOT}:${platform}:write`;
+}
 /**
  * 匹配本模块生成的 marker（用于剥离）。
  * 各字段字符集受限且由本模块生成，外部内容无法构造出能破坏该格式的 marker。
  */
-const MARKER_PATTERN = new RegExp(`\\n*<!-- ${MARKER_PREFIX}:\\d+:[a-z][a-z0-9-]*:[0-9a-f]{16} -->`, 'g');
+const MARKER_PATTERN = new RegExp(`\\n*<!-- ${MARKER_ROOT}:(?:github|gitlab):write:\\d+:[a-z][a-z0-9-]*:[0-9a-f]{16} -->`, 'g');
 /** 为一次逻辑写入生成唯一 ID */
 function newWriteOperationId() {
     return (0,external_crypto_.randomUUID)();
@@ -48804,6 +48812,7 @@ function buildWriteMarker(input) {
     // \0 作分隔符：合法的项目路径/文件名/正文都不含它，杜绝字段拼接歧义
     const digest = (0,external_crypto_.createHash)('sha1')
         .update([
+        input.platform,
         input.projectPath,
         String(input.changeRequestId),
         kind,
@@ -48813,7 +48822,7 @@ function buildWriteMarker(input) {
     ].join('\u0000'), 'utf8')
         .digest('hex')
         .slice(0, 16);
-    return `<!-- ${MARKER_PREFIX}:${input.changeRequestId}:${kind}:${digest} -->`;
+    return `<!-- ${markerPrefix(input.platform)}:${input.changeRequestId}:${kind}:${digest} -->`;
 }
 /** 追加 marker；已包含时保持原样（重试路径可安全重复调用） */
 function appendWriteMarker(body, marker) {
@@ -48836,6 +48845,15 @@ function stripWriteMarkers(body) {
         return '';
     return body.replace(MARKER_PATTERN, '');
 }
+
+;// CONCATENATED MODULE: ./lib/platform/gitlab-write-marker.js
+/**
+ * platform/gitlab-write-marker.ts — 兼容 shim
+ *
+ * 实现已泛化到 `write-marker.ts` 供两个平台共用（STATE-015）。本文件保留原路径，
+ * §6 接线与 GLAPI-027 的既有测试不受影响。
+ */
+
 
 ;// CONCATENATED MODULE: ./lib/platform/gitlab-platform.js
 /**
@@ -49136,6 +49154,7 @@ class GitLabPlatform {
         // operationId 每次调用新生成 → marker 只在本次调用的重试之间复用，
         // 不会命中同 MR 里正文相同的历史评论。
         const marker = buildWriteMarker({
+            platform: 'gitlab',
             projectPath,
             changeRequestId,
             op: 'note',
@@ -49237,7 +49256,7 @@ class GitLabPlatform {
         const { reviewComments } = await this.getAllDiffDiscussions(projectPath, changeRequestId);
         return reviewComments;
     }
-    async submitReviewComments(owner, repo, changeRequestId, commitSha, comments, _reviewBody) {
+    async submitReviewComments(owner, repo, changeRequestId, commitSha, comments, _reviewBody, hooks) {
         // GitLab 无 batch review 概念，逐条创建 discussion。
         //
         // 必须逐条汇报成败：只回一个总数的话，调用方无从知道**哪几条**没发出去，
@@ -49245,7 +49264,17 @@ class GitLabPlatform {
         // 历史也没了（REVIEW-013）。失败项交回调用方统一做顶层降级（REVIEW-014）。
         const delivered = [];
         const failed = [];
-        for (const comment of comments) {
+        const staleSkipped = [];
+        for (const [i, comment] of comments.entries()) {
+            // STATE-011/012：**每条** discussion 创建前重读 HEAD。
+            // 只在整批之前检查一次是不够的——一批可能有十几条，第一条写完 HEAD 就变了
+            // 的话，剩下的仍然是基于旧 diff 的结论。
+            if (hooks?.ensureFresh != null && !(await hooks.ensureFresh())) {
+                staleSkipped.push(...comments.slice(i));
+                getLogger().warning(`submitReviewComments: HEAD moved mid-batch — skipping ${staleSkipped.length} ` +
+                    'remaining comment(s) rather than publishing stale findings (STATE-011/012)');
+                break;
+            }
             try {
                 await this.createReviewComment(owner, repo, changeRequestId, commitSha, comment);
                 delivered.push(comment);
@@ -49264,13 +49293,14 @@ class GitLabPlatform {
                 }
             }
         }
-        return { delivered, failed };
+        return { delivered, failed, staleSkipped };
     }
     async createReviewComment(owner, repo, changeRequestId, commitSha, comment) {
         const projectPath = `${owner}/${repo}`;
         // 文件路径只参与摘要（opDetail），不进 marker 文本：
         // Git 文件名允许 `>` 甚至 `-->`，原样拼接会提前闭合 HTML 注释
         const marker = buildWriteMarker({
+            platform: 'gitlab',
             projectPath,
             changeRequestId,
             op: 'discussion',
@@ -49326,6 +49356,7 @@ class GitLabPlatform {
         }
         const discussionId = cached.discussionId;
         const marker = buildWriteMarker({
+            platform: 'gitlab',
             projectPath,
             changeRequestId,
             op: 'reply',
@@ -49634,7 +49665,7 @@ class GitLabPlatform {
  *   「找不到自己写过的 marker」，造成重复回帖或重复审查。旧格式在所有在途 PR
  *   关闭后即可删除。
  */
-const state_namespace_MARKER_PREFIX = 'ai-reviewer';
+const MARKER_PREFIX = 'ai-reviewer';
 let _namespace = 'github';
 /**
  * 当前状态命名空间。
@@ -49666,7 +49697,7 @@ function resetStateNamespace() {
  */
 function buildStateMarker(kind, ...parts) {
     const suffix = parts.length > 0 ? `:${parts.join(':')}` : '';
-    return `<!-- ${state_namespace_MARKER_PREFIX}:${_namespace}:${kind}${suffix} -->`;
+    return `<!-- ${MARKER_PREFIX}:${_namespace}:${kind}${suffix} -->`;
 }
 /**
  * 返回匹配时应接受的全部 marker 形态：当前命名空间的新格式 + 历史格式。
@@ -53348,7 +53379,9 @@ ${commentTag()}`;
      * @param commitId - 提交的 commit SHA
      * @param statusMsg - 审查状态消息（包含处理统计信息）
      */
-    async submitReview(pullNumber, commitId, statusMsg, threadStatusMap) {
+    async submitReview(pullNumber, commitId, statusMsg, threadStatusMap, 
+    /** STATE-011/012：每次逻辑写入前的 HEAD 新鲜度回调，由 review.ts 提供 */
+    ensureFresh) {
         const body = `${getCommentGreeting()}
 
 ${statusMsg}
@@ -53419,14 +53452,18 @@ ${statusMsg}
             startSide: comment.startLine !== comment.endLine ? 'RIGHT' : undefined
         });
         try {
-            const result = await platform.submitReviewComments(repo.owner, repo.repo, pullNumber, commitId, commentsToSubmit.map(toDraft), body);
+            const result = await platform.submitReviewComments(repo.owner, repo.repo, pullNumber, commitId, commentsToSubmit.map(toDraft), body, { ensureFresh });
+            const staleSkipped = result.staleSkipped ?? [];
             logger.info(`Submitting review for PR #${pullNumber}, delivered: ${result.delivered.length}, ` +
-                `failed: ${result.failed.length}`);
+                `failed: ${result.failed.length}, staleSkipped: ${staleSkipped.length}`);
             // adapter 可能部分成功：GitHub 的 createReview 是原子的，GitLab 则逐条创建
             // discussion，部分失败时只返回一个总数是不够的。按位置对回本地缓冲，
             // **只清理确认投递成功的那些**，否则新发现没发成、被取代的旧讨论却已经删了。
             const failedKeys = new Set(result.failed.map(d => draftKey(d)));
-            const deliveredComments = commentsToSubmit.filter(c => !failedKeys.has(commentKey(c)));
+            // HEAD 变化而主动放弃的那些，既不算投递成功（不能删对应的旧讨论），
+            // 也不能走顶层降级（降级发出去正是要避免的事）——直接排除在两条路径之外。
+            const staleKeys = new Set(staleSkipped.map(d => draftKey(d)));
+            const deliveredComments = commentsToSubmit.filter(c => !failedKeys.has(commentKey(c)) && !staleKeys.has(commentKey(c)));
             await this.flushPendingDeletions(deliveredComments, pendingDeletions);
             // 两层都没送出去的，交给统一的顶层降级（REVIEW-014），
             // 而不是让 adapter 各自静默跳过
@@ -61698,7 +61735,10 @@ ${reviewsSkipped.length > 0
         // 将最新的 head commit SHA 添加到已审查列表
         summarizeComment += `\n${commenter.addReviewedCommitId(existingCommitIdsBlock, pr.head.sha)}`;
         // 批量提交所有缓冲的审查评论（严重级别已内嵌在每条评论顶部，不再单独发汇总评论）
-        await commenter.submitReview(pr.number, commits[commits.length - 1].sha, statusMsg, threadStatusMap);
+        // STATE-011/012：批次内每条写入前再确认一次 HEAD。
+        // 上面那道 `ensureHeadFresh('line-level review')` 只挡住「进入发布阶段前就
+        // 已经变了」；一批可能有十几条 discussion，第一条写完 HEAD 就变的情况它挡不住。
+        await commenter.submitReview(pr.number, commits[commits.length - 1].sha, statusMsg, threadStatusMap, async () => (await ensureHeadFresh('line-level write')).fresh);
     }
     // summary-only 等跳过审查阶段的场景：保留既有的已审查 commit 记录，
     // 否则 replace 摘要评论会清空增量审查标记，导致下次自动审查从 base 重审
@@ -62768,6 +62808,89 @@ async function handleCommentEvent(deps) {
     }
 }
 
+;// CONCATENATED MODULE: ./lib/review-idempotency.js
+/**
+ * review-idempotency.ts — 自动审查的重复投递判定（STATE-013/014/015）
+ *
+ * 原先这套判定只存在于 `gitlab-mr-idempotency.ts`，且只在 GitLab trigger 入口
+ * 调用。结果是同一条规则只覆盖了一半：
+ *
+ *   GitLab job Retry / webhook 重投  → trigger 入口拦住（EVENT-013，已真实验证）
+ *   GitHub workflow rerun            → **没有任何拦截**
+ *
+ * GitHub rerun 的后果不是「多打一条日志」。`review.ts` 决定 diff 起点时，
+ * 若最高已审 commit 恰好等于当前 HEAD，会走「已是最新」分支回退到 base commit
+ * 重跑**整份** diff——于是一次 rerun 就是一轮完整的模型调用，外加重新发布摘要与
+ * 行级评论。这正是 STATE-013 要防的。
+ *
+ * 所以判定挪到平台无关模块，由**共享分发层**（orchestrator.dispatchEvent）统一
+ * 把关，两个平台走同一条规则（STATE-015）。GitLab trigger 入口保留它自己那道
+ * 前置检查：那道更早，能在构造 bot、进入编排之前就退出，省掉整段初始化，
+ * 且它的日志格式已经过真实环境验证。两处调用的是同一个函数，不存在规则漂移。
+ *
+ * ## 判定依据
+ *
+ * summary comment 里的 reviewed-commit-ids marker——`review.ts` 每次成功审查后
+ * 都会把 `pr.head.sha` 写进去（`commenter.addReviewedCommitId()`），这是两个平台
+ * 共用的既有机制。不新建独立存储：再发明一套只会产生两份可能互相不一致的状态。
+ *
+ * ## 查询失败按「未审查过」处理
+ *
+ * 这层防的是「重复投递浪费一次模型调用」，不是安全边界。查询失败时宁可再审一次
+ * （`review.ts` 自身的增量逻辑仍会尽量减少重复工作），也不能因为这层读取失败就
+ * 让正常审查停摆。
+ *
+ * 注意与 REVIEW-003 的分工：那条防的是「审查跑到一半 HEAD 变了，别写旧结果」
+ * （fail closed）；这条防的是「同一个 HEAD 被投递了两次，别重跑」（fail open）。
+ * 方向相反是有意的——前者错了会写脏数据，后者错了只是多花一次钱。
+ */
+
+
+
+
+/**
+ * 这个 headSha 是否已经被自动审查覆盖过。
+ *
+ * 只用 `getPlatform()` 和 `Commenter` 的纯字符串方法，不依赖 execCtx 就绪——
+ * GitLab trigger 在 `setExecCtx()` 之前就要调它。`getReviewedCommitIds()` 只解析
+ * 传入正文，不 touch `this`/execCtx；而 `findCommentWithTag()` 依赖模块级 repo
+ * 绑定，所以查找 summary comment 这一步直接走 `getPlatform().listComments()`。
+ */
+async function hasHeadBeenReviewed(owner, repo, changeRequestId, headSha) {
+    // 没有基准就无从判断。空 headSha 判为「未审查过」，与查询失败同口径。
+    if (headSha === '')
+        return false;
+    try {
+        const comments = await getPlatform().listComments(owner, repo, changeRequestId);
+        // 只认 reviewer 自己发布的 summary。
+        //
+        // marker 格式和 HEAD SHA 都是公开信息——任何能评论的人都能贴一条带正确
+        // marker 和当前 SHA 的评论。不校验作者的话，这就是一个**任意用户可触发的
+        // 审查静默开关**：伪造一条，共享分发层立刻判定「审过了」并跳过整轮审查，
+        // 而且日志里看起来完全正常。
+        //
+        // 身份确认不了时不采信这条评论（继续审查）。这与本模块整体的 fail open 一致：
+        // 宁可多审一次，也不能被一条来路不明的评论关掉审查。
+        for (const c of comments) {
+            if (!bodyHasMarker(c.body, 'summarize'))
+                continue;
+            if ((await isOwnAuthor(c.author)) !== true)
+                continue;
+            if (new commenter_Commenter().getReviewedCommitIds(c.body ?? '').includes(headSha))
+                return true;
+        }
+        return false;
+    }
+    catch (e) {
+        getLogger().warning(`review-idempotency: failed to check reviewed headSha: ${String(e)}`);
+        return false;
+    }
+}
+/** 幂等键。只用于日志与排查，判定本身不依赖它 */
+function buildReviewIdempotencyKey(platform, projectId, changeRequestId, headSha) {
+    return `${platform}:${projectId}:${changeRequestId}:head:${headSha}`;
+}
+
 ;// CONCATENATED MODULE: ./lib/prompts.js
 class Prompts {
     summarize; // 用户自定义的最终摘要提示词
@@ -63355,6 +63478,7 @@ $lint_context
 
 
 
+
 // re-export 供已有消费方（tests/main.ts）不需要改 import 路径
 
 /**
@@ -63370,6 +63494,18 @@ async function dispatchEvent(deps) {
     if (execCtx.eventKind === 'pr_opened' ||
         execCtx.eventKind === 'pr_synchronize' ||
         execCtx.eventKind === 'pr_reopened') {
+        // STATE-013/014/015：同一个 HEAD 被投递两次不得重跑。
+        //
+        // 触发场景两个平台各有一套（GitHub workflow rerun、GitLab job Retry /
+        // webhook 重投 / API 超时重试），但规则只有一条，所以放在共享分发层。
+        // 少了它，rerun 会让 review.ts 回退到 base commit 重跑整份 diff——
+        // 一次点击等于一轮完整的模型调用外加重新发布摘要和行级评论。
+        const { owner, repo } = repoCoordsOf(execCtx);
+        if (await hasHeadBeenReviewed(owner, repo, execCtx.changeRequestId, execCtx.headSha)) {
+            logger.info(`Skipped: headSha ${execCtx.headSha} already reviewed (idempotency key ` +
+                `${buildReviewIdempotencyKey(execCtx.platform, execCtx.projectId, execCtx.changeRequestId, execCtx.headSha)}) — duplicate delivery or rerun (STATE-013/014)`);
+            return;
+        }
         const bots = createBots();
         if (bots == null)
             return;
@@ -72668,6 +72804,10 @@ function buildMrIdempotencyKey(projectId, mrIid, headSha) {
 /**
  * gitlab-mr-idempotency.ts - MR 自动审查幂等判断（EVENT-013）
  *
+ * ⚠️ 判定逻辑已迁到平台无关的 `review-idempotency.ts`（STATE-013/015）——
+ * 同一条规则原先只覆盖 GitLab 一侧，GitHub workflow rerun 无人拦截。本文件保留
+ * 为 re-export，§6 的接线与真实环境验证过的日志格式都不受影响。
+ *
  * `gitlab-mr-hook-rules.ts` 的 `buildMrIdempotencyKey()` 只生成
  * `gitlab:{project_id}:{mr_iid}:head:{head_sha}` 这个幂等键字符串，供日志/排查
  * 使用；本文件负责"这个 headSha 到底判没判过"的真正判断。
@@ -72697,30 +72837,6 @@ function buildMrIdempotencyKey(projectId, mrIid, headSha) {
  *   因为这层读取失败就让正常的审查停摆。
  */
 
-
-
-
-/**
- * 判断给定 MR 的 headSha 是否已经被自动审查过（EVENT-013 的判断依据）。
- *
- * 读取 summary comment（`summarizeTag()` 标识）里既有的 reviewed-commit-ids
- * marker，检查 headSha 是否已在其中——这条 marker 由 `review.ts` 每次成功审查
- * 后写入，语义与"这个 commit 是否已经被增量审查覆盖过"完全一致。
- */
-async function hasHeadBeenReviewed(owner, repo, changeRequestId, headSha) {
-    try {
-        const comments = await getPlatform().listComments(owner, repo, changeRequestId);
-        const summaryComment = comments.find(c => bodyHasMarker(c.body, 'summarize'));
-        if (summaryComment == null)
-            return false;
-        const reviewedIds = new commenter_Commenter().getReviewedCommitIds(summaryComment.body ?? '');
-        return reviewedIds.includes(headSha);
-    }
-    catch (e) {
-        getLogger().warning(`gitlab-mr-idempotency: failed to check reviewed headSha: ${String(e)}`);
-        return false;
-    }
-}
 
 ;// CONCATENATED MODULE: ./lib/gitlab-note-hook-rules.js
 /**
