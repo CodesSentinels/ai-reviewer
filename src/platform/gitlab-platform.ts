@@ -45,6 +45,7 @@ import {
   type ReviewComment,
   type ReviewCommentDraft,
   type SubmitReviewResult,
+  type SubmitReviewHooks,
   type ReviewThreadInfo,
   type TreeResult,
   type PlatformPermission,
@@ -436,6 +437,7 @@ export class GitLabPlatform implements IGitPlatform {
     // operationId 每次调用新生成 → marker 只在本次调用的重试之间复用，
     // 不会命中同 MR 里正文相同的历史评论。
     const marker = buildWriteMarker({
+      platform: 'gitlab',
       projectPath,
       changeRequestId,
       op: 'note',
@@ -579,7 +581,8 @@ export class GitLabPlatform implements IGitPlatform {
     changeRequestId: number,
     commitSha: string,
     comments: ReviewCommentDraft[],
-    _reviewBody?: string
+    _reviewBody?: string,
+    hooks?: SubmitReviewHooks
   ): Promise<SubmitReviewResult> {
     // GitLab 无 batch review 概念，逐条创建 discussion。
     //
@@ -588,7 +591,19 @@ export class GitLabPlatform implements IGitPlatform {
     // 历史也没了（REVIEW-013）。失败项交回调用方统一做顶层降级（REVIEW-014）。
     const delivered: ReviewCommentDraft[] = []
     const failed: ReviewCommentDraft[] = []
-    for (const comment of comments) {
+    const staleSkipped: ReviewCommentDraft[] = []
+    for (const [i, comment] of comments.entries()) {
+      // STATE-011/012：**每条** discussion 创建前重读 HEAD。
+      // 只在整批之前检查一次是不够的——一批可能有十几条，第一条写完 HEAD 就变了
+      // 的话，剩下的仍然是基于旧 diff 的结论。
+      if (hooks?.ensureFresh != null && !(await hooks.ensureFresh())) {
+        staleSkipped.push(...comments.slice(i))
+        getLogger().warning(
+          `submitReviewComments: HEAD moved mid-batch — skipping ${staleSkipped.length} ` +
+            'remaining comment(s) rather than publishing stale findings (STATE-011/012)'
+        )
+        break
+      }
       try {
         await this.createReviewComment(owner, repo, changeRequestId, commitSha, comment)
         delivered.push(comment)
@@ -612,7 +627,7 @@ export class GitLabPlatform implements IGitPlatform {
         }
       }
     }
-    return {delivered, failed}
+    return {delivered, failed, staleSkipped}
   }
 
   async createReviewComment(
@@ -626,6 +641,7 @@ export class GitLabPlatform implements IGitPlatform {
     // 文件路径只参与摘要（opDetail），不进 marker 文本：
     // Git 文件名允许 `>` 甚至 `-->`，原样拼接会提前闭合 HTML 注释
     const marker = buildWriteMarker({
+      platform: 'gitlab',
       projectPath,
       changeRequestId,
       op: 'discussion',
@@ -696,6 +712,7 @@ export class GitLabPlatform implements IGitPlatform {
     }
     const discussionId = cached.discussionId
     const marker = buildWriteMarker({
+      platform: 'gitlab',
       projectPath,
       changeRequestId,
       op: 'reply',

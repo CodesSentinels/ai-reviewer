@@ -13,6 +13,13 @@
 import {octokit} from '../octokit'
 import {getLogger} from './logger'
 import {
+  buildWriteMarker,
+  newWriteOperationId,
+  appendWriteMarker,
+  hasWriteMarker,
+  stripWriteMarkers
+} from './write-marker'
+import {
   GitPlatformError,
   type ChangeRequestInfo,
   type DiffFile,
@@ -24,6 +31,7 @@ import {
   type ReviewComment,
   type ReviewCommentDraft,
   type SubmitReviewResult,
+  type SubmitReviewHooks,
   type ReviewThreadInfo,
   type TreeResult
 } from './git-platform'
@@ -131,6 +139,17 @@ function normalizeLogin(login: string): string {
 }
 
 // ─── GitHub adapter 实现 ──────────────────────────────────────────────────
+
+/** API 返回 → 平台无关评论；顺带剥掉写 marker，共享核心看不到平台实现细节 */
+function toPlatformComment(data: any): PlatformComment {
+  return {
+    id: data.id,
+    body: stripWriteMarkers(data.body ?? ''),
+    author: data.user?.login ?? '',
+    nodeId: data.node_id,
+    createdAt: data.created_at
+  }
+}
 
 export class GitHubPlatform implements IGitPlatform {
   // ─── 1. PR 信息 ───────────────────────────────────────────────────────────
@@ -257,30 +276,180 @@ export class GitHubPlatform implements IGitPlatform {
 
   // ─── 4. 顶层评论 ─────────────────────────────────────────────────────────
 
+  /**
+   * 创建顶层评论（STATE-015：写级别幂等）。
+   *
+   * 原实现直接 `octokit.issues.createComment`，依赖 `@octokit/plugin-retry` 兜底。
+   * 那是**传输层**重试：网络错误时它会重发 POST，而「服务端已经写成功、响应在
+   * 回程丢了」与「请求根本没到」在客户端看来完全一样——重发就多一条评论，
+   * 事后也无从察觉。GitLab 侧早有 write marker 解决这个问题（GLAPI-027），
+   * GitHub 侧一直空缺。
+   *
+   * 现在两平台共用 `write-marker.ts`：
+   *
+   *   1. 写前在正文尾部埋一个隐藏 marker（本次逻辑写入唯一）
+   *   2. 关掉 octokit 的自动重试，改由这里控制——否则它会在我们看不见的地方
+   *      重发，marker 探测也就无从谈起
+   *   3. 失败后先按 marker 查一遍已有评论：命中说明上一次其实成功了，直接复用；
+   *      没命中才真正重试
+   */
   async createComment(
     owner: string,
     repo: string,
     changeRequestId: number,
     body: string
   ): Promise<PlatformComment> {
-    try {
+    const marker = buildWriteMarker({
+      platform: 'github',
+      projectPath: `${owner}/${repo}`,
+      changeRequestId,
+      op: 'issue-comment',
+      operationId: newWriteOperationId(),
+      body
+    })
+    const markedBody = appendWriteMarker(body, marker)
+
+    const attempt = async (): Promise<PlatformComment> => {
       const {data} = await octokit.issues.createComment({
         owner,
         repo,
         // eslint-disable-next-line camelcase
         issue_number: changeRequestId,
-        body
+        body: markedBody,
+        // 自动重试必须关掉：它会在我们察觉不到的情况下重发 POST
+        request: {retries: 0}
       })
-      return {
-        id: data.id,
-        body: data.body ?? '',
-        author: data.user?.login ?? '',
-        nodeId: data.node_id,
-        createdAt: data.created_at
-      }
-    } catch (e) {
-      throw toGitPlatformError(e)
+      return toPlatformComment(data)
     }
+
+    return await this.writeOnce(attempt, async () => {
+      // 探测必须看**未剥离**的原始正文——marker 正是要找的东西，
+      // 而 listComments() 返回给共享核心的正文已经把它去掉了。
+      const hit = await this.findAcrossPages<any>(
+        async page => {
+          const {data} = await octokit.issues.listComments({
+            owner,
+            repo,
+            // eslint-disable-next-line camelcase
+            issue_number: changeRequestId,
+            // eslint-disable-next-line camelcase
+            per_page: 100,
+            page,
+            sort: 'created',
+            direction: 'desc'
+          })
+          return data as any[]
+        },
+        c => hasWriteMarker(c.body, marker)
+      )
+      return hit == null ? null : toPlatformComment(hit)
+    })
+  }
+
+  /**
+   * 逐页查找，直到命中或翻完（STATE-015）。
+   *
+   * 探测**必须**分页。原实现只取 `per_page: 100` 的第一页——评论超过 100 条的 PR
+   * 上，刚写进去的那条根本不在第一页，探测就会误判「还没写」并重发，幂等形同虚设。
+   * 而「评论很多的 PR」恰恰是长期迭代、最可能触发重试的那种。
+   *
+   * 能指定顺序的端点一律按创建时间倒序取，自己刚写的那条通常就在第一页；
+   * `maxPages` 只是兜底，防止异常情况下无限翻页。
+   */
+  private async findAcrossPages<T>(
+    fetchPage: (page: number) => Promise<T[]>,
+    match: (item: T) => boolean,
+    maxPages = 20
+  ): Promise<T | null> {
+    for (let page = 1; page <= maxPages; page++) {
+      const items = await fetchPage(page)
+      const hit = items.find(match)
+      if (hit != null) return hit
+      // 不满一页说明已经是最后一页，再翻也没有
+      if (items.length < 100) return null
+    }
+    getLogger().warning(
+      `write-marker: probe stopped after ${maxPages} pages without finding the marker`
+    )
+    return null
+  }
+
+  /** 为一次逻辑写入生成 marker（STATE-015） */
+  private writeMarkerFor(
+    owner: string,
+    repo: string,
+    changeRequestId: number,
+    op: string,
+    body: string,
+    opDetail?: string
+  ): string {
+    return buildWriteMarker({
+      platform: 'github',
+      projectPath: `${owner}/${repo}`,
+      changeRequestId,
+      op,
+      opDetail,
+      operationId: newWriteOperationId(),
+      body
+    })
+  }
+
+  /** 在行级评论里按 marker 查找（原始正文，未剥离），供写入探测使用 */
+  private async findReviewCommentByMarker(
+    owner: string,
+    repo: string,
+    changeRequestId: number,
+    marker: string
+  ): Promise<any | null> {
+    return await this.findAcrossPages<any>(
+      async page => {
+        const {data} = await octokit.pulls.listReviewComments({
+          owner,
+          repo,
+          // eslint-disable-next-line camelcase
+          pull_number: changeRequestId,
+          // eslint-disable-next-line camelcase
+          per_page: 100,
+          page,
+          sort: 'created',
+          direction: 'desc'
+        })
+        return data as any[]
+      },
+      c => hasWriteMarker(c.body, marker)
+    )
+  }
+
+  /**
+   * 「至多一次」写入：失败后先探测上一次是否其实成功了，没成功才重试。
+   *
+   * 探测本身失败不作数——那只是说明这一刻查不了，继续按重试处理。
+   */
+  private async writeOnce<T>(
+    attempt: () => Promise<T>,
+    probe: () => Promise<T | null>,
+    maxAttempts = 3
+  ): Promise<T> {
+    let lastError: unknown
+    for (let i = 0; i < maxAttempts; i++) {
+      try {
+        return await attempt()
+      } catch (e) {
+        lastError = e
+        try {
+          const already = await probe()
+          if (already != null) {
+            getLogger().info(
+              'write-marker: previous attempt actually succeeded (response was lost) — reusing it'
+            )
+            return already
+          }
+        } catch (probeError) {
+          getLogger().warning(`write-marker: probe failed: ${String(probeError)}`)
+        }
+      }
+    }
+    throw toGitPlatformError(lastError)
   }
 
   async updateComment(owner: string, repo: string, commentId: number, body: string): Promise<void> {
@@ -331,7 +500,7 @@ export class GitHubPlatform implements IGitPlatform {
         allComments.push(
           ...data.map(c => ({
             id: c.id,
-            body: c.body ?? '',
+            body: stripWriteMarkers(c.body ?? ''),
             author: c.user?.login ?? '',
             nodeId: c.node_id,
             createdAt: c.created_at
@@ -369,7 +538,7 @@ export class GitHubPlatform implements IGitPlatform {
         allComments.push(
           ...data.map(c => ({
             id: c.id,
-            body: c.body ?? '',
+            body: stripWriteMarkers(c.body ?? ''),
             path: c.path,
             line: c.line ?? null,
             startLine: c.start_line ?? null,
@@ -396,40 +565,95 @@ export class GitHubPlatform implements IGitPlatform {
     changeRequestId: number,
     commitSha: string,
     comments: ReviewCommentDraft[],
-    reviewBody?: string
+    reviewBody?: string,
+    hooks?: SubmitReviewHooks
   ): Promise<SubmitReviewResult> {
     // GitHub 的 createReview 是原子的：要么整批进去，要么抛错。
     // 因此结果只有「全部投递」或「异常上抛由调用方降级」两种。
     if (comments.length === 0) return {delivered: [], failed: []}
+
+    // STATE-011/012：这里「每次逻辑写入前」等同于「整批之前」——整批评论由一次
+    // createReview 调用写入，中途没有第二个写入点可插。GitLab 那边逐条创建
+    // discussion，所以门禁在循环内部。
+    if (hooks?.ensureFresh != null && !(await hooks.ensureFresh())) {
+      return {delivered: [], failed: [], staleSkipped: [...comments]}
+    }
+    // STATE-015：整批 review 也要写级别幂等。marker 埋在 review body 里，
+    // 探测时按它在已有 review 列表中查找——超时重发会多出一整份 review，
+    // 比多一条评论更醒目，也更该防。
+    const body = reviewBody ?? ''
+    const marker = this.writeMarkerFor(owner, repo, changeRequestId, 'review', body)
+    const markedBody = appendWriteMarker(body, marker)
+
+    const findExistingReview = async (): Promise<{id: number; submitted: boolean} | null> => {
+      // listReviews 不支持排序方向，只能顺序翻页
+      const hit = await this.findAcrossPages<any>(
+        async page => {
+          const {data} = await octokit.pulls.listReviews({
+            owner,
+            repo,
+            // eslint-disable-next-line camelcase
+            pull_number: changeRequestId,
+            // eslint-disable-next-line camelcase
+            per_page: 100,
+            page
+          })
+          return data as any[]
+        },
+        r => hasWriteMarker(r.body, marker)
+      )
+      return hit == null ? null : {id: hit.id, submitted: hit.state !== 'PENDING'}
+    }
+
     try {
-      const review = await octokit.pulls.createReview({
-        owner,
-        repo,
-        // eslint-disable-next-line camelcase
-        pull_number: changeRequestId,
-        // eslint-disable-next-line camelcase
-        commit_id: commitSha,
-        comments: comments.map(c => {
-          const d: any = {path: c.path, body: c.body, line: c.line}
-          if (c.startLine != null && c.startLine !== c.line) {
-            // eslint-disable-next-line camelcase
-            d.start_line = c.startLine
-            // eslint-disable-next-line camelcase
-            d.start_side = c.startSide ?? 'RIGHT'
-          }
-          return d
+      const review = await this.writeOnce(async () => {
+        const {data} = await octokit.pulls.createReview({
+          owner,
+          repo,
+          // eslint-disable-next-line camelcase
+          pull_number: changeRequestId,
+          // eslint-disable-next-line camelcase
+          commit_id: commitSha,
+          body: markedBody,
+          comments: comments.map(c => {
+            const d: any = {path: c.path, body: c.body, line: c.line}
+            if (c.startLine != null && c.startLine !== c.line) {
+              // eslint-disable-next-line camelcase
+              d.start_line = c.startLine
+              // eslint-disable-next-line camelcase
+              d.start_side = c.startSide ?? 'RIGHT'
+            }
+            return d
+          }),
+          request: {retries: 0}
         })
-      })
-      await octokit.pulls.submitReview({
-        owner,
-        repo,
-        // eslint-disable-next-line camelcase
-        pull_number: changeRequestId,
-        // eslint-disable-next-line camelcase
-        review_id: review.data.id,
-        event: 'COMMENT',
-        body: reviewBody ?? ''
-      })
+        return {id: data.id, submitted: false}
+      }, findExistingReview)
+
+      // submitReview 是第二个 POST。它自己的「已提交」状态就是天然的幂等依据：
+      // 探测发现 review 不再是 PENDING，说明上一次其实提交成功了。
+      if (!review.submitted) {
+        await this.writeOnce(
+          async () => {
+            await octokit.pulls.submitReview({
+              owner,
+              repo,
+              // eslint-disable-next-line camelcase
+              pull_number: changeRequestId,
+              // eslint-disable-next-line camelcase
+              review_id: review.id,
+              event: 'COMMENT',
+              request: {retries: 0}
+            })
+            return true
+          },
+          async () => {
+            const existing = await findExistingReview()
+            return existing?.submitted === true ? true : null
+          }
+        )
+      }
+
       return {delivered: [...comments], failed: []}
     } catch (e) {
       throw toGitPlatformError(e)
@@ -443,6 +667,14 @@ export class GitHubPlatform implements IGitPlatform {
     commitSha: string,
     comment: ReviewCommentDraft
   ): Promise<void> {
+    const marker = this.writeMarkerFor(
+      owner,
+      repo,
+      changeRequestId,
+      'review-comment',
+      comment.body,
+      `${comment.path}:${comment.line}`
+    )
     try {
       const d: any = {
         owner,
@@ -452,8 +684,9 @@ export class GitHubPlatform implements IGitPlatform {
         // eslint-disable-next-line camelcase
         commit_id: commitSha,
         path: comment.path,
-        body: comment.body,
-        line: comment.line
+        body: appendWriteMarker(comment.body, marker),
+        line: comment.line,
+        request: {retries: 0}
       }
       if (comment.startLine != null && comment.startLine !== comment.line) {
         // eslint-disable-next-line camelcase
@@ -461,7 +694,16 @@ export class GitHubPlatform implements IGitPlatform {
         // eslint-disable-next-line camelcase
         d.start_side = comment.startSide ?? 'RIGHT'
       }
-      await octokit.pulls.createReviewComment(d)
+      await this.writeOnce<boolean>(
+        async () => {
+          await octokit.pulls.createReviewComment(d)
+          return true
+        },
+        async () =>
+          (await this.findReviewCommentByMarker(owner, repo, changeRequestId, marker)) == null
+            ? null
+            : true
+      )
     } catch (e) {
       throw toGitPlatformError(e)
     }
@@ -474,16 +716,32 @@ export class GitHubPlatform implements IGitPlatform {
     commentId: number,
     body: string
   ): Promise<PlatformComment> {
+    const marker = this.writeMarkerFor(
+      owner,
+      repo,
+      changeRequestId,
+      'review-reply',
+      body,
+      String(commentId)
+    )
     try {
-      const {data} = await octokit.pulls.createReplyForReviewComment({
-        owner,
-        repo,
-        // eslint-disable-next-line camelcase
-        pull_number: changeRequestId,
-        // eslint-disable-next-line camelcase
-        comment_id: commentId,
-        body
-      })
+      const {data} = await this.writeOnce(
+        async () =>
+          await octokit.pulls.createReplyForReviewComment({
+            owner,
+            repo,
+            // eslint-disable-next-line camelcase
+            pull_number: changeRequestId,
+            // eslint-disable-next-line camelcase
+            comment_id: commentId,
+            body: appendWriteMarker(body, marker),
+            request: {retries: 0}
+          }),
+        async () => {
+          const hit = await this.findReviewCommentByMarker(owner, repo, changeRequestId, marker)
+          return hit == null ? null : ({data: hit} as any)
+        }
+      )
       return {
         id: data.id,
         body: data.body ?? '',

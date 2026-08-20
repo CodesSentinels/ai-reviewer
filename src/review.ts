@@ -1430,11 +1430,15 @@ ${
     summarizeComment += `\n${commenter.addReviewedCommitId(existingCommitIdsBlock, pr.head.sha)}`
 
     // 批量提交所有缓冲的审查评论（严重级别已内嵌在每条评论顶部，不再单独发汇总评论）
+    // STATE-011/012：批次内每条写入前再确认一次 HEAD。
+    // 上面那道 `ensureHeadFresh('line-level review')` 只挡住「进入发布阶段前就
+    // 已经变了」；一批可能有十几条 discussion，第一条写完 HEAD 就变的情况它挡不住。
     await commenter.submitReview(
       pr.number,
       commits[commits.length - 1].sha,
       statusMsg,
-      threadStatusMap
+      threadStatusMap,
+      async () => (await ensureHeadFresh('line-level write')).fresh
     )
   }
 

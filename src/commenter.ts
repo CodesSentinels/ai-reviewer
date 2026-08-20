@@ -457,7 +457,9 @@ ${commentTag()}`
     pullNumber: number,
     commitId: string,
     statusMsg: string,
-    threadStatusMap?: Map<string, boolean>
+    threadStatusMap?: Map<string, boolean>,
+    /** STATE-011/012：每次逻辑写入前的 HEAD 新鲜度回调，由 review.ts 提供 */
+    ensureFresh?: () => Promise<boolean>
   ) {
     const body = `${getCommentGreeting()}
 
@@ -559,19 +561,26 @@ ${statusMsg}
         pullNumber,
         commitId,
         commentsToSubmit.map(toDraft),
-        body
+        body,
+        {ensureFresh}
       )
 
+      const staleSkipped = result.staleSkipped ?? []
       logger.info(
         `Submitting review for PR #${pullNumber}, delivered: ${result.delivered.length}, ` +
-          `failed: ${result.failed.length}`
+          `failed: ${result.failed.length}, staleSkipped: ${staleSkipped.length}`
       )
 
       // adapter 可能部分成功：GitHub 的 createReview 是原子的，GitLab 则逐条创建
       // discussion，部分失败时只返回一个总数是不够的。按位置对回本地缓冲，
       // **只清理确认投递成功的那些**，否则新发现没发成、被取代的旧讨论却已经删了。
       const failedKeys = new Set(result.failed.map(d => draftKey(d)))
-      const deliveredComments = commentsToSubmit.filter(c => !failedKeys.has(commentKey(c)))
+      // HEAD 变化而主动放弃的那些，既不算投递成功（不能删对应的旧讨论），
+      // 也不能走顶层降级（降级发出去正是要避免的事）——直接排除在两条路径之外。
+      const staleKeys = new Set(staleSkipped.map(d => draftKey(d)))
+      const deliveredComments = commentsToSubmit.filter(
+        c => !failedKeys.has(commentKey(c)) && !staleKeys.has(commentKey(c))
+      )
       await this.flushPendingDeletions(deliveredComments, pendingDeletions)
 
       // 两层都没送出去的，交给统一的顶层降级（REVIEW-014），

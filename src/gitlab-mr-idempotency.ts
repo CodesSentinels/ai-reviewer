@@ -1,6 +1,10 @@
 /**
  * gitlab-mr-idempotency.ts - MR 自动审查幂等判断（EVENT-013）
  *
+ * ⚠️ 判定逻辑已迁到平台无关的 `review-idempotency.ts`（STATE-013/015）——
+ * 同一条规则原先只覆盖 GitLab 一侧，GitHub workflow rerun 无人拦截。本文件保留
+ * 为 re-export，§6 的接线与真实环境验证过的日志格式都不受影响。
+ *
  * `gitlab-mr-hook-rules.ts` 的 `buildMrIdempotencyKey()` 只生成
  * `gitlab:{project_id}:{mr_iid}:head:{head_sha}` 这个幂等键字符串，供日志/排查
  * 使用；本文件负责"这个 headSha 到底判没判过"的真正判断。
@@ -29,32 +33,4 @@
  *   时宁可再审一次（下游 review.ts 自身的增量逻辑仍会尽量减少重复工作），也不能
  *   因为这层读取失败就让正常的审查停摆。
  */
-import {getPlatform} from './platform/git-platform'
-import {getLogger} from './platform/logger'
-import {bodyHasMarker} from './state-markers'
-import {Commenter} from './commenter'
-
-/**
- * 判断给定 MR 的 headSha 是否已经被自动审查过（EVENT-013 的判断依据）。
- *
- * 读取 summary comment（`summarizeTag()` 标识）里既有的 reviewed-commit-ids
- * marker，检查 headSha 是否已在其中——这条 marker 由 `review.ts` 每次成功审查
- * 后写入，语义与"这个 commit 是否已经被增量审查覆盖过"完全一致。
- */
-export async function hasHeadBeenReviewed(
-  owner: string,
-  repo: string,
-  changeRequestId: number,
-  headSha: string
-): Promise<boolean> {
-  try {
-    const comments = await getPlatform().listComments(owner, repo, changeRequestId)
-    const summaryComment = comments.find(c => bodyHasMarker(c.body, 'summarize'))
-    if (summaryComment == null) return false
-    const reviewedIds = new Commenter().getReviewedCommitIds(summaryComment.body ?? '')
-    return reviewedIds.includes(headSha)
-  } catch (e) {
-    getLogger().warning(`gitlab-mr-idempotency: failed to check reviewed headSha: ${String(e)}`)
-    return false
-  }
-}
+export {hasHeadBeenReviewed} from './review-idempotency'

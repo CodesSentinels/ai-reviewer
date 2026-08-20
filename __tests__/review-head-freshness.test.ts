@@ -129,12 +129,12 @@ function makeOptions(over: Record<string, any> = {}): any {
 }
 
 /** execCtx.headSha 可控：PR 事件带值，评论事件为空 */
-function ctxWith(headSha: string): ExecutionContext {
-  setStateNamespace('github')
+function ctxWith(headSha: string, platform: 'github' | 'gitlab' = 'github'): ExecutionContext {
+  setStateNamespace(platform)
   const ctx: any = {
-    platform: 'github',
-    projectPath: 'octo/demo',
-    projectId: 'octo/demo',
+    platform,
+    projectPath: platform === 'gitlab' ? 'group/demo' : 'octo/demo',
+    projectId: platform === 'gitlab' ? 'group/demo' : 'octo/demo',
     changeRequestId: 1,
     eventKind: headSha === '' ? 'comment_created' : 'pr_opened',
     actor: {login: 'alice', isBot: false},
@@ -467,4 +467,41 @@ describe('REVIEW-003：查询失败不发作废提示', () => {
 
     expect(logs.join('\n')).toContain('failed to publish invalidation notice')
   })
+})
+
+/**
+ * STATE-011/012 的 §10 视角：门禁必须在两个平台上都成立。
+ *
+ * 上面的用例全部跑在 GitHub 上下文里。写前重读 HEAD 这条规则本身是平台无关的
+ * （`review.ts` 里的四道 `ensureHeadFresh`），但「平台无关」是需要被验证的结论，
+ * 不是可以默认的前提——marker 命名空间与 `getChangeRequest` 的 adapter 实现都在
+ * 平台之间分叉，任一处漏了都会让 GitLab 侧静默失去这道防线。
+ */
+describe('STATE-011/012：两个平台共用同一道写前 HEAD 门禁', () => {
+  test.each<['github' | 'gitlab']>([['github'], ['gitlab']])(
+    '%s：审查期间 HEAD 变化 → 不提交行级评论、不写 release notes',
+    async platform => {
+      const ctx = ctxWith(OLD_HEAD, platform)
+      headMovesAfter(1)
+
+      await codeReview(ctx, makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
+
+      expect(platformState.submitReviewComments).not.toHaveBeenCalled()
+      expect(platformState.updateChangeRequestBody).not.toHaveBeenCalled()
+      expect(logs.join('\n')).toContain('[review-003] HEAD moved')
+    }
+  )
+
+  test.each<['github' | 'gitlab']>([['github'], ['gitlab']])(
+    '%s：对照组——HEAD 未变则照常发布（证明夹具确实走到了写入）',
+    async platform => {
+      const ctx = ctxWith(OLD_HEAD, platform)
+      platformState.getChangeRequest.mockResolvedValue(cr(OLD_HEAD))
+
+      await codeReview(ctx, makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
+
+      expect(platformState.submitReviewComments).toHaveBeenCalled()
+      expect(postedText()).toContain(stateMarker('commitIdsStart'))
+    }
+  )
 })

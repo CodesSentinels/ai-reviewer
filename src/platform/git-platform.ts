@@ -113,6 +113,28 @@ export interface SubmitReviewResult {
   delivered: ReviewCommentDraft[]
   /** 两层都没送出去的评论，调用方需自行决定如何呈现 */
   failed: ReviewCommentDraft[]
+  /**
+   * 因 HEAD 已变化而**主动放弃**投递的评论（STATE-011/012）。
+   *
+   * 与 `failed` 必须分开：`failed` 会触发顶层降级（REVIEW-014），把内容以另一种
+   * 形式发出去；而这些是「基于旧 HEAD 的结论，现在不该发了」，降级发出去正好是
+   * 要避免的事。也不能算 delivered——它们没发出去，对应位置上被取代的 resolved
+   * 旧讨论不能删。
+   *
+   * 可选：老的 adapter/测试替身不返回它时按空数组处理。
+   */
+  staleSkipped?: ReviewCommentDraft[]
+}
+
+/** 写入期间的回调（STATE-011/012） */
+export interface SubmitReviewHooks {
+  /**
+   * 每次逻辑写入前调用；返回 false 表示 HEAD 已变化，adapter 应停止投递剩余评论。
+   *
+   * 「每次逻辑写入」在两个平台上的含义不同：GitLab 逐条创建 discussion，所以是
+   * 逐条；GitHub 的 createReview 是一次原子调用带整批评论，一次调用就是一次写入。
+   */
+  ensureFresh?: () => Promise<boolean>
 }
 
 /** review thread 状态 */
@@ -230,7 +252,8 @@ export interface IGitPlatform {
     changeRequestId: number,
     commitSha: string,
     comments: ReviewCommentDraft[],
-    reviewBody?: string
+    reviewBody?: string,
+    hooks?: SubmitReviewHooks
   ): Promise<SubmitReviewResult>
 
   /** 创建单条行级评论 */

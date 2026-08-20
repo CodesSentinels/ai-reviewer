@@ -256,7 +256,9 @@ describe('GitLab adapter 稳定性契约', () => {
   // ─── GLAPI-027 写幂等 ─────────────────────────────────────────────────────
 
   describe('GLAPI-027 写操作幂等 marker', () => {
-    const markerInput = (over: Record<string, unknown> = {}) => ({
+    const markerInput = (over: Record<string, unknown> = {}): any => ({
+      // marker 现在带平台命名空间（STATE-015：两平台共用同一套实现）
+      platform: 'gitlab' as const,
       projectPath: 'g/r',
       changeRequestId: 5,
       op: 'note',
