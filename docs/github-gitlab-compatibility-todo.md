@@ -1057,33 +1057,43 @@
 
 ## 15. 开发验收矩阵
 
+> GitLab-only 列里打勾的格子，均为 2026-08-18/19 真实 GitLab 环境端到端验证
+> （Issue #118）里有具体 job 日志/API 证据支持的项，不是凭经验推断。命令类
+> （`review`/`full review`/`summary`/`pause`/`resume`/`configuration`/
+> `resolve`）当时只真实测过 `help`，其余命令没有单独发过真实命令验证，故不
+> 打勾；"行级回复/对话上下文"里，行级回复本身有验证，但对话上下文
+> （`REVIEW-015~018`）验证时确认尚未接入 GitLab（`conversation: skip`），故
+> 整行不打勾；"命令进程内限流"没有专门构造超限场景验证，故不打勾；"权限
+> 校验"只验证过"权限足够→放行"，没验证过"权限不足→拒绝"，故不打勾。
+> GitHub-only 和"同时启用"两列均未验证，保持空。
+
 | 功能                                  | GitHub-only | GitLab-only | 同时启用 |
 | ------------------------------------- | ----------- | ----------- | -------- |
-| 自动增量审查                          | [ ]         | [ ]         | [ ]      |
+| 自动增量审查                          | [ ]         | [x]         | [ ]      |
 | `review`                              | [ ]         | [ ]         | [ ]      |
 | `full review`                         | [ ]         | [ ]         | [ ]      |
 | `summary`                             | [ ]         | [ ]         | [ ]      |
 | `pause` / `resume`                    | [ ]         | [ ]         | [ ]      |
 | `configuration`                       | [ ]         | [ ]         | [ ]      |
-| `help`                                | [ ]         | [ ]         | [ ]      |
+| `help`                                | [ ]         | [x]         | [ ]      |
 | `resolve`                             | [ ]         | [ ]         | [ ]      |
-| 顶层摘要                              | [ ]         | [ ]         | [ ]      |
-| 行级评论/discussion                   | [ ]         | [ ]         | [ ]      |
+| 顶层摘要                              | [ ]         | [x]         | [ ]      |
+| 行级评论/discussion                   | [ ]         | [x]         | [ ]      |
 | 行级回复/对话上下文                   | [ ]         | [ ]         | [ ]      |
-| ACK reaction/award emoji              | [ ]         | [ ]         | [ ]      |
+| ACK reaction/award emoji              | [ ]         | [x]         | [ ]      |
 | Web search 开关与工具调用             | [ ]         | [ ]         | [ ]      |
 | Repository tree/跨文件依赖分析        | [ ]         | [ ]         | [ ]      |
-| Release notes 生成与 description 更新 | [ ]         | [ ]         | [ ]      |
+| Release notes 生成与 description 更新 | [ ]         | [x]         | [ ]      |
 | 命令进程内限流与事件幂等              | [ ]         | [ ]         | [ ]      |
-| 禁用 lint/shell 后 API-only 审查      | [ ]         | [ ]         | [ ]      |
+| 禁用 lint/shell 后 API-only 审查      | [ ]         | [x]         | [ ]      |
 | 权限校验                              | [ ]         | [ ]         | [ ]      |
-| reviewed SHA marker                   | [ ]         | [ ]         | [ ]      |
+| reviewed SHA marker                   | [ ]         | [x]         | [ ]      |
 | pause marker                          | [ ]         | [ ]         | [ ]      |
-| event 幂等                            | [ ]         | [ ]         | [ ]      |
-| 旧 SHA 退出                           | [ ]         | [ ]         | [ ]      |
+| event 幂等                            | [ ]         | [x]         | [ ]      |
+| 旧 SHA 退出                           | [ ]         | [x]         | [ ]      |
 | 平台状态隔离                          | N/A         | N/A         | [ ]      |
 | 单平台故障隔离                        | N/A         | N/A         | [ ]      |
-| 不可信代码无法访问密钥                | [ ]         | [ ]         | [ ]      |
+| 不可信代码无法访问密钥                | [ ]         | [x]         | [ ]      |
 
 ---
 
