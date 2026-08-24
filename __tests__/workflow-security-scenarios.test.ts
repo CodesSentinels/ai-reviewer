@@ -257,6 +257,14 @@ describe.each(SCENARIOS)('$name', ({ctx, headRepo}) => {
   })
 })
 
+/** 剥掉 shell 行注释（行首或空白后的 #），避免注释里的说明文字触发误判 */
+function stripShellComments(script: string): string {
+  return script
+    .split('\n')
+    .map(line => line.replace(/(^|\s)#.*$/, '$1'))
+    .join('\n')
+}
+
 describe('恶意 PR：五类篡改各自被哪条机制挡住（§3 验收①）', () => {
   const ctx = SCENARIOS[3].ctx
   const review = jobs.review
@@ -336,6 +344,86 @@ describe('恶意 PR：五类篡改各自被哪条机制挡住（§3 验收①）
   test('尝试读密钥 —— 持密钥 job 全程没有 run: 步骤，没有可注入的执行点', () => {
     const runSteps = stepsOf(review).filter(s => s.run != null)
     expect(runSteps.map(s => String(s.run).slice(0, 40))).toEqual([])
+  })
+
+  /**
+   * TEST-025 的 install hooks 那一维。
+   *
+   * `npm ci` 会执行 preinstall / postinstall / prepare 等生命周期脚本——攻击者
+   * 不必改 package scripts，塞一个带 install hook 的依赖就够了。上一条断言的是
+   * 「不在 pr/ 里装依赖」；这条补的是：**凡是会装依赖的步骤，都必须在装之前就
+   * 已经不可能看到 PR 内容**，且持密钥 job 一次都不装。
+   */
+  test('改 install hooks —— 持密钥 job 不装依赖，生命周期脚本无从触发', () => {
+    for (const step of stepsOf(review)) {
+      const run = String(step.run ?? '')
+      expect(run).not.toMatch(/(npm|yarn|pnpm)\s+(ci|install)/)
+    }
+  })
+
+  test('改 install hooks —— 每一个装依赖的步骤都在 PR 代码落盘之前', () => {
+    // 只看第一个安装步骤是不够的：下面这种顺序会被漏掉——
+    //   npm ci  →  checkout(path: pr)  →  npm install
+    // 第二次安装发生在 PR 内容已经在工作区之后，install hook 就能跑起来。
+    // 所以收集**全部**安装步骤，逐个与最早的 PR checkout 位置比较。
+    const violations: string[] = []
+
+    for (const [name, job] of Object.entries(jobs)) {
+      const steps = stepsOf(job)
+      const installIdxs = steps
+        .map((step, i) => ({i, run: String(step.run ?? '')}))
+        .filter(x => /(npm|yarn|pnpm)\s+(ci|install)/.test(x.run))
+        .map(x => x.i)
+      const prCheckoutIdxs = steps
+        .map((step, i) => ({i, step}))
+        .filter(
+          x =>
+            String(x.step.uses ?? '').startsWith('actions/checkout') &&
+            String(x.step.with?.path ?? '') === 'pr'
+        )
+        .map(x => x.i)
+
+      if (prCheckoutIdxs.length === 0) continue
+      const firstPrCheckout = Math.min(...prCheckoutIdxs)
+
+      for (const idx of installIdxs) {
+        if (idx > firstPrCheckout) {
+          violations.push(
+            `${name}: step#${idx} 安装依赖发生在 PR checkout(#${firstPrCheckout}) 之后`
+          )
+        }
+      }
+    }
+
+    expect(violations).toEqual([])
+  })
+
+  /**
+   * TEST-026 的日志那一维。
+   *
+   * 密钥进日志和密钥被读走一样严重——日志对仓库协作者可见，PR 作者往往就是
+   * 协作者。这里查两件事：没有任何步骤开启命令回显（会把展开后的环境变量打出
+   * 来），也没有任何步骤把 secrets 表达式直接 echo 出去。
+   */
+  test('读日志 —— 没有步骤开启 shell 命令回显（set -x / bash -x）', () => {
+    for (const [name, job] of Object.entries(jobs)) {
+      for (const step of stepsOf(job)) {
+        // 必须先剥 shell 注释：workflow 里正写着「不用 set -x、不回显 AUTH」，
+        // 连注释一起扫会被自己的正确说明判为违规（这个坑踩过三次）
+        const run = stripShellComments(String(step.run ?? ''))
+        expect(`${name}:${run}`).not.toMatch(/set\s+-[a-z]*x|bash\s+-x|sh\s+-x/)
+      }
+    }
+  })
+
+  test('读日志 —— 没有步骤把 secrets 表达式 echo 出去', () => {
+    for (const [name, job] of Object.entries(jobs)) {
+      for (const step of stepsOf(job)) {
+        const run = stripShellComments(String(step.run ?? ''))
+        expect(`${name}:${run}`).not.toMatch(/echo[^\n]*secrets\./)
+        expect(`${name}:${run}`).not.toMatch(/echo[^\n]*\$\{\{[^}]*secrets/)
+      }
+    }
   })
 
   test('产物是数据不是代码 —— 下载目录在工作区之外，且没有步骤执行它', () => {

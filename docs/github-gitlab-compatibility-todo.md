@@ -977,17 +977,17 @@
 
 ### 14.1 单元与契约测试
 
-- [ ] `TEST-001` GitHub payload → `ExecutionContext` fixtures。
-- [ ] `TEST-002` GitLab MR Hook → `ExecutionContext` fixtures。
-- [ ] `TEST-003` GitLab Note Hook → `ExecutionContext` fixtures。
+- [x] `TEST-001` GitHub payload → `ExecutionContext` fixtures。
+- [x] `TEST-002` GitLab MR Hook → `ExecutionContext` fixtures。
+- [x] `TEST-003` GitLab Note Hook → `ExecutionContext` fixtures。
 - [x] `TEST-004` 两平台 ConfigProvider 默认值、优先级和错误测试。
-- [ ] `TEST-005` GitHub/GitLab adapter 成功、分页和错误测试。
+- [x] `TEST-005` GitHub/GitLab adapter 成功、分页和错误测试。
 - [ ] `TEST-006` GitLab diff position 的新增、删除、重命名和旧 SHA 测试。
-- [ ] `TEST-007` 所有命令权限和 MR 作者例外测试。
-- [ ] `TEST-008` 所有命令 parser/handler 测试。
-- [ ] `TEST-009` marker、幂等、反馈循环和陈旧任务测试。
-- [ ] `TEST-010` 双入口 bundle 启动测试。
-- [ ] `TEST-011` 架构测试：GitHub adapter 不依赖 GitLab，GitLab adapter 不依赖
+- [x] `TEST-007` 所有命令权限和 MR 作者例外测试。
+- [x] `TEST-008` 所有命令 parser/handler 测试。
+- [x] `TEST-009` marker、幂等、反馈循环和陈旧任务测试。
+- [x] `TEST-010` 双入口 bundle 启动测试。
+- [x] `TEST-011` 架构测试：GitHub adapter 不依赖 GitLab，GitLab adapter 不依赖
       GitHub。
 
 ### 14.2 语义等价测试
@@ -999,11 +999,11 @@
 
 ### 14.3 独立运行与集成故障注入测试
 
-- [ ] `TEST-016` GitHub-only：无任何 GitLab 配置时全功能通过。
-- [ ] `TEST-017` GitHub-only：GitLab API 不可达时全功能通过。
+- [x] `TEST-016` GitHub-only：无任何 GitLab 配置时全功能通过。
+- [x] `TEST-017` GitHub-only：GitLab API 不可达时全功能通过。
 - [ ] `TEST-018` GitLab-only：无 GitHub Token 且阻断 GitHub API 时全功能通过。
 - [ ] `TEST-019` GitLab-only：停用同步 workflow 后，已部署版本仍可处理 MR。
-- [ ] `TEST-020` 同时启用：同一 commit 的 PR/MR 分别审查，不共享状态。
+- [x] `TEST-020` 同时启用：同一 commit 的 PR/MR 分别审查，不共享状态。
 - [ ] `TEST-021` 集成/E2E 故障注入：同时启用时，一个平台的 API、Runner 或凭据故
       障不影响另一平台；该项不作为普通单元测试替代。
 
@@ -1014,7 +1014,7 @@
 - [ ] `TEST-024` 恶意 PR/MR 修改 workflow/`.gitlab-ci.yml`。
 - [ ] `TEST-025` 恶意 PR/MR 修改 package scripts、依赖和 install hooks。
 - [ ] `TEST-026` 恶意 PR/MR 尝试读取环境、文件系统、artifact 和日志中的 secret。
-- [ ] `TEST-027` GitLab fork MR 被拒绝。
+- [x] `TEST-027` GitLab fork MR 被拒绝。
 - [ ] `TEST-028` bot/system/self event 不调用模型。
 - [ ] `TEST-029` API 错误、异常堆栈和 debug log 不包含 secret。
 - [ ] `TEST-030` Web search 开关映射、受信任配置来源、禁用时不传 tool 和
@@ -1025,9 +1025,9 @@
       `max_dependency_files` 一致性测试。
 - [ ] `TEST-033` Release notes 的开关、prompt、平台 marker、description 局部更新
       、并发冲突重试和用户内容保护测试；同时覆盖 pause/resume marker 不被覆盖。
-- [ ] `TEST-034` 命令限流复合 key 隔离、单进程窗口和 GitLab Note Hook 幂等协作测
+- [x] `TEST-034` 命令限流复合 key 隔离、单进程窗口和 GitLab Note Hook 幂等协作测
       试。
-- [ ] `TEST-035` GitLab trigger 禁用 lint 后不检测、不下载、不安装、不恢复缓存且
+- [x] `TEST-035` GitLab trigger 禁用 lint 后不检测、不下载、不安装、不恢复缓存且
       仍可完成审查的测试。
 - [x] `TEST-036` 配置链路测试：
   - `action.yml` 必须声明代码读取的 `semgrep_version` 和 `semgrep_config`；
@@ -1040,17 +1040,17 @@
 - [x] `TEST-037` 扫描生产代码的所有 Action input 读取点：每个读取值必须已在
       `action.yml` 声明并进入 `GitHubConfigProvider`，共享核心不得直接读取
       Action input。
-- [ ] `TEST-038` GitLab 幂等键测试：MR Hook 使用 project/MR/head SHA，Note Hook
+- [x] `TEST-038` GitLab 幂等键测试：MR Hook 使用 project/MR/head SHA，Note Hook
       使用 project/MR/note/action；重复 payload、job Retry 和缺少必填字段均不得
       重复调用模型或回复。
 - [ ] `TEST-039` Repository tree 缓存隔离测试：相同 ref 的不同平台/项目不能互相
       命中，并分别验证空仓库、截断/不完整响应和 API 失败。
 - [ ] `TEST-040` CI 产物来源测试：MR 临时 bundle 只验证不复用，protected trigger
       只接受 source commit 等于当前 `main` `CI_COMMIT_SHA` 的可信 bundle。
-- [ ] `TEST-041` `@gitbeaker/rest` 客户端契约测试：覆盖自定义 host、PAT 注入
+- [x] `TEST-041` `@gitbeaker/rest` 客户端契约测试：覆盖自定义 host、PAT 注入
       、timeout、分页、snake_case 响应、429/5xx、401/403、404/409、网络错误和日
       志脱敏。
-- [ ] `TEST-042` 架构测试：共享核心不得导入 `@gitbeaker/rest` 或直接调用 GitLab
+- [x] `TEST-042` 架构测试：共享核心不得导入 `@gitbeaker/rest` 或直接调用 GitLab
       `fetch`；受控原生 `fetch` fallback 只能位于 GitLab adapter/客户端层。
 
 ---

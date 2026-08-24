@@ -19,6 +19,7 @@
 import {describe, expect, test} from '@jest/globals'
 import * as fs from 'fs'
 import * as path from 'path'
+import * as ts from 'typescript'
 
 const SRC = path.resolve(__dirname, '../src')
 
@@ -129,6 +130,104 @@ describe('ARCH-023: 共享核心不得新增直接平台依赖', () => {
 
   test('GitHub adapter 文件存在', () => {
     expect(fs.existsSync(path.join(SRC, 'platform/github-platform.ts'))).toBe(true)
+  })
+
+  /**
+   * TEST-011：两个 adapter 必须互不依赖。
+   *
+   * 上面几条只管「共享核心不碰平台 SDK」。adapter 之间的交叉引用是另一回事：
+   * GitHub adapter 一旦 import 了 gitbeaker，GitHub-only 部署就被迫拖上 GitLab
+   * SDK，任一平台的 SDK 故障也会波及另一平台（§1 平台独立运行）。
+   */
+  test('GitHub adapter 不引用 GitLab SDK', () => {
+    const code = fs.readFileSync(path.join(SRC, 'platform/github-platform.ts'), 'utf8')
+
+    expect(stripComments(code)).not.toMatch(/@gitbeaker/)
+  })
+
+  test('GitLab adapter 不引用 GitHub SDK', () => {
+    const code = stripComments(
+      fs.readFileSync(path.join(SRC, 'platform/gitlab-platform.ts'), 'utf8')
+    )
+
+    expect(code).not.toMatch(/@octokit/)
+    expect(code).not.toMatch(/from '\.\.\/octokit'/)
+    expect(code).not.toMatch(/@actions\/github/)
+  })
+
+  /**
+   * TEST-042：受控的原生 `fetch` 只能出现在 GitLab adapter / 客户端层。
+   *
+   * 业务层直接 fetch 等于绕开统一的认证、超时、脱敏、分页、重试与错误规范化
+   * （方案「关键技术决策」）。这条守的是「下一次有人图省事」——目前生产代码里
+   * 一处都没有，正因如此更需要一道门，否则第一次出现时不会有任何信号。
+   */
+  test('原生 fetch 只允许出现在 GitLab adapter / 客户端层', () => {
+    // 正则版只认 `fetch(` 与 `globalThis.fetch`，下面这些全绕得过去：
+    //   const request = fetch; request(url)     别名后再调用
+    //   window.fetch(url) / self.fetch(url)     另一个全局对象
+    //   globalThis['fetch'](url)                element access
+    //   ;(0, fetch)(url)                        逗号表达式间接调用
+    // 改用 AST：只要 `fetch` 作为**值**被引用到（不管怎么用），就算越界。
+    const ALLOWED = /^platform\/gitlab-(platform|client|retry)\.ts$/
+    const GLOBAL_OBJECTS = new Set(['globalThis', 'window', 'self', 'global'])
+    const violations: string[] = []
+
+    for (const f of collectTsFiles(SRC)) {
+      const rel = path.relative(SRC, f).replace(/\\/g, '/')
+      if (ALLOWED.test(rel)) continue
+
+      const sf = ts.createSourceFile(f, fs.readFileSync(f, 'utf8'), ts.ScriptTarget.Latest, true)
+      let hit = false
+
+      const visit = (node: ts.Node): void => {
+        if (hit) return
+
+        // globalThis['fetch'] / window["fetch"]
+        if (
+          ts.isElementAccessExpression(node) &&
+          ts.isStringLiteralLike(node.argumentExpression) &&
+          node.argumentExpression.text === 'fetch'
+        ) {
+          hit = true
+          return
+        }
+
+        // globalThis.fetch / window.fetch / self.fetch
+        if (
+          ts.isPropertyAccessExpression(node) &&
+          node.name.text === 'fetch' &&
+          ts.isIdentifier(node.expression) &&
+          GLOBAL_OBJECTS.has(node.expression.text)
+        ) {
+          hit = true
+          return
+        }
+
+        // 裸标识符 fetch 被当作值引用——涵盖直接调用、别名赋值、
+        // 作为实参传递、逗号表达式等一切形态。
+        if (ts.isIdentifier(node) && node.text === 'fetch') {
+          const parent = node.parent
+          const isPropertyName =
+            (ts.isPropertyAccessExpression(parent) && parent.name === node) ||
+            (ts.isPropertyAssignment(parent) && parent.name === node) ||
+            (ts.isPropertySignature(parent) && parent.name === node) ||
+            (ts.isMethodDeclaration(parent) && parent.name === node) ||
+            (ts.isBindingElement(parent) && parent.propertyName === node)
+          if (!isPropertyName) {
+            hit = true
+            return
+          }
+        }
+
+        ts.forEachChild(node, visit)
+      }
+      visit(sf)
+
+      if (hit) violations.push(rel)
+    }
+
+    expect(violations).toEqual([])
   })
 })
 
