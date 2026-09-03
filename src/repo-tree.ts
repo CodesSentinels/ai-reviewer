@@ -73,6 +73,24 @@ let cachedTree: RepoFileTree | null = null
 let cachedTreeKey: string | null = null
 
 /**
+ * 仅供测试：清空模块级缓存。
+ *
+ * 缓存是模块级单例，跨用例不会自动失效。没有这个钩子时，测试只能靠「每个用例
+ * 换一个 repo 名」绕开（见 `dep-tree-consistency.test.ts` 里的 `uniqueProject`）
+ * ——那是在回避缓存，而不是测试它，缓存本身的行为（命中、隔离、截断状态保留）
+ * 反而永远测不到。
+ */
+export function _resetTreeCache(): void {
+  cachedTree = null
+  cachedTreeKey = null
+}
+
+/** 仅供测试：当前缓存键，用来断言隔离而不是靠间接现象 */
+export function _currentTreeCacheKey(): string | null {
+  return cachedTreeKey
+}
+
+/**
  * 获取仓库文件树
  *
  * 通过注入的 TreeFetcher 获取指定 ref 下的所有文件路径。
@@ -249,9 +267,24 @@ function normalizeRelativePath(importingFile: string, importPath: string): strin
  * 全量文件树被截断时，用它只把「PR 真正 import 到的目录」补回来，
  * 而不是重拉整棵树：一个目录一次请求，就能解掉该目录下所有候选扩展名。
  */
+/** 单个目录的列举结果 */
+export interface DirectoryListing {
+  /** 目录下一层的文件路径（仓库根相对） */
+  files: string[]
+  /**
+   * 这一层是否被平台 API 截断。
+   *
+   * 曾经这个接口只返回 `string[]`——adapter 好不容易算出来的截断状态在
+   * 消费端第一步就被丢掉了，超大目录的回填结果会被当成完整目录，
+   * 于是「文件不在列表里」又一次被误判成「文件不存在」。
+   * 按需回填本来就是为了修这个问题，结果自己踩了同一个坑。
+   */
+  truncated: boolean
+}
+
 export interface DirectoryLister {
-  /** 列举目录下一层的文件路径（仓库根相对）。目录不存在返回空数组 */
-  listDirectory(dirPath: string): Promise<string[]>
+  /** 列举目录下一层。目录不存在返回空列表（投机查询，不是失败） */
+  listDirectory(dirPath: string): Promise<DirectoryListing>
 }
 
 /**

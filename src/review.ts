@@ -84,9 +84,13 @@ function makeDirectoryLister(owner: string, repoName: string, ref: string): Dire
   return {
     async listDirectory(dirPath) {
       const result = await getPlatform().listRepositoryTree(owner, repoName, ref, dirPath)
-      return result.entries
-        .filter(item => item.type === 'blob' && item.path != null)
-        .map(item => item.path as string)
+      return {
+        files: result.entries
+          .filter(item => item.type === 'blob' && item.path != null)
+          .map(item => item.path as string),
+        // 截断状态必须带出去：丢掉它等于把「半个目录」当成完整目录
+        truncated: result.truncated
+      }
     }
   }
 }

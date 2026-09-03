@@ -140,6 +140,18 @@ function normalizeLogin(login: string): string {
 
 // ─── GitHub adapter 实现 ──────────────────────────────────────────────────
 
+/**
+ * 是不是「仓库是空的」这一类错误。
+ *
+ * 只认 409 + 明确文案的组合。单看状态码会把真正的冲突误吞成空仓，
+ * 单看文案又可能被别的接口的相似措辞蒙混——两者都要。
+ */
+function isEmptyRepositoryError(e: unknown): boolean {
+  const status = (e as {status?: number})?.status
+  const message = String((e as {message?: string})?.message ?? '')
+  return status === 409 && /repository is empty/i.test(message)
+}
+
 /** API 返回 → 平台无关评论；顺带剥掉写 marker，共享核心看不到平台实现细节 */
 function toPlatformComment(data: any): PlatformComment {
   return {
@@ -1003,6 +1015,15 @@ export class GitHubPlatform implements IGitPlatform {
       const err = toGitPlatformError(e)
       // 目录探查命中不存在的路径是正常结果，不是错误
       if (path != null && path !== '' && err.errorKind === 'not_found') {
+        return {entries: [], truncated: false}
+      }
+      // 空仓库：Git Tree API 对没有任何 commit 的仓库返回 409
+      // "Git Repository is empty."。那是「没有文件」而不是「查询失败」，
+      // 语义上就是一棵空树——GitLab adapter 早就把等价的
+      // "404 Tree Not Found" 这么处理了，两边对齐。
+      //
+      // 判据同时看状态与文案：只看 409 会把真正的冲突（如并发写）误吞成空仓。
+      if (isEmptyRepositoryError(e)) {
         return {entries: [], truncated: false}
       }
       throw err

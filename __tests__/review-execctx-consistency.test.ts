@@ -324,6 +324,45 @@ describe('review.ts 的事件坐标来源（Phase 0 依赖分析调用）', () =
       expect(typeof depArgs[8].dirLister.listDirectory).toBe('function')
     })
 
+    /**
+     * 回填器实现本身也要验：它把 adapter 的 `truncated` 带出去了吗。
+     *
+     * 前面那条只断言 `listDirectory` 是个函数——实现里把截断状态丢掉
+     * （`truncated: false` 写死）照样通过。而目录本身也可能被截断，
+     * 丢掉它就等于把「半个目录」当成完整目录。
+     */
+    test('回填器把目录级 truncated 原样带出（不谎报完整）', async () => {
+      repoTreeState.getRepoFileTree.mockResolvedValue({files: ['src/foo.ts'], truncated: true})
+      platformState.listRepositoryTree.mockResolvedValue({
+        entries: [
+          {type: 'blob', path: 'src/legacy/a.ts'},
+          {type: 'tree', path: 'src/legacy/sub'}
+        ],
+        truncated: true
+      })
+      await runReview()
+
+      const depArgs = dependencyAnalyzerState.analyzeDependencies.mock.calls[0] as any[]
+      const listing = await depArgs[8].dirLister.listDirectory('src/legacy')
+
+      expect(listing.truncated).toBe(true)
+      expect(listing.files).toEqual(['src/legacy/a.ts']) // 目录条目被过滤掉
+    })
+
+    test('回填器在目录完整时报 false（对照组）', async () => {
+      repoTreeState.getRepoFileTree.mockResolvedValue({files: ['src/foo.ts'], truncated: true})
+      platformState.listRepositoryTree.mockResolvedValue({
+        entries: [{type: 'blob', path: 'src/legacy/a.ts'}],
+        truncated: false
+      })
+      await runReview()
+
+      const depArgs = dependencyAnalyzerState.analyzeDependencies.mock.calls[0] as any[]
+      const listing = await depArgs[8].dirLister.listDirectory('src/legacy')
+
+      expect(listing.truncated).toBe(false)
+    })
+
     test('未截断时不传目录回填器（不为正常仓库付额外 API）', async () => {
       repoTreeState.getRepoFileTree.mockResolvedValue({files: ['src/foo.ts'], truncated: false})
       await runReview()

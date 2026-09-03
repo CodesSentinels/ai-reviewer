@@ -255,18 +255,20 @@ export class GitLabPlatform implements IGitPlatform {
       )
       // GitLab 的 tree 条目 path 本身就是仓库根相对路径，无需拼接
       const entries = trees.map(t => ({type: t.type, path: t.path}))
-      // 目录探查只有一层，不参与整树的截断判定
-      if (scoped) {
-        return {entries, truncated: false}
-      }
       const limit = TREE_PAGINATION_DEFAULTS.perPage * TREE_PAGINATION_DEFAULTS.maxPages
       // 没到上限说明翻页自然结束，一定是完整的
       if (entries.length < limit) {
         return {entries, truncated: false}
       }
+      // 目录探查同样可能被截断——`recursive: false` 只说明"查一层"，不保证
+      // 这一层少于 perPage × maxPages。一个有五万个直接子项的目录照样会在
+      // 分页上限处被截断，此时报 truncated=false 就是谎报完整。
+      //
+      // 这对 DEP-004 的按需回填尤其要命：主树截断后正是靠逐目录回填来补，
+      // 若回填结果也被谎报完整，下游会把"缺失路径"当成"文件不存在"。
       // 正好卡在上限：可能刚好取完，也可能还有下一页。探一页拿事实，
       // 避免「恰好 5 万个文件的仓库」被误报成截断（GLAPI-024 / DEP-004）
-      return {entries, truncated: await this.hasMoreTreePages(projectPath, ref)}
+      return {entries, truncated: await this.hasMoreTreePages(projectPath, ref, path)}
     } catch (e) {
       // 空仓库返回 404 "404 Tree Not Found"，视为合法的空树；
       // 目录探查打到不存在的路径同理（投机查询，不是失败）
@@ -285,12 +287,19 @@ export class GitLabPlatform implements IGitPlatform {
    * 否则页码换算不到同一个位置。探测失败时保守返回 true —— 宁可提示
    * 「可能不完整」，也不能因为一次探测出错就谎报完整。
    */
-  private async hasMoreTreePages(projectPath: string, ref: string): Promise<boolean> {
+  private async hasMoreTreePages(
+    projectPath: string,
+    ref: string,
+    path?: string
+  ): Promise<boolean> {
+    // 探测参数必须与主查询同形（recursive / path 都要带上），否则探的不是同一
+    // 个集合；perPage 也必须一致，否则 page 换算不到上限的下一页。
+    const scoped = path != null && path !== ''
     try {
       const next = await withGitLabRetry('listRepositoryTree(probe)', async () =>
         this.api.Repositories.allRepositoryTrees(projectPath, {
           ref,
-          recursive: true,
+          ...(scoped ? {recursive: false, path} : {recursive: true}),
           page: TREE_PAGINATION_DEFAULTS.maxPages + 1,
           perPage: TREE_PAGINATION_DEFAULTS.perPage,
           maxPages: 1

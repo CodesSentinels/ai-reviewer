@@ -1019,7 +1019,7 @@
 - [ ] `TEST-029` API 错误、异常堆栈和 debug log 不包含 secret。
 - [ ] `TEST-030` Web search 开关映射、受信任配置来源、禁用时不传 tool 和
       citation 清理测试。
-- [ ] `TEST-031` GitHub/GitLab repository tree 的分页、recursive、缓存、错误和大
+- [x] `TEST-031` GitHub/GitLab repository tree 的分页、recursive、缓存、错误和大
       仓截断测试。
 - [ ] `TEST-032` 跨文件依赖分析在两平台的候选、路径解析、排序和
       `max_dependency_files` 一致性测试。
@@ -1043,7 +1043,7 @@
 - [x] `TEST-038` GitLab 幂等键测试：MR Hook 使用 project/MR/head SHA，Note Hook
       使用 project/MR/note/action；重复 payload、job Retry 和缺少必填字段均不得
       重复调用模型或回复。
-- [ ] `TEST-039` Repository tree 缓存隔离测试：相同 ref 的不同平台/项目不能互相
+- [x] `TEST-039` Repository tree 缓存隔离测试：相同 ref 的不同平台/项目不能互相
       命中，并分别验证空仓库、截断/不完整响应和 API 失败。
 - [ ] `TEST-040` CI 产物来源测试：MR 临时 bundle 只验证不复用，protected trigger
       只接受 source commit 等于当前 `main` `CI_COMMIT_SHA` 的可信 bundle。
