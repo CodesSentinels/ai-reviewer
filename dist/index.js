@@ -84438,6 +84438,17 @@ function normalizeLogin(login) {
     return login.replace(/\[bot\]$/i, '').toLowerCase();
 }
 // ─── GitHub adapter 实现 ──────────────────────────────────────────────────
+/**
+ * 是不是「仓库是空的」这一类错误。
+ *
+ * 只认 409 + 明确文案的组合。单看状态码会把真正的冲突误吞成空仓，
+ * 单看文案又可能被别的接口的相似措辞蒙混——两者都要。
+ */
+function isEmptyRepositoryError(e) {
+    const status = e?.status;
+    const message = String(e?.message ?? '');
+    return status === 409 && /repository is empty/i.test(message);
+}
 /** API 返回 → 平台无关评论；顺带剥掉写 marker，共享核心看不到平台实现细节 */
 function toPlatformComment(data) {
     return {
@@ -85130,6 +85141,15 @@ class GitHubPlatform {
             const err = toGitPlatformError(e);
             // 目录探查命中不存在的路径是正常结果，不是错误
             if (path != null && path !== '' && err.errorKind === 'not_found') {
+                return { entries: [], truncated: false };
+            }
+            // 空仓库：Git Tree API 对没有任何 commit 的仓库返回 409
+            // "Git Repository is empty."。那是「没有文件」而不是「查询失败」，
+            // 语义上就是一棵空树——GitLab adapter 早就把等价的
+            // "404 Tree Not Found" 这么处理了，两边对齐。
+            //
+            // 判据同时看状态与文案：只看 409 会把真正的冲突（如并发写）误吞成空仓。
+            if (isEmptyRepositoryError(e)) {
                 return { entries: [], truncated: false };
             }
             throw err;
@@ -85856,6 +85876,22 @@ const LANGUAGE_EXTENSIONS = {
 /** 文件树缓存（同一次运行中避免重复调用 API），连同截断状态一起缓存 */
 let cachedTree = null;
 let cachedTreeKey = null;
+/**
+ * 仅供测试：清空模块级缓存。
+ *
+ * 缓存是模块级单例，跨用例不会自动失效。没有这个钩子时，测试只能靠「每个用例
+ * 换一个 repo 名」绕开（见 `dep-tree-consistency.test.ts` 里的 `uniqueProject`）
+ * ——那是在回避缓存，而不是测试它，缓存本身的行为（命中、隔离、截断状态保留）
+ * 反而永远测不到。
+ */
+function _resetTreeCache() {
+    cachedTree = null;
+    cachedTreeKey = null;
+}
+/** 仅供测试：当前缓存键，用来断言隔离而不是靠间接现象 */
+function _currentTreeCacheKey() {
+    return cachedTreeKey;
+}
 /**
  * 获取仓库文件树
  *
@@ -87004,9 +87040,16 @@ async function recoverPathsForImports(contents, repoFilesSet, state, concurrency
     for (const dir of dirs)
         state.listed.add(dir);
     const discovered = [];
+    const truncatedDirs = [];
     await Promise.all(dirs.map(async (dir) => concurrencyLimit(async () => {
         try {
-            for (const f of await state.lister.listDirectory(dir)) {
+            const listing = await state.lister.listDirectory(dir);
+            // 这一层本身也可能被平台 API 截断（超大目录）。不记下来的话，
+            // 回填出来的「半个目录」会被当成完整目录，下游继续把缺失路径
+            // 判成「文件不存在」——正是按需回填要解决的那个问题。
+            if (listing.truncated)
+                truncatedDirs.push(dir);
+            for (const f of listing.files) {
                 if (repoFilesSet.has(f))
                     continue;
                 repoFilesSet.add(f);
@@ -87020,6 +87063,9 @@ async function recoverPathsForImports(contents, repoFilesSet, state, concurrency
     })));
     if (discovered.length > 0) {
         getLogger().info(`dependency analysis [${stage}]: recovered ${discovered.length} file(s) from ${dirs.length} directory probe(s)`);
+    }
+    if (truncatedDirs.length > 0) {
+        getLogger().warning(`dependency analysis [${stage}]: ${truncatedDirs.length} probed director${truncatedDirs.length > 1 ? 'ies were' : 'y was'} truncated by the platform API (${truncatedDirs.slice(0, 5).join(', ')}${truncatedDirs.length > 5 ? ', …' : ''}) — some files in them remain invisible, dependency analysis may still be incomplete`);
     }
     return discovered;
 }
@@ -90549,9 +90595,13 @@ function makeDirectoryLister(owner, repoName, ref) {
     return {
         async listDirectory(dirPath) {
             const result = await getPlatform().listRepositoryTree(owner, repoName, ref, dirPath);
-            return result.entries
-                .filter(item => item.type === 'blob' && item.path != null)
-                .map(item => item.path);
+            return {
+                files: result.entries
+                    .filter(item => item.type === 'blob' && item.path != null)
+                    .map(item => item.path),
+                // 截断状态必须带出去：丢掉它等于把「半个目录」当成完整目录
+                truncated: result.truncated
+            };
         }
     };
 }

@@ -49030,18 +49030,20 @@ class GitLabPlatform {
             const trees = await withGitLabRetry(scoped ? 'listRepositoryTree(dir)' : 'listRepositoryTree', async () => this.api.Repositories.allRepositoryTrees(projectPath, listOptions(scoped ? { ref, recursive: false, path } : { ref, recursive: true }, TREE_PAGINATION_DEFAULTS)));
             // GitLab 的 tree 条目 path 本身就是仓库根相对路径，无需拼接
             const entries = trees.map(t => ({ type: t.type, path: t.path }));
-            // 目录探查只有一层，不参与整树的截断判定
-            if (scoped) {
-                return { entries, truncated: false };
-            }
             const limit = TREE_PAGINATION_DEFAULTS.perPage * TREE_PAGINATION_DEFAULTS.maxPages;
             // 没到上限说明翻页自然结束，一定是完整的
             if (entries.length < limit) {
                 return { entries, truncated: false };
             }
+            // 目录探查同样可能被截断——`recursive: false` 只说明"查一层"，不保证
+            // 这一层少于 perPage × maxPages。一个有五万个直接子项的目录照样会在
+            // 分页上限处被截断，此时报 truncated=false 就是谎报完整。
+            //
+            // 这对 DEP-004 的按需回填尤其要命：主树截断后正是靠逐目录回填来补，
+            // 若回填结果也被谎报完整，下游会把"缺失路径"当成"文件不存在"。
             // 正好卡在上限：可能刚好取完，也可能还有下一页。探一页拿事实，
             // 避免「恰好 5 万个文件的仓库」被误报成截断（GLAPI-024 / DEP-004）
-            return { entries, truncated: await this.hasMoreTreePages(projectPath, ref) };
+            return { entries, truncated: await this.hasMoreTreePages(projectPath, ref, path) };
         }
         catch (e) {
             // 空仓库返回 404 "404 Tree Not Found"，视为合法的空树；
@@ -49060,11 +49062,14 @@ class GitLabPlatform {
      * 否则页码换算不到同一个位置。探测失败时保守返回 true —— 宁可提示
      * 「可能不完整」，也不能因为一次探测出错就谎报完整。
      */
-    async hasMoreTreePages(projectPath, ref) {
+    async hasMoreTreePages(projectPath, ref, path) {
+        // 探测参数必须与主查询同形（recursive / path 都要带上），否则探的不是同一
+        // 个集合；perPage 也必须一致，否则 page 换算不到上限的下一页。
+        const scoped = path != null && path !== '';
         try {
             const next = await withGitLabRetry('listRepositoryTree(probe)', async () => this.api.Repositories.allRepositoryTrees(projectPath, {
                 ref,
-                recursive: true,
+                ...(scoped ? { recursive: false, path } : { recursive: true }),
                 page: TREE_PAGINATION_DEFAULTS.maxPages + 1,
                 perPage: TREE_PAGINATION_DEFAULTS.perPage,
                 maxPages: 1
@@ -55985,6 +55990,22 @@ const LANGUAGE_EXTENSIONS = {
 let cachedTree = null;
 let cachedTreeKey = null;
 /**
+ * 仅供测试：清空模块级缓存。
+ *
+ * 缓存是模块级单例，跨用例不会自动失效。没有这个钩子时，测试只能靠「每个用例
+ * 换一个 repo 名」绕开（见 `dep-tree-consistency.test.ts` 里的 `uniqueProject`）
+ * ——那是在回避缓存，而不是测试它，缓存本身的行为（命中、隔离、截断状态保留）
+ * 反而永远测不到。
+ */
+function _resetTreeCache() {
+    cachedTree = null;
+    cachedTreeKey = null;
+}
+/** 仅供测试：当前缓存键，用来断言隔离而不是靠间接现象 */
+function _currentTreeCacheKey() {
+    return cachedTreeKey;
+}
+/**
  * 获取仓库文件树
  *
  * 通过注入的 TreeFetcher 获取指定 ref 下的所有文件路径。
@@ -57132,9 +57153,16 @@ async function recoverPathsForImports(contents, repoFilesSet, state, concurrency
     for (const dir of dirs)
         state.listed.add(dir);
     const discovered = [];
+    const truncatedDirs = [];
     await Promise.all(dirs.map(async (dir) => concurrencyLimit(async () => {
         try {
-            for (const f of await state.lister.listDirectory(dir)) {
+            const listing = await state.lister.listDirectory(dir);
+            // 这一层本身也可能被平台 API 截断（超大目录）。不记下来的话，
+            // 回填出来的「半个目录」会被当成完整目录，下游继续把缺失路径
+            // 判成「文件不存在」——正是按需回填要解决的那个问题。
+            if (listing.truncated)
+                truncatedDirs.push(dir);
+            for (const f of listing.files) {
                 if (repoFilesSet.has(f))
                     continue;
                 repoFilesSet.add(f);
@@ -57148,6 +57176,9 @@ async function recoverPathsForImports(contents, repoFilesSet, state, concurrency
     })));
     if (discovered.length > 0) {
         getLogger().info(`dependency analysis [${stage}]: recovered ${discovered.length} file(s) from ${dirs.length} directory probe(s)`);
+    }
+    if (truncatedDirs.length > 0) {
+        getLogger().warning(`dependency analysis [${stage}]: ${truncatedDirs.length} probed director${truncatedDirs.length > 1 ? 'ies were' : 'y was'} truncated by the platform API (${truncatedDirs.slice(0, 5).join(', ')}${truncatedDirs.length > 5 ? ', …' : ''}) — some files in them remain invisible, dependency analysis may still be incomplete`);
     }
     return discovered;
 }
@@ -60677,9 +60708,13 @@ function makeDirectoryLister(owner, repoName, ref) {
     return {
         async listDirectory(dirPath) {
             const result = await getPlatform().listRepositoryTree(owner, repoName, ref, dirPath);
-            return result.entries
-                .filter(item => item.type === 'blob' && item.path != null)
-                .map(item => item.path);
+            return {
+                files: result.entries
+                    .filter(item => item.type === 'blob' && item.path != null)
+                    .map(item => item.path),
+                // 截断状态必须带出去：丢掉它等于把「半个目录」当成完整目录
+                truncated: result.truncated
+            };
         }
     };
 }
