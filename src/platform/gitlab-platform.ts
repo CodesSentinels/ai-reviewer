@@ -669,6 +669,24 @@ export class GitLabPlatform implements IGitPlatform {
       // 需要 base_sha / head_sha / start_sha 构造 position
       const mr = await this.api.MergeRequests.show(projectPath, changeRequestId)
       const diffRefs = mr.diff_refs as any
+      // 三个锚点 SHA 少一个，position 就是非法的，GitLab 必然回 400。与其把
+      // `startSha: undefined` 发出去换一个注定的失败（还白花一次 API 配额、
+      // 多走一轮重试判定），不如在这里就判死，直接走 GLAPI-015 的顶层降级。
+      // 错误信息带上文件与行号——降级后的顶层 note 是用户唯一能看到的线索，
+      // 日志里若不点名是哪条，排查时对不上号。
+      const missing = ['base_sha', 'head_sha', 'start_sha'].filter(k => diffRefs?.[k] == null)
+      if (missing.length > 0) {
+        const detail = `${comment.path}:${comment.line}`
+        getLogger().warning(
+          `createReviewComment: MR !${changeRequestId} diff_refs incomplete ` +
+            `(missing ${missing.join(', ')}) — cannot build a line position for ${detail}, ` +
+            'falling back to a top-level note'
+        )
+        throw new GitPlatformError(
+          `createReviewComment: incomplete diff_refs (missing ${missing.join(', ')}) for ${detail}`,
+          'unknown'
+        )
+      }
       const discussion = (await this.api.MergeRequestDiscussions.create(
         projectPath,
         changeRequestId,

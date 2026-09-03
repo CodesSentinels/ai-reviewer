@@ -982,7 +982,7 @@
 - [x] `TEST-003` GitLab Note Hook → `ExecutionContext` fixtures。
 - [x] `TEST-004` 两平台 ConfigProvider 默认值、优先级和错误测试。
 - [x] `TEST-005` GitHub/GitLab adapter 成功、分页和错误测试。
-- [ ] `TEST-006` GitLab diff position 的新增、删除、重命名和旧 SHA 测试。
+- [x] `TEST-006` GitLab diff position 的新增、删除、重命名和旧 SHA 测试。
 - [x] `TEST-007` 所有命令权限和 MR 作者例外测试。
 - [x] `TEST-008` 所有命令 parser/handler 测试。
 - [x] `TEST-009` marker、幂等、反馈循环和陈旧任务测试。
