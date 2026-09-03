@@ -1015,7 +1015,7 @@
 - [ ] `TEST-025` 恶意 PR/MR 修改 package scripts、依赖和 install hooks。
 - [ ] `TEST-026` 恶意 PR/MR 尝试读取环境、文件系统、artifact 和日志中的 secret。
 - [x] `TEST-027` GitLab fork MR 被拒绝。
-- [ ] `TEST-028` bot/system/self event 不调用模型。
+- [x] `TEST-028` bot/system/self event 不调用模型。
 - [ ] `TEST-029` API 错误、异常堆栈和 debug log 不包含 secret。
 - [ ] `TEST-030` Web search 开关映射、受信任配置来源、禁用时不传 tool 和
       citation 清理测试。

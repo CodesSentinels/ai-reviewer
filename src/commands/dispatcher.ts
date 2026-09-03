@@ -22,6 +22,7 @@
  *   - dispatchCommentEvent(deps): 主入口，被 command-handler.ts 调用
  *   - DispatchOutcome: 用于测试的明确返回值
  */
+import {isOwnAuthor} from '../commenter'
 import {getPlatform} from '../platform/git-platform'
 import {repoCoordsOf} from '../platform/run-context'
 import {getLogger} from '../platform/logger'
@@ -135,6 +136,29 @@ export async function dispatchCommentEvent(deps: DispatcherDeps): Promise<Dispat
     // 避免与真人之间的普通讨论冲突。
     return {kind: 'ignored', reason: 'no bot mention'}
   }
+
+  // [自评论过滤] 以真实账号（PAT / machine user）身份运行时，reviewer 自己的
+  // 评论**不带** `[bot]` 后缀、user.type 也不是 Bot，上面那条 isBot 判不出来。
+  //
+  // GitLab 入口在 EVENT-018 把这种情况改写成 isBot=true 再交给本函数；GitHub
+  // 那条路径没有等价物，于是同一份配置在 GitHub 上少一道防线：reviewer 自己的
+  // 回帖里只要出现一个边界合法的 @mention，就会再触发一次命令，每一轮都是一次
+  // 完整的模型调用，且没有任何东西会喊停。判定放在共享层，两个平台一起兜住。
+  //
+  // 放在 parse 之后：`isOwnAuthor` 可能要查一次平台身份，而绝大多数评论根本没
+  // @ 过 bot，早退掉它们就不必为普通讨论付这次查询（结果在 commenter 内缓存，
+  // 一次运行至多查一次）。判定仍在任何 handler 执行与模型调用之前。
+  //
+  // 只在**确定是自己**时拦截：身份解析失败（token 缺 scope、API 抖动）返回
+  // null，此时不能一并挡下真人的命令——那会让命令系统整体失效。这与
+  // conversation.ts 的 REVIEW-018 取同一个方向，那边还多一层 marker 兜底。
+  if ((await isOwnAuthor(actorLogin)) === true) {
+    logger.info(
+      `command dispatcher: ignored comment authored by the reviewer itself (login=${actorLogin})`
+    )
+    return {kind: 'ignored', reason: 'comment from self'}
+  }
+
   if (outcome.kind === 'conversation') {
     // conversation：@bot 但非已注册命令 → 交回 command-handler 走对话式追问 fallback。
     return {kind: 'fallback_conversation'}

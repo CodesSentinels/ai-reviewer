@@ -131,6 +131,9 @@ jest.mock('../src/commenter', () => ({
   Commenter: jest.fn().mockImplementation(() => commenterState),
   getCommentGreeting: () => '🤖 AI Reviewer',
   initBotGreeting: jest.fn(),
+  // dispatcher 的自评论过滤要问「这条评论是不是我自己发的」（TEST-028）。
+  // 这里的评论者是真人，固定答 false，否则命令会被当成 bot 自问自答挡掉。
+  isOwnAuthor: async () => false,
   commentTag: () => '<!-- bot-comment -->',
   commentReplyTag: () => '<!-- bot-reply -->',
   rawSummaryStartTag: () => '<!-- raw-summary-start -->',
