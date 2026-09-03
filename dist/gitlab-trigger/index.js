@@ -56220,6 +56220,16 @@ function tryResolveWithExtensions(basePath, repoFilesSet) {
 /**
  * 按优先级对候选文件排序（同目录文件优先）
  *
+ * 同档内按路径字典序兜底，排序结果与输入顺序无关——这一点是跨平台一致性的
+ * 前提，不是锦上添花：候选列表来自平台的文件树，而两个平台还回条目的顺序
+ * 各按各的规则（git 的树序把目录和文件按名字混排，GitLab 有自己的排序），
+ * 我们的接口契约里从没规定过顺序。只按三档分数排的话，同分候选会保持输入
+ * 顺序，于是 `max_dependency_files` 一截断，两个平台留下的就是**不同的**
+ * 文件集——同一个 PR 得到不同的审查结论，还不报任何错。
+ *
+ * 用 `<`/`>` 而不是 `localeCompare`：后者受运行环境 locale 影响，
+ * 换个 runner 就可能换个顺序，等于把不确定性从平台挪到了机器上。
+ *
  * @param candidateFiles - 候选文件列表
  * @param modifiedFiles - PR 中被修改的文件列表
  * @returns 按优先级排序后的文件列表
@@ -56237,7 +56247,12 @@ function sortByProximity(candidateFiles, modifiedFiles) {
             return 1;
         return 2;
     };
-    return [...candidateFiles].sort((a, b) => getScore(a) - getScore(b));
+    return [...candidateFiles].sort((a, b) => {
+        const byScore = getScore(a) - getScore(b);
+        if (byScore !== 0)
+            return byScore;
+        return a < b ? -1 : a > b ? 1 : 0;
+    });
 }
 
 ;// CONCATENATED MODULE: ./lib/dependency-analyzer.js
