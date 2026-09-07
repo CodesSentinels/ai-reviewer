@@ -48524,25 +48524,6 @@ function resetPlatform() {
     _platform = null;
 }
 
-;// CONCATENATED MODULE: ./lib/gitlab-trigger-redact.js
-/**
- * gitlab-trigger-redact.ts - 错误日志脱敏（EVENT-005）
- *
- * 只处理字符串形态的错误信息，覆盖当前已知会出现在 gitlab-trigger 错误路径里的
- * token 形态：GitLab PAT（glpat-）、Bearer token、URL query 中的 token 参数。
- * 不是通用脱敏框架——覆盖 HTTP Header/环境变量/异常对象任意嵌套字段是 SEC-008
- * 的范围，不在本任务内。
- *
- * 参考 docs/tasks/gitlab-trigger-cli-design.md 第 6 节。
- */
-function gitlab_trigger_redact_redact(input) {
-    return input
-        .replace(/glpat-[A-Za-z0-9_-]+/g, 'glpat-***')
-        .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer ***')
-        .replace(/([?&]token=)[^&\s]+/gi, '$1***')
-        .replace(/([?&]private_token=)[^&\s]+/gi, '$1***');
-}
-
 ;// CONCATENATED MODULE: ./lib/platform/gitlab-errors.js
 /**
  * platform/gitlab-errors.ts — GitLab 错误归一化契约（GLAPI-025/026/032）
@@ -48660,7 +48641,12 @@ function normalizeGitLabError(e, operation) {
             kind = 'timeout';
         }
     }
-    const detail = gitlab_trigger_redact_redact(rawMsg);
+    // SEC-008：用通用实现而不是 gitlab-trigger-redact 的 redact()。后者是
+    // EVENT-005 时期的窄实现，只认 glpat- / Bearer / `?token=` / `?private_token=`
+    // 四种形态（它自己的文件头就写明「覆盖 env/嵌套字段是 SEC-008 的范围」）。
+    // 于是 OpenAI key、GitHub token 这些形态在这一侧是漏的——而 GitHub adapter
+    // 的对称位置用 redactForLog 挡得住，两边强弱不一。
+    const detail = (0,redact/* redactForLog */.vS)(rawMsg);
     const prefix = operation == null || operation === '' ? '' : `${operation}: `;
     const message = status === 401 || status === 403
         ? `${prefix}${permissionDiagnostics(status, detail)}`
@@ -55390,6 +55376,7 @@ const _RATE_LIMIT_CONSTANTS = { WINDOW_MS, MAX_PER_WINDOW };
 
 
 
+
 /**
  * 命令回复评论的幂等标签前缀（历史格式，无平台命名空间）。
  *
@@ -55474,8 +55461,21 @@ class Reply {
             getLogger().warning(`reply.progress update failed: ${String(e)}`);
         }
     }
-    /** 新建或更新评论 */
-    async publish(body, ackId) {
+    /**
+     * 新建或更新评论。
+     *
+     * SEC-008：正文在这里统一脱敏，而不是在各个调用点。命令失败时
+     * `error(code, detail)` 会把异常的 message 原样渲染进 `详情:`——那串文本
+     * 来自平台 SDK 或任意 handler，完全可能带着 token（回显的 URL、
+     * Authorization 头、API key）。日志出口早就被 SEC-008 焊死了，但**评论**
+     * 是另一条出口，而且更糟：PR/MR 评论对所有人可见，还会一直留在那里。
+     *
+     * 放在这个收口处而不是 `error()` 里，理由与 Logger 那层相同——将来任何新的
+     * 回帖路径都自动被覆盖，不必指望每个调用点都记得脱敏。对不含密钥的正文
+     * 这是个 no-op，排错信息不会被抹掉。
+     */
+    async publish(rawBody, ackId) {
+        const body = (0,redact/* redactForLog */.vS)(rawBody);
         const platform = getPlatform();
         const logger = getLogger();
         if (ackId != null) {
@@ -72849,6 +72849,25 @@ function validateTriggerPayload(payload) {
 }
 function isNonEmptyString(value) {
     return typeof value === 'string' && value !== '';
+}
+
+;// CONCATENATED MODULE: ./lib/gitlab-trigger-redact.js
+/**
+ * gitlab-trigger-redact.ts - 错误日志脱敏（EVENT-005）
+ *
+ * 只处理字符串形态的错误信息，覆盖当前已知会出现在 gitlab-trigger 错误路径里的
+ * token 形态：GitLab PAT（glpat-）、Bearer token、URL query 中的 token 参数。
+ * 不是通用脱敏框架——覆盖 HTTP Header/环境变量/异常对象任意嵌套字段是 SEC-008
+ * 的范围，不在本任务内。
+ *
+ * 参考 docs/tasks/gitlab-trigger-cli-design.md 第 6 节。
+ */
+function gitlab_trigger_redact_redact(input) {
+    return input
+        .replace(/glpat-[A-Za-z0-9_-]+/g, 'glpat-***')
+        .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer ***')
+        .replace(/([?&]token=)[^&\s]+/gi, '$1***')
+        .replace(/([?&]private_token=)[^&\s]+/gi, '$1***');
 }
 
 ;// CONCATENATED MODULE: ./lib/gitlab-mr-hook-rules.js
