@@ -1033,8 +1033,8 @@
   - `action.yml` 必须声明代码读取的 `semgrep_version` 和 `semgrep_config`；
   - 完整公开配置矩阵中的 GitHub input 与 GitLab 公开配置产生相同的规范化值；
   - `enable_<tool>` 正确转换为内部 `toolEnableOverrides`，`<tool>_version` 正确
-    转换为 `resolvedToolVersions`；
-  - 未填写或空版本使用唯一受控默认值，空字符串不进入 `resolvedToolVersions`；
+    转换为 `toolVersionOverrides`；
+  - 未填写或空版本使用唯一受控默认值，空字符串不进入 `toolVersionOverrides`；
   - 空 `semgrep_config` 回退到 `p/default`；
   - 规范化值正确传递到 `Options`、lint orchestrator 和 Semgrep adapter。
 - [x] `TEST-037` 扫描生产代码的所有 Action input 读取点：每个读取值必须已在
@@ -1112,7 +1112,7 @@
       置与功能兼容测试通过。
 - [ ] Semgrep 的公开输入、默认值和内部规范化链路不存在未声明输入或空字符串覆盖默
       认值的问题。
-- [ ] `toolEnableOverrides`、`resolvedToolVersions` 仅作为内部字段，不暴露为面向
+- [ ] `toolEnableOverrides`、`toolVersionOverrides` 仅作为内部字段，不暴露为面向
       用户的 GitHub/GitLab 配置键；工具默认版本只有一个受控来源。
 - [ ] 命令复合 key 限流与 event/note 幂等协作测试通过，且未引入持久化基础设施。
 - [ ] GitLab secret-bearing trigger 不检测、下载、安装或运行 lint 工具。
@@ -1120,8 +1120,9 @@
 - [ ] GitHub-only、GitLab-only、同时启用三种测试模式全部通过。
 - [ ] 两个平台不跨平台读取或写入运行状态。
 - [ ] GitLab MR head 和普通 MR job 无法接触业务密钥。
-- [ ] MR verify 生成的临时 bundle 不进入高权限执行面；GitLab trigger bundle 与
-      protected `main` 的 `CI_COMMIT_SHA` 一致。
+- [ ] MR verify 生成的临时 bundle 不进入高权限执行面；GitLab trigger bundle 记录的
+      source commit 是 protected `main` 的 `CI_COMMIT_SHA` 的**祖先**（与 `CI-013`
+      / `TEST-040` 一致；原文写的"一致"是 PR #119 修复前的旧语义）。
 - [ ] 单向发布 workflow 可验证 SHA、不会反向同步或形成循环。
 - [ ] 第 15 章开发验收矩阵全部完成。
 
