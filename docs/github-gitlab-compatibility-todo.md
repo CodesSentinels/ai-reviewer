@@ -1023,7 +1023,7 @@
       仓截断测试。
 - [x] `TEST-032` 跨文件依赖分析在两平台的候选、路径解析、排序和
       `max_dependency_files` 一致性测试。
-- [ ] `TEST-033` Release notes 的开关、prompt、平台 marker、description 局部更新
+- [x] `TEST-033` Release notes 的开关、prompt、平台 marker、description 局部更新
       、并发冲突重试和用户内容保护测试；同时覆盖 pause/resume marker 不被覆盖。
 - [x] `TEST-034` 命令限流复合 key 隔离、单进程窗口和 GitLab Note Hook 幂等协作测
       试。

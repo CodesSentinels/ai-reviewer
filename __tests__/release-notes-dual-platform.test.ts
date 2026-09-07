@@ -396,6 +396,123 @@ describe('REVIEW-021/022/023：只替换 reviewer 管理的区域', () => {
     expect(occurrences).toBe(1)
     expect(body).toContain('第二版')
     expect(body).not.toContain('第一版')
+    // 就地更新时用户原文同样要在。少了这条断言，实现退化成「整份覆盖」
+    // 上面三条仍然全绿——用户描述被抹掉却没人发现
+    expect(body).toContain('用户自己写的描述')
+  })
+})
+
+/**
+ * 就地更新路径（第二次及以后的运行）的内容保护。
+ *
+ * 上面那一组用的都是**空白起点**——description 里还没有 reviewer 区块，走的是
+ * `writeSection` 的**追加**分支。而真实世界里除了第一次，每次都是**就地更新**
+ * 分支（`location != null`，要把区块前后的内容原样拼回去）。这条分支上「前后
+ * 内容有没有被保住」此前没有任何断言。
+ *
+ * 这不是理论担忧：把 `writeSection` 就地更新分支的 before/after 改成空串
+ * （即退回 STATE-016 之前的「读整份 → 写整份」写法），上面 21 条用例**一条都
+ * 不会红**，包括那几条名字里就写着「不覆盖」的。
+ */
+describe('就地更新路径：区块前后的内容必须原样保住', () => {
+  /** 一份"什么都有"的 description：用户原文 + 另一平台区块 + pause 状态 */
+  function richDescription(): string {
+    return [
+      '用户自己写的描述',
+      '',
+      '## 背景',
+      '这个 MR 修了个 bug',
+      '',
+      '<!-- ai-reviewer:github:release-notes-start -->',
+      'GitHub 侧的发布说明',
+      '<!-- ai-reviewer:github:release-notes-end -->',
+      '',
+      stateMarker('reviewStateStart'),
+      'state: paused',
+      stateMarker('reviewStateEnd'),
+      '',
+      '## 结尾段落',
+      '区块之后也有用户内容'
+    ].join('\n')
+  }
+
+  test('GitLab 就地更新自己的区块，前后一切照旧', async () => {
+    const ctx = useCtx('gitlab')
+    const store = statefulDescription(richDescription())
+    const opts = makeOptions()
+    const cmd = {source: 'command' as const, mode: 'full' as const}
+
+    // 第一次：追加自己的区块
+    await codeReview(ctx, makeBot('- 第一版'), makeBot('- 第一版'), opts, taggedPrompts, cmd)
+    _resetWriteQueues()
+    // 第二次：这次走的是就地更新分支
+    await codeReview(ctx, makeBot('- 第二版'), makeBot('- 第二版'), opts, taggedPrompts, cmd)
+
+    const body = store.get()
+    // 自己那段确实更新了（否则下面的断言可能只是因为压根没写）
+    expect(body).toContain('第二版')
+    expect(body).not.toContain('第一版')
+
+    // 区块**之前**的内容
+    expect(body).toContain('用户自己写的描述')
+    expect(body).toContain('## 背景')
+    // 另一平台的区块，连同它的 marker
+    expect(body).toContain('GitHub 侧的发布说明')
+    expect(body).toContain('ai-reviewer:github:release-notes-start')
+    // pause 状态
+    expect(body).toContain('state: paused')
+    // 区块**之后**的内容
+    expect(body).toContain('## 结尾段落')
+    expect(body).toContain('区块之后也有用户内容')
+  })
+
+  test('GitHub 就地更新时同样保住前后内容（两平台对称）', async () => {
+    const ctx = useCtx('github')
+    // 换成另一侧的区块，构造同样的"我不是唯一写入者"处境
+    const store = statefulDescription(
+      [
+        '用户自己写的描述',
+        '',
+        '<!-- ai-reviewer:gitlab:release-notes-start -->',
+        'GitLab 侧的发布说明',
+        '<!-- ai-reviewer:gitlab:release-notes-end -->',
+        '',
+        '## 结尾段落'
+      ].join('\n')
+    )
+    const opts = makeOptions()
+
+    await codeReview(ctx, makeBot('- 第一版'), makeBot('- 第一版'), opts, taggedPrompts)
+    _resetWriteQueues()
+    await codeReview(ctx, makeBot('- 第二版'), makeBot('- 第二版'), opts, taggedPrompts)
+
+    const body = store.get()
+    expect(body).toContain('第二版')
+    expect(body).toContain('用户自己写的描述')
+    expect(body).toContain('GitLab 侧的发布说明')
+    expect(body).toContain('ai-reviewer:gitlab:release-notes-start')
+    expect(body).toContain('## 结尾段落')
+  })
+
+  test('连续三次运行，用户内容一次都没被削掉（不是只在第二次成立）', async () => {
+    const ctx = useCtx('gitlab')
+    const store = statefulDescription(richDescription())
+    const opts = makeOptions()
+    const cmd = {source: 'command' as const, mode: 'full' as const}
+
+    for (const version of ['- 第一版', '- 第二版', '- 第三版']) {
+      _resetWriteQueues()
+      await codeReview(ctx, makeBot(version), makeBot(version), opts, taggedPrompts, cmd)
+    }
+
+    const body = store.get()
+    expect(body).toContain('第三版')
+    expect(body).toContain('用户自己写的描述')
+    expect(body).toContain('## 结尾段落')
+    expect(body).toContain('state: paused')
+    expect(body).toContain('GitHub 侧的发布说明')
+    // 自己的区块始终只有一个
+    expect(body.split(stateMarker('descriptionStart')).length - 1).toBe(1)
   })
 })
 
