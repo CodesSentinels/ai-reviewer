@@ -1102,28 +1102,28 @@
 
 ## 16. 开发完成条件
 
-- [ ] GitHub P0 安全修复及恶意 PR 测试通过。
-- [ ] 共享核心不直接依赖平台 payload/API。
+- [x] GitHub P0 安全修复及恶意 PR 测试通过。
+- [x] 共享核心不直接依赖平台 payload/API。
 - [ ] GitHub Action inputs 和现有功能没有破坏性回退。
-- [ ] GitLab trigger CLI、API adapter、Notes、Discussions 和命令全部实现。
-- [ ] GitLab adapter 以锁定版本的 `@gitbeaker/rest` 为标准客户端，SDK 类型不泄露
+- [x] GitLab trigger CLI、API adapter、Notes、Discussions 和命令全部实现。
+- [x] GitLab adapter 以锁定版本的 `@gitbeaker/rest` 为标准客户端，SDK 类型不泄露
       到共享核心，原生 `fetch` 仅作为 adapter 内受控 fallback。
-- [ ] Web search、repository tree、跨文件依赖分析和 release notes 在两个平台的配
+- [x] Web search、repository tree、跨文件依赖分析和 release notes 在两个平台的配
       置与功能兼容测试通过。
-- [ ] Semgrep 的公开输入、默认值和内部规范化链路不存在未声明输入或空字符串覆盖默
+- [x] Semgrep 的公开输入、默认值和内部规范化链路不存在未声明输入或空字符串覆盖默
       认值的问题。
-- [ ] `toolEnableOverrides`、`toolVersionOverrides` 仅作为内部字段，不暴露为面向
+- [x] `toolEnableOverrides`、`toolVersionOverrides` 仅作为内部字段，不暴露为面向
       用户的 GitHub/GitLab 配置键；工具默认版本只有一个受控来源。
-- [ ] 命令复合 key 限流与 event/note 幂等协作测试通过，且未引入持久化基础设施。
-- [ ] GitLab secret-bearing trigger 不检测、下载、安装或运行 lint 工具。
-- [ ] GitHub/GitLab 两个 bundle 可独立构建和启动。
+- [x] 命令复合 key 限流与 event/note 幂等协作测试通过，且未引入持久化基础设施。
+- [x] GitLab secret-bearing trigger 不检测、下载、安装或运行 lint 工具。
+- [x] GitHub/GitLab 两个 bundle 可独立构建和启动。
 - [ ] GitHub-only、GitLab-only、同时启用三种测试模式全部通过。
-- [ ] 两个平台不跨平台读取或写入运行状态。
-- [ ] GitLab MR head 和普通 MR job 无法接触业务密钥。
-- [ ] MR verify 生成的临时 bundle 不进入高权限执行面；GitLab trigger bundle 记录的
+- [x] 两个平台不跨平台读取或写入运行状态。
+- [x] GitLab MR head 和普通 MR job 无法接触业务密钥。
+- [x] MR verify 生成的临时 bundle 不进入高权限执行面；GitLab trigger bundle 记录的
       source commit 是 protected `main` 的 `CI_COMMIT_SHA` 的**祖先**（与 `CI-013`
       / `TEST-040` 一致；原文写的"一致"是 PR #119 修复前的旧语义）。
-- [ ] 单向发布 workflow 可验证 SHA、不会反向同步或形成循环。
+- [x] 单向发布 workflow 可验证 SHA、不会反向同步或形成循环。
 - [ ] 第 15 章开发验收矩阵全部完成。
 
 ---
