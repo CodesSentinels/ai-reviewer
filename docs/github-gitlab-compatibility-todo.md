@@ -1017,7 +1017,7 @@
 - [x] `TEST-027` GitLab fork MR 被拒绝。
 - [x] `TEST-028` bot/system/self event 不调用模型。
 - [ ] `TEST-029` API 错误、异常堆栈和 debug log 不包含 secret。
-- [ ] `TEST-030` Web search 开关映射、受信任配置来源、禁用时不传 tool 和
+- [x] `TEST-030` Web search 开关映射、受信任配置来源、禁用时不传 tool 和
       citation 清理测试。
 - [x] `TEST-031` GitHub/GitLab repository tree 的分页、recursive、缓存、错误和大
       仓截断测试。
