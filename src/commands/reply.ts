@@ -13,6 +13,7 @@
  * - error 文案带错误码，便于日志与用户排查
  */
 import {getCommentGreeting} from '../commenter'
+import {redactForLog} from '../redact'
 import {getPlatform} from '../platform/git-platform'
 import {getLogger} from '../platform/logger'
 import {buildStateMarker, hasStateMarker, stateMarkerVariants} from '../platform/state-namespace'
@@ -138,8 +139,21 @@ export class Reply implements IReply {
     }
   }
 
-  /** 新建或更新评论 */
-  private async publish(body: string, ackId?: number | null): Promise<void> {
+  /**
+   * 新建或更新评论。
+   *
+   * SEC-008：正文在这里统一脱敏，而不是在各个调用点。命令失败时
+   * `error(code, detail)` 会把异常的 message 原样渲染进 `详情:`——那串文本
+   * 来自平台 SDK 或任意 handler，完全可能带着 token（回显的 URL、
+   * Authorization 头、API key）。日志出口早就被 SEC-008 焊死了，但**评论**
+   * 是另一条出口，而且更糟：PR/MR 评论对所有人可见，还会一直留在那里。
+   *
+   * 放在这个收口处而不是 `error()` 里，理由与 Logger 那层相同——将来任何新的
+   * 回帖路径都自动被覆盖，不必指望每个调用点都记得脱敏。对不含密钥的正文
+   * 这是个 no-op，排错信息不会被抹掉。
+   */
+  private async publish(rawBody: string, ackId?: number | null): Promise<void> {
+    const body = redactForLog(rawBody)
     const platform = getPlatform()
     const logger = getLogger()
     if (ackId != null) {

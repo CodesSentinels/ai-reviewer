@@ -11,6 +11,7 @@
  * ARCH-022: 所有 Octokit 错误统一转换为 GitPlatformError。
  */
 import {octokit} from '../octokit'
+import {redactForLog} from '../redact'
 import {getLogger} from './logger'
 import {
   buildWriteMarker,
@@ -110,7 +111,14 @@ interface GetReviewThreadsResponse {
 // ─── 错误转换 ─────────────────────────────────────────────────────────────
 
 function toGitPlatformError(e: unknown): GitPlatformError {
-  const msg = String(e)
+  // SEC-008：在归一化的源头脱敏。这条 message 之后会被四处传递——进日志、
+  // 进 setFailed、还会被命令失败分支渲染进贴给用户的评论——指望每个下游都
+  // 记得脱敏是不现实的。octokit 的错误文本里出现回显的 URL query token 或
+  // Authorization 头并不罕见。
+  //
+  // GitLab 侧的对称位置（normalizeGitLabError）一直有这一步，GitHub 侧原先
+  // 是裸的 String(e)：同一类故障在 GitHub 上泄露、在 GitLab 上不泄露。
+  const msg = redactForLog(String(e))
   const status = (e as any)?.status as number | undefined
 
   if (status === 404) {

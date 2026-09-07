@@ -14,7 +14,7 @@
  */
 
 import {GitPlatformError, type GitPlatformErrorKind} from './git-platform'
-import {redact} from '../gitlab-trigger-redact'
+import {redactForLog} from '../redact'
 
 /** 可重试的错误类别（GLAPI-025） */
 const RETRYABLE_KINDS: ReadonlySet<GitPlatformErrorKind> = new Set<GitPlatformErrorKind>([
@@ -117,7 +117,12 @@ export function normalizeGitLabError(e: unknown, operation?: string): GitPlatfor
     }
   }
 
-  const detail = redact(rawMsg)
+  // SEC-008：用通用实现而不是 gitlab-trigger-redact 的 redact()。后者是
+  // EVENT-005 时期的窄实现，只认 glpat- / Bearer / `?token=` / `?private_token=`
+  // 四种形态（它自己的文件头就写明「覆盖 env/嵌套字段是 SEC-008 的范围」）。
+  // 于是 OpenAI key、GitHub token 这些形态在这一侧是漏的——而 GitHub adapter
+  // 的对称位置用 redactForLog 挡得住，两边强弱不一。
+  const detail = redactForLog(rawMsg)
   const prefix = operation == null || operation === '' ? '' : `${operation}: `
   const message =
     status === 401 || status === 403
