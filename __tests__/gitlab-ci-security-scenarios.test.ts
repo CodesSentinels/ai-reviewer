@@ -260,7 +260,9 @@ describe('恶意 MR：五类篡改各自被哪条机制挡住（TEST-022~026）'
 
   test('读 artifact —— 持密钥 job 不消费任何其他 job 的产物', () => {
     expect(trigger.needs).toBeUndefined()
-    expect(trigger.dependencies).toBeUndefined()
+    // 必须是**显式**空列表，不能是省略：省略时 GitLab 默认下载此前所有 stage
+    // 全部 job 的 artifact，那样这条属性就只能靠 rules 互斥间接成立（TEST-040）
+    expect(trigger.dependencies).toEqual([])
   })
 
   test('读 artifact —— 不可信面的产物有过期时间，且不流向持密钥面', () => {

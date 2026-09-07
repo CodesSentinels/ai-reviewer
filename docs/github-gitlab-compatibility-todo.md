@@ -1045,8 +1045,11 @@
       重复调用模型或回复。
 - [x] `TEST-039` Repository tree 缓存隔离测试：相同 ref 的不同平台/项目不能互相
       命中，并分别验证空仓库、截断/不完整响应和 API 失败。
-- [ ] `TEST-040` CI 产物来源测试：MR 临时 bundle 只验证不复用，protected trigger
-      只接受 source commit 等于当前 `main` `CI_COMMIT_SHA` 的可信 bundle。
+- [x] `TEST-040` CI 产物来源测试：MR 临时 bundle 只验证不复用，protected trigger
+      只接受 source commit 是当前 `main` `CI_COMMIT_SHA` **祖先**的可信 bundle
+      （与 `CI-013` 一致；原文写的"等于"是 2026-08-18 真实环境验证前的旧语义，
+      精确相等在"先算 HEAD 再提交"的流程下永远无法自洽，见 §12 状态说明与
+      PR #119）。
 - [x] `TEST-041` `@gitbeaker/rest` 客户端契约测试：覆盖自定义 host、PAT 注入
       、timeout、分页、snake_case 响应、429/5xx、401/403、404/409、网络错误和日
       志脱敏。
