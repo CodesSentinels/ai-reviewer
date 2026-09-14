@@ -19,6 +19,7 @@
 import {describe, expect, test} from '@jest/globals'
 import * as fs from 'fs'
 import * as path from 'path'
+import * as ts from 'typescript'
 
 const SRC = path.resolve(__dirname, '../src')
 
@@ -42,11 +43,10 @@ function collectTsFiles(dir: string): string[] {
  * 每当一个文件完成迁移（不再直接 import octokit/@actions/core），
  * 就从此列表移除，让架构测试自动捕获回退。
  */
-const LEGACY_ALLOWLIST = new Set([
-  // 直接 import @actions/github（ARCH-005 context 迁移目标）
-  'review.ts',
-  'commenter.ts',
-  'commands/dispatcher.ts'
+const LEGACY_ALLOWLIST = new Set<string>([
+  // 原先这里是 review.ts / commenter.ts / commands/dispatcher.ts（ARCH-005 context
+  // 迁移目标）。三者已改为只消费 ExecutionContext + IGitPlatform，不再 import
+  // @actions/github，因此从豁免列表移除——这正是迁移的意义：让门禁能挡住回退。
   // 原先这里还有 17 个直接 import @actions/core 的文件（Logger 迁移目标）。
   // SEC-008 把它们的日志出口统一换成了 src/actions-log.ts 的脱敏包装，
   // 不再直接依赖 @actions/core，因此从豁免列表移除。
@@ -64,6 +64,14 @@ function isExempt(rel: string): boolean {
   return isAdapterOrEntry(rel) || LEGACY_ALLOWLIST.has(rel)
 }
 
+/**
+ * 判定 import 必须先剥注释：文档注释里写「迁移前是 import ... from '@actions/github'」
+ * 这类说明是常态，把它算成违规会逼着注释绕开事实。
+ */
+function stripComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+}
+
 describe('ARCH-023: 共享核心不得新增直接平台依赖', () => {
   const allFiles = collectTsFiles(SRC)
   const coreFiles = allFiles.filter(f => !isExempt(path.relative(SRC, f).replace(/\\/g, '/')))
@@ -75,7 +83,7 @@ describe('ARCH-023: 共享核心不得新增直接平台依赖', () => {
   test('@actions/core 不应出现在共享核心中', () => {
     const violations: string[] = []
     for (const f of coreFiles) {
-      const content = fs.readFileSync(f, 'utf8')
+      const content = stripComments(fs.readFileSync(f, 'utf8'))
       if (/from ['"]@actions\/core['"]/.test(content)) {
         violations.push(path.relative(SRC, f))
       }
@@ -86,7 +94,7 @@ describe('ARCH-023: 共享核心不得新增直接平台依赖', () => {
   test('@actions/github 不应出现在共享核心中', () => {
     const violations: string[] = []
     for (const f of coreFiles) {
-      const content = fs.readFileSync(f, 'utf8')
+      const content = stripComments(fs.readFileSync(f, 'utf8'))
       if (/from ['"]@actions\/github['"]/.test(content)) {
         violations.push(path.relative(SRC, f))
       }
@@ -97,7 +105,7 @@ describe('ARCH-023: 共享核心不得新增直接平台依赖', () => {
   test('octokit 直接 import 不应出现在共享核心中', () => {
     const violations: string[] = []
     for (const f of coreFiles) {
-      const content = fs.readFileSync(f, 'utf8')
+      const content = stripComments(fs.readFileSync(f, 'utf8'))
       if (/from ['"]\.\.?\/octokit['"]/.test(content)) {
         violations.push(path.relative(SRC, f))
       }
@@ -123,20 +131,114 @@ describe('ARCH-023: 共享核心不得新增直接平台依赖', () => {
   test('GitHub adapter 文件存在', () => {
     expect(fs.existsSync(path.join(SRC, 'platform/github-platform.ts'))).toBe(true)
   })
+
+  /**
+   * TEST-011：两个 adapter 必须互不依赖。
+   *
+   * 上面几条只管「共享核心不碰平台 SDK」。adapter 之间的交叉引用是另一回事：
+   * GitHub adapter 一旦 import 了 gitbeaker，GitHub-only 部署就被迫拖上 GitLab
+   * SDK，任一平台的 SDK 故障也会波及另一平台（§1 平台独立运行）。
+   */
+  test('GitHub adapter 不引用 GitLab SDK', () => {
+    const code = fs.readFileSync(path.join(SRC, 'platform/github-platform.ts'), 'utf8')
+
+    expect(stripComments(code)).not.toMatch(/@gitbeaker/)
+  })
+
+  test('GitLab adapter 不引用 GitHub SDK', () => {
+    const code = stripComments(
+      fs.readFileSync(path.join(SRC, 'platform/gitlab-platform.ts'), 'utf8')
+    )
+
+    expect(code).not.toMatch(/@octokit/)
+    expect(code).not.toMatch(/from '\.\.\/octokit'/)
+    expect(code).not.toMatch(/@actions\/github/)
+  })
+
+  /**
+   * TEST-042：受控的原生 `fetch` 只能出现在 GitLab adapter / 客户端层。
+   *
+   * 业务层直接 fetch 等于绕开统一的认证、超时、脱敏、分页、重试与错误规范化
+   * （方案「关键技术决策」）。这条守的是「下一次有人图省事」——目前生产代码里
+   * 一处都没有，正因如此更需要一道门，否则第一次出现时不会有任何信号。
+   */
+  test('原生 fetch 只允许出现在 GitLab adapter / 客户端层', () => {
+    // 正则版只认 `fetch(` 与 `globalThis.fetch`，下面这些全绕得过去：
+    //   const request = fetch; request(url)     别名后再调用
+    //   window.fetch(url) / self.fetch(url)     另一个全局对象
+    //   globalThis['fetch'](url)                element access
+    //   ;(0, fetch)(url)                        逗号表达式间接调用
+    // 改用 AST：只要 `fetch` 作为**值**被引用到（不管怎么用），就算越界。
+    const ALLOWED = /^platform\/gitlab-(platform|client|retry)\.ts$/
+    const GLOBAL_OBJECTS = new Set(['globalThis', 'window', 'self', 'global'])
+    const violations: string[] = []
+
+    for (const f of collectTsFiles(SRC)) {
+      const rel = path.relative(SRC, f).replace(/\\/g, '/')
+      if (ALLOWED.test(rel)) continue
+
+      const sf = ts.createSourceFile(f, fs.readFileSync(f, 'utf8'), ts.ScriptTarget.Latest, true)
+      let hit = false
+
+      const visit = (node: ts.Node): void => {
+        if (hit) return
+
+        // globalThis['fetch'] / window["fetch"]
+        if (
+          ts.isElementAccessExpression(node) &&
+          ts.isStringLiteralLike(node.argumentExpression) &&
+          node.argumentExpression.text === 'fetch'
+        ) {
+          hit = true
+          return
+        }
+
+        // globalThis.fetch / window.fetch / self.fetch
+        if (
+          ts.isPropertyAccessExpression(node) &&
+          node.name.text === 'fetch' &&
+          ts.isIdentifier(node.expression) &&
+          GLOBAL_OBJECTS.has(node.expression.text)
+        ) {
+          hit = true
+          return
+        }
+
+        // 裸标识符 fetch 被当作值引用——涵盖直接调用、别名赋值、
+        // 作为实参传递、逗号表达式等一切形态。
+        if (ts.isIdentifier(node) && node.text === 'fetch') {
+          const parent = node.parent
+          const isPropertyName =
+            (ts.isPropertyAccessExpression(parent) && parent.name === node) ||
+            (ts.isPropertyAssignment(parent) && parent.name === node) ||
+            (ts.isPropertySignature(parent) && parent.name === node) ||
+            (ts.isMethodDeclaration(parent) && parent.name === node) ||
+            (ts.isBindingElement(parent) && parent.propertyName === node)
+          if (!isPropertyName) {
+            hit = true
+            return
+          }
+        }
+
+        ts.forEachChild(node, visit)
+      }
+      visit(sf)
+
+      if (hit) violations.push(rel)
+    }
+
+    expect(violations).toEqual([])
+  })
 })
 
 /** 粗粒度剥离注释（块注释/行注释），避免文档里提到 "execCtx.raw" 这几个字触发假阳性 */
-function stripComments(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
-}
-
 describe('ARCH-005: 共享业务层不得新增 execCtx.raw 读取（GitHub Issue #88 P2 复核）', () => {
-  // 已知例外：conversation.ts 需要 review comment 的 diff_hunk/path 等深层 GitHub
-  // 字段，以及完整 PR title/body/base/head sha——这些依赖 Commenter（本身仍直接
-  // import @actions/github，见上方 LEGACY_ALLOWLIST）提供的上下文，是比本次修复
-  // 范围更大的独立迁移任务（尚无 GLAPI-*/REVIEW-* 对应任务落地），暂不消除，
-  // 只冻结在这份 allowlist 里，防止新文件继续蔓延同类读取。
-  const RAW_READ_ALLOWLIST = new Set(['conversation.ts'])
+  // 名单已清空。原先唯一的例外是 conversation.ts——它要 review comment 的
+  // diff_hunk/path 等深层 GitHub 字段。REVIEW-015/016 把这些纳入 CommentRef
+  // 的归一化字段（path/line/diffHunk），PR 标题、描述与 base/head 改为经
+  // IGitPlatform 现查，读取随之消除。GitLab 的 note 事件此前在第一道 payload
+  // 校验就被拒，对话功能完全不可用，正是同一个根因。
+  const RAW_READ_ALLOWLIST = new Set<string>([])
 
   const allFiles = collectTsFiles(SRC)
   const coreFiles = allFiles.filter(f => {
@@ -468,5 +570,34 @@ describe('GH-015: 平台状态 marker 不跨平台读写', () => {
     const gitlabTrigger = fs.readFileSync(path.join(SRC, 'gitlab-trigger.ts'), 'utf8')
     expect(main).toMatch(/setStateNamespace\(\s*'github'\s*\)/)
     expect(gitlabTrigger).toMatch(/setStateNamespace\(\s*'gitlab'\s*\)/)
+  })
+})
+
+describe('SYNC-009: GitLab 运行代码不得读取同步 Token', () => {
+  const allFiles = collectTsFiles(SRC)
+
+  // GITLAB_TOKEN 是 .github/workflows/sync-to-gitlab.yml 专用的、持有 GitLab
+  // 写权限的同步凭据，只应存在于 GitHub Actions secret 里；GitLab-only 运行时
+  // 用的是完全不同的 GITLAB_PAT/CI_JOB_TOKEN（见 gitlab-trigger.ts
+  // resolveGitLabCredential()）。src/ 里任何地方出现 GITLAB_TOKEN 字符串，
+  // 都意味着有代码在尝试读取本该只属于同步 workflow 的凭据。
+  test('src/ 下不出现 GITLAB_TOKEN（与 GITLAB_PAT/CI_JOB_TOKEN 是两个不同凭据）', () => {
+    const violations: string[] = []
+    for (const f of allFiles) {
+      const code = fs
+        .readFileSync(f, 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/\/\/.*/g, '')
+      if (/\bGITLAB_TOKEN\b/.test(code)) {
+        violations.push(path.relative(SRC, f).replace(/\\/g, '/'))
+      }
+    }
+    expect(violations).toEqual([])
+  })
+
+  test('gitlab-trigger.ts 确实使用的是 GITLAB_PAT/CI_JOB_TOKEN（防止两个凭据名字都被删掉导致上一条测试空跑）', () => {
+    const content = fs.readFileSync(path.join(SRC, 'gitlab-trigger.ts'), 'utf8')
+    expect(content).toContain('GITLAB_PAT')
+    expect(content).toContain('CI_JOB_TOKEN')
   })
 })

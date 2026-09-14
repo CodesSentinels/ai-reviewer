@@ -288,7 +288,10 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
             )}`
           )
 
-          if (item.type === 'web_search_call') {
+          // WS-003：开关必须同时校验。只看响应项类型的话，兼容 API 返回了意外的
+          // web_search_call、或响应协议漂移时，开关为 false 也会记下 web search
+          // analysis step——那条 step 会进 PR 评论，等于对外宣称做过搜索。
+          if (this.enableWebSearch && item.type === 'web_search_call') {
             info(`[web_search] executed, id: ${(item as any).id}, status: ${(item as any).status}`)
             analysisSteps.push({
               type: 'web_search',

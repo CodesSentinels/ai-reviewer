@@ -5,7 +5,7 @@
  * 这样架构守卫等静态检查可以直接读取它，而不会因为 import 链上的
  * `context.repo` 而炸掉。commenter.ts 负责 re-export，调用方无需改 import。
  */
-import {buildStateMarker} from './platform/state-namespace'
+import {buildStateMarker, currentNamespace} from './platform/state-namespace'
 
 // ==================== 状态 marker 注册表（GH-014）====================
 //
@@ -110,6 +110,19 @@ export const STATE_MARKERS = {
     legacy: '<!-- commit_ids_reviewed_end -->',
     current: () => buildStateMarker('commit-ids-reviewed-end')
   },
+  reviewInvalidated: {
+    kind: 'review-invalidated',
+    // 新增 marker，无历史形态（空串会被 includes('') 恒真命中，故用占位）
+    legacy: '<!-- ai-reviewer:__no-legacy:review-invalidated -->',
+    current: () => buildStateMarker('review-invalidated')
+  },
+  undeliverableFindings: {
+    kind: 'undeliverable-findings',
+    // 新增 marker，没有历史形态；legacy 留空串会被 includes('') 恒真命中，
+    // 因此用一个不可能出现在正文里的占位
+    legacy: '<!-- ai-reviewer:__no-legacy:undeliverable-findings -->',
+    current: () => buildStateMarker('undeliverable-findings')
+  },
   reviewStateStart: {
     kind: 'review-state-start',
     legacy: '<!-- codesentinel-review-state:start -->',
@@ -119,6 +132,19 @@ export const STATE_MARKERS = {
     kind: 'review-state-end',
     legacy: '<!-- codesentinel-review-state:end -->',
     current: () => buildStateMarker('review-state-end')
+  },
+  noteHookMarkersStart: {
+    kind: 'note-hook-markers-start',
+    // 这个 marker 是随命名空间一起引入的（STATE-005），没有真正的历史无前缀形态；
+    // legacy 只是占位，保持字段完整性和 tagPairVariants 回退逻辑一致，不会在真实
+    // 数据里命中。
+    legacy: '<!-- ai-reviewer-note-hook-markers-start -->',
+    current: () => buildStateMarker('note-hook-markers-start')
+  },
+  noteHookMarkersEnd: {
+    kind: 'note-hook-markers-end',
+    legacy: '<!-- ai-reviewer-note-hook-markers-end -->',
+    current: () => buildStateMarker('note-hook-markers-end')
   }
 } as const satisfies Record<string, StateMarkerSpec>
 
@@ -162,10 +188,13 @@ export function tagPairVariants(startTag: string, endTag: string): Array<[string
       e => endTag === e.current() || endTag === e.legacy
     )
     if (endSpec == null) break
-    return [
-      [spec.current(), endSpec.current()],
-      [spec.legacy, endSpec.legacy]
-    ]
+    const pairs: Array<[string, string]> = [[spec.current(), endSpec.current()]]
+    // 历史格式只归 GitHub——见 stateMarkerVariants 的说明。GitLab 若也接受它，
+    // 会把升级前 GitHub 写入的区块当成自己的整段覆盖（REVIEW-023）。
+    if (currentNamespace() === 'github') {
+      pairs.push([spec.legacy, endSpec.legacy])
+    }
+    return pairs
   }
   return [[startTag, endTag]]
 }

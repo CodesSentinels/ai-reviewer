@@ -8,8 +8,10 @@
 #   merge_request_event 和 trigger）。ai_review_trigger 绝不能 checkout 或
 #   执行 MR 提供的任何代码/脚本/依赖——它只信任仓库里已经在 protected
 #   default branch 上、经 SOURCE_SHA 校验过来源的 dist/gitlab-trigger/index.js。
-#   两个 job 之间没有 needs:/dependencies:，mr_verify 的 artifact 不会被
-#   ai_review_trigger 消费。
+#   两个 job 都显式写了 `dependencies: []`，mr_verify 的 artifact 不会被
+#   ai_review_trigger 消费。注意**不能**改回省略——省略时 GitLab 的默认行为
+#   是下载此前所有 stage 全部 job 的 artifact，那样「不消费 MR 产物」就只能
+#   靠上面的 rules 互斥间接保证，两条防线塌成一条。
 #
 #   GITLAB_PAT/OPENAI_API_KEY 必须在 GitLab CI/CD Settings 里标记为
 #   Protected——这是密钥只对 protected ref 上的 pipeline 可见的平台原生保障，
@@ -26,6 +28,11 @@ mr_verify:
   stage: verify
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  # CI-004：显式声明不下载任何 artifact。省略 dependencies 时 GitLab 的默认
+  # 行为是「下载此前所有 stage 里全部 job 的 artifact」，空列表才是「什么都
+  # 不要」。这个 job 目前是第一个 stage，写上是为了将来有人在它前面插入新
+  # stage 时不至于悄悄开始消费别人的产物。
+  dependencies: []
   script:
     - npm ci
     - npm run build
@@ -56,10 +63,22 @@ ai_review_trigger:
   stage: review
   rules:
     - if: '$CI_PIPELINE_SOURCE == "trigger" && $CI_COMMIT_REF_NAME == $CI_DEFAULT_BRANCH'
+  # CI-004/008：显式声明不下载任何 artifact。此前这里是省略状态，而 GitLab 省略
+  # dependencies 时默认下载**此前所有 stage 全部 job**的 artifact——mr_verify 正好
+  # 在更早的 stage。今天没出事只是因为两个 job 的 rules 互斥、不可能出现在同一次
+  # pipeline 里；也就是说「持密钥的 job 不消费 MR 产物」这条属性此前**依赖于**
+  # rules 互斥那条属性成立。写成空列表让它独立成立：将来哪怕有人放宽了 rules，
+  # artifact 也不会悄悄流进来。
+  dependencies: []
   variables:
     # CI-007/008：强制全新 clone，workspace 里不会残留任何其他分支（尤其是
     # 触发这次 pipeline 的那个 MR 分支）的内容。
     GIT_STRATEGY: clone
+    # CI-013 的祖先链校验需要完整历史才能可靠判断——GitLab 默认浅克隆
+    # （实测 depth=20），SOURCE_SHA 稍微老一点就会因为本地历史不全被误判为
+    # "不是祖先"而拒绝执行，即便它其实是。GIT_DEPTH: 0 = 不限制深度，做一次
+    # 完整 clone。
+    GIT_DEPTH: '0'
   resource_group: ai-reviewer-mvp
   timeout: 10m
   retry:
@@ -67,13 +86,35 @@ ai_review_trigger:
     when: [runner_system_failure, stuck_or_timeout_failure]
   script:
     - test -f dist/gitlab-trigger/SOURCE_SHA
-    # CI-013：bundle 记录的 source commit 必须等于这次 job 自己的
-    # CI_COMMIT_SHA（即 protected default branch 上的当前 commit），
-    # 拒绝执行任何来源不明或陈旧的 bundle。
+    # CI-013：bundle 记录的 source commit 必须是这次 job 自己的
+    # CI_COMMIT_SHA（即 protected default branch 上的当前 commit）的祖先——
+    # 不能要求完全相等：`git rev-parse HEAD` 写入 SOURCE_SHA 时那个 commit
+    # 还不包含这次写入本身，随后无论是"重新打包 dist"的单独提交，还是
+    # GitHub 侧 PR 合并产生的 merge commit，都会让 CI_COMMIT_SHA 与写入时
+    # 的 HEAD 不再相等——这是任何"先算 HEAD 再提交"的流程都绕不开的结构性
+    # 现实，不是构建疏漏。祖先链校验保留的安全属性是：SOURCE_SHA 必须是这条
+    # 受保护分支真实历史上的一个 commit（挡住伪造/来自其他分支的 SHA），
+    # 但不要求它是刚好等于当前 HEAD 那一个。
     - |
       RECORDED_SHA=$(cat dist/gitlab-trigger/SOURCE_SHA)
-      if [ "$RECORDED_SHA" != "$CI_COMMIT_SHA" ]; then
-        echo "REFUSED: dist/gitlab-trigger/SOURCE_SHA ($RECORDED_SHA) != CI_COMMIT_SHA ($CI_COMMIT_SHA) — refusing to run untrusted/stale bundle" >&2
+      # 先卡格式，再交给 git。git 的每个 rev 参数都接受完整 revision 语法
+      # （HEAD、分支名、HEAD~1、@{-1}、tag、短 SHA……），不先校验的话
+      # SOURCE_SHA 里写个 `HEAD` 就能通过——在这个 job 的 clone 里 HEAD 正是
+      # CI_COMMIT_SHA 自己，自己是自己的祖先，下面两道全过，校验变成恒真，
+      # 日志还照样打印 "ok: ... is a real ancestor"。
+      # 打包脚本写入的一定是 `git rev-parse HEAD` 的输出（完整 40 位十六进制），
+      # 因此这条格式约束没有误伤面。
+      if ! printf '%s' "$RECORDED_SHA" | grep -Eq '^[0-9a-fA-F]{40}$'; then
+        echo "REFUSED: dist/gitlab-trigger/SOURCE_SHA ($RECORDED_SHA) is not a full 40-character commit SHA — refusing to run untrusted/stale bundle" >&2
         exit 1
       fi
+      if ! git cat-file -e "${RECORDED_SHA}^{commit}" 2>/dev/null; then
+        echo "REFUSED: dist/gitlab-trigger/SOURCE_SHA ($RECORDED_SHA) is not a known commit in this repository's history — refusing to run untrusted/stale bundle" >&2
+        exit 1
+      fi
+      if ! git merge-base --is-ancestor "$RECORDED_SHA" "$CI_COMMIT_SHA"; then
+        echo "REFUSED: dist/gitlab-trigger/SOURCE_SHA ($RECORDED_SHA) is not an ancestor of CI_COMMIT_SHA ($CI_COMMIT_SHA) — refusing to run untrusted/stale bundle" >&2
+        exit 1
+      fi
+      echo "ok: dist/gitlab-trigger/SOURCE_SHA ($RECORDED_SHA) is a real ancestor of CI_COMMIT_SHA ($CI_COMMIT_SHA)"
     - node dist/gitlab-trigger/index.js

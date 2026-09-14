@@ -1,13 +1,21 @@
 {
   "clearMocks": true,
-  "moduleFileExtensions": ["js", "ts"],
-  "testMatch": ["**/*.test.ts"],
+  "moduleFileExtensions": [
+    "js",
+    "ts"
+  ],
+  "testMatch": [
+    "**/*.test.ts"
+  ],
   "transform": {
     "^.+\\.ts$": "ts-jest"
   },
   "moduleNameMapper": {
-    "^p-limit$": "<rootDir>/__mocks__/p-limit.js"
+    "^p-limit$": "<rootDir>/__mocks__/p-limit.js",
+    "^p-retry$": "<rootDir>/__mocks__/p-retry.js"
   },
-  "setupFiles": ["<rootDir>/__mocks__/setup-node-globals.js"],
+  "setupFiles": [
+    "<rootDir>/__mocks__/setup-node-globals.js"
+  ],
   "verbose": true
 }

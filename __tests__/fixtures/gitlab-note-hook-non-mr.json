@@ -13,9 +13,8 @@
     "noteable_type": "Issue",
     "action": "create"
   },
-  "merge_request": {
-    "iid": 7,
-    "title": "Add characterization fixtures",
-    "diff_head_sha": "head-sha-0001"
+  "issue": {
+    "iid": 3,
+    "title": "Something unrelated to any MR"
   }
 }

@@ -13,6 +13,7 @@
  * - error 文案带错误码，便于日志与用户排查
  */
 import {getCommentGreeting} from '../commenter'
+import {redactForLog} from '../redact'
 import {getPlatform} from '../platform/git-platform'
 import {getLogger} from '../platform/logger'
 import {buildStateMarker, hasStateMarker, stateMarkerVariants} from '../platform/state-namespace'
@@ -72,7 +73,15 @@ const ERROR_MESSAGES: Record<ErrorCode, string> = {
   BOT_FORBIDDEN:
     '🚫 **Bot 权限不足**。请检查 workflow `permissions` 配置（pull-requests: write / contents: read）。',
   NOT_IMPLEMENTED: '🚧 **命令暂未实现**。该命令已在路线图中，等待实现。',
-  RATE_LIMITED: '⏱️ **请求过于频繁**。同一用户在 60 秒内最多执行 10 条命令，请稍后再试。',
+  // CMD-029：不能给出「N 条 / M 秒」这种配额承诺。
+  //
+  // 桶只活在单个 Node 进程里，而 GitHub comment 与 GitLab note 通常是一条事件一
+  // 个新进程——用户连发 10 条评论会起 10 个进程，每个桶都是空的，谁也限不住。
+  // 说成「同一用户 60 秒内最多 10 条」，用户照着数就会发现根本对不上。
+  //
+  // 它也不负责重复投递——那在 dispatcher 里先被幂等检查拦下了（CMD-030）。
+  // 所以文案只说作用范围，不说场景，也不给数字。
+  RATE_LIMITED: '⏱️ **请求过于频繁**。本次运行中检测到过多命令请求，请稍后再试。',
   DUPLICATE: 'ℹ️ **命令已处理**（重复事件已去重）。',
   INTERNAL: '💥 **命令执行失败**。错误已记录，请联系维护者。'
 }
@@ -130,8 +139,21 @@ export class Reply implements IReply {
     }
   }
 
-  /** 新建或更新评论 */
-  private async publish(body: string, ackId?: number | null): Promise<void> {
+  /**
+   * 新建或更新评论。
+   *
+   * SEC-008：正文在这里统一脱敏，而不是在各个调用点。命令失败时
+   * `error(code, detail)` 会把异常的 message 原样渲染进 `详情:`——那串文本
+   * 来自平台 SDK 或任意 handler，完全可能带着 token（回显的 URL、
+   * Authorization 头、API key）。日志出口早就被 SEC-008 焊死了，但**评论**
+   * 是另一条出口，而且更糟：PR/MR 评论对所有人可见，还会一直留在那里。
+   *
+   * 放在这个收口处而不是 `error()` 里，理由与 Logger 那层相同——将来任何新的
+   * 回帖路径都自动被覆盖，不必指望每个调用点都记得脱敏。对不含密钥的正文
+   * 这是个 no-op，排错信息不会被抹掉。
+   */
+  private async publish(rawBody: string, ackId?: number | null): Promise<void> {
+    const body = redactForLog(rawBody)
     const platform = getPlatform()
     const logger = getLogger()
     if (ackId != null) {

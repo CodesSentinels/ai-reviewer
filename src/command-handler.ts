@@ -17,6 +17,7 @@
 import {info} from './actions-log'
 import {bootstrapCommands} from './commands/bootstrap'
 import {dispatchCommentEvent} from './commands/dispatcher'
+import {resolveBotMentions} from './commands/parser'
 import type {Bot} from './bot'
 import type {ReviewCommandMode} from './commands/types'
 import type {Options} from './options'
@@ -57,6 +58,9 @@ export async function handleCommentEvent(deps: HandleCommentEventDeps): Promise<
   const outcome = await dispatchCommentEvent({
     execCtx: deps.execCtx,
     options: deps.options,
+    // CMD-001/002：文本别名 + 配置的真实账号。此前 deps.botMentions 从未被传，
+    // 两个平台都只吃默认别名，GitLab 上 @ 真实 PAT 账号不会触发。
+    botMentions: resolveBotMentions(deps.options.botLogin),
     triggerReview
   })
 

@@ -852,7 +852,9 @@ describe('GitLabPlatform', () => {
         {path: 'a.ts', body: 'c1', line: 1},
         {path: 'b.ts', body: 'c2', line: 2}
       ])
-      expect(count).toBe(2)
+      // 逐条创建 discussion，两条都成功
+      expect(count.delivered).toHaveLength(2)
+      expect(count.failed).toEqual([])
       expect(mockMergeRequestDiscussions.create).toHaveBeenCalledTimes(2)
     })
 
@@ -867,7 +869,9 @@ describe('GitLabPlatform', () => {
       const count = await platform.submitReviewComments('g', 'r', 5, 'sha', [
         {path: 'x.ts', body: 'comment', line: 10}
       ])
-      expect(count).toBe(1)
+      // 行级失败但顶层降级成功，仍算投递成功
+      expect(count.delivered).toHaveLength(1)
+      expect(count.failed).toEqual([])
       expect(mockMergeRequestNotes.create).toHaveBeenCalledWith(
         'g/r',
         5,

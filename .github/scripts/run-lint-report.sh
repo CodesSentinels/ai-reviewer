@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# run-lint-report.sh — 在**无密钥** job 里跑 lint 并产出 JSON 报告（SEC-002）
+# run-lint-report.sh — lint 报告的兜底产出（SEC-002）
 #
 # 由 openai-review.yml 的 `lint` job 调用。该 job checkout 的是 PR head，
 # 即不可信代码；本脚本运行在那个执行面上，因此：
 #
-#   - 绝不读取任何密钥（调用方一条 env secret 都不给）
+#   - 绝不读取任何密钥（调用方一条 env secret 都不给；只读 GITHUB_TOKEN 只
+#     出现在本脚本之前的 checkout / fetch 步骤里）
 #   - 只写出 lint-report.json 这一份**数据**，不产出可执行物（SEC-005）
 #   - 任何失败都以「空报告」收场并返回 0——静态分析是增强项，
 #     不能因为它挂了就把整个 PR 的审查挡住
@@ -40,15 +41,7 @@ enforce_size_limit() {
 
 command -v node >/dev/null 2>&1 || emit_empty "node not available"
 
-# reviewer 自身的依赖不在这个 checkout 里（这里是 PR 仓库），
-# 因此用仓库内已提交的 bundle 无法直接跑 orchestrator。
-# MVP 阶段先产出空报告占位：双 job 的**安全骨架**先落地，
-# lint 的实际执行留给后续任务（届时在此调用打包好的 lint-only 入口）。
-#
-# 这样做的理由：安全边界（无密钥面执行 PR 代码、有密钥面只读数据）现在就成立，
-# 而不是等 lint 跑通了再一起上，避免把两件事的风险绑在一起。
-emit_empty "lint execution not yet wired (SEC-002 skeleton)"
-
-# 真正接上 lint 之后，上面的 emit_empty 会被替换成实际扫描，
-# 结尾统一走体积门禁：
-# enforce_size_limit
+# lint 的实际执行由 dist/lint-report/index.js（可信 bundle）承担，见 workflow
+# 的 `Run lint tools against PR head` 步骤。本脚本是它的**兜底**：CLI 崩溃或
+# bundle 缺失时，保证仍产出一份结构合法的空报告，让 reviewer 照常跑完审查。
+emit_empty "fallback: lint CLI did not produce a report"

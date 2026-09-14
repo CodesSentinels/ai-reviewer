@@ -22,6 +22,14 @@ else
   FAIL=1
 fi
 
+echo "--- check: lib/lint-report-entry.js exists (LINT-005) ---"
+if [ -f lib/lint-report-entry.js ]; then
+  echo "PASS: lib/lint-report-entry.js 已生成"
+else
+  echo "FAIL: lib/lint-report-entry.js 不存在，tsc 编译可能未覆盖 lint-only 入口"
+  FAIL=1
+fi
+
 check() {
   local label="$1" cmd="$2" expected_text="$3"
   echo "--- smoke test: ${label} ---"
@@ -57,6 +65,14 @@ check "GitLab bundle (dist/gitlab-trigger/index.js) — 缺凭据" \
   "env -u GITLAB_PAT -u CI_JOB_TOKEN node dist/gitlab-trigger/index.js" \
   "GITLAB_PAT or CI_JOB_TOKEN is required"
 
+check "lint-only bundle (dist/lint-report/index.js) — 缺参数" \
+  "node dist/lint-report/index.js --repo-root /nonexistent" \
+  "usage: --repo-root"
+
+check "lint-only bundle — 拒绝分支名（只接受 40 位 SHA）" \
+  "node dist/lint-report/index.js --repo-root . --base-sha main --head-sha feature --out /dev/null" \
+  "must be full 40-char commit SHAs, not refs"
+
 check "GitLab bundle (dist/gitlab-trigger/index.js) — 缺事件 payload" \
   "env -u TRIGGER_PAYLOAD GITLAB_PAT=glpat-smoke-placeholder node dist/gitlab-trigger/index.js" \
   "TRIGGER_PAYLOAD is not set"
@@ -66,4 +82,90 @@ if [ "$FAIL" -ne 0 ]; then
   exit 1
 fi
 
+echo "bundle 启动冒烟通过"
+
+# ─── GitLab bundle 在零 GITHUB_* 环境下必须能跑到事件分发（ARCH-005）──────────
+#
+# 这是长期挡住 gitlab-trigger 接入审查核心的那个故障：review.ts / commenter.ts
+# 在模块级求值 @actions/github 的 context.repo，没有 GITHUB_REPOSITORY 就抛，
+# 于是 GitLab 入口在**加载期**崩溃，run() 根本执行不到。
+#
+# 这里用假 token 跑真实产物：预期走到 getChangeRequest 的 401，而不是加载期崩溃。
+echo "--- smoke test: GitLab bundle 在零 GITHUB_* 环境下完成事件分发 ---"
+GITLAB_SMOKE_PAYLOAD="$(mktemp)"
+cat > "$GITLAB_SMOKE_PAYLOAD" <<'PAYLOAD'
+{"object_kind":"merge_request","project":{"id":77,"path_with_namespace":"group/demo"},
+ "user":{"username":"alice"},
+ "object_attributes":{"iid":42,"action":"open","source_project_id":77,"target_project_id":77,
+ "last_commit":{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+ "oldrev":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}
+PAYLOAD
+
+GITLAB_SMOKE_OUT="$(env -u GITHUB_REPOSITORY -u GITHUB_EVENT_PATH -u GITHUB_EVENT_NAME \
+  -u GITHUB_ACTION -u GITHUB_SERVER_URL -u GITHUB_TOKEN \
+  GITLAB_HOST=https://gitlab.invalid GITLAB_PAT=glpat-smoketestplaceholder \
+  TRIGGER_PAYLOAD="$GITLAB_SMOKE_PAYLOAD" OPENAI_API_KEY=sk-smoke-test \
+  node dist/gitlab-trigger/index.js 2>&1)"
+rm -f "$GITLAB_SMOKE_PAYLOAD"
+
+# note 事件走的是另一条分发分支（命令/对话），MR 事件绿不代表它也通——
+# 第一版接线就是 MR 通、note 全部静默丢弃。两条都要跑。
+GITLAB_NOTE_PAYLOAD="$(mktemp)"
+cat > "$GITLAB_NOTE_PAYLOAD" <<'PAYLOAD'
+{"object_kind":"note","project":{"id":77,"path_with_namespace":"group/demo"},"project_id":77,
+ "user":{"username":"alice"},"merge_request":{"iid":42,"last_commit":{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
+ "object_attributes":{"id":9001,"action":"create","note":"@ai-reviewer help",
+ "noteable_type":"MergeRequest","system":false}}
+PAYLOAD
+
+GITLAB_NOTE_OUT="$(env -u GITHUB_REPOSITORY -u GITHUB_EVENT_PATH -u GITHUB_EVENT_NAME \
+  -u GITHUB_ACTION -u GITHUB_SERVER_URL -u GITHUB_TOKEN \
+  GITLAB_HOST=https://gitlab.invalid GITLAB_PAT=glpat-smoketestplaceholder \
+  TRIGGER_PAYLOAD="$GITLAB_NOTE_PAYLOAD" OPENAI_API_KEY=sk-smoke-test \
+  node dist/gitlab-trigger/index.js 2>&1)"
+rm -f "$GITLAB_NOTE_PAYLOAD"
+
+if echo "$GITLAB_NOTE_OUT" | grep -q "missing comment body"; then
+  echo "FAIL: note 事件被当成「无评论正文」丢弃（comment.body 未填充）"
+  FAIL=1
+elif echo "$GITLAB_NOTE_OUT" | grep -q "eventKind=comment_created"; then
+  echo "PASS: note 事件分发到达命令路径"
+else
+  echo "FAIL: note 事件未走到命令分发，实际输出："
+  echo "$GITLAB_NOTE_OUT" | head -5
+  FAIL=1
+fi
+
+if echo "$GITLAB_SMOKE_OUT" | grep -q "GITHUB_REPOSITORY"; then
+  echo "FAIL: GitLab bundle 仍在向 @actions/github 要 GITHUB_REPOSITORY（加载期崩溃回归）"
+  FAIL=1
+elif echo "$GITLAB_SMOKE_OUT" | grep -q "eventKind=pr_opened"; then
+  echo "PASS: 事件分发到达共享核心（platform=gitlab eventKind=pr_opened）"
+else
+  echo "FAIL: 未走到事件分发，实际输出："
+  echo "$GITLAB_SMOKE_OUT" | head -5
+  FAIL=1
+fi
+
+# ─── LINT-002：裸环境下的 API-only 审查 ───────────────────────────────────────
+#
+# 空 cwd、空缓存、PATH 只有 node、GitLab/OpenAI 都指向 loopback stub，跑真实
+# bundle 走完整条审查链；第二轮在 PATH 上摆可执行的假 lint 工具，确认一次都没
+# 被调到。详见脚本头部注释。
+echo ""
+if node scripts/bare-env-review-check.mjs; then
+  :
+else
+  FAIL=1
+fi
+
+# 收尾统一判定。
+#
+# 这个 exit 之前是缺的：上面 GitLab 事件分发那几段只置 FAIL=1，脚本却在最后一个
+# `fi` 处以 0 结束，于是分发回归会打印 FAIL 但 `npm run all` 照样绿。
+echo ""
+if [ "$FAIL" -ne 0 ]; then
+  echo "冒烟测试失败"
+  exit 1
+fi
 echo "冒烟测试全部通过"

@@ -7,10 +7,12 @@
  * 那些属于 EVENT-002/EVENT-003 任务，届时只需要"解析出 payload JSON 后调用
  * 本文件的函数"，不需要重新设计字段映射。
  *
- * `isBot` 恒为 false：GitLab MVP 使用个人 PAT 身份评论，没有天然的 bot 账号标记；
- * 真正的自反馈过滤需要将 actor.login 与配置好的 PAT 用户名比较（EVENT-018，
- * 见 `gitlab-note-hook-rules.ts` 的 `isSelfNote()`），故意不放进 ExecutionContext
- * 构造阶段判断——构造阶段不应依赖外部配置输入（呼应 ARCH-002 的字段设计边界）。
+ * `isBot` 只依据 GitLab 的**权威命名**判定（access token 账号与内置系统账号，
+ * 见 `isGitLabBotUsername`）。判不出「这是不是 reviewer 自己」——那需要把
+ * actor.login 与配置好的 PAT 用户名比较（EVENT-018，见
+ * `gitlab-note-hook-rules.ts` 的 `isSelfNote()`），故意不放进构造阶段：
+ * 构造阶段不应依赖外部配置输入（呼应 ARCH-002 的字段设计边界），该判定由
+ * `gitlab-trigger.ts` 在配置就绪后补上。
  *
  * GitLab Webhook 字段映射依据 GitLab 官方 Webhook events 文档整理，尚未经真实
  * Webhook 验证（ai-reviewer-test 项目尚未接入），EVENT-002 对接真实环境时需要
@@ -18,6 +20,19 @@
  * 第 5.1 节。参考该文档第 5 节。
  */
 import {type EventKind, type ExecutionContext, ExecutionContextError} from './execution-context'
+
+/**
+ * GitLab Note Hook `object_attributes.noteable_type` 的已知取值——评论挂在
+ * 哪一类对象上。依据 GitLab 官方 Webhook events 文档「Comment events」一节
+ * 整理，跟本文件其余字段映射一样，尚未经真实 Webhook 验证。
+ *
+ * `Epic` 属于 Premium/Ultimate 功能，当前项目只针对 GitLab.com Free 套餐
+ * （见 github-to-gitlab-migration-plan.md §0.4/§0.5），故意不列入。
+ */
+export type GitLabNoteableType = 'Commit' | 'MergeRequest' | 'Issue' | 'Snippet'
+
+/** 唯一需要业务处理的 noteable_type；其余一律 ignorable_event（EVENT-017）。 */
+export const MERGE_REQUEST_NOTEABLE_TYPE: GitLabNoteableType = 'MergeRequest'
 
 /**
  * 输入为已由 EVENT-002 任务解析出的 GitLab webhook payload 对象
@@ -59,14 +74,14 @@ function buildFromMergeRequestHook(p: Record<string, any>): ExecutionContext {
       'missing_required_field'
     )
   }
-  const eventKind = mapMergeRequestAction(attrs, p.changes)
+  const eventKind = mapMergeRequestAction(attrs)
   return {
     platform: 'gitlab',
     projectPath: project.path_with_namespace,
     projectId: String(project.id),
     changeRequestId: attrs.iid,
     eventKind,
-    actor: {login: p.user?.username ?? '', isBot: false},
+    actor: makeGitLabActor(p.user?.username),
     baseSha: attrs.oldrev ?? '',
     headSha: attrs.last_commit?.id ?? '',
     raw: p
@@ -77,10 +92,12 @@ function buildFromNoteHook(p: Record<string, any>): ExecutionContext {
   const attrs = p.object_attributes
   const mr = p.merge_request
 
-  // 结构缺失：真正的校验失败，fail closed（区别于下面的 ignorable_event）
-  if (attrs == null || mr == null) {
+  // 结构缺失：真正的校验失败，fail closed（区别于下面的 ignorable_event）。
+  // 只要求 object_attributes 存在——merge_request 是否必须存在取决于
+  // noteable_type，不能在这里无条件要求（见下方 bug 说明）。
+  if (attrs == null) {
     throw new ExecutionContextError(
-      'note payload missing object_attributes/merge_request',
+      'note payload missing required fields', // object_attributes
       'gitlab',
       'missing_required_field'
     )
@@ -88,7 +105,15 @@ function buildFromNoteHook(p: Record<string, any>): ExecutionContext {
 
   // 结构合法但业务上不需要处理：优雅跳过（EVENT-016/017，修复 Issue #66——
   // 此前这三种情形跟"字段真正缺失"共用 missing_required_field，导致
-  // gitlab-trigger.ts 对编辑/删除评论等 fail closed 而非优雅跳过）
+  // gitlab-trigger.ts 对编辑/删除评论等 fail closed 而非优雅跳过）。
+  //
+  // noteable_type 检查必须排在 merge_request 非空检查之前：GitLab 真实 Note
+  // Hook payload 里 merge_request 字段只在 noteable_type === 'MergeRequest'
+  // 时才会出现——评论挂在 Issue/commit/snippet 上时，payload 里根本没有
+  // merge_request（而是 issue/commit/snippet 字段）。如果先无条件要求
+  // merge_request 非空，Issue 等对象上的评论这一最常见的"非 MR note"场景会
+  // 在走到这条 ignorable_event 判断之前就先被上面的结构校验 fail closed，
+  // 这条判断反而变成只有人为构造的 fixture 才能触发的死代码。
   if (attrs.action !== 'create') {
     throw new ExecutionContextError(
       `note action is '${attrs.action}', not 'create' — ignorable`,
@@ -99,37 +124,126 @@ function buildFromNoteHook(p: Record<string, any>): ExecutionContext {
   if (attrs.system === true) {
     throw new ExecutionContextError('system note — ignorable', 'gitlab', 'ignorable_event')
   }
-  if (attrs.noteable_type !== 'MergeRequest') {
+  if (attrs.noteable_type !== MERGE_REQUEST_NOTEABLE_TYPE) {
     throw new ExecutionContextError(
       `noteable_type '${attrs.noteable_type}' is not MergeRequest — ignorable`,
       'gitlab',
       'ignorable_event'
     )
   }
+
+  // 到这里已经确认 noteable_type === 'MergeRequest'，merge_request 理应存在；
+  // 缺失说明 payload 结构真的坏了（不是"评论在别的对象上"这种正常情况）。
+  if (mr == null) {
+    throw new ExecutionContextError(
+      'MergeRequest note payload missing required fields', // merge_request
+      'gitlab',
+      'missing_required_field'
+    )
+  }
+  // 2026-08-18 真实环境验证（Issue #118）纠正：此前用 `attrs.discussion_id`
+  // 是否存在判断"这是不是行级 diff 评论回复"，但真实 GitLab 上**所有** note
+  // （包括顶层评论）现在都会带 discussion_id——不再是行级回复的专属信号。
+  // 真实捕获的 payload 证实：行级 diff 评论的 `object_attributes.type` 是
+  // `'DiffNote'`，顶层评论这个字段完全不存在。用 type 判断才准确，这也是
+  // `gitlab-platform.ts` 的 `getAllDiffDiscussions()` 内部一直在用的同一个
+  // 字段（`note.type !== 'DiffNote'` 过滤）——两处判据不一致正是这次真实验证
+  // 暴露出的 bug：顶层命令因为 discussion_id 存在被误判为
+  // review_comment_created，走 `replyToReviewComment()` 时在
+  // `noteToDiscussion` 缓存里查不到（该缓存只收录 DiffNote），报
+  // "discussion ID unknown" 后降级为普通评论——命令最终能执行成功，但走的是
+  // 非预期的降级路径，且行级 diff 评论的真实回复功能同样会因为这个误判被
+  // 破坏（顶层评论会被错误当成行级回复处理）。
+  const isDiffNoteReply = attrs.type === 'DiffNote'
   return {
     platform: 'gitlab',
     projectPath: p.project?.path_with_namespace ?? '',
     projectId: String(p.project_id ?? p.project?.id ?? ''),
     changeRequestId: mr.iid,
-    eventKind: attrs.discussion_id ? 'review_comment_created' : 'comment_created',
-    actor: {login: p.user?.username ?? '', isBot: false},
+    eventKind: isDiffNoteReply ? 'review_comment_created' : 'comment_created',
+    actor: makeGitLabActor(p.user?.username),
     baseSha: '',
-    headSha: mr.diff_head_sha ?? '',
+    // 2026-08-18 真实环境验证（Issue #118）纠正：真实 Note Hook payload 里
+    // merge_request 对象没有 diff_head_sha 字段，HEAD SHA 实际在
+    // merge_request.last_commit.id（与 MR Hook 的 object_attributes.
+    // last_commit.id 同构）。
+    headSha: mr.last_commit?.id ?? '',
     comment: {
-      kind: attrs.discussion_id ? 'review_thread' : 'top_level',
+      kind: isDiffNoteReply ? 'review_thread' : 'top_level',
       id: attrs.id,
+      // 正文必须填：共享 dispatcher 以 `typeof comment.body === 'string'` 作为
+      // 「这是一条可解析的评论」的判据，缺了它所有 GitLab 命令都会在解析前
+      // 就被当成「missing comment body」静默丢弃。
+      body: typeof attrs.note === 'string' ? attrs.note : undefined,
+      // 行级对话定位所需（REVIEW-016）。GitLab 的 note payload 用 position
+      // 描述锚点，没有 GitHub 那样的 diff_hunk——留空即可，对话仍能进行。
+      path: attrs.position?.new_path ?? attrs.position?.old_path ?? undefined,
+      line:
+        typeof attrs.position?.new_line === 'number'
+          ? attrs.position.new_line
+          : typeof attrs.position?.old_line === 'number'
+          ? attrs.position.old_line
+          : undefined,
       threadId: attrs.discussion_id
     },
     raw: p
   }
 }
 
-function mapMergeRequestAction(attrs: Record<string, any>, changes: any): EventKind {
+/**
+ * GitLab 侧的 bot 识别（CMD-006）。
+ *
+ * GitLab 的 webhook payload 里 user 只有 username/name，**没有** bot 标记
+ * （`user.bot` 只在 REST 的用户表示里出现），所以拿不到 GitHub
+ * `user.type === 'Bot'` 那样的确定信号。这里只认 GitLab 自己保证的命名：
+ *
+ *   project_{id}_bot / project_{id}_bot_{hash}   —— 项目 access token
+ *   group_{id}_bot / group_{id}_bot_{hash}       —— 群组 access token
+ *   支持/告警等内置系统账号
+ *
+ * **刻意不匹配**泛化的 `-bot` / `_bot` 后缀：那会把用户名恰好以 bot 结尾的真人
+ * 一并挡掉，让他再也用不了命令。反向的漏判危害小得多——reviewer 自己造成的
+ * 反馈循环已由 gitlab-trigger.ts 的 isSelfNote 过滤（EVENT-018）。
+ */
+function makeGitLabActor(username: string | undefined | null): {login: string; isBot: boolean} {
+  const login = username ?? ''
+  return {login, isBot: isGitLabBotUsername(login)}
+}
+
+export function isGitLabBotUsername(username: string | undefined | null): boolean {
+  const name = (username ?? '').trim().toLowerCase()
+  if (name === '') return false
+  if (/^(project|group)_\d+_bot(_.*)?$/.test(name)) return true
+  return GITLAB_SYSTEM_BOTS.has(name)
+}
+
+/** GitLab 内置系统账号（发 note 时同样不该进入权限与模型流程） */
+const GITLAB_SYSTEM_BOTS = new Set([
+  'support-bot',
+  'alert-bot',
+  'automation-bot',
+  'security-bot',
+  'ghost'
+])
+
+/**
+ * `action=update` 事件区分"代码真的变了"（需要重新审查）还是"只改了标题/
+ * label 等元数据"（不该触发模型）。
+ *
+ * 2026-08-05 复核（Issue #75/#88）指出：此前只看 `changes.last_commit`/
+ * `changes.source_branch` 是否存在，但 GitLab 官方 Webhook events 文档里
+ * `changes` 是否包含这两个字段并未被文档承诺为"push 是否发生"的判据——按官方
+ * 契约，`object_attributes.oldrev` 才是权威信号：只有由 push 触发的 update
+ * 事件才会带这个字段（记录 push 前的 HEAD），单纯的标题/label 修改不会有它。
+ * 依赖未经承诺的 `changes` 结构有被真实 webhook 误判为 `metadata_updated`
+ * 而漏审的风险；当前 fixture 是人工构造的，未覆盖过这个偏差。
+ */
+function mapMergeRequestAction(attrs: Record<string, any>): EventKind {
   if (attrs.action === 'open') return 'pr_opened'
   if (attrs.action === 'reopen') return 'pr_reopened'
   if (attrs.action === 'update') {
-    const headChanged = changes?.last_commit != null || changes?.source_branch != null
-    return headChanged ? 'pr_synchronize' : 'metadata_updated'
+    const pushed = typeof attrs.oldrev === 'string' && attrs.oldrev !== ''
+    return pushed ? 'pr_synchronize' : 'metadata_updated'
   }
   return 'unknown'
 }

@@ -14,14 +14,15 @@
 import type {Bot} from '../bot'
 import {initBotGreeting} from '../commenter'
 import {handleCommentEvent} from '../command-handler'
+import {hasHeadBeenReviewed, buildReviewIdempotencyKey} from '../review-idempotency'
 import type {Options} from '../options'
-import type {ConfigProvider} from './config-provider'
-import {ConfigError} from './config-provider'
+import {ConfigError, type ConfigProvider} from './config-provider'
 import {handleExecCtxError} from './exec-ctx-error-handler'
 import type {ExecutionContext} from './execution-context'
 import type {Logger} from './logger'
 import {Prompts} from '../prompts'
 import {codeReview} from '../review'
+import {repoCoordsOf, setExecCtx} from './run-context'
 
 // re-export 供已有消费方（tests/main.ts）不需要改 import 路径
 export {handleExecCtxError} from './exec-ctx-error-handler'
@@ -48,6 +49,26 @@ export async function dispatchEvent(deps: {
     execCtx.eventKind === 'pr_synchronize' ||
     execCtx.eventKind === 'pr_reopened'
   ) {
+    // STATE-013/014/015：同一个 HEAD 被投递两次不得重跑。
+    //
+    // 触发场景两个平台各有一套（GitHub workflow rerun、GitLab job Retry /
+    // webhook 重投 / API 超时重试），但规则只有一条，所以放在共享分发层。
+    // 少了它，rerun 会让 review.ts 回退到 base commit 重跑整份 diff——
+    // 一次点击等于一轮完整的模型调用外加重新发布摘要和行级评论。
+    const {owner, repo} = repoCoordsOf(execCtx)
+    if (await hasHeadBeenReviewed(owner, repo, execCtx.changeRequestId, execCtx.headSha)) {
+      logger.info(
+        `Skipped: headSha ${execCtx.headSha} already reviewed (idempotency key ` +
+          `${buildReviewIdempotencyKey(
+            execCtx.platform,
+            execCtx.projectId,
+            execCtx.changeRequestId,
+            execCtx.headSha
+          )}) — duplicate delivery or rerun (STATE-013/014)`
+      )
+      return
+    }
+
     const bots = createBots()
     if (bots == null) return
     await codeReview(execCtx, bots.lightBot, bots.heavyBot, options, prompts)
@@ -76,7 +97,7 @@ export interface OrchestratorDeps {
 
   createBots: (options: Options) => {lightBot: Bot; heavyBot: Bot} | null
 
-  earlyReaction?: (execCtx: ExecutionContext, reaction: string) => Promise<void>
+  earlyReaction?: (execCtx: ExecutionContext, options: Options) => Promise<void>
 }
 
 /**
@@ -92,7 +113,7 @@ export async function runOrchestrator(deps: OrchestratorDeps): Promise<void> {
   let options: Options
   try {
     options = configProvider.getOptions()
-    initBotGreeting(options.botIcon, options.botName)
+    initBotGreeting(options.botIcon, options.botName, options.botLogin)
     configProvider.print((msg: string) => logger.info(msg))
   } catch (e) {
     if (e instanceof ConfigError) {
@@ -114,6 +135,10 @@ export async function runOrchestrator(deps: OrchestratorDeps): Promise<void> {
     return
   }
 
+  // 共享核心里拿不到 execCtx 参数的位置（Commenter 等）通过模块级上下文读取，
+  // 两个入口都经由本函数，所以在这里登记一次即可覆盖 review 与命令两条路径
+  setExecCtx(execCtx)
+
   logger.info(`Event: platform=${execCtx.platform} eventKind=${execCtx.eventKind}`)
 
   // 3. 评论事件 ACK
@@ -121,7 +146,7 @@ export async function runOrchestrator(deps: OrchestratorDeps): Promise<void> {
     deps.earlyReaction &&
     (execCtx.eventKind === 'comment_created' || execCtx.eventKind === 'review_comment_created')
   ) {
-    await deps.earlyReaction(execCtx, options.commandAckReaction)
+    await deps.earlyReaction(execCtx, options)
   }
 
   // 4. 构建提示词

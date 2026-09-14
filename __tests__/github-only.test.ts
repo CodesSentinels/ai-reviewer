@@ -203,6 +203,15 @@ jest.mock('../src/command-handler', () => ({
   handleCommentEvent: (...a: any[]) => commandHandlerState.handleCommentEvent(...a)
 }))
 
+// STATE-013 在共享分发层加了一道「这个 HEAD 审过没有」的门禁，它会真的调
+// octokit.issues.listComments。本文件刻意不搭 GitHub API 替身（它测的是「GitLab
+// 缺席/故障时 GitHub 路径照常」），那次调用会真发 HTTP 然后挂住，表现成
+// codeReview never called。幂等本身有专门的用例覆盖，这里直接短路掉。
+jest.mock('../src/review-idempotency', () => ({
+  hasHeadBeenReviewed: async () => false,
+  buildReviewIdempotencyKey: () => 'stub-key'
+}))
+
 const earlyReactionState = {tryEarlyReaction: jest.fn<(...a: any[]) => Promise<void>>()}
 jest.mock('../src/commands/early-reaction', () => ({
   tryEarlyReaction: (...a: any[]) => earlyReactionState.tryEarlyReaction(...a)
@@ -261,7 +270,13 @@ describe('GH-016 / GH-017: GitHub Action 在 GitLab 缺席或故障时正常运�
   async function runMain(): Promise<void> {
     jest.resetModules()
     await import('../src/main')
-    await new Promise(resolve => setImmediate(resolve))
+    // main 的顶层 run() 不返回 Promise 给调用方，只能靠让出事件循环等它跑完。
+    // 单个 setImmediate 太脆：编排链路上每多一个 await（例如 STATE-013 的幂等
+    // 查询）就会把 codeReview 推到下一个 tick 之后，测试随即变成「没调用」。
+    // 让出若干轮，与具体的 await 层数解耦。
+    for (let i = 0; i < 10; i++) {
+      await new Promise(resolve => setImmediate(resolve))
+    }
   }
 
   test('GH-016：无任何 GitLab 变量时，PR 事件照常触发审查', async () => {

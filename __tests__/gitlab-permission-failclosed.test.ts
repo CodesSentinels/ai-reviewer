@@ -26,12 +26,12 @@ jest.mock('@gitbeaker/rest', () => ({
   }))
 }))
 
-const mockContext: any = {
-  eventName: 'issue_comment',
-  payload: {},
-  repo: {owner: 'group', repo: 'demo'}
-}
-jest.mock('@actions/github', () => ({context: mockContext}))
+// ARCH-005：dispatcher 只消费 ExecutionContext。迁移前这里给的是 GitHub 形状的
+// payload（issue / pull_request）——一个 GitLab 用例却靠 GitHub payload 驱动，
+// 正是双轨遗留。现在按 GitLab 事件构造。
+import type {ExecutionContext} from '../src/platform/execution-context'
+
+let currentCtx: ExecutionContext
 
 jest.mock('../src/platform/logger', () => ({
   getLogger: () => ({info: jest.fn(), warning: jest.fn(), error: jest.fn(), debug: jest.fn()}),
@@ -92,13 +92,20 @@ function stubNonPermissionApis(platform: any): void {
   }))
 }
 
-/** MR 作者本人发的命令评论 */
-function authorComment(body: string): any {
+/** MR 作者本人发的命令评论（GitLab note 事件） */
+function authorComment(body: string): ExecutionContext {
   return {
-    action: 'created',
-    issue: {number: 42, pull_request: {}, user: {login: 'mr-author'}},
-    comment: {id: 1001, body, user: {login: 'mr-author', type: 'User'}}
-  }
+    platform: 'gitlab',
+    projectPath: 'group/demo',
+    projectId: '77',
+    changeRequestId: 42,
+    eventKind: 'comment_created',
+    actor: {login: 'mr-author', isBot: false},
+    baseSha: '',
+    headSha: '',
+    comment: {kind: 'top_level', id: 1001, body},
+    raw: {}
+  } as ExecutionContext
 }
 
 function apiError(status: number, message = 'boom'): Error {
@@ -117,9 +124,6 @@ beforeEach(() => {
   platformHolder.comments = []
   platformHolder.instance = new GitLabPlatform(TEST_CLIENT_CONFIG)
   stubNonPermissionApis(platformHolder.instance)
-
-  mockContext.eventName = 'issue_comment'
-  mockContext.payload = {}
 })
 
 afterEach(() => {
@@ -183,9 +187,9 @@ describe('GitLabPlatform → permission → dispatcher（作者豁免的安全�
     ['500 Internal Server Error', 500]
   ])('权限 API %s → 连 MR 作者的 review 也被拒（CMD-016）', async (msg, status) => {
     mockUsers.all.mockRejectedValue(apiError(status, msg))
-    mockContext.payload = authorComment('@ai-reviewer review')
+    currentCtx = authorComment('@ai-reviewer review')
 
-    const r = await dispatchCommentEvent({options: stubOptions})
+    const r = await dispatchCommentEvent({execCtx: currentCtx, options: stubOptions})
 
     expect(r.kind).toBe('executed')
     if (r.kind === 'executed') {
@@ -197,9 +201,9 @@ describe('GitLabPlatform → permission → dispatcher（作者豁免的安全�
 
   test('网络错误同样拒绝（不只有 HTTP 状态码算失败）', async () => {
     mockUsers.all.mockRejectedValue(new Error('ETIMEDOUT'))
-    mockContext.payload = authorComment('@ai-reviewer summary')
+    currentCtx = authorComment('@ai-reviewer summary')
 
-    const r = await dispatchCommentEvent({options: stubOptions})
+    const r = await dispatchCommentEvent({execCtx: currentCtx, options: stubOptions})
 
     expect(r.kind).toBe('executed')
     if (r.kind === 'executed') {
@@ -211,9 +215,9 @@ describe('GitLabPlatform → permission → dispatcher（作者豁免的安全�
     // 这条是上面 fail closed 的边界——不能因为要拦住故障就把正常路径一起拦死
     mockUsers.all.mockResolvedValue([{id: 7, username: 'mr-author'}])
     mockProjectMembers.all.mockResolvedValue([])
-    mockContext.payload = authorComment('@ai-reviewer help')
+    currentCtx = authorComment('@ai-reviewer help')
 
-    const r = await dispatchCommentEvent({options: stubOptions})
+    const r = await dispatchCommentEvent({execCtx: currentCtx, options: stubOptions})
 
     expect(r.kind).toBe('executed')
     if (r.kind === 'executed') {
@@ -223,13 +227,14 @@ describe('GitLabPlatform → permission → dispatcher（作者豁免的安全�
 
   test('对照组：非作者且权限查询失败 → 同样拒绝', async () => {
     mockUsers.all.mockRejectedValue(apiError(401, '401 Unauthorized'))
-    mockContext.payload = {
-      action: 'created',
-      issue: {number: 42, pull_request: {}, user: {login: 'mr-author'}},
-      comment: {id: 1002, body: '@ai-reviewer review', user: {login: 'someone-else', type: 'User'}}
-    }
+    // 作者是 mr-author（见 getChangeRequest 存根），发命令的是别人
+    currentCtx = {
+      ...authorComment('@ai-reviewer review'),
+      actor: {login: 'someone-else', isBot: false},
+      comment: {kind: 'top_level', id: 1002, body: '@ai-reviewer review'}
+    } as ExecutionContext
 
-    const r = await dispatchCommentEvent({options: stubOptions})
+    const r = await dispatchCommentEvent({execCtx: currentCtx, options: stubOptions})
 
     expect(r.kind).toBe('executed')
     if (r.kind === 'executed') {

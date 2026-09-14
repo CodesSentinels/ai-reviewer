@@ -44,7 +44,7 @@
 | | `src/commands/parser.ts` | 214 | 命令解析器：@bot mention 识别 + 最长前缀匹配 + 安全校验 |
 | | `src/commands/registry.ts` | 76 | 单例注册表：命令名 → handler 映射 + 别名支持 |
 | | `src/commands/permission.ts` | 89 | 权限查询（带缓存）+ 命令级校验 + PR 作者豁免 |
-| | `src/commands/rate-limit.ts` | 56 | 进程内令牌桶（10 次/60s/actor） |
+| | `src/commands/rate-limit.ts` | 109 | 进程内令牌桶（10 次/60s/限流域） |
 | | `src/commands/reply.ts` | 197 | 统一评论回复（ACK/成功/失败/进度 四种状态 + 幂等标签） |
 | | `src/commands/dispatcher.ts` | 309 | 调度主流程（10 步流水线） |
 | | `src/commands/bootstrap.ts` | 30 | 一次性启动注册 |
@@ -591,10 +591,12 @@ canExecute(handler, actualPermission, isPrAuthor)
 **文件**: `src/commands/rate-limit.ts` | **新增**: 56 行
 
 ```
-checkRateLimit("mason")
+checkRateLimit({platform, projectPath, changeRequestId, actor})
+   │
+   ├─ rateLimitKey(scope) → 四段各自 encodeURIComponent 后用 ':' 连接
    │
    ├─ 获取或创建 bucket
-   │    buckets: Map<actor, {timestamps: number[]}>
+   │    buckets: Map<key, {timestamps: number[]}>
    │
    ├─ 清理窗口外记录（now - 60_000 之前的 timestamp）
    │
@@ -605,7 +607,11 @@ checkRateLimit("mason")
         → push(now), 返回 {allowed: true}
 ```
 
-**限制**: 进程内，单次 run 有效。不防跨 run 的频率攻击（靠 GitHub 自身的 abuse detection）。在单次 run 中足以防止 webhook 抖动产生的重复处理。
+**限流域**（CMD-027）: `platform + project + PR/MR + actor` 四元组，任一维不同即互不影响。早先 key 是裸 actor 名，双平台之后会串桶——同一个人在 GitHub PR 和 GitLab MR 上、在两个项目上、在同一项目的两个 MR 上发命令会互相消耗配额。
+
+**这是保留的进程内 best-effort 防护，当前调用模型下基本不会触发**（CMD-029）。桶只活在单个 Node 进程里，而 GitHub comment 与 GitLab note 是一条事件一个新进程，所以：跨 run / 跨 pipeline 一律不生效（即便 `resource_group` 让 pipeline 串行）；同一条评论的重复投递在 dispatcher 里先被幂等检查拦下，根本走不到限流；不同投递又通常各在各的进程里。
+
+因此它**不负责**重复投递防护——那是 event/note marker 幂等检查的职责，该检查排在限流之前，重复投递也不消耗配额。持续性滥用防护依赖平台自身的 abuse detection。用户可见文案相应不给「N 条 / M 秒」的配额承诺。
 
 ---
 
@@ -654,7 +660,7 @@ checkRateLimit("mason")
 | INVALID_ARGS | ⚠️ **参数不合法**。命令参数仅接受字母、数字以及 `._-/:=` 字符。 |
 | FORBIDDEN | 🚫 **权限不足**。执行该命令需要仓库 `write` 及以上权限。 |
 | NOT_IMPLEMENTED | 🚧 **命令暂未实现**。该命令已在路线图中，等待实现。 |
-| RATE_LIMITED | ⏱️ **请求过于频繁**。同一用户在 60 秒内最多执行 10 条命令。 |
+| RATE_LIMITED | ⏱️ **请求过于频繁**。本次运行中检测到过多命令请求，请稍后再试。 |
 | DUPLICATE | ℹ️ **命令已处理**（重复事件已去重）。 |
 | INTERNAL | 💥 **命令执行失败**。错误已记录，请联系维护者。 |
 
@@ -1052,10 +1058,16 @@ ctx.options          // 全局 Options 配置
 
 ### Q3: rate-limit 只在进程内，有什么实际意义？
 
-GitHub Actions 中每次 issue_comment 事件会启动一个独立 runner 进程，进程间不共享状态。所以这个 rate-limit 的作用是：
-- 防止 **webhook 抖动/重放**（同一事件被 Actions 多次处理时，同一进程内生效）
-- 防止 **dispatcher 被代码 bug 循环调用**
-- 占位，为后续引入 Redis/KV 存储做准备
+GitHub Actions 中每次 issue_comment 事件会启动一个独立 runner 进程，GitLab note 同理，进程间不共享状态。**当前调用模型下它基本不会触发**：
+
+- 用户连发命令 → 每条一个新进程，桶都是空的，限不住
+- 同一条评论重复投递 → dispatcher 里幂等检查排在限流之前，在那一步就返回了（CMD-030）
+
+所以不要把它描述成「防重复投递」或「防 webhook 抖动」。它的实际价值是：
+
+- 防止 **dispatcher 被代码 bug 循环调用**（单进程内确实生效）
+- 一旦调用模型变化（单进程处理多条命令、批量回放、常驻进程）立刻有意义
+- 占位，为后续引入 Redis/KV 存储做准备（CMD-032 范围内不做）
 
 ### Q4: 为什么 reply 的 HTML 标签里用 `codesentinel-cmd-reply` 而不是配置化？
 

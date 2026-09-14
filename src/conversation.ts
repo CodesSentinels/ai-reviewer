@@ -18,8 +18,12 @@
  */
 import {type Bot} from './bot'
 import type {ExecutionContext} from './platform/execution-context'
+import {repoCoordsOf} from './platform/run-context'
+import {getPermissionResult} from './commands/permission'
+import {permissionAtLeast, type PermissionLevel} from './commands/types'
 import {
   Commenter,
+  isOwnAuthor,
   bodyHasMarker,
   commentReplyTag,
   getCommentGreeting,
@@ -99,6 +103,74 @@ export function issueConvReplyTagVariants(originalCommentId: number): string[] {
  *
  * @returns true 表示需要 bot 介入回复
  */
+/**
+ * 自然语言追问所需的最低权限（REVIEW-017）。
+ *
+ * 与 `review` 命令同基线：两者触发的是同一个重量模型，成本相当。选 write 而不是
+ * read，是因为「能看见仓库的人都能让 bot 跑模型」在私有仓库/大群组里等于把
+ * 模型预算敞开给所有可见成员。
+ */
+const CONVERSATION_MIN_PERMISSION: PermissionLevel = 'write'
+
+/**
+ * 追问者是否有权触发对话（REVIEW-017）。
+ *
+ * 三条规则，与命令路径保持一致：
+ *   1. 权限达标 → 放行；
+ *   2. 未达标但本人是 PR/MR 作者 → 放行（对自己的变更提问是主要场景）；
+ *   3. **权限查询失败 → 拒绝**。不能因为「看起来是作者」就在权限未知时放行，
+ *      那是 fail open——同 CMD-016 的教训。
+ */
+async function canConverse(
+  execCtx: ExecutionContext,
+  prAuthor: string
+): Promise<{allowed: boolean; reason: string}> {
+  const {owner, repo} = repoCoordsOf(execCtx)
+  const actor = execCtx.actor.login
+  const {level, queryFailed} = await getPermissionResult({owner, repo, username: actor})
+
+  if (queryFailed) {
+    return {allowed: false, reason: '权限查询失败'}
+  }
+  if (permissionAtLeast(level, CONVERSATION_MIN_PERMISSION)) {
+    return {allowed: true, reason: `权限 ${level}`}
+  }
+  if (actor !== '' && actor === prAuthor) {
+    return {allowed: true, reason: '变更作者豁免'}
+  }
+  return {allowed: false, reason: `权限不足（${level}）`}
+}
+
+/**
+ * 这条评论是不是 reviewer 自己发的（REVIEW-018）。
+ *
+ * 判定顺序有讲究：
+ *
+ * 1. **构造阶段归一化的 actor.isBot** —— GitHub 认 `user.type === 'Bot'` 与
+ *    `xxx[bot]` 后缀，GitLab 认 access token 账号的权威命名（CMD-006）。
+ * 2. **作者是否等于本 reviewer** —— 权威信号，覆盖「以个人 PAT 身份发言」的
+ *    GitLab 常见形态。
+ * 3. **正文带 bot marker** —— 仅在前两条都判不出时作为兜底。
+ *
+ * 第 3 条单独用是有害的：用户「引用回复」会把 marker 一起复制过去，于是他带着
+ * 引用提问就永远得不到回复（§8.3 留下的尾巴）。所以只有在**身份完全判不出**时
+ * 才退回到它——那种情况下宁可少答一次，也不能让 bot 自问自答绕成死循环。
+ */
+async function isSelfAuthoredComment(
+  execCtx: ExecutionContext,
+  commentBody: string
+): Promise<boolean> {
+  if (execCtx.actor.isBot) return true
+
+  const own = await isOwnAuthor(execCtx.actor.login)
+  if (own === true) return true
+  // 身份可解析且确认不是自己 → 就是真人，哪怕正文里带着引用来的 marker
+  if (own === false) return false
+
+  // 身份判不出：退回 marker 兜底，宁可少答一次也不能形成反馈循环
+  return bodyHasMarker(commentBody, 'comment') || bodyHasMarker(commentBody, 'commentReply')
+}
+
 export function isFollowUpQuestion(opts: {
   commentBody: string
   authorIsBot: boolean
@@ -110,9 +182,13 @@ export function isFollowUpQuestion(opts: {
     return false
   }
   const body = commentBody ?? ''
-  // bot 自动生成的内容带有专属标签，二次保险，避免把 bot 文案当成追问
+  // marker 兜底：默认开启，用于调用方没做作者判定的场景。
+  //
+  // 注意它会误伤「引用回复」——用户引用 bot 的话再提问，正文里就带着 marker。
+  // 生产调用方已在上游用 isSelfAuthoredComment 做过作者判定（REVIEW-018），
+  // 那里才是权威信号，因此显式传 `botCommentTags: []` 关掉这层兜底。
   const botTags = opts.botCommentTags ?? botCommentTagVariants()
-  if (botTags.some(tag => body.includes(tag))) {
+  if (botTags.length > 0 && botTags.some(tag => body.includes(tag))) {
     return false
   }
 
@@ -214,7 +290,9 @@ export const handleConversation = async (
 ): Promise<void> => {
   const commenter: Commenter = new Commenter()
   const inputs: Inputs = new Inputs()
-  const [repoOwner, repoName] = execCtx.projectPath.split('/')
+  // 按**最后**一个斜杠切：GitLab 子组项目是 group/subgroup/project，
+  // split('/') 取前两段会把 owner/repo 切错（repoCoordsOf 的既有语义）
+  const {owner: repoOwner, repo: repoName} = repoCoordsOf(execCtx)
 
   const logger = getLogger()
 
@@ -223,42 +301,50 @@ export const handleConversation = async (
     logger.info(`conversation: skip non review_comment event (${execCtx.eventKind})`)
     return
   }
-  const payload = execCtx.raw as any
-  if (!payload || payload.action !== 'created') {
-    logger.info('conversation: skip (missing payload or action != created)')
-    return
-  }
-  const comment = payload.comment
-  if (comment == null || typeof comment.body !== 'string') {
+  // REVIEW-015/016：改读归一化字段。原先直接读 GitHub 的 review comment payload
+  // （action / pull_request / repository / diff_hunk），GitLab 的 diff discussion
+  // note 在第一道校验就被拒。
+  //
+  // 「action != created」已在 ExecutionContext 构造阶段判掉。
+  const commentRef = execCtx.comment
+  if (commentRef == null || typeof commentRef.body !== 'string') {
     logger.warning('conversation: skip (missing comment body)')
     return
   }
-  if (payload.pull_request == null || payload.repository == null) {
-    logger.warning('conversation: skip (missing pull_request/repository)')
-    return
-  }
 
-  // ===== 2. 过滤 bot 自身评论 =====
-  const authorIsBot =
-    comment.user?.type === 'Bot' ||
-    /\[bot\]$/i.test(comment.user?.login ?? '') ||
-    bodyHasMarker(comment.body, 'comment') ||
-    bodyHasMarker(comment.body, 'commentReply')
-  if (authorIsBot) {
+  // ===== 2. 过滤 bot 自身评论（REVIEW-018）=====
+  if (await isSelfAuthoredComment(execCtx, commentRef.body)) {
     logger.info('conversation: skip (comment from bot itself)')
     return
   }
 
-  const pullNumber = payload.pull_request.number
+  const pullNumber = execCtx.changeRequestId
 
-  // 填充 PR 基本信息
-  inputs.title = payload.pull_request.title
-  if (payload.pull_request.body) {
-    inputs.description = commenter.getDescription(payload.pull_request.body)
+  // 对话链查找需要「评论自身」的形状（沿 in_reply_to_id 上溯、按 path/line 匹配），
+  // 由归一化字段重建，不再依赖平台 payload
+  const comment = {
+    id: commentRef.id,
+    body: commentRef.body,
+    path: commentRef.path ?? '',
+    line: commentRef.line,
+    user: {login: execCtx.actor.login}
   }
-  inputs.comment = `${comment.user.login}: ${comment.body}`
-  inputs.diff = comment.diff_hunk ?? ''
-  inputs.filename = comment.path ?? ''
+
+  inputs.comment = `${execCtx.actor.login || 'unknown'}: ${commentRef.body}`
+  // GitLab 的 note payload 没有 diff_hunk，留空即可——少一段上下文，不影响对话
+  inputs.diff = commentRef.diffHunk ?? ''
+  inputs.filename = commentRef.path ?? ''
+
+  // PR 基本信息改由 IGitPlatform 现查（payload 形状两个平台不同）
+  try {
+    const cr = await getPlatform().getChangeRequest(repoOwner, repoName, pullNumber)
+    inputs.title = cr.title
+    if (cr.body) {
+      inputs.description = commenter.getDescription(cr.body)
+    }
+  } catch (e) {
+    logger.warning(`conversation: failed to load change request details: ${String(e)}`)
+  }
 
   // ===== 3. Thread 对话历史收集 =====
   const {chain: rawChain, topLevelComment} = await commenter.getCommentChain(pullNumber, comment)
@@ -271,10 +357,27 @@ export const handleConversation = async (
   if (
     !isFollowUpQuestion({
       commentBody: comment.body,
-      authorIsBot: false
+      // 作者判定已在上游完成（isSelfAuthoredComment），这里关掉 marker 兜底，
+      // 否则用户「引用回复」后提问会被误判成 bot 文案
+      authorIsBot: false,
+      botCommentTags: []
     })
   ) {
     logger.info('conversation: not a follow-up question (no @mention), skip')
+    return
+  }
+
+  // ===== 4. 权限校验（REVIEW-017）=====
+  // 放在意图识别之后：无关评论不必为它多查一次权限 API
+  let prAuthor = ''
+  try {
+    prAuthor = (await getPlatform().getChangeRequest(repoOwner, repoName, pullNumber)).author
+  } catch (e) {
+    logger.warning(`conversation: failed to resolve change request author: ${String(e)}`)
+  }
+  const perm = await canConverse(execCtx, prAuthor)
+  if (!perm.allowed) {
+    logger.info(`conversation: skip (${perm.reason})`)
     return
   }
 
@@ -296,12 +399,10 @@ export const handleConversation = async (
   // ===== 7. 关联代码行及扩展上下文（文件完整 diff） =====
   let fileDiff = ''
   try {
-    const diffResult = await getPlatform().compareDiff(
-      repoOwner,
-      repoName,
-      payload.pull_request.base.sha,
-      payload.pull_request.head.sha
-    )
+    // base/head 同样改为现查：评论事件的 payload 在两个平台形状不同，
+    // 而 execCtx 对评论事件本就不带 base/head（构造阶段固定留空）
+    const cr = await getPlatform().getChangeRequest(repoOwner, repoName, pullNumber)
+    const diffResult = await getPlatform().compareDiff(repoOwner, repoName, cr.baseSha, cr.headSha)
     const file = diffResult.files.find(f => f.filename === comment.path)
     if (file?.patch) {
       fileDiff = file.patch
@@ -442,7 +543,9 @@ export const handleIssueConversation = async (
 ): Promise<void> => {
   const commenter: Commenter = new Commenter()
   const inputs: Inputs = new Inputs()
-  const [repoOwner, repoName] = execCtx.projectPath.split('/')
+  // 按**最后**一个斜杠切：GitLab 子组项目是 group/subgroup/project，
+  // split('/') 取前两段会把 owner/repo 切错（repoCoordsOf 的既有语义）
+  const {owner: repoOwner, repo: repoName} = repoCoordsOf(execCtx)
   const logger = getLogger()
 
   // ===== 1. 事件与 payload 校验 =====
@@ -450,29 +553,23 @@ export const handleIssueConversation = async (
     logger.info(`issue-conversation: skip non issue_comment event (${execCtx.eventKind})`)
     return
   }
-  const payload = execCtx.raw as any
-  if (!payload || payload.action !== 'created') {
-    logger.info('issue-conversation: skip (missing payload or action != created)')
-    return
-  }
-  // 只处理 PR 上的评论（GitHub 中 PR 复用 issue 模型）
-  if (!payload.issue?.pull_request) {
-    logger.info('issue-conversation: skip (issue_comment on non-PR issue)')
-    return
-  }
-  const comment = payload.comment
-  if (comment == null || typeof comment.body !== 'string') {
+  // REVIEW-016：改读归一化字段。原先直接读 GitHub payload（`payload.action`、
+  // `payload.issue.pull_request`），GitLab 的 note 事件在第一道校验就被拒——
+  // 对话功能在 GitLab 上完全不可用。
+  //
+  // 「action != created」和「评论挂在非 PR issue 上」这两条判断已经在
+  // ExecutionContext 构造阶段做掉（抛 ignorable_event），走到这里的一定是新建的
+  // PR/MR 顶层评论，不必重复判断。
+  const commentRef = execCtx.comment
+  if (commentRef == null || typeof commentRef.body !== 'string') {
     logger.warning('issue-conversation: skip (missing comment body)')
     return
   }
+  // 收窄 body 类型：CommentRef.body 是可选的（GitLab 早期未填充），上面已校验
+  const comment = {id: commentRef.id, body: commentRef.body}
 
-  // ===== 2. 过滤 bot 自身评论 =====
-  const authorIsBot =
-    comment.user?.type === 'Bot' ||
-    /\[bot\]$/i.test(comment.user?.login ?? '') ||
-    bodyHasMarker(comment.body, 'comment') ||
-    bodyHasMarker(comment.body, 'commentReply')
-  if (authorIsBot) {
+  // ===== 2. 过滤 bot 自身评论（REVIEW-018）=====
+  if (await isSelfAuthoredComment(execCtx, comment.body)) {
     logger.info('issue-conversation: skip (comment from bot itself)')
     return
   }
@@ -481,14 +578,30 @@ export const handleIssueConversation = async (
   if (
     !isFollowUpQuestion({
       commentBody: comment.body,
-      authorIsBot: false
+      // 作者判定已在上游完成（isSelfAuthoredComment），这里关掉 marker 兜底，
+      // 否则用户「引用回复」后提问会被误判成 bot 文案
+      authorIsBot: false,
+      botCommentTags: []
     })
   ) {
     logger.info('issue-conversation: not a follow-up question (no @mention), skip')
     return
   }
 
-  const pullNumber = payload.issue.number
+  const pullNumber = execCtx.changeRequestId
+
+  // ===== 4. 权限校验（REVIEW-017）=====
+  let prAuthor = ''
+  try {
+    prAuthor = (await getPlatform().getChangeRequest(repoOwner, repoName, pullNumber)).author
+  } catch (e) {
+    logger.warning(`issue-conversation: failed to resolve change request author: ${String(e)}`)
+  }
+  const issuePerm = await canConverse(execCtx, prAuthor)
+  if (!issuePerm.allowed) {
+    logger.info(`issue-conversation: skip (${issuePerm.reason})`)
+    return
+  }
 
   // ===== 4. 幂等去重（连续提问不丢/不重复的关键） =====
   const allComments = await commenter.listComments(pullNumber)
@@ -508,18 +621,16 @@ export const handleIssueConversation = async (
       commenter,
       pullNumber,
       comment,
+      execCtx.actor.login,
       `本话题的自动对话轮次已达上限（${MAX_CONVERSATION_TURNS} 轮）。如需继续深入，请新开一条评论或联系人工 reviewer。`
     )
     return
   }
 
   // ===== 6. 上下文组装（PR 级） =====
-  inputs.title = payload.pull_request?.title ?? payload.issue.title ?? ''
-  const prBody = payload.pull_request?.body ?? payload.issue.body
-  if (prBody) {
-    inputs.description = commenter.getDescription(prBody)
-  }
-  inputs.comment = `${comment.user?.login ?? 'unknown'}: ${comment.body}`
+  // 标题/描述改由 IGitPlatform 现查：payload 形状两个平台不同，而下面本来就要
+  // 调 getChangeRequest 拿 diff，顺带取回即可，不多一次 API
+  inputs.comment = `${execCtx.actor.login || 'unknown'}: ${comment.body}`
   inputs.commentChain = truncateConversationChain(rawChain)
 
   // ===== 7. 拉取整个 PR 的 diff（可选，受 token 预算约束） =====
@@ -527,6 +638,10 @@ export const handleIssueConversation = async (
   try {
     const platform = getPlatform()
     const cr = await platform.getChangeRequest(repoOwner, repoName, pullNumber)
+    inputs.title = cr.title
+    if (cr.body) {
+      inputs.description = commenter.getDescription(cr.body)
+    }
     const diffResult = await platform.compareDiff(repoOwner, repoName, cr.baseSha, cr.headSha)
     prDiff = diffResult.files
       .map(f => (f.patch ? `--- ${f.filename}\n${f.patch}` : ''))
@@ -548,6 +663,7 @@ export const handleIssueConversation = async (
       commenter,
       pullNumber,
       comment,
+      execCtx.actor.login,
       '无法回复该评论：关联的上下文过大，超出了模型的 token 限制。'
     )
     return
@@ -584,7 +700,7 @@ export const handleIssueConversation = async (
     return
   }
   const cleanedReply = reply.replace(/^\s*@user[，,：:\s]*/i, '').trimStart()
-  await postIssueReply(commenter, pullNumber, comment, cleanedReply)
+  await postIssueReply(commenter, pullNumber, comment, execCtx.actor.login, cleanedReply)
   logger.info(`issue-conversation: replied on PR #${pullNumber} main thread`)
 }
 
@@ -597,10 +713,12 @@ export const handleIssueConversation = async (
 async function postIssueReply(
   commenter: Commenter,
   pullNumber: number,
-  comment: any,
+  comment: {id: number; body: string},
+  authorLogin: string,
   body: string
 ): Promise<void> {
-  const authorLogin: string = comment.user?.login ?? ''
+  // 作者显式传入而不是从 comment.user 读：顶层对话的评论对象现在来自
+  // ExecutionContext 的归一化字段，那里作者在 execCtx.actor 上（REVIEW-016）
   const mention = authorLogin ? `@${authorLogin} ` : ''
   const quotedQuestion = comment.body
     .split('\n')

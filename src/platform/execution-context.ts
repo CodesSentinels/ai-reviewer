@@ -45,6 +45,29 @@ export interface CommentRef {
   /** 评论正文文本。GitHub: comment.body；GitLab: 暂未在构造阶段填充（无消费方，见 GLAPI 系列 / REVIEW-016）。 */
   body?: string
   /**
+   * 评论自身的平台原生 ID（GitHub: `comment.node_id`，GraphQL 用；GitLab 无对应
+   * 概念，留空）。与 `threadId` 是两回事——见下方 threadId 的注释。
+   *
+   * ARCH-005 迁移前，dispatcher 直接从 `context.payload.comment.node_id` 取值。
+   * 目前仓库里没有消费方，但它是 CommandContext 对 B/C/D 的公开契约字段，
+   * 因此改走平台无关通道传递，而不是在迁移中悄悄丢掉。
+   */
+  nodeId?: string
+  /**
+   * 行级评论所在的文件与行号（`kind === 'review_thread'` 时有值）。
+   *
+   * 行级对话要靠它定位所在 diff 位置。GitHub 来自 review comment payload 的
+   * `path`/`line`，GitLab 来自 note 的 `position.new_path`/`new_line`。
+   */
+  path?: string
+  line?: number
+  /**
+   * 评论锚定处的 diff 片段。GitHub 的 review comment payload 直接给
+   * （`diff_hunk`）；GitLab 的 note payload 没有对应字段，会留空——
+   * 对话仍能进行，只是少了这一段上下文。
+   */
+  diffHunk?: string
+  /**
    * 评论所属"讨论线程"的真正平台 ID，与 comment/note 自身的 ID 是两个不同概念
    * （ARCH-021 类型边界；GitHub Issue #88 P2 复核指出过混用风险）：
    * - GitHub: 真正的 thread ID 是 `PullRequestReviewThread` 的 GraphQL node ID，

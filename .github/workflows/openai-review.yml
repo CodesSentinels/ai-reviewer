@@ -38,43 +38,157 @@ concurrency:
     github.event_name != 'issue_comment' }}
 
 jobs:
-  # ─── 不可信执行面：跑 lint，绝不持有任何密钥（SEC-002 / SEC-004）───────────
+  # ─── 元数据解析：持只读 token，但**绝不 checkout 任何代码**（SEC-004）──────
   #
-  # ⚠️ 当前状态：本 job 的安全骨架已就位，但 lint **尚未真正执行**——
-  # run-lint-report.sh 目前只产出空报告。原因是本 job checkout 的是 PR 仓库，
-  # reviewer 自己的代码与依赖不在其中，需要单独的 lint-only 可信执行器
-  # （双 checkout：默认分支代码 + pr/ 子目录）。在那之前，审查收不到 lint 结果，
-  # §3 的验收「安全修复不以删除现有 GitHub 功能代替」尚未满足。
+  # 评论事件（issue_comment / pull_request_review_comment）的 payload 里没有
+  # head/base SHA，只能查 API。查询要 token，而**执行 PR 代码的 lint 步骤不接收
+  # token 或业务密钥**——因此单独拆一个 job：查 API 的这个 job 完全不 checkout，
+  # lint job 的只读 token 只出现在执行 PR 代码之前的 checkout / fetch 步骤里。
   #
-  # 这个 job 会 checkout 并对 PR head 运行 lint 工具——eslint 会 require()
-  # 仓库里的 eslint.config.js，等同于执行 PR 代码。因此它：
-  #   - 没有 env secrets（用允许列表而非黑名单：这里一条 env 都不给）
-  #   - permissions 只读，拿不到写评论的能力
-  #   - 只产出一份 JSON 数据 artifact，不产出任何可执行物（SEC-005）
+  # 统一走 API（PR 事件也不例外），这样本 job 完全不引用 pull_request.head.*，
+  # 与「持密钥 job 不得出现 PR head 引用」的门禁不冲突。
+  resolve-pr:
+    if: >-
+      github.event_name == 'pull_request_target' ||
+      github.event_name == 'pull_request_review_comment' ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      head_sha: ${{ steps.pr.outputs.head_sha }}
+      base_sha: ${{ steps.pr.outputs.base_sha }}
+      head_repo: ${{ steps.pr.outputs.head_repo }}
+    steps:
+      - id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${REPO}/pulls/${PR_NUMBER}" \
+            --jq '"head_sha=" + .head.sha, "base_sha=" + .base.sha, "head_repo=" + .head.repo.full_name' \
+            >> "$GITHUB_OUTPUT"
+
+  # ─── 不可信执行面：跑 lint（SEC-002 / SEC-004）─────────────────────────────
+  #
+  # 本 job 的安全不变式（不是「没有任何 token」——checkout 私有仓库必须要有）：
+  #
+  #   1. 不持有业务密钥（OPENAI_API_KEY 等），也不持有任何写权限
+  #   2. 只读 GITHUB_TOKEN 仅用于**执行 PR 代码之前**的可信步骤：两个
+  #      checkout 和 base 历史 fetch
+  #   3. 真正执行 PR 代码的步骤（Run lint tools）不带任何凭据
+  #   4. 凭据不落工作区：checkout 全部 persist-credentials: false，
+  #      fetch 用 `git -c http.extraheader` 内联传头，不写进 .git/config
   lint:
-    # 只有 PR 事件需要 lint；评论事件复用上一次审查的结论，不重复扫描
-    if: github.event_name == 'pull_request_target'
+    needs: [resolve-pr]
+    # PR 事件与评论事件都要跑：评论触发的 review/full review/summary 同样需要
+    # lint 结果，而 download-artifact 只能看到**当前 run** 的产物，拿不到历史
+    if: needs.resolve-pr.outputs.head_sha != ''
+    # 必须是 GitHub 托管的临时 runner：本 job 会执行 PR 自带的 lint 配置，
+    # 持久化的 self-hosted runner 会让这种执行在多次运行之间留下痕迹
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      - name: Checkout PR head (untrusted, no secrets in this job)
+      # 可信侧：默认分支的代码与已提交的 lint-only bundle。
+      # CLI 只从这里执行，绝不从 pr/ 解析入口、插件或依赖。
+      - name: Checkout trusted reviewer code (default branch)
         uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26 # v3
         with:
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
           submodules: false
 
-      - name: Run lint tools and emit report
+      # 不可信侧：PR head，**只作为扫描对象**，物理隔离在 pr/ 子目录。
+      # head SHA 来自 resolve-pr 的 API 查询，不是 PR 可控的分支名。
+      # fetch-depth: 0 是为了让本地 git diff 能同时看到 base 与 head。
+      - name: Checkout PR head into pr/ (untrusted, scan target only)
+        uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26 # v3
+        with:
+          repository: ${{ needs.resolve-pr.outputs.head_repo }}
+          ref: ${{ needs.resolve-pr.outputs.head_sha }}
+          path: pr
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+
+      # base 通常不在 fork 的历史里，显式取回来。
+      #
+      # 这里**不能**用浅 fetch：那会把 base 标成浅历史边界，于是
+      # `git diff base...head` 直接报 "no merge base"，CLI 降级成空报告——
+      # lint 静默失效。fork 落后/分叉于最新 base 时必然踩到。
+      # 取完之后显式验证 merge-base，拿不到就逐步 deepen，最后仍失败则
+      # 明确记录降级原因，而不是留给下游猜。
+      - name: Fetch base commit and ensure a merge base exists
+        id: fetch-base
+        continue-on-error: true
+        working-directory: pr
+        env:
+          BASE_SHA: ${{ needs.resolve-pr.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.resolve-pr.outputs.head_sha }}
+          UPSTREAM: https://github.com/${{ github.repository }}.git
+          # 只读 token，仅用于取回 base 历史（LINT-009）。
+          #
+          # 这不是新引入的凭据面：actions/checkout 的 token 默认就是
+          # ${{ github.token }}，上面两个 checkout 一直在用它拉取代码。
+          # 真正的不变式是「执行 PR 代码的那一步不带凭据，且凭据不落到工作区」——
+          # 本步骤跑在任何 PR 代码之前，用 -c 内联传头、不写进 .git/config，
+          # 两个 checkout 也都设了 persist-credentials: false。
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -u
+
+          # 同仓库 PR（非 fork）时 base 本来就在历史里，完全不需要 fetch
+          if git merge-base "$BASE_SHA" "$HEAD_SHA" >/dev/null 2>&1; then
+            echo "merge base already reachable, no fetch needed"
+            exit 0
+          fi
+
+          # 跨仓库 fork：base 不在 fork 历史里，从 upstream 取回。
+          # 带认证才能覆盖私有仓库；不用 set -x、不回显 AUTH，避免 base64 泄漏。
+          AUTH="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          git -c http.extraheader="$AUTH" fetch --no-tags "$UPSTREAM" "$BASE_SHA" || true
+
+          if git merge-base "$BASE_SHA" "$HEAD_SHA" >/dev/null 2>&1; then
+            echo "merge base found after fetching base"
+            exit 0
+          fi
+
+          # 仓库若因任何原因仍是浅的，先补全再逐步加深
+          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+            git -c http.extraheader="$AUTH" fetch --unshallow "$UPSTREAM" || true
+          fi
+          for depth in 50 200 1000; do
+            git merge-base "$BASE_SHA" "$HEAD_SHA" >/dev/null 2>&1 && break
+            git -c http.extraheader="$AUTH" fetch --no-tags --deepen="$depth" "$UPSTREAM" "$BASE_SHA" || true
+          done
+
+          if git merge-base "$BASE_SHA" "$HEAD_SHA" >/dev/null 2>&1; then
+            echo "merge base found after deepening"
+          else
+            # 降级必须是**显眼**的：lint 静默失效是最难发现的故障形态
+            echo "::warning::no merge base between $BASE_SHA and $HEAD_SHA — lint skipped."
+          fi
+
+      # 从**可信** checkout 执行；被扫描的是 pr/。
+      # 不跑 PR 的 npm install / 生命周期脚本 / package scripts——lint 工具由
+      # tool-installer 装进 /tmp 沙箱，与被扫描仓库的 node_modules 无关。
+      - name: Run lint tools against PR head
         id: lint
         continue-on-error: true
+        env:
+          BASE_SHA: ${{ needs.resolve-pr.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.resolve-pr.outputs.head_sha }}
         run: |
-          # 由 scripts/run-lint-report.sh 产出 lint-report.json（当前为空报告占位）。
-          # 失败不阻塞审查——静态分析是增强项，reviewer 读不到报告就照常跑。
-          bash "${GITHUB_WORKSPACE}/.github/scripts/run-lint-report.sh" \
-            || echo '{"results":[],"toolSummaries":[],"durationMs":0,"filesScanned":0}' \
-              > lint-report.json
+          node dist/lint-report/index.js \
+            --repo-root pr \
+            --base-sha "$BASE_SHA" \
+            --head-sha "$HEAD_SHA" \
+            --out lint-report.json \
+            || bash .github/scripts/run-lint-report.sh
 
       - name: Upload report (data only, never executable)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -86,8 +200,8 @@ jobs:
 
   review:
     runs-on: ubuntu-latest
-    # lint 失败/跳过都不能挡住审查：always() + 下面对文件存在性的判断
-    needs: [lint]
+    # lint 失败/跳过都不能挡住审查：always() + 下面对产物存在性的容错
+    needs: [resolve-pr, lint]
     if: always()
     permissions:
       contents: read
@@ -128,7 +242,7 @@ jobs:
           review_comment_lgtm: false
           openai_heavy_model: gpt-5.4-mini
           # SEC-004 / SEC-005：本 job 持有密钥，不能执行 PR 代码，
-          # 因此本地工具保持关闭；lint 结果改由上面的无密钥 job 提供。
+          # 因此本地工具保持关闭；lint 结果改由上面的低权限 lint job 提供。
           #
           # lint 尤其危险：eslint 适配器会探测并让 eslint require() 仓库里的
           # eslint.config.js / .eslintrc.js（src/lint/adapters/eslint.ts），

@@ -114,7 +114,7 @@ describe('I2: GitLab fixture 全字段完整性快照', () => {
       actor: {login: 'alice', isBot: false},
       baseSha: '',
       headSha: 'head-sha-0001',
-      comment: {kind: 'top_level', id: 5001, threadId: undefined},
+      comment: {kind: 'top_level', id: 5001, body: '@ai-reviewer review', threadId: undefined},
       raw: noteToplevel
     })
   })
@@ -133,6 +133,7 @@ describe('I2: GitLab fixture 全字段完整性快照', () => {
       comment: {
         kind: 'review_thread',
         id: 5002,
+        body: '@ai-reviewer 这里为什么这样写？',
         threadId: 'abc123discussionid'
       },
       raw: noteDiscussion

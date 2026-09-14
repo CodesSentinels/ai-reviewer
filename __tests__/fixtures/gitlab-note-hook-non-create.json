@@ -16,6 +16,6 @@
   "merge_request": {
     "iid": 7,
     "title": "Add characterization fixtures",
-    "diff_head_sha": "head-sha-0001"
+    "last_commit": {"id": "head-sha-0001"}
   }
 }

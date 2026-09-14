@@ -1211,11 +1211,17 @@ async function recoverPathsForImports(
   for (const dir of dirs) state.listed.add(dir)
 
   const discovered: string[] = []
+  const truncatedDirs: string[] = []
   await Promise.all(
     dirs.map(async dir =>
       concurrencyLimit(async () => {
         try {
-          for (const f of await state.lister.listDirectory(dir)) {
+          const listing = await state.lister.listDirectory(dir)
+          // 这一层本身也可能被平台 API 截断（超大目录）。不记下来的话，
+          // 回填出来的「半个目录」会被当成完整目录，下游继续把缺失路径
+          // 判成「文件不存在」——正是按需回填要解决的那个问题。
+          if (listing.truncated) truncatedDirs.push(dir)
+          for (const f of listing.files) {
             if (repoFilesSet.has(f)) continue
             repoFilesSet.add(f)
             discovered.push(f)
@@ -1233,6 +1239,15 @@ async function recoverPathsForImports(
   if (discovered.length > 0) {
     getLogger().info(
       `dependency analysis [${stage}]: recovered ${discovered.length} file(s) from ${dirs.length} directory probe(s)`
+    )
+  }
+  if (truncatedDirs.length > 0) {
+    getLogger().warning(
+      `dependency analysis [${stage}]: ${truncatedDirs.length} probed director${
+        truncatedDirs.length > 1 ? 'ies were' : 'y was'
+      } truncated by the platform API (${truncatedDirs.slice(0, 5).join(', ')}${
+        truncatedDirs.length > 5 ? ', …' : ''
+      }) — some files in them remain invisible, dependency analysis may still be incomplete`
     )
   }
   return discovered

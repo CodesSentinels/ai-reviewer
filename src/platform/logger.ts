@@ -7,7 +7,11 @@
  *
  * ARCH-015：GitLab-only 启动不得初始化 @actions/core，因此 GitLabLogger
  * 不 import @actions/core，只使用 console。
+ *
+ * SEC-008：默认 consoleLogger 同样过 redactForLog——它是未调用 setLogger()
+ * 时的兜底出口（如 lint-only CLI），不能成为脱敏的缺口。
  */
+import {redactForLog} from '../redact'
 
 /** 平台无关 Logger 接口 */
 export interface Logger {
@@ -26,13 +30,13 @@ export interface Logger {
  */
 const consoleLogger: Logger = {
   // eslint-disable-next-line no-console
-  info: (msg: string) => console.log(msg),
+  info: (msg: string) => console.log(redactForLog(msg)),
   // eslint-disable-next-line no-console
-  warning: (msg: string) => console.warn(msg),
+  warning: (msg: string) => console.warn(redactForLog(msg)),
   // eslint-disable-next-line no-console
-  error: (msg: string) => console.error(msg),
+  error: (msg: string) => console.error(redactForLog(msg)),
   // eslint-disable-next-line no-console
-  debug: (msg: string) => console.log(`[DEBUG] ${msg}`)
+  debug: (msg: string) => console.log(`[DEBUG] ${redactForLog(msg)}`)
 }
 
 let _logger: Logger = consoleLogger

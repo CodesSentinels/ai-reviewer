@@ -121,6 +121,9 @@ jest.mock('../src/commenter', () => ({
   Commenter: jest.fn().mockImplementation(() => commenterState),
   getCommentGreeting: () => '🤖 AI Reviewer',
   initBotGreeting: jest.fn(),
+  // dispatcher 的自评论过滤要问「这条评论是不是我自己发的」（TEST-028）。
+  // 这里的评论者是真人，固定答 false，否则命令会被当成 bot 自问自答挡掉。
+  isOwnAuthor: async () => false,
   commentTag: () => '<!-- bot-comment -->',
   commentReplyTag: () => '<!-- bot-reply -->',
   rawSummaryStartTag: () => '<!-- raw-summary-start -->',
@@ -191,6 +194,19 @@ describe('GH-017: GitLab 不可达时 GitHub 全功能仍然通过', () => {
     commenterState.getAllCommitIds.mockResolvedValue([])
     commenterState.addInProgressStatus.mockReturnValue('IN_PROGRESS')
     commenterState.addReviewedCommitId.mockReturnValue('<!-- reviewed-commit-ids -->')
+
+    // ARCH-005：PR 详情统一经 octokit.pulls.get 现查
+    octokitState.pullsGet.mockResolvedValue({
+      data: {
+        number: 42,
+        title: 'GitHub-only regression',
+        body: 'body',
+        state: 'open',
+        base: {sha: 'base-sha-0001', ref: 'main'},
+        head: {sha: 'head-sha-0001', ref: 'feature'},
+        user: {login: 'someone'}
+      }
+    })
 
     octokitState.compareCommits.mockResolvedValue({
       data: {

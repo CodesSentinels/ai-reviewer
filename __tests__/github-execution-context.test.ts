@@ -130,7 +130,10 @@ describe('createGitHubExecutionContext()', () => {
     expect(execCtx.comment).toEqual({
       kind: 'top_level',
       id: 9001,
-      body: 'hello'
+      body: 'hello',
+      // ARCH-005：评论自身的 GraphQL node id 改走平台无关通道透传，
+      // 迁移前由 dispatcher 直接从 payload.comment.node_id 读取
+      nodeId: 'IC_xxx'
     })
   })
 
@@ -149,7 +152,8 @@ describe('createGitHubExecutionContext()', () => {
     expect(execCtx.comment).toEqual({
       kind: 'review_thread',
       id: 9002,
-      body: 'hi'
+      body: 'hi',
+      nodeId: 'PRRC_xxx'
     })
   })
 

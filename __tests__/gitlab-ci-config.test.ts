@@ -74,14 +74,19 @@ describe('CI-006: mr_verify 与 ai_review_trigger 的触发条件互斥', () => 
 })
 
 describe('CI-004/CI-008: 两个 job 之间没有 artifact 依赖', () => {
-  test('mr_verify 没有 needs/dependencies（不消费任何其他 job 的产物）', () => {
+  /**
+   * 这两条原本断言 `dependencies` 为 `undefined`——那其实把**不安全**的那一种
+   * 形态钉成了正确答案：GitLab 省略 `dependencies` 时的默认行为是「下载此前
+   * 所有 stage 全部 job 的 artifact」，空列表才是「什么都不要」（TEST-040）。
+   */
+  test('mr_verify 显式声明不消费任何 artifact', () => {
     expect(job(MR_VERIFY).needs).toBeUndefined()
-    expect(job(MR_VERIFY).dependencies).toBeUndefined()
+    expect(job(MR_VERIFY).dependencies).toEqual([])
   })
 
-  test('ai_review_trigger 没有 needs/dependencies 指向 mr_verify（不消费 MR 构建产物）', () => {
+  test('ai_review_trigger 显式声明不消费任何 artifact（不吃 MR 构建产物）', () => {
     expect(job(TRIGGER).needs).toBeUndefined()
-    expect(job(TRIGGER).dependencies).toBeUndefined()
+    expect(job(TRIGGER).dependencies).toEqual([])
   })
 
   test('mr_verify 的 artifact 设了过期时间（只用于本次验证，不长期保留）', () => {
@@ -114,6 +119,47 @@ describe('CI-013: ai_review_trigger 校验 bundle 来源', () => {
     const script = scriptOf(job(TRIGGER))
     expect(script).toContain('dist/gitlab-trigger/SOURCE_SHA')
     expect(script).toContain('CI_COMMIT_SHA')
+  })
+
+  /**
+   * 2026-08-18 真实 GitLab 环境验证（Issue #118）暴露：`[ "$RECORDED_SHA" !=
+   * "$CI_COMMIT_SHA" ]` 精确相等校验永远无法自洽——`git rev-parse HEAD` 写入
+   * SOURCE_SHA 时那个 commit 还不包含这次写入本身，随后无论是单独的"重新打包
+   * dist"提交，还是 PR 合并产生的 merge commit，都会让 CI_COMMIT_SHA 与写入
+   * 时的 HEAD 不再相等，导致这个 job 在受保护分支上永远拒绝执行。改为祖先链
+   * 校验（`git merge-base --is-ancestor`），保留"必须是真实历史上的 commit，
+   * 挡住伪造/其他分支的 SHA"这条安全属性，但不再要求恰好等于当前 HEAD。
+   */
+  test('用祖先链校验（git merge-base --is-ancestor）而不是精确字符串相等', () => {
+    const script = scriptOf(job(TRIGGER))
+    expect(script).toContain('git merge-base --is-ancestor')
+    expect(script).not.toMatch(/\["\$RECORDED_SHA"\s*!=\s*"\$CI_COMMIT_SHA"\]/)
+  })
+
+  test('先校验 RECORDED_SHA 确实是仓库里的真实 commit，再做祖先链判断', () => {
+    const script = scriptOf(job(TRIGGER))
+    expect(script).toContain('git cat-file -e')
+  })
+
+  /**
+   * 格式门禁必须排在所有 git 调用**之前**。git 的 rev 参数接受完整 revision
+   * 语法，`HEAD` / 分支名 / `HEAD~1` 都能解析成功——先交给 git 再判断，校验
+   * 就变成恒真（行为验证见 ci-trigger-bundle-provenance.test.ts）。
+   */
+  test('SOURCE_SHA 先过 40 位十六进制格式校验，再交给 git', () => {
+    const script = scriptOf(job(TRIGGER))
+    expect(script).toMatch(/\[0-9a-fA-F\]\{40\}/)
+
+    const formatIdx = script.indexOf('{40}')
+    const catFileIdx = script.indexOf('git cat-file -e')
+    const ancestorIdx = script.indexOf('git merge-base --is-ancestor')
+    expect(formatIdx).toBeGreaterThanOrEqual(0)
+    expect(formatIdx).toBeLessThan(catFileIdx)
+    expect(formatIdx).toBeLessThan(ancestorIdx)
+  })
+
+  test('GIT_DEPTH 设为 0（完整历史），否则浅克隆会让祖先链校验误判', () => {
+    expect(job(TRIGGER).variables?.GIT_DEPTH).toBe('0')
   })
 })
 

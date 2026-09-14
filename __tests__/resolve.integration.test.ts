@@ -87,6 +87,7 @@ import {
   _resetBotLoginCache
 } from '../src/github/review-thread'
 import {dispatchCommentEvent} from '../src/commands/dispatcher'
+import type {ExecutionContext} from '../src/platform/execution-context'
 import {bootstrapCommands, _resetBootstrap} from '../src/commands/bootstrap'
 import {_resetPermissionCache} from '../src/commands/permission'
 import {_resetRateLimit} from '../src/commands/rate-limit'
@@ -486,23 +487,22 @@ describeIntegration('resolve command — integration with GitHub API', () => {
     })
     console.log(`  触发评论已创建: id=${triggerComment.id}`)
 
-    mockGHContext.eventName = 'issue_comment'
-    mockGHContext.repo = {owner: OWNER, repo: REPO}
-    mockGHContext.payload = {
-      action: 'created',
-      issue: {
-        number: prNumber,
-        pull_request: {},
-        user: {login: botLogin}
-      },
-      comment: {
-        id: triggerComment.id,
-        body: '@ai-reviewer resolve',
-        user: {login: botLogin, type: 'User'}
-      }
-    }
+    // ARCH-005：dispatcher 只消费 ExecutionContext。这里直接按真实事件构造，
+    // 不再经由 @actions/github 的 payload 中转。
+    const execCtx = {
+      platform: 'github',
+      projectPath: `${OWNER}/${REPO}`,
+      projectId: `${OWNER}/${REPO}`,
+      changeRequestId: prNumber,
+      eventKind: 'comment_created',
+      actor: {login: botLogin, isBot: false},
+      baseSha: '',
+      headSha: '',
+      comment: {kind: 'top_level', id: triggerComment.id, body: '@ai-reviewer resolve'},
+      raw: {}
+    } as unknown as ExecutionContext
 
-    const result = await dispatchCommentEvent({options: {} as never})
+    const result = await dispatchCommentEvent({execCtx, options: {} as never})
     console.log(`  dispatch 结果: ${JSON.stringify(result)}`)
 
     expect(result.kind).toBe('executed')

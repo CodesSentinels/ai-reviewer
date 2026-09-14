@@ -17,10 +17,34 @@ on:
         required: true
         default: 'develop'
 
+# SYNC-003：按目标分支分组，同一分支的旧同步在新一次触发后被取消，
+# 避免旧同步比新同步跑得慢、完成顺序颠倒导致新内容被旧内容覆盖。
+# main/develop 各自的分组独立，互不取消。
+concurrency:
+  group: sync-to-gitlab-${{ github.event.inputs.branch || github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
+      # SYNC-002/008：workflow_dispatch 的 branch 输入是自由文本，push 触发器
+      # 虽然已经用 on.push.branches 限制了 main/develop，但手动触发没有同等
+      # 限制——不校验的话，任何人都能用 workflow_dispatch 把仓库里任意分支强推
+      # 到 GitLab 同名分支。放在 checkout/拿到 GITLAB_TOKEN 之前，校验失败时
+      # 后续步骤都不会执行。
+      - name: Validate branch allowlist
+        env:
+          SYNC_BRANCH: ${{ github.event.inputs.branch || github.ref_name }}
+        run: |
+          case "$SYNC_BRANCH" in
+            main|develop)
+              echo "ok: $SYNC_BRANCH is in sync allowlist" ;;
+            *)
+              echo "REFUSED: '$SYNC_BRANCH' is not in the sync allowlist (main, develop)" >&2
+              exit 1 ;;
+          esac
+
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -42,5 +66,26 @@ jobs:
           # 那个前提已经不再成立。
           #
           # main 和 develop 都纳入自动触发；workflow_dispatch 的 branch 输入
-          # 仍可用于手动同步其他分支。
+          # 仍可用于手动同步 main/develop（上面的白名单校验已限制取值范围）。
           git push gitlab "HEAD:refs/heads/${SYNC_BRANCH}" --force
+
+      # SYNC-004：git push 命令本身成功退出，不代表 GitLab 那端真的收到了这次
+      # 推送的内容——网络问题、GitLab 侧 hook 拒绝、并发覆盖都可能让这个假设
+      # 不成立。回读 GitLab 当前这个分支的 HEAD，跟本地刚推送的 commit 比对，
+      # 是第 12 章 ai_review_trigger 信任链（CI-013）的上游保证：那边校验
+      # bundle 记录的 source commit 等于当前 CI_COMMIT_SHA，前提就是这一步
+      # 保证 GitLab main 上的内容确实等于这次同步推送的内容。
+      - name: Verify GitLab received the pushed SHA
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          SYNC_BRANCH: ${{ github.event.inputs.branch || github.ref_name }}
+        run: |
+          LOCAL_SHA=$(git rev-parse HEAD)
+          GITLAB_SHA=$(curl -sf --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+            "https://gitlab.com/api/v4/projects/CodesSentinels%2Fai-reviewer/repository/branches/${SYNC_BRANCH}" \
+            | jq -r '.commit.id')
+          if [ "$GITLAB_SHA" != "$LOCAL_SHA" ]; then
+            echo "SYNC FAILED: GitLab $SYNC_BRANCH is at $GITLAB_SHA, expected $LOCAL_SHA" >&2
+            exit 1
+          fi
+          echo "OK: GitLab $SYNC_BRANCH confirmed at $LOCAL_SHA"

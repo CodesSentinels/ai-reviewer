@@ -1,7 +1,7 @@
 /**
  * lint-report-schema.test.ts — 外部 lint 报告的严格校验（SEC-002 / SEC-005）
  *
- * 这份报告由**无密钥 job** 产出，内容间接受 PR 作者控制：他决定被扫描的代码，
+ * 这份报告由**低权限 job** 产出，内容间接受 PR 作者控制：他决定被扫描的代码，
  * 因而能影响文件名、规则 ID 和消息文本。跨过信任边界时必须当敌意数据处理。
  *
  * 用例按「攻击者能塞什么」组织，而不是按字段列表组织。
@@ -204,7 +204,7 @@ describe('数值字段的边界', () => {
   })
 })
 
-describe('无密钥 job 产出的空报告可被接受', () => {
+describe('低权限 job 产出的空报告可被接受', () => {
   test('run-lint-report.sh 的空报告格式通过校验', () => {
     const emitted = JSON.parse('{"results":[],"toolSummaries":[],"durationMs":0,"filesScanned":0}')
     const parsed = parseLintReport(emitted)

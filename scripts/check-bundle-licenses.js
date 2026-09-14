@@ -100,6 +100,21 @@ function collectSubtree(lock, roots, onError = fail, nodeModulesDir = 'node_modu
   return [...seen].sort()
 }
 
+/**
+ * 取 SPDX 标识：先 lockfile，再退回已安装包自己的 package.json。
+ *
+ * 两者都在仓库内可核验。lockfile 的 license 字段并非必填，npm 生成时经常缺
+ * （openai 就是这样），仅凭它判定会把有明确许可证的包误判为「不明」。
+ */
+function readSpdx(name, lock) {
+  const fromLock = lock.packages[`node_modules/${name}`]?.license
+  if (fromLock != null) return fromLock
+  const pkgPath = path.join('node_modules', ...name.split('/'), 'package.json')
+  if (!fs.existsSync(pkgPath)) return null
+  const declared = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).license
+  return typeof declared === 'string' && declared !== '' ? declared : null
+}
+
 /** 在包目录里找许可证文件正文 */
 function readLicenseText(name) {
   const dir = path.join('node_modules', ...name.split('/'))
@@ -166,15 +181,21 @@ function main() {
   const blocks = []
   const unlicensed = []
   for (const name of missing) {
-    const spdx = lock.packages[`node_modules/${name}`]?.license
+    const spdx = readSpdx(name, lock)
     const text = readLicenseText(name)
-    if (text == null || spdx == null) {
-      unlicensed.push(
-        `${name}（license 字段：${spdx ?? '无'}，许可证文件：${text == null ? '无' : '有'}）`
-      )
+    // 只有**两者都拿不到**才算「不明许可证」——这也是本文件开头声明的规则。
+    // 此前写成 `text == null || spdx == null`（任一缺失即失败），与注释矛盾：
+    // 大量 MIT 包不随包分发 LICENSE 文件（@dqbd/tiktoken），而 lockfile 的
+    // license 字段又经常缺（openai）。按旧写法，这两类都会被判成供应链风险。
+    if (text == null && spdx == null) {
+      unlicensed.push(`${name}（license 字段：无，许可证文件：无）`)
       continue
     }
-    blocks.push(`${name}\n${spdx}\n${text}\n`)
+    blocks.push(
+      text == null
+        ? `${name}\n${spdx}\n（该包未随发行物附带许可证正文，以 SPDX 标识为准）\n`
+        : `${name}\n${spdx ?? '（package.json 未声明 SPDX，以下为随包分发的许可证正文）'}\n${text}\n`
+    )
   }
   if (unlicensed.length > 0) {
     fail(`以下依赖缺少可核验的许可证信息，供应链检查不通过：\n  ${unlicensed.join('\n  ')}`)

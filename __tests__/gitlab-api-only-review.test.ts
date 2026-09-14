@@ -57,6 +57,14 @@ jest.mock('../src/lint/tool-installer', () => ({
   ensureToolInstalled: (...a: any[]) => installerState.ensureToolInstalled(...a)
 }))
 
+// lint 子系统之外还有一条 fork 进程的路：analysis chain 的仓库 URL 兜底会
+// `git config --get remote.origin.url`。上面两个 mock 都拦不到它，所以单独把
+// child_process 也锁住——否则「零外部命令」只覆盖了 lint 那一半。
+const childProcessState = {execFileSync: jest.fn<any>(() => '')}
+jest.mock('child_process', () => ({
+  execFileSync: (...a: any[]) => childProcessState.execFileSync(...a)
+}))
+
 jest.mock('@actions/core', () => ({
   info: jest.fn(),
   warning: jest.fn(),
@@ -235,6 +243,45 @@ describe('LOCAL-003: 本地工具全关时，GitLab 侧仍能完成 API-only 审
     const bodies = mockMergeRequestNotes.create.mock.calls.map((c: any[]) => c[2]).join('\n')
     expect(bodies).toContain('ai-reviewer:gitlab:')
     expect(bodies).not.toContain('ai-reviewer:github:')
+  })
+
+  /**
+   * 这条是裸环境验收（scripts/bare-env-review-check.mjs）里诱饵工具抓出来的：
+   * analysis chain 的仓库 URL 有一档兜底会 fork 一个 git 进程去读 origin。
+   *
+   * secret-bearing trigger 强制 `enable_shell=false`（LOCAL-001），这条路径却
+   * 不看那个开关，等于给「强制关闭本地命令」留了个绕过口，而且执行的是 PATH
+   * 上第一个 git。纯展示用途，不值得这个代价。
+   */
+  test('enableShell=false 时不 fork git 进程读 origin remote', async () => {
+    await codeReview(
+      execCtx,
+      makeBot('[TRIAGE]: APPROVED\nLGTM'),
+      makeBot('LGTM'),
+      apiOnlyOptions(),
+      new Prompts('', '')
+    )
+
+    expect(childProcessState.execFileSync).not.toHaveBeenCalled()
+  })
+
+  test('对照组：enableShell=true 时才会去读（证明上面不是因为路径没跑到）', async () => {
+    const options = apiOnlyOptions()
+    ;(options as any).enableShell = true
+
+    await codeReview(
+      execCtx,
+      makeBot('[TRIAGE]: APPROVED\nLGTM'),
+      makeBot('LGTM'),
+      options,
+      new Prompts('', '')
+    )
+
+    expect(childProcessState.execFileSync).toHaveBeenCalledWith(
+      'git',
+      ['config', '--get', 'remote.origin.url'],
+      expect.anything()
+    )
   })
 
   test('对照组：把 lint 打开就会触发工具链（证明上面的零调用不是空跑）', async () => {

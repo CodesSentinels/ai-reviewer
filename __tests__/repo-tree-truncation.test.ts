@@ -8,12 +8,13 @@
  */
 import {describe, expect, test, jest} from '@jest/globals'
 
+const logs: string[] = []
 jest.mock('../src/platform/logger', () => ({
   getLogger: () => ({
-    info: jest.fn(),
-    warning: jest.fn(),
-    error: jest.fn(),
-    debug: jest.fn()
+    info: (m: string) => logs.push(m),
+    warning: (m: string) => logs.push(m),
+    error: (m: string) => logs.push(m),
+    debug: () => {}
   }),
   setLogger: jest.fn()
 }))
@@ -267,8 +268,10 @@ describe('analyzeDependencies：截断时按需回填不可见文件', () => {
 
   const makeLister = (): DirectoryLister => ({
     listDirectory: jest.fn<DirectoryLister['listDirectory']>().mockImplementation(async dir => {
-      if (dir === 'src/legacy') return [HIDDEN_DEP]
-      return []
+      // 契约已从 string[] 改为 {files, truncated}——adapter 算出的截断状态
+      // 原先在消费端第一步就被丢掉了（DEP-004 自己踩了它要修的那个坑）
+      if (dir === 'src/legacy') return {files: [HIDDEN_DEP], truncated: false}
+      return {files: [], truncated: false}
     })
   })
 
@@ -331,5 +334,102 @@ describe('analyzeDependencies：截断时按需回填不可见文件', () => {
     const lister = makeLister()
     await run({truncated: false, dirLister: lister})
     expect((lister.listDirectory as any).mock.calls).toHaveLength(0)
+  })
+})
+
+/**
+ * 目录回填结果**自己也可能被截断**（超大目录）。
+ *
+ * 这条链路曾经在两处丢掉截断状态：adapter 对 scoped 查询无条件返回
+ * `truncated: false`；`DirectoryLister` 的返回类型只有 `string[]`。
+ * 两处都修完，还要确认它真的传到了消费端——否则「回填出半个目录」会被当成
+ * 「回填出完整目录」，下游继续把缺失路径判成「文件不存在」，
+ * 而按需回填本来就是为了修这个问题。
+ */
+describe('按需回填：目录自身被截断时不得静默', () => {
+  const MODIFIED = 'src/utils/hash.ts'
+  const PR_FILE = 'src/api/login.ts'
+  const HIDDEN_DEP = 'src/legacy/helper.ts'
+
+  const filesAndChanges: Array<[string, string, string, Array<[number, number, string]>]> = [
+    [
+      MODIFIED,
+      'export function hashPassword(p: string): string {\n  return p\n}\n',
+      '@@ -1 +1,3 @@\n+export function hashPassword(p: string): string {',
+      []
+    ],
+    [PR_FILE, 'const x = 1\n', '@@ -1 +1,2 @@\n+const x = 1', []]
+  ]
+
+  // PR 文件必须 import 到那个不可见目录，才会触发目录探查——
+  // 少了这一步，回填链路根本不会被走到，用例就成了空跑
+  const CONTENTS: Record<string, string> = {
+    [PR_FILE]: "import {legacyHelper} from '@/legacy/helper'\nlegacyHelper()\n",
+    [HIDDEN_DEP]:
+      "import {hashPassword} from '../utils/hash'\nexport function legacyHelper(): string {\n  return hashPassword('x')\n}\n"
+  }
+
+  function makeFetcher(): any {
+    return {
+      getContent: jest
+        .fn<any>()
+        .mockImplementation(async (_o: any, _r: any, path: string) => CONTENTS[path] ?? null)
+    }
+  }
+
+  function listerReturning(truncated: boolean): DirectoryLister {
+    return {
+      listDirectory: jest.fn<DirectoryLister['listDirectory']>().mockImplementation(async dir => {
+        if (dir === 'src/legacy') return {files: [HIDDEN_DEP], truncated}
+        return {files: [], truncated: false}
+      })
+    }
+  }
+
+  async function run(truncated: boolean): Promise<void> {
+    logs.length = 0
+    await analyzeDependencies(
+      filesAndChanges,
+      [PR_FILE],
+      FAKE_OPTIONS,
+      NOOP_LIMIT,
+      {owner: 'octo', repo: 'demo'},
+      'sha',
+      makeFetcher(),
+      undefined,
+      {truncated: true, dirLister: listerReturning(truncated)}
+    )
+  }
+
+  test('目录被截断 → 打出明确告警，点名是哪个目录', async () => {
+    await run(true)
+
+    const joined = logs.join('\n')
+    expect(joined).toMatch(/truncated by the platform API/)
+    expect(joined).toContain('src/legacy')
+    expect(joined).toMatch(/may still be incomplete/)
+  })
+
+  test('对照组：目录未截断 → 不打这条告警（避免噪音）', async () => {
+    await run(false)
+
+    expect(logs.join('\n')).not.toMatch(/probed director.*truncated/)
+  })
+
+  test('即使目录被截断，已取到的文件仍然进入候选（降级不是放弃）', async () => {
+    logs.length = 0
+    const ctx = await analyzeDependencies(
+      filesAndChanges,
+      [PR_FILE],
+      FAKE_OPTIONS,
+      NOOP_LIMIT,
+      {owner: 'octo', repo: 'demo'},
+      'sha',
+      makeFetcher(),
+      undefined,
+      {truncated: true, dirLister: listerReturning(true)}
+    )
+
+    expect(ctx.fileAnalyses.get(MODIFIED)?.dependentFiles).toContain(HIDDEN_DEP)
   })
 })

@@ -46,15 +46,17 @@ describe('buildHelpMessage', () => {
     expect(helpIdx).toBeGreaterThan(resolveIdx)
   })
 
+  // 断言的是**段落标题**而不是裸词「别名」。原来匹配 /别名/ 太松：正文里任何
+  // 一处提到这两个字都会算数（「文本别名触发」就撞上了），测不出段落有没有出现。
   test('别名段落出现', () => {
     const msg = buildHelpMessage([mk('review', {aliases: ['rv']})])
-    expect(msg).toMatch(/别名/)
+    expect(msg).toMatch(/^### 别名$/m)
     expect(msg).toMatch(/`rv`/)
   })
 
   test('无别名时不输出别名段落', () => {
     const msg = buildHelpMessage([mk('review'), mk('resolve')])
-    expect(msg).not.toMatch(/别名/)
+    expect(msg).not.toMatch(/^### 别名$/m)
   })
 
   test('输出提及 bot alias 的说明', () => {

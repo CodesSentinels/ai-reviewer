@@ -39506,6 +39506,20 @@ var escClose = '\0CLOSE'+Math.random()+'\0';
 var escComma = '\0COMMA'+Math.random()+'\0';
 var escPeriod = '\0PERIOD'+Math.random()+'\0';
 
+var EXPANSION_MAX = 100000
+
+// `EXPANSION_MAX` caps the *number* of expansions, but not their length. An
+// input like `'{a,b}'.repeat(1500)` stays under that count - its output is
+// truncated to 100k results - while making every result ~1500 characters
+// long. The result set, and the intermediate arrays built while combining
+// brace sets, then grow large enough to exhaust memory and crash the process
+// (CVE-2026-14257). `EXPANSION_MAX_LENGTH` bounds the total number of
+// characters the accumulator may hold at any point, so memory stays flat no
+// matter how many brace groups are chained. The limit sits well above any
+// realistic expansion (100k results hitting `EXPANSION_MAX` measure ~1M
+// characters) so legitimate input is unaffected.
+var EXPANSION_MAX_LENGTH = 4000000
+
 function numeric(str) {
   return parseInt(str, 10) == str
     ? parseInt(str, 10)
@@ -39559,9 +39573,13 @@ function parseCommaParts(str) {
   return parts;
 }
 
-function expandTop(str) {
+function expandTop(str, options) {
   if (!str)
     return [];
+
+  options = options || {};
+  var max = options.max == null ? EXPANSION_MAX : options.max;
+  var maxLength = options.maxLength == null ? EXPANSION_MAX_LENGTH : options.maxLength;
 
   // I don't know why Bash 4.3 does this, but it does.
   // Anything starting with {} will have the first two bytes preserved
@@ -39573,7 +39591,7 @@ function expandTop(str) {
     str = '\\{\\}' + str.substr(2);
   }
 
-  return expand(escapeBraces(str), true).map(unescapeBraces);
+  return expand(escapeBraces(str), max, maxLength, true).map(unescapeBraces);
 }
 
 function embrace(str) {
@@ -39590,24 +39608,144 @@ function gte(i, y) {
   return i >= y;
 }
 
-function expand(str, isTop) {
-  var expansions = [];
-
-  var m = balanced('{', '}', str);
-  if (!m) return [str];
-
-  // no need to expand pre, since it is guaranteed to be free of brace-sets
-  var pre = m.pre;
-  var post = m.post.length
-    ? expand(m.post, false)
-    : [''];
-
-  if (/\$$/.test(m.pre)) {    
-    for (var k = 0; k < post.length; k++) {
-      var expansion = pre+ '{' + m.body + '}' + post[k];
-      expansions.push(expansion);
+// Build `{ acc[a] + pre + values[v] }` for every combination, capping the
+// number of results at `max` and the total number of characters at `maxLength`.
+// This is the one place output grows, so bounding it here keeps the single
+// accumulator - and therefore memory - flat regardless of how many brace groups
+// are combined (CVE-2026-14257).
+function combine(
+  acc,
+  pre,
+  values,
+  max,
+  maxLength,
+  dropEmpties
+) {
+  var out = []
+  var length = 0
+  for (var a = 0; a < acc.length; a++) {
+    for (var v = 0; v < values.length; v++) {
+      if (out.length >= max) return out
+      var expansion = acc[a] + pre + values[v]
+      // Bash drops empty results at the top level. Skip them before they count
+      // against `max`, so `max` bounds the number of *kept* results.
+      if (dropEmpties && !expansion) continue
+      if (length + expansion.length > maxLength) return out
+      out.push(expansion)
+      length += expansion.length
     }
-  } else {
+  }
+  return out
+}
+
+// The expansion values of a single numeric (`1..5`) or alphabetic (`a..e..2`)
+// sequence body.
+function expandSequence(
+  body,
+  isAlphaSequence,
+  max,
+  maxLength
+) {
+  var n = body.split(/\.\./)
+  var N = []
+  // A sequence body always splits into two or three parts, but the compiler
+  // can't know that.
+  /* c8 ignore start */
+  if (n[0] === undefined || n[1] === undefined) {
+    return N
+  }
+  /* c8 ignore stop */
+  var x = numeric(n[0])
+  var y = numeric(n[1])
+  var width = Math.max(n[0].length, n[1].length)
+  var incr =
+    n.length === 3 && n[2] !== undefined ?
+      Math.max(Math.abs(numeric(n[2])), 1)
+    : 1
+  var test = lte
+  var reverse = y < x
+  if (reverse) {
+    incr *= -1
+    test = gte
+  }
+  var pad = n.some(isPadded)
+
+  var length = 0
+  for (var i = x; test(i, y) && N.length < max; i += incr) {
+    var c
+    if (isAlphaSequence) {
+      c = String.fromCharCode(i)
+      if (c === '\\') {
+        c = ''
+      }
+    } else {
+      c = String(i)
+      if (pad) {
+        var need = width - c.length
+        if (need > 0) {
+          var z = new Array(need + 1).join('0')
+          if (i < 0) {
+            c = '-' + z + c.slice(1)
+          } else {
+            c = z + c
+          }
+        }
+      }
+    }
+    if (length + c.length > maxLength) break
+    N.push(c)
+    length += c.length
+  }
+  return N
+}
+
+function expand(
+  str,
+  max,
+  maxLength,
+  isTop
+) {
+  // Consume the string's top-level brace groups left to right, threading a
+  // running set of combined prefixes (`acc`). Expanding the tail iteratively -
+  // rather than recursing on `m.post` once per group - keeps the native stack
+  // depth constant, so deeply chained input (`'{a,b}'.repeat(3000)`) can no
+  // longer overflow the stack, and leaves a single accumulator whose size
+  // `maxLength` bounds directly (CVE-2026-14257).
+  var acc = ['']
+
+  // Bash drops empty results, but only when the *first* top-level group is a
+  // comma set - a sequence like `{a..\}` may legitimately yield ''. The drop
+  // is on the final strings, so it is applied to whichever `combine` produces
+  // them (the one with no brace set left in the tail).
+  var dropEmpties = false
+  var firstGroup = true
+
+  for (;;) {
+    const m = balanced('{', '}', str)
+
+    // No brace set left: the rest of the string is literal.
+    if (!m) {
+      return combine(acc, str, [''], max, maxLength, dropEmpties)
+    }
+
+    // no need to expand pre, since it is guaranteed to be free of brace-sets
+    const pre = m.pre
+
+    if (/\$$/.test(pre)) {
+      acc = combine(
+        acc,
+        pre + '{' + m.body + '}',
+        [''],
+        max,
+        maxLength,
+        dropEmpties && !m.post.length
+      )
+      firstGroup = false
+      if (!m.post.length) break
+      str = m.post
+      continue
+    }
+
     var isNumericSequence = /^-?\d+\.\.-?\d+(?:\.\.-?\d+)?$/.test(m.body);
     var isAlphaSequence = /^[a-zA-Z]\.\.[a-zA-Z](?:\.\.-?\d+)?$/.test(m.body);
     var isSequence = isNumericSequence || isAlphaSequence;
@@ -39616,89 +39754,86 @@ function expand(str, isTop) {
       // {a},b}
       if (m.post.match(/,(?!,).*\}/)) {
         str = m.pre + '{' + m.body + escClose + m.post;
-        return expand(str);
+        isTop = true;
+        continue;
       }
-      return [str];
+      // Nothing here expands, so the whole remaining string is literal.
+      return combine(
+        acc,
+        pre + '{' + m.body + '}' + m.post,
+        [''],
+        max,
+        maxLength,
+        dropEmpties
+      )
     }
 
-    var n;
+    if (firstGroup) {
+      dropEmpties = isTop && !isSequence
+      firstGroup = false
+    }
+
+    var values;
     if (isSequence) {
-      n = m.body.split(/\.\./);
+      values = expandSequence(m.body, isAlphaSequence, max, maxLength);
     } else {
-      n = parseCommaParts(m.body);
-      if (n.length === 1) {
+      var n = parseCommaParts(m.body);
+      if (n.length === 1 && n[0] !== undefined) {
         // x{{a,b}}y ==> x{a}y x{b}y
-        n = expand(n[0], false).map(embrace);
+        n = expand(n[0], max, maxLength, false).map(embrace);
+        //XXX is this necessary? Can't seem to hit it in tests.
+        /* c8 ignore start */
         if (n.length === 1) {
-          return post.map(function(p) {
-            return m.pre + n[0] + p;
-          });
+          acc = combine(
+            acc,
+            pre + n[0],
+            [''],
+            max,
+            maxLength,
+            dropEmpties && !m.post.length
+          )
+          if (!m.post.length) break
+          str = m.post
+          continue
+        }
+        /* c8 ignore stop */
+      }
+
+      // Values that `combine` is going to drop as empty produce no result, so
+      // they must not count against `max` - otherwise `{a,,b}` with `max: 2`
+      // would stop at `['a', '']` and yield one result instead of two. Skipping
+      // them outright keeps `values` bounded while leaving `max` a bound on
+      // *kept* results.
+      var dropsEmpties = dropEmpties && !m.post.length && !pre
+      for (var d = 0; dropsEmpties && d < acc.length; d++) {
+        if (acc[d]) {
+          dropsEmpties = false
         }
       }
-    }
 
-    // at this point, n is the parts, and we know it's not a comma set
-    // with a single entry.
-    var N;
-
-    if (isSequence) {
-      var x = numeric(n[0]);
-      var y = numeric(n[1]);
-      var width = Math.max(n[0].length, n[1].length)
-      var incr = n.length == 3
-        ? Math.abs(numeric(n[2]))
-        : 1;
-      var test = lte;
-      var reverse = y < x;
-      if (reverse) {
-        incr *= -1;
-        test = gte;
-      }
-      var pad = n.some(isPadded);
-
-      N = [];
-
-      for (var i = x; test(i, y); i += incr) {
-        var c;
-        if (isAlphaSequence) {
-          c = String.fromCharCode(i);
-          if (c === '\\')
-            c = '';
-        } else {
-          c = String(i);
-          if (pad) {
-            var need = width - c.length;
-            if (need > 0) {
-              var z = new Array(need + 1).join('0');
-              if (i < 0)
-                c = '-' + z + c.slice(1);
-              else
-                c = z + c;
-            }
+      values = []
+      var valuesLength = 0
+      outer: for (var j = 0; j < n.length; j++) {
+        var expanded = expand(n[j], max, maxLength, false)
+        for (var k = 0; k < expanded.length; k++) {
+          var v = expanded[k]
+          if (dropsEmpties && !v) continue
+          if (values.length >= max || valuesLength + v.length > maxLength) {
+            break outer
           }
+          values.push(v)
+          valuesLength += v.length
         }
-        N.push(c);
-      }
-    } else {
-      N = [];
-
-      for (var j = 0; j < n.length; j++) {
-        N.push.apply(N, expand(n[j], false));
       }
     }
 
-    for (var j = 0; j < N.length; j++) {
-      for (var k = 0; k < post.length; k++) {
-        var expansion = pre + N[j] + post[k];
-        if (!isTop || isSequence || expansion)
-          expansions.push(expansion);
-      }
-    }
+    acc = combine(acc, pre, values, max, maxLength, dropEmpties && !m.post.length)
+    if (!m.post.length) break
+    str = m.post
   }
 
-  return expansions;
+  return acc
 }
-
 
 
 /***/ }),
@@ -69223,6 +69358,3038 @@ __nccwpck_require__.r(__webpack_exports__);
 
 // EXTERNAL MODULE: ./lib/actions-log.js
 var actions_log = __nccwpck_require__(380);
+// EXTERNAL MODULE: ./lib/redact.js
+var redact = __nccwpck_require__(1173);
+;// CONCATENATED MODULE: ./lib/platform/logger.js
+/**
+ * platform/logger.ts - 平台无关 Logger 接口（ARCH-012）
+ *
+ * 定义统一的日志接口，替换共享核心中对 @actions/core info/warning/error 的直接依赖。
+ * 入口文件（main.ts / gitlab-trigger.ts）在启动时调用 setLogger() 设置平台实现，
+ * 共享核心通过 getLogger() 或便捷函数（logger.info 等）输出日志。
+ *
+ * ARCH-015：GitLab-only 启动不得初始化 @actions/core，因此 GitLabLogger
+ * 不 import @actions/core，只使用 console。
+ *
+ * SEC-008：默认 consoleLogger 同样过 redactForLog——它是未调用 setLogger()
+ * 时的兜底出口（如 lint-only CLI），不能成为脱敏的缺口。
+ */
+
+/**
+ * 控制台 Logger（默认 fallback）。
+ * 在 setLogger() 调用前或未初始化时使用，保证日志不会丢失。
+ */
+const consoleLogger = {
+    // eslint-disable-next-line no-console
+    info: (msg) => console.log((0,redact/* redactForLog */.vS)(msg)),
+    // eslint-disable-next-line no-console
+    warning: (msg) => console.warn((0,redact/* redactForLog */.vS)(msg)),
+    // eslint-disable-next-line no-console
+    error: (msg) => console.error((0,redact/* redactForLog */.vS)(msg)),
+    // eslint-disable-next-line no-console
+    debug: (msg) => console.log(`[DEBUG] ${(0,redact/* redactForLog */.vS)(msg)}`)
+};
+let _logger = consoleLogger;
+/** 设置全局 Logger 实例（入口文件调用） */
+function setLogger(logger) {
+    _logger = logger;
+}
+/** 获取当前 Logger 实例 */
+function getLogger() {
+    return _logger;
+}
+/** 重置为默认 console logger（仅供测试使用） */
+function resetLogger() {
+    _logger = consoleLogger;
+}
+
+;// CONCATENATED MODULE: ./lib/commands/registry.js
+
+class CommandRegistry {
+    handlers = new Map();
+    /** 规范名 → 注册顺序，help 命令按注册顺序输出 */
+    order = [];
+    // {
+    //   name: "review",
+    //   aliases: ['r', 're']
+    // }
+    // {
+    //   name: 'review',
+    // }
+    register(handler) {
+        const primary = handler.name.toLowerCase();
+        if (this.handlers.has(primary)) {
+            throw new Error(`Command already registered: ${primary}`);
+        }
+        this.handlers.set(primary, handler);
+        this.order.push(primary);
+        for (const alias of handler.aliases ?? []) {
+            const a = alias.toLowerCase();
+            if (this.handlers.has(a)) {
+                throw new Error(`Command alias collides with existing command: ${a}`);
+            }
+            this.handlers.set(a, handler);
+        }
+        getLogger().info(`[Registered command]: ${handler.name} aliases: ${(handler.aliases ?? []).join(', ')}`);
+    }
+    get(name) {
+        return this.handlers.get(name.toLowerCase());
+    }
+    has(name) {
+        return this.handlers.has(name.toLowerCase());
+    }
+    /** 仅返回主名 + 别名，用于 parser 命中检测 */
+    getRegisteredNames() {
+        return new Set(this.handlers.keys());
+    }
+    /** 按注册顺序返回所有主命令（不含别名），供 help 使用 */
+    listCommands() {
+        return this.order
+            .map(n => this.handlers.get(n))
+            .filter((h) => h !== undefined);
+    }
+    /** 仅供测试使用 */
+    _reset() {
+        this.handlers.clear();
+        this.order.length = 0;
+    }
+}
+const globalRegistry = new CommandRegistry();
+function registry_getRegistry() {
+    return globalRegistry;
+}
+
+
+;// CONCATENATED MODULE: ./lib/constants.js
+/**
+ * constants.ts - 全局共享常量
+ *
+ * 跨多个领域模块（命令解析 / 对话识别 / 文案展示）复用的常量集中在此，
+ * 避免同一个值在多处硬编码后发生分叉。
+ */
+/**
+ * bot mention 别名（小写，已带 @）。
+ *
+ * 命令解析（parser）与对话追问识别（conversation）共用同一份触发别名——
+ * 二者必须保持一致，否则会出现「命令能触发但对话不认」之类的隐蔽 bug。
+ * 新增/调整别名只改这里一处。
+ */
+const BOT_MENTIONS = ['@ai-reviewer', '@codesentinel'];
+/**
+ * 主 mention 别名，用于面向用户的文案/用法示例（help、命令 usage 等）。
+ * 取 BOT_MENTIONS 的第一个，保证与触发别名同源。
+ */
+const PRIMARY_BOT_MENTION = BOT_MENTIONS[0];
+
+;// CONCATENATED MODULE: ./lib/commands/parser.js
+/**
+ * commands/parser.ts - 命令解析器
+ *
+ * 输入: 评论原文 + 已注册命令列表
+ * 输出: ParseOutcome，三种情形:
+ *   1. command      — 命中白名单的命令（可能带参数）
+ *   2. conversation — 包含 @bot 但未命中命令（走对话 fallback）
+ *   3. none         — 不包含 @bot 或没有任何有效触发
+ *
+ * 关键规则（见 §5.4 设计文档）:
+ *   - 默认支持 @ai-reviewer 与 @codesentinel 两个 mention 别名
+ *   - bot mention 不区分大小写
+ *   - 命令名不区分大小写（解析后归一化为小写）
+ *   - 复合命令按最长前缀匹配（例: "full review" 先于 "full"）
+ *   - 仅处理第一行的命令体，换行后的内容进入 rawAfter
+ *   - 单条评论只识别第一个命令，其余忽略
+ *   - 参数字符集白名单: [A-Za-z0-9_\-./:=]；出现 shell 元字符 → INVALID_ARGS
+ *   - 长度上限: 命令行 ≤ 512 字符, 单个 arg ≤ 128 字符, arg 数量 ≤ 16
+ */
+
+/** 默认支持的 bot mention 别名（小写，已带 @）。共享自 constants.BOT_MENTIONS。 */
+const DEFAULT_BOT_MENTIONS = [...BOT_MENTIONS];
+/**
+ * 本次运行认可的全部 mention（CMD-001 / CMD-002）。
+ *
+ * 两类来源：
+ *
+ * 1. **文本别名** `@ai-reviewer` / `@codesentinel`——平台无关，两边都保留
+ *    （CMD-001）。GitLab 上 bot 常以个人 PAT 身份发言，`@` 一个不存在的用户
+ *    不会产生通知，但作为纯文本前缀依然可用，这正是 CMD-002 里「或纯文本前缀」
+ *    的含义。
+ * 2. **真实账号 mention** `@{botLogin}`——GitLab 是 PAT 用户名
+ *    （`AI_REVIEWER_BOT_GITLAB_LOGIN`），GitHub 是 `bot_github_login`。
+ *    用户凭直觉 @ 真实账号时也应该能触发。
+ *
+ * 未配置 botLogin 时退化为纯别名，与迁移前行为一致。
+ *
+ * 入参容忍 undefined：这条链路一崩，**所有**命令都会失效，不值得为了类型上的
+ * 洁癖去赌每个调用方都传了值。
+ */
+function resolveBotMentions(botLogin) {
+    const login = (botLogin ?? '').trim().replace(/^@/, '');
+    if (login === '')
+        return [...DEFAULT_BOT_MENTIONS];
+    const real = `@${login.toLowerCase()}`;
+    return DEFAULT_BOT_MENTIONS.includes(real)
+        ? [...DEFAULT_BOT_MENTIONS]
+        : [...DEFAULT_BOT_MENTIONS, real];
+}
+/** 命令行长度上限 */
+const MAX_COMMAND_LINE_LENGTH = 512;
+/** 单个 arg 长度上限 */
+const MAX_ARG_LENGTH = 128;
+/** 参数个数上限 */
+const MAX_ARGS_COUNT = 16;
+/** 允许的参数字符集 */
+const SAFE_TOKEN_RE = /^[A-Za-z0-9_\-./:=]+$/;
+/** shell 元字符黑名单（补充检查，用于生成更明确的错误信息） */
+const SHELL_METACHARS_RE = /[`$(){}|&;<>\\'"]/;
+/**
+ * mention 两侧必须都是边界（CMD-004）。
+ *
+ * 只看前一个字符是不够的：`@ai-reviewerX help` 会命中 `@ai-reviewer` 并把
+ * `X help` 当成命令体，等于替另一个用户执行命令。两侧都要卡：
+ *
+ *   前：行首、空白或标点          —— 挡住 `foo@ai-reviewer`
+ *   后：非标识符字符              —— 挡住 `@ai-reviewerX` / `@ai-reviewer-bot`
+ *
+ * 尾部的 `.` 单独处理：`@ai-reviewer.` 句末是合法的，但 GitLab 用户名允许含
+ * `.`，所以 `.` 后面若紧跟标识符字符（`@ai-reviewer.bot`）仍判为另一个用户。
+ */
+function hasMentionBoundary(body, idx, len) {
+    if (idx > 0) {
+        const prev = body[idx - 1];
+        if (!/\s|[,.;:，。；：]/.test(prev))
+            return false;
+    }
+    const next = body[idx + len];
+    if (next === undefined)
+        return true;
+    if (/[A-Za-z0-9_-]/.test(next))
+        return false;
+    if (next === '.') {
+        const after = body[idx + len + 1];
+        if (after !== undefined && /[A-Za-z0-9_-]/.test(after))
+            return false;
+    }
+    return true;
+}
+/**
+ * 主解析入口
+ */
+function parse(body, opts) {
+    if (typeof body !== 'string' || body.length === 0) {
+        return { kind: 'none' };
+    }
+    const mentions = (opts.botMentions ?? DEFAULT_BOT_MENTIONS).map(m => m.toLowerCase());
+    // 1. 找到第一个**边界合法**的 bot mention（忽略大小写）
+    const lower = body.toLowerCase();
+    let mentionIdx = -1;
+    let mentionLen = 0;
+    for (const m of mentions) {
+        // 必须遍历该 mention 的**每一次**出现：早先只取 indexOf 的第一处，
+        // 首次出现边界不合法就整个放弃，于是
+        //   "邮箱 a@ai-reviewer.com\n@ai-reviewer help"
+        // 里第二行真正的命令被完全吞掉（返回 none）。
+        let from = 0;
+        for (;;) {
+            const idx = lower.indexOf(m, from);
+            if (idx === -1)
+                break;
+            from = idx + 1;
+            if (!hasMentionBoundary(body, idx, m.length))
+                continue;
+            if (mentionIdx === -1 || idx < mentionIdx) {
+                mentionIdx = idx;
+                mentionLen = m.length;
+            }
+            break; // 该别名的首个合法位置即可，更靠前的由其他别名比较得出
+        }
+    }
+    if (mentionIdx === -1) {
+        return { kind: 'none' };
+    }
+    // 2. 提取 mention 之后的剩余内容
+    let rest = body.slice(mentionIdx + mentionLen);
+    // 允许 mention 后紧跟标点分隔符
+    rest = rest.replace(/^[,:;，：；]+/, '');
+    // 按第一个换行切分：第一行是命令体，其余是 rawAfter
+    const firstNewline = rest.indexOf('\n');
+    const firstLineRaw = firstNewline === -1 ? rest : rest.slice(0, firstNewline);
+    const rawAfter = firstNewline === -1 ? '' : rest.slice(firstNewline + 1).trim();
+    // 3. 命令行长度校验
+    if (firstLineRaw.length > MAX_COMMAND_LINE_LENGTH) {
+        return {
+            kind: 'command',
+            error: {
+                code: 'INVALID_ARGS',
+                detail: `命令长度超过上限 (${MAX_COMMAND_LINE_LENGTH})`
+            }
+        };
+    }
+    const firstLine = firstLineRaw.trim();
+    if (firstLine.length === 0) {
+        // 仅 @bot 单独出现 → 视为对话触发
+        return { kind: 'conversation' };
+    }
+    // 4. 分词（空白分隔）
+    const tokens = firstLine.split(/\s+/);
+    // 5. 尝试匹配命令名（最长前缀匹配，最多看前 3 个 token）
+    const matched = matchCommandName(tokens, opts.registeredCommands);
+    if (!matched) {
+        // 未命中已注册命令。判断是"无效命令"还是"自然语言对话"：
+        // - 首 token 纯 ASCII 字母（看起来像命令名）→ UNKNOWN_COMMAND
+        // - 否则（含 CJK、标点开头等自然语言）→ conversation fallback
+        if (looksLikeCommandAttempt(tokens[0])) {
+            return {
+                kind: 'command',
+                error: { code: 'UNKNOWN_COMMAND', detail: firstLine }
+            };
+        }
+        return { kind: 'conversation' };
+    }
+    const { name, consumed } = matched;
+    const argTokens = tokens.slice(consumed);
+    // 6. 参数数量校验
+    if (argTokens.length > MAX_ARGS_COUNT) {
+        return {
+            kind: 'command',
+            error: {
+                code: 'INVALID_ARGS',
+                detail: `参数个数超过上限 (${MAX_ARGS_COUNT})`
+            },
+            command: { name, raw: firstLine, args: [], kv: {}, rawAfter }
+        };
+    }
+    // 7. 参数字符集校验
+    for (const t of argTokens) {
+        if (t.length > MAX_ARG_LENGTH) {
+            return {
+                kind: 'command',
+                error: {
+                    code: 'INVALID_ARGS',
+                    detail: `参数过长: \`${truncate(t, 32)}\``
+                },
+                command: { name, raw: firstLine, args: [], kv: {}, rawAfter }
+            };
+        }
+        if (SHELL_METACHARS_RE.test(t)) {
+            return {
+                kind: 'command',
+                error: {
+                    code: 'INVALID_ARGS',
+                    detail: `参数包含非法字符: \`${truncate(t, 32)}\``
+                },
+                command: { name, raw: firstLine, args: [], kv: {}, rawAfter }
+            };
+        }
+        if (!SAFE_TOKEN_RE.test(t)) {
+            return {
+                kind: 'command',
+                error: {
+                    code: 'INVALID_ARGS',
+                    detail: `参数包含不允许的字符: \`${truncate(t, 32)}\``
+                },
+                command: { name, raw: firstLine, args: [], kv: {}, rawAfter }
+            };
+        }
+    }
+    // 8. 拆分 kv
+    const args = [];
+    const kv = {};
+    for (const t of argTokens) {
+        const eq = t.indexOf('=');
+        if (eq > 0 && eq < t.length - 1) {
+            const k = t.slice(0, eq);
+            const v = t.slice(eq + 1);
+            kv[k] = v;
+        }
+        args.push(t);
+    }
+    const command = {
+        name,
+        raw: firstLine,
+        args,
+        kv,
+        rawAfter
+    };
+    return { kind: 'command', command };
+}
+/**
+ * 在已注册命令集合中对 token 序列做最长前缀匹配
+ *
+ * 例如: registered = {"review", "full review"}
+ * tokens = ["full", "review"] → 匹配到 "full review"
+ * tokens = ["review"]         → 匹配到 "review"
+ * tokens = ["full"]           → 不匹配（full 未注册）→ 返回 null
+ */
+function matchCommandName(tokens, registered) {
+    const maxDepth = Math.min(tokens.length, 3);
+    // 从最长开始尝试
+    for (let depth = maxDepth; depth >= 1; depth--) {
+        const candidate = tokens
+            .slice(0, depth)
+            .map(t => t.toLowerCase())
+            .join(' ');
+        if (registered.has(candidate)) {
+            return { name: candidate, consumed: depth };
+        }
+    }
+    return null;
+}
+/**
+ * 判断 token 是否"看起来像一条命令"。
+ * 纯 ASCII 字母（允许连字符）→ 极可能是用户尝试输入命令名；
+ * 含中文、日文、韩文等非 ASCII 字符 → 自然语言对话。
+ */
+function looksLikeCommandAttempt(token) {
+    return /^[A-Za-z][A-Za-z0-9_-]*$/.test(token);
+}
+function truncate(s, n) {
+    return s.length > n ? `${s.slice(0, n)}...` : s;
+}
+
+;// CONCATENATED MODULE: ./lib/commands/handlers/help.js
+
+
+
+/**
+ * 纯函数：根据命令列表生成 help Markdown。
+ * 提取出来便于单元测试（不依赖 registry 单例）。
+ *
+ * CMD-023 要求 help 展示四样东西：命令、权限、**触发前缀**、**评论身份**。
+ * 后两样此前是缺的——底部只列了 BOT_MENTIONS 两个静态别名，而 GitLab 上
+ * reviewer 通常以某个 PAT 账号发言，@ 那个账号才是最自然的用法，用户从 help
+ * 里根本看不到它；权限列也只有 `write`/`triage` 这种词，GitLab 用户不知道对应
+ * 自己项目里的哪个角色。
+ */
+function buildHelpMessage(commands, botIconOrIdentity = '🤖') {
+    const identity = typeof botIconOrIdentity === 'string'
+        ? { platform: 'github', botLogin: '', botIcon: botIconOrIdentity }
+        : botIconOrIdentity;
+    const botIcon = identity.botIcon;
+    const lines = [];
+    lines.push('## 支持的命令');
+    lines.push('');
+    lines.push('| 命令 | 描述 | 最低权限 |');
+    lines.push('| :--- | :--- | :------- |');
+    // help 自身也要出现在列表里，但排在最后
+    const ordered = [...commands].sort((a, b) => {
+        if (a.name === 'help')
+            return 1;
+        if (b.name === 'help')
+            return -1;
+        return 0;
+    });
+    for (const c of ordered) {
+        const perm = c.minPermission ?? 'write';
+        const usage = c.usage ?? `${PRIMARY_BOT_MENTION} ${c.name}`;
+        lines.push(`| \`${usage}\` | ${c.description} | \`${perm}\` |`);
+    }
+    if (ordered.some(c => (c.aliases?.length ?? 0) > 0)) {
+        lines.push('');
+        lines.push('### 别名');
+        for (const c of ordered) {
+            if (c.aliases && c.aliases.length > 0) {
+                lines.push(`- \`${c.name}\` → ${c.aliases.map(a => `\`${a}\``).join(', ')}`);
+            }
+        }
+    }
+    // ── 权限名对照（CMD-023）──
+    // 表格里的 `write` / `triage` 是平台无关的内部叫法。GitHub 用户看得懂，
+    // GitLab 用户得知道它对应 access level 才能自查。
+    lines.push('');
+    lines.push('### 权限说明');
+    lines.push(identity.platform === 'gitlab'
+        ? '- `write` → Developer(30) 及以上\n' +
+            '- `triage` → Reporter(20) 及以上\n' +
+            '- `read` → 对项目可见即可\n\n' +
+            '`review` / `full review` / `summary` 对 MR 作者豁免权限要求；' +
+            '`pause` / `resume` / `resolve` 不豁免。权限查询失败一律拒绝执行。'
+        : '- `write` → 仓库 write 及以上\n' +
+            '- `triage` → triage 及以上\n' +
+            '- `read` → 对仓库可见即可\n\n' +
+            '`review` / `full review` / `summary` 对 PR 作者豁免权限要求；' +
+            '`pause` / `resume` / `resolve` 不豁免。权限查询失败一律拒绝执行。');
+    // ── 触发前缀与评论身份（CMD-023）──
+    lines.push('');
+    lines.push('### 如何触发');
+    const mentions = resolveBotMentions(identity.botLogin);
+    lines.push(`把下面任一前缀写在评论行首即可：${mentions.map(m => `\`${m}\``).join('、')}`);
+    lines.push('');
+    lines.push(identity.botLogin === ''
+        ? `> ${botIcon} 本 reviewer 尚未配置账号标识，只能用上面的文本别名触发。`
+        : `> ${botIcon} 本 reviewer 以 \`@${identity.botLogin}\` 的身份发表评论，` +
+            `@ 这个账号同样可以触发命令。`);
+    lines.push('');
+    lines.push('顶层评论和行级评论（review thread / diff discussion）都支持。');
+    return lines.join('\n');
+}
+/**
+ * 构造"未知命令"回复消息，列出所有支持的命令。
+ * 参考 coderabbitai 格式: @user, I didn't recognize `xxx` as a valid command.
+ */
+function buildUnknownCommandMessage(invalidCmd, actorLogin, commands) {
+    const lines = [];
+    lines.push(`@${actorLogin} , I didn't recognize \`${invalidCmd}\` as a valid command. Here are the commands I support:`);
+    lines.push('');
+    const ordered = [...commands].sort((a, b) => {
+        if (a.name === 'help')
+            return 1;
+        if (b.name === 'help')
+            return -1;
+        return 0;
+    });
+    for (const c of ordered) {
+        const usage = c.usage ?? `${PRIMARY_BOT_MENTION} ${c.name}`;
+        lines.push(`- \`${usage}\` — ${c.description}`);
+    }
+    lines.push('');
+    lines.push(`Let me know which one you'd like to run, or feel free to ask me a question directly!`);
+    return lines.join('\n');
+}
+const helpHandler = {
+    name: 'help',
+    description: '显示所有支持的命令及用法',
+    usage: `${PRIMARY_BOT_MENTION} help`,
+    needsAck: false,
+    minPermission: 'read',
+    async execute(ctx) {
+        const cmds = registry_getRegistry().listCommands();
+        return {
+            message: buildHelpMessage(cmds, {
+                platform: ctx.execCtx?.platform ?? 'github',
+                botLogin: ctx.options.botLogin ?? '',
+                botIcon: ctx.options.botIcon
+            })
+        };
+    }
+};
+
+;// CONCATENATED MODULE: ./node_modules/yocto-queue/index.js
+/*
+How it works:
+`this.#head` is an instance of `Node` which keeps track of its current value and nests another instance of `Node` that keeps the value that comes after it. When a value is provided to `.enqueue()`, the code needs to iterate through `this.#head`, going deeper and deeper to find the last value. However, iterating through every single item is slow. This problem is solved by saving a reference to the last value as `this.#tail` so that it can reference it to add a new value.
+*/
+
+class Node {
+	value;
+	next;
+
+	constructor(value) {
+		this.value = value;
+	}
+}
+
+class Queue {
+	#head;
+	#tail;
+	#size;
+
+	constructor() {
+		this.clear();
+	}
+
+	enqueue(value) {
+		const node = new Node(value);
+
+		if (this.#head) {
+			this.#tail.next = node;
+			this.#tail = node;
+		} else {
+			this.#head = node;
+			this.#tail = node;
+		}
+
+		this.#size++;
+	}
+
+	dequeue() {
+		const current = this.#head;
+		if (!current) {
+			return;
+		}
+
+		this.#head = this.#head.next;
+		this.#size--;
+
+		// Clean up tail reference when queue becomes empty
+		if (!this.#head) {
+			this.#tail = undefined;
+		}
+
+		return current.value;
+	}
+
+	peek() {
+		if (!this.#head) {
+			return;
+		}
+
+		return this.#head.value;
+
+		// TODO: Node.js 18.
+		// return this.#head?.value;
+	}
+
+	clear() {
+		this.#head = undefined;
+		this.#tail = undefined;
+		this.#size = 0;
+	}
+
+	get size() {
+		return this.#size;
+	}
+
+	* [Symbol.iterator]() {
+		let current = this.#head;
+
+		while (current) {
+			yield current.value;
+			current = current.next;
+		}
+	}
+
+	* drain() {
+		while (this.#head) {
+			yield this.dequeue();
+		}
+	}
+}
+
+;// CONCATENATED MODULE: ./node_modules/p-limit/index.js
+
+
+function pLimit(concurrency) {
+	if (!((Number.isInteger(concurrency) || concurrency === Number.POSITIVE_INFINITY) && concurrency > 0)) {
+		throw new TypeError('Expected `concurrency` to be a number from 1 and up');
+	}
+
+	const queue = new Queue();
+	let activeCount = 0;
+
+	const next = () => {
+		activeCount--;
+
+		if (queue.size > 0) {
+			queue.dequeue()();
+		}
+	};
+
+	const run = async (fn, resolve, args) => {
+		activeCount++;
+
+		const result = (async () => fn(...args))();
+
+		resolve(result);
+
+		try {
+			await result;
+		} catch {}
+
+		next();
+	};
+
+	const enqueue = (fn, resolve, args) => {
+		queue.enqueue(run.bind(undefined, fn, resolve, args));
+
+		(async () => {
+			// This function needs to wait until the next microtask before comparing
+			// `activeCount` to `concurrency`, because `activeCount` is updated asynchronously
+			// when the run function is dequeued and called. The comparison in the if-statement
+			// needs to happen asynchronously as well to get an up-to-date value for `activeCount`.
+			await Promise.resolve();
+
+			if (activeCount < concurrency && queue.size > 0) {
+				queue.dequeue()();
+			}
+		})();
+	};
+
+	const generator = (fn, ...args) => new Promise(resolve => {
+		enqueue(fn, resolve, args);
+	});
+
+	Object.defineProperties(generator, {
+		activeCount: {
+			get: () => activeCount,
+		},
+		pendingCount: {
+			get: () => queue.size,
+		},
+		clearQueue: {
+			value: () => {
+				queue.clear();
+			},
+		},
+	});
+
+	return generator;
+}
+
+;// CONCATENATED MODULE: ./lib/platform/git-platform.js
+/**
+ * platform/git-platform.ts - 平台无关 Git 服务接口（ARCH-016 / ARCH-017）
+ *
+ * 定义 GitHub 和 GitLab 共用的 Git 平台操作抽象。业务层（review.ts、commenter.ts、
+ * commands/**、conversation.ts 等）通过此接口访问平台 API，不得直接 import
+ * octokit / @gitbeaker/rest。
+ *
+ * 方法签名以"需要什么数据"为导向，而非"哪个 REST endpoint"。GitHub adapter
+ * 和 GitLab adapter 各自负责把调用翻译到对应平台 API。
+ *
+ * ARCH-021: PR number / MR IID 统一为 changeRequestId（number），
+ *   comment/note ID 统一为 commentId（number），
+ *   thread node ID / discussion ID 统一为 threadId（string）。
+ *
+ * ARCH-022: 所有方法在遇到平台 API 错误时抛出 GitPlatformError，
+ *   业务层按 errorKind 分支处理。
+ */
+class GitPlatformError extends Error {
+    errorKind;
+    statusCode;
+    cause;
+    constructor(message, errorKind, statusCode, cause) {
+        super(message);
+        this.errorKind = errorKind;
+        this.statusCode = statusCode;
+        this.cause = cause;
+        this.name = 'GitPlatformError';
+    }
+}
+// ─── 平台单例（ARCH-018）────────────────────────────────────────────────
+let _platform = null;
+/** 获取当前平台实例。未设置时抛错（入口文件必须先调用 setPlatform） */
+function getPlatform() {
+    if (_platform == null) {
+        throw new Error('getPlatform() called before setPlatform(). ' +
+            'Entry point (main.ts / gitlab-trigger.ts) must call setPlatform() first.');
+    }
+    return _platform;
+}
+/** 设置全局平台实例（入口文件调用） */
+function setPlatform(platform) {
+    _platform = platform;
+}
+/** 重置为未初始化状态（仅供测试使用） */
+function resetPlatform() {
+    _platform = null;
+}
+
+;// CONCATENATED MODULE: ./lib/github/review-thread.js
+
+
+
+// ─── Bot identity ─────────────────────────────────────────────────────────────
+let cachedBotLogin = null;
+async function getBotLogin(options) {
+    if (cachedBotLogin !== null)
+        return cachedBotLogin;
+    void options;
+    // Explicit override for custom GitHub App: installation tokens cannot call
+    // GET /user, so auto-detection would wrongly fall back to 'github-actions'.
+    const explicitLogin = options.botLogin;
+    if (explicitLogin) {
+        cachedBotLogin = explicitLogin;
+        return cachedBotLogin;
+    }
+    cachedBotLogin = await getPlatform().getAuthenticatedLogin();
+    return cachedBotLogin;
+}
+/** Visible for testing only */
+function _resetBotLoginCache() {
+    cachedBotLogin = null;
+}
+async function fetchThreadStatusMap(params) {
+    return getPlatform().fetchThreadStatusMap(params.owner, params.repo, params.prNumber);
+}
+async function fetchUnresolvedBotThreads(params, botLogin) {
+    const threads = await getPlatform().fetchUnresolvedBotThreads(params.owner, params.repo, params.prNumber, botLogin);
+    return threads.map(t => ({
+        id: t.id,
+        isResolved: t.isResolved,
+        firstCommentAuthorLogin: t.firstCommentAuthorLogin,
+        path: t.path,
+        line: t.line,
+        firstCommentBody: t.firstCommentBody
+    }));
+}
+function isPermissionError(e) {
+    return String(e).includes('not accessible by integration');
+}
+/** 网络/超时类错误（与权限、node-not-found 区分，便于给出不同提示） */
+function isNetworkError(e) {
+    return /ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|network|timed? ?out/i.test(String(e));
+}
+/**
+ * 测试用：识别注入的假 thread ID（`PRRT_debug_inject_<kind>_<n>`），
+ * 返回对应类型的模拟错误，不实际发起 GraphQL 请求。
+ *
+ * 真实运行时 thread ID 不会带此前缀，函数返回 null，走正常 GraphQL 流程。
+ */
+function simulateDebugError(threadId) {
+    if (!threadId.startsWith('PRRT_debug_inject_'))
+        return null;
+    if (threadId.includes('_permission_')) {
+        return new Error("Resource not accessible by integration (mutation 'resolveReviewThread')");
+    }
+    if (threadId.includes('_network_')) {
+        // TODO: Maybe gitlab in the future, or other network errors, but for now just simulate a connection reset.
+        return new Error('request to https://api.github.com/graphql failed, reason: read ECONNRESET');
+    }
+    // 默认：node not found（无效的 global id）
+    return new Error('Request failed due to following response errors:\n' +
+        ` - Could not resolve to a node with the global id of '${threadId}'`);
+}
+function threadLabel(t) {
+    if (t.path) {
+        const loc = t.line != null ? `${t.path}:${t.line}` : t.path;
+        if (t.firstCommentBody) {
+            const snippet = t.firstCommentBody.trim().replace(/\s+/g, ' ').slice(0, 60);
+            const ellipsis = snippet.length === 60 ? '…' : '';
+            return `${loc} – "${snippet}${ellipsis}"`;
+        }
+        return loc;
+    }
+    return t.id;
+}
+async function batchResolve(threads) {
+    const logger = getLogger();
+    const limit = pLimit(6);
+    let ok = 0;
+    const errors = [];
+    const failedItems = [];
+    // 先过滤掉 debug 注入的假 thread ID，模拟错误
+    const debugThreads = [];
+    const realThreads = [];
+    for (const t of threads) {
+        const simulated = simulateDebugError(t.id);
+        if (simulated) {
+            const err = simulated;
+            errors.push(err);
+            failedItems.push({ thread: t, error: err });
+            debugThreads.push(t);
+        }
+        else {
+            realThreads.push(t);
+        }
+    }
+    // 批量 resolve 真实 thread
+    if (realThreads.length > 0) {
+        const platform = getPlatform();
+        await Promise.allSettled(realThreads.map(t => limit(async () => {
+            try {
+                const result = await platform.resolveThreads([t.id]);
+                if (result.failed > 0) {
+                    // adapter 吞掉 GraphQL 异常并放进 errors 返回，不 throw
+                    for (const err of result.errors) {
+                        errors.push(err);
+                        failedItems.push({ thread: t, error: err });
+                    }
+                }
+                else {
+                    ok++;
+                }
+            }
+            catch (e) {
+                const err = e instanceof Error ? e : new Error(String(e));
+                errors.push(err);
+                failedItems.push({ thread: t, error: err });
+            }
+        })));
+    }
+    const permissionFailed = failedItems.filter(({ error }) => isPermissionError(error));
+    const otherFailed = failedItems.filter(({ error }) => !isPermissionError(error));
+    if (permissionFailed.length > 0) {
+        logger.warning('batchResolve: token lacks permission to resolve review threads ' +
+            '("Resource not accessible by integration"). ' +
+            'Set the `resolve_token` input to a classic PAT with repo scope.');
+    }
+    if (otherFailed.length > 0) {
+        const lines = otherFailed
+            .map(({ thread, error }) => `  • ${threadLabel(thread)}: ${error.message}`)
+            .join('\n');
+        logger.warning(`batchResolve: failed to resolve ${otherFailed.length}/${threads.length} thread(s):\n${lines}`);
+    }
+    return { ok, failed: errors.length, errors, failedItems };
+}
+
+;// CONCATENATED MODULE: ./lib/commands/handlers/resolve.js
+
+
+// ─── Handler ──────────────────────────────────────────────────────────────────
+const resolveHandler = {
+    name: 'resolve',
+    description: '批量将所有 CodeSentinel 审查意见标记为已解决',
+    usage: `${PRIMARY_BOT_MENTION} resolve`,
+    needsAck: true,
+    minPermission: 'write',
+    execute
+};
+async function execute(ctx) {
+    const botLogin = await getBotLogin(ctx.options);
+    const threads = await fetchUnresolvedBotThreads({ owner: ctx.owner, repo: ctx.repo, prNumber: ctx.prNumber }, botLogin);
+    if (threads.length === 0) {
+        return { message: 'ℹ️ 没有找到待解决的 CodeSentinel 审查意见' };
+    }
+    // 测试用：注入假 thread ID，模拟部分失败场景。
+    // 按 notfound → permission → network 轮换，覆盖三类错误。
+    // const injectCount = ctx.options.debugResolveInjectFailures
+    // if (injectCount > 0) {
+    //   const kinds = ['notfound', 'permission', 'network'] as const
+    //   for (let i = 0; i < injectCount; i++) {
+    //     const kind = kinds[i % kinds.length]
+    //     threads.push({
+    //       id: `PRRT_debug_inject_${kind}_${i + 1}`,
+    //       isResolved: false,
+    //       firstCommentAuthorLogin: botLogin,
+    //       path: threads[0].path,
+    //       line: 9000 + i,
+    //       firstCommentBody: `[debug] injected ${kind} failure ${i + 1}`
+    //     })
+    //   }
+    // }
+    const { ok, failed, failedItems } = await batchResolve(threads);
+    const platform = ctx.execCtx?.platform ?? 'github';
+    return { message: formatResult(ok, failed, threads.length, failedItems, platform) };
+}
+// ─── Formatting ───────────────────────────────────────────────────────────────
+// TODO Refer to CodeRabbit for the original implementation of this formatting logic.
+/**
+ * 权限失败时给出的可操作建议（CMD-024）。
+ *
+ * 两个平台的失败原因和补救方式完全不同，此前只有 GitHub 那套：
+ *
+ *   GitHub — resolveReviewThread 是 GraphQL mutation，GITHUB_TOKEN 会被拒为
+ *            "Resource not accessible by integration"，需要用户 PAT
+ *   GitLab — discussion resolve 走 REST，需要 PAT 至少 Developer(30)，
+ *            且 MVP 里 reviewer 用的就是 GITLAB_PAT，没有 resolve_token 这一说
+ *
+ * 在 GitLab 上告诉用户「去配 resolve_token」是纯误导——那个 input 根本不存在。
+ */
+function permissionAdvice(platform) {
+    return platform === 'gitlab'
+        ? '请确认 `GITLAB_PAT` 对应的账号在本项目至少具有 Developer(30) 权限，或手动解决。'
+        : '请将 `resolve_token` 输入配置为具有 repo 权限的 classic PAT，' +
+            '或在 workflow 中授予 `permissions: pull-requests: write`，或手动解决。';
+}
+function formatResult(ok, failed, total, failedItems, platform) {
+    if (failed === 0) {
+        return `✅ 已解决 **${ok}** 条 CodeSentinel 审查意见`;
+    }
+    const errDetail = failedItems.length > 0
+        ? `\n\n失败详情：\n${failedItems
+            .map(({ thread, error }) => `- ${errorTag(error)} \`${threadLabel(thread)}\`：${flattenError(error.message)}`)
+            .join('\n')}${permissionHint(failedItems, platform)}`
+        : '';
+    if (ok === 0) {
+        // 全部失败时几乎一定是权限问题，给出可操作提示，避免用户只看到一句干巴巴的
+        // forbidden。建议按平台分（见 permissionAdvice）。
+        const hint = `\n\n💡 这通常是权限不足：${permissionAdvice(platform)}`;
+        return `❌ 解决失败（共 **${total}** 条）${errDetail}${hint}`;
+    }
+    return `⚠️ 共 **${total}** 条，成功解决 **${ok}** 条，**${failed}** 条失败（可手动解决）${errDetail}`;
+}
+/** 给每条失败打上分类标签，方便用户一眼区分错误类型 */
+function errorTag(error) {
+    if (isPermissionError(error))
+        return '🔒 权限不足';
+    if (isNetworkError(error))
+        return '🌐 网络错误';
+    return '⚠️ 其他错误';
+}
+/** 存在权限错误时，追加可操作提示 */
+function permissionHint(failedItems, platform) {
+    if (!failedItems.some(({ error }) => isPermissionError(error)))
+        return '';
+    return `\n\n💡 存在权限不足导致的失败：当前 token 无法解决审查线程，${permissionAdvice(platform)}`;
+}
+/** 将多行错误信息压成单行，避免错误中的 ` - ` 被 Markdown 当作嵌套列表渲染 */
+function flattenError(message) {
+    return message.replace(/\s+/g, ' ').trim();
+}
+
+;// CONCATENATED MODULE: ./lib/platform/state-namespace.js
+/**
+ * platform/state-namespace.ts — marker 与幂等键的平台命名空间（GH-014 / STATE-006）
+ *
+ * 双平台同时启用时，marker 和幂等键必须能区分来源，禁止用同一把 key 合并两平台的
+ * 任务状态。做法是给所有**状态类** marker 加 `ai-reviewer:{platform}:` 前缀：
+ *
+ *   <!-- ai-reviewer:github:cmd-reply:12345:help -->
+ *   <!-- ai-reviewer:gitlab:conv-reply:12345 -->
+ *
+ * 两条边界：
+ *
+ * - **命名空间来自入口**：共享核心（commenter / conversation / commands）不读平台
+ *   payload，也不该猜自己跑在哪个平台上。入口（main.ts / gitlab-trigger.ts）在
+ *   setPlatform() 之后调用 setStateNamespace()，共享核心只消费结果。未设置时按
+ *   'github' 处理——这是历史行为，且 GitLab 命令路径尚未接入（CMD-* / STATE-*）。
+ * - **写新读旧**：命名空间是本次新增的，线上在途 PR 里已经存在无前缀的旧 marker。
+ *   写入一律用新格式，匹配则同时接受新旧两种形态，否则升级当天所有在途 PR 会
+ *   「找不到自己写过的 marker」，造成重复回帖或重复审查。旧格式在所有在途 PR
+ *   关闭后即可删除。
+ */
+const MARKER_PREFIX = 'ai-reviewer';
+let _namespace = 'github';
+/**
+ * 当前状态命名空间。
+ *
+ * 供需要按平台区分「历史格式归属」的地方使用（见 stateMarkerVariants 与
+ * state-markers.ts 的 tagPairVariants）。业务层不应用它做行为分支——
+ * 平台差异应当止于 adapter。
+ */
+function currentNamespace() {
+    return _namespace;
+}
+/** 入口在 setPlatform() 之后调用，声明本次运行的状态命名空间 */
+function setStateNamespace(platform) {
+    _namespace = platform;
+}
+/** 当前状态命名空间；未显式设置时为 'github'（历史行为） */
+function getStateNamespace() {
+    return _namespace;
+}
+/** 重置为默认值（仅供测试使用） */
+function resetStateNamespace() {
+    _namespace = 'github';
+}
+/**
+ * 构造带命名空间的状态 marker。
+ *
+ * @param kind marker 种类，如 'cmd-reply' / 'conv-reply' / 'commit-ids-start'
+ * @param parts 附加标识（评论 ID、命令名等），按顺序拼在 kind 之后
+ */
+function buildStateMarker(kind, ...parts) {
+    const suffix = parts.length > 0 ? `:${parts.join(':')}` : '';
+    return `<!-- ${MARKER_PREFIX}:${_namespace}:${kind}${suffix} -->`;
+}
+/**
+ * 返回匹配时应接受的全部 marker 形态：当前命名空间的新格式 + 历史格式。
+ *
+ * 只用于**读取/匹配**；写入必须只用 buildStateMarker() 的结果。
+ *
+ * **历史格式只归 GitHub。** legacy marker 产生于双平台改造之前——那时只有
+ * GitHub 版，所以正文里任何 legacy marker 必然是 GitHub 侧写下的。若 GitLab
+ * 也接受它，MR description 里一个升级前由 GitHub 写入的 release notes 区块，
+ * 会在 GitLab 首次运行时被识别成「自己的区块」而整段覆盖（REVIEW-023）。
+ *
+ * 代价：GitLab 读不到 legacy 状态。这不是损失——那些状态本来就不属于它。
+ */
+function stateMarkerVariants(kind, legacy, ...parts) {
+    const current = buildStateMarker(kind, ...parts);
+    return _namespace === 'github' ? [current, legacy] : [current];
+}
+/** 判断正文是否包含某个状态 marker（新旧格式皆可） */
+function hasStateMarker(body, variants) {
+    if (typeof body !== 'string')
+        return false;
+    return variants.some(v => body.includes(v));
+}
+
+;// CONCATENATED MODULE: ./lib/state-markers.js
+/**
+ * state-markers.ts — 状态 marker 权威清单（GH-014）
+ *
+ * 独立于 commenter.ts：清单是纯数据 + 命名空间逻辑，不依赖 GitHub context，
+ * 这样架构守卫等静态检查可以直接读取它，而不会因为 import 链上的
+ * `context.repo` 而炸掉。commenter.ts 负责 re-export，调用方无需改 import。
+ */
+
+/** 把 kind 包成隐藏 HTML 注释块的开/闭形态（raw/short summary 用） */
+function wrappedStart(kind) {
+    return `${buildStateMarker(kind)}\n<!--\n`;
+}
+function wrappedEnd(kind) {
+    return `-->\n${buildStateMarker(kind)}`;
+}
+/**
+ * 全部状态 marker 的权威清单。
+ *
+ * 新增任何参与查找/去重/状态更新的 marker 都必须登记在此——
+ * `state-marker-inventory.test.ts` 会校验清单完整性与命名空间正确性。
+ */
+const STATE_MARKERS = {
+    comment: {
+        kind: 'comment',
+        legacy: '<!-- This is an auto-generated comment by AI Reviewer -->',
+        current: () => buildStateMarker('comment')
+    },
+    commentReply: {
+        kind: 'comment-reply',
+        legacy: '<!-- This is an auto-generated reply by AI Reviewer -->',
+        current: () => buildStateMarker('comment-reply')
+    },
+    summarize: {
+        kind: 'summarize',
+        legacy: '<!-- This is an auto-generated comment: summarize by AI Reviewer -->',
+        current: () => buildStateMarker('summarize')
+    },
+    inProgressStart: {
+        kind: 'in-progress-start',
+        legacy: '<!-- This is an auto-generated comment: summarize review in progress by AI Reviewer -->',
+        current: () => buildStateMarker('in-progress-start')
+    },
+    inProgressEnd: {
+        kind: 'in-progress-end',
+        legacy: '<!-- end of auto-generated comment: summarize review in progress by AI Reviewer -->',
+        current: () => buildStateMarker('in-progress-end')
+    },
+    descriptionStart: {
+        kind: 'release-notes-start',
+        legacy: '<!-- This is an auto-generated comment: release notes by AI Reviewer -->',
+        current: () => buildStateMarker('release-notes-start')
+    },
+    descriptionEnd: {
+        kind: 'release-notes-end',
+        legacy: '<!-- end of auto-generated comment: release notes by AI Reviewer -->',
+        current: () => buildStateMarker('release-notes-end')
+    },
+    rawSummaryStart: {
+        kind: 'raw-summary-start',
+        legacy: `<!-- This is an auto-generated comment: raw summary by AI Reviewer -->\n<!--\n`,
+        current: () => wrappedStart('raw-summary-start')
+    },
+    rawSummaryEnd: {
+        kind: 'raw-summary-end',
+        legacy: `-->\n<!-- end of auto-generated comment: raw summary by AI Reviewer -->`,
+        current: () => wrappedEnd('raw-summary-end')
+    },
+    shortSummaryStart: {
+        kind: 'short-summary-start',
+        legacy: `<!-- This is an auto-generated comment: short summary by AI Reviewer -->\n<!--\n`,
+        current: () => wrappedStart('short-summary-start')
+    },
+    shortSummaryEnd: {
+        kind: 'short-summary-end',
+        legacy: `-->\n<!-- end of auto-generated comment: short summary by AI Reviewer -->`,
+        current: () => wrappedEnd('short-summary-end')
+    },
+    commitIdsStart: {
+        kind: 'commit-ids-reviewed-start',
+        legacy: '<!-- commit_ids_reviewed_start -->',
+        current: () => buildStateMarker('commit-ids-reviewed-start')
+    },
+    commitIdsEnd: {
+        kind: 'commit-ids-reviewed-end',
+        legacy: '<!-- commit_ids_reviewed_end -->',
+        current: () => buildStateMarker('commit-ids-reviewed-end')
+    },
+    reviewInvalidated: {
+        kind: 'review-invalidated',
+        // 新增 marker，无历史形态（空串会被 includes('') 恒真命中，故用占位）
+        legacy: '<!-- ai-reviewer:__no-legacy:review-invalidated -->',
+        current: () => buildStateMarker('review-invalidated')
+    },
+    undeliverableFindings: {
+        kind: 'undeliverable-findings',
+        // 新增 marker，没有历史形态；legacy 留空串会被 includes('') 恒真命中，
+        // 因此用一个不可能出现在正文里的占位
+        legacy: '<!-- ai-reviewer:__no-legacy:undeliverable-findings -->',
+        current: () => buildStateMarker('undeliverable-findings')
+    },
+    reviewStateStart: {
+        kind: 'review-state-start',
+        legacy: '<!-- codesentinel-review-state:start -->',
+        current: () => buildStateMarker('review-state-start')
+    },
+    reviewStateEnd: {
+        kind: 'review-state-end',
+        legacy: '<!-- codesentinel-review-state:end -->',
+        current: () => buildStateMarker('review-state-end')
+    },
+    noteHookMarkersStart: {
+        kind: 'note-hook-markers-start',
+        // 这个 marker 是随命名空间一起引入的（STATE-005），没有真正的历史无前缀形态；
+        // legacy 只是占位，保持字段完整性和 tagPairVariants 回退逻辑一致，不会在真实
+        // 数据里命中。
+        legacy: '<!-- ai-reviewer-note-hook-markers-start -->',
+        current: () => buildStateMarker('note-hook-markers-start')
+    },
+    noteHookMarkersEnd: {
+        kind: 'note-hook-markers-end',
+        legacy: '<!-- ai-reviewer-note-hook-markers-end -->',
+        current: () => buildStateMarker('note-hook-markers-end')
+    }
+};
+/** 当前平台命名空间下的 marker（用于写入） */
+function stateMarker(name) {
+    return STATE_MARKERS[name].current();
+}
+/** 匹配时应接受的全部形态：当前命名空间格式 + 历史格式 */
+function stateMarkerVariantsFor(name) {
+    return [STATE_MARKERS[name].current(), STATE_MARKERS[name].legacy];
+}
+/**
+ * 由一个 marker 字符串反查其全部形态。
+ *
+ * `comment()` / `findCommentWithTag()` 接受调用方传入的 tag 字符串，
+ * 这里把它还原成 [新格式, 历史格式] 以便写新读旧。未登记的自定义 tag 原样返回。
+ */
+function variantsForTag(tag) {
+    for (const spec of Object.values(STATE_MARKERS)) {
+        if (tag === spec.current() || tag === spec.legacy) {
+            return [spec.current(), spec.legacy];
+        }
+    }
+    return [tag];
+}
+/**
+ * 由一对（起始、结束）标签反查其新旧两种组合。
+ *
+ * 起止标签必须成对回退：不能用新的起始标签配历史的结束标签，
+ * 否则会截出错误区间、写坏用户正文。
+ */
+function tagPairVariants(startTag, endTag) {
+    for (const spec of Object.values(STATE_MARKERS)) {
+        if (startTag !== spec.current() && startTag !== spec.legacy)
+            continue;
+        const endSpec = Object.values(STATE_MARKERS).find(e => endTag === e.current() || endTag === e.legacy);
+        if (endSpec == null)
+            break;
+        const pairs = [[spec.current(), endSpec.current()]];
+        // 历史格式只归 GitHub——见 stateMarkerVariants 的说明。GitLab 若也接受它，
+        // 会把升级前 GitHub 写入的区块当成自己的整段覆盖（REVIEW-023）。
+        if (currentNamespace() === 'github') {
+            pairs.push([spec.legacy, endSpec.legacy]);
+        }
+        return pairs;
+    }
+    return [[startTag, endTag]];
+}
+/**
+ * 按 marker 名定位一个成对区块（新格式优先，回退历史格式）。
+ *
+ * 返回命中的标签本身，调用方据此就地改写——历史区块保持历史标签，
+ * 回滚到旧版本时旧版本仍能认出它。
+ */
+function locateMarkerBlock(body, startName, endName) {
+    const pairs = [
+        [STATE_MARKERS[startName].current(), STATE_MARKERS[endName].current()],
+        [STATE_MARKERS[startName].legacy, STATE_MARKERS[endName].legacy]
+    ];
+    for (const [startTag, endTag] of pairs) {
+        const start = body.indexOf(startTag);
+        const end = body.indexOf(endTag);
+        if (start !== -1 && end !== -1)
+            return { start, end, startTag, endTag };
+    }
+    return null;
+}
+/** 判断正文是否含指定 marker（新旧格式皆可） */
+function bodyHasMarker(body, name) {
+    if (typeof body !== 'string')
+        return false;
+    return stateMarkerVariantsFor(name).some(v => body.includes(v));
+}
+
+;// CONCATENATED MODULE: ./lib/description-state.js
+/**
+ * description-state.ts — PR/MR description 的分区状态读写（STATE-008 / STATE-016）
+ *
+ * 解决两类事故：
+ *
+ * **一、marker 损坏时毁掉用户内容（STATE-008）。**
+ * 旧实现用 `indexOf(start)` 配 `lastIndexOf(end)` 定位区块，于是：
+ *
+ *   - 结束标签出现在开始标签之前 → 切片跨越负区间，用户内容被复制成两份；
+ *   - description 里存在两组区块、中间夹着用户手写段落 → 第一个 start 到
+ *     最后一个 end 之间全被抹掉，用户那段直接消失。
+ *
+ * 这里改为「第一个 start，及其**之后**第一个 end」，并且定位不确定时一律返回
+ * null 让调用方放弃修改——宁可这次不写状态，也不能改坏用户的描述。
+ *
+ * **二、并发写互相覆盖（STATE-016）。**
+ * pause/resume（review-state.ts）和 release notes（commenter.ts）是两条独立的
+ * 「读整份 body → 拼 → 整份写回」路径。交错执行时后写的一方会带着自己读到的
+ * 旧快照覆盖掉对方刚写入的区块。
+ *
+ * 修法分两个层面，**必须分清各自的边界**：
+ *
+ * 【同一进程内】用按 PR/MR 维度的串行队列把所有 description 写入排队，
+ * 再配合「只替换自己那一段 + 写前重读」。同一次运行里 release notes 与
+ * pause/resume 不可能交错，这一层是确定性的。
+ *
+ * 【跨进程】做不到。平台没有条件更新（GitHub 的 pulls.update、GitLab 的 MR
+ * update 都不接受 If-Match/version），也就没有 CAS 可用。此时依赖的是 CI 侧的
+ * 串行化：
+ *
+ *   GitLab —— `.gitlab-ci.yml` 的 `resource_group: ai-reviewer-mvp` 让所有
+ *             ai_review_trigger job 全局串行，这一层是成立的；
+ *   GitHub —— **不成立**。openai-review.yml 的 concurrency group 把评论事件
+ *             按 comment.id 分组，同一 PR 的多条评论**故意并行**（避免排队的
+ *             运行被后一条评论挤掉）。于是 pause 与 release notes 完全可能是
+ *             两个并行进程在写同一份 description。
+ *
+ * 因此下面的写后校验只能发现「自己那段被别人冲掉」，发现不了「自己冲掉了别人
+ * 那段」——两个进程各自校验自己那段都成功，却已经丢了一方的内容：
+ *
+ *     A、B 都读到旧正文
+ *     A 写入 pause，校验自己那段 → 成功
+ *     B 用旧正文写入 release notes，覆盖 pause
+ *     B 校验自己那段 → 也成功，双方都报成功，pause 已丢失
+ *
+ * **这是已决策接受的边界，不是待办。** 闭合它需要让同一 PR/MR 的 description
+ * 写入落在同一串行执行面上，即把 GitHub 的 concurrency group 改成按 PR 分组；
+ * 但那会让快速连发的多条评论排队，且排队中的运行会被后一条评论挤掉——正是当初
+ * 改成按 comment.id 分组要解决的问题。产品侧选择保留评论并行，相应地
+ * STATE-010/016 的验收范围收窄到「进程内确定性 + 平台并发控制所能覆盖的部分」。
+ *
+ * 若将来改了 concurrency 分组，`workflow-concurrency-contract` 那组测试会失败，
+ * 提醒同时放宽这里的边界说明。
+ */
+
+
+
+/**
+ * 定位一个 marker 区块。
+ *
+ * 规则：第一个 start，以及它**之后**的第一个 end。这两点都与旧实现不同，
+ * 也正是 STATE-008 两个事故的成因。
+ *
+ * 返回 null 表示「不能安全地就地修改」，调用方应当放弃写入而不是猜。
+ */
+function locateSection(body, startTag, endTag) {
+    for (const [s, e] of tagPairVariants(startTag, endTag)) {
+        const start = body.indexOf(s);
+        if (start === -1)
+            continue;
+        // 只认 start 之后的 end：结束标签跑到前面时不能当成区块，否则切片会把
+        // 中间的用户内容复制一份出来
+        const endIdx = body.indexOf(e, start + s.length);
+        if (endIdx === -1) {
+            // 开始标签在、结束标签不在：区块不完整，不能就地改
+            return { location: null, problem: body.includes(e) ? 'end_before_start' : 'unterminated' };
+        }
+        const second = body.indexOf(s, endIdx + e.length);
+        const problem = second === -1 ? undefined : 'duplicated';
+        return {
+            location: { start, end: endIdx + e.length, startTag: s, endTag: e },
+            problem
+        };
+    }
+    return { location: null, problem: 'absent' };
+}
+/** 读取区块内的内容；区块不存在或损坏时返回 null（与「内容为空」区分开） */
+function readSection(body, startTag, endTag) {
+    const { location } = locateSection(body, startTag, endTag);
+    if (location == null)
+        return null;
+    return body.slice(location.start + location.startTag.length, location.end - location.endTag.length);
+}
+/**
+ * 用新内容替换区块；区块不存在则追加到末尾。
+ *
+ * **只动自己那一段**——这是 STATE-016 能成立的前提。注意它本身不足以保证并发
+ * 安全：若贴合的是旧快照，别人刚写入的区块照样会被覆盖，所以调用方必须先取到
+ * 最新正文再调用（见 updateDescriptionSection 的写前重读）。
+ *
+ * 区块损坏（缺结束标签、结束标签在前）时返回 null：让调用方明确放弃，而不是
+ * 追加第二个区块把描述越搞越乱。
+ */
+function writeSection(body, startTag, endTag, content) {
+    const { location, problem } = locateSection(body, startTag, endTag);
+    const block = `${startTag}\n${content}\n${endTag}`;
+    if (location == null) {
+        if (problem === 'absent') {
+            return [body.trimEnd(), block].filter(Boolean).join('\n\n');
+        }
+        return null; // unterminated / end_before_start：不确定边界，不动
+    }
+    const before = body.slice(0, location.start).trimEnd();
+    const after = body.slice(location.end).trim();
+    // 已有区块保持原标签形态（历史区块不因升级被改写，回滚后旧版本仍读得懂）
+    const kept = `${location.startTag}\n${content}\n${location.endTag}`;
+    return [before, kept, after].filter(Boolean).join('\n\n');
+}
+/** 移除区块及其内容；损坏时原样返回，绝不猜边界 */
+function removeSection(body, startTag, endTag) {
+    const { location } = locateSection(body, startTag, endTag);
+    if (location == null)
+        return body;
+    const before = body.slice(0, location.start).trimEnd();
+    const after = body.slice(location.end).trim();
+    return [before, after].filter(Boolean).join('\n\n');
+}
+/**
+ * 按 PR/MR 维度的串行队列（STATE-010）。
+ *
+ * 同一次运行里可能有多处写 description（release notes、pause/resume、
+ * 未来的其他 marker）。不排队的话它们会各自「读 → 改 → 写」并互相覆盖，
+ * 而这一层是我们**能够**确定性解决的。
+ *
+ * key 带平台命名空间与项目坐标：同一进程理论上只服务一个 PR/MR，
+ * 但测试与未来的批处理不该因为共用一把全局锁而互相阻塞。
+ */
+const writeQueues = new Map();
+function serializePerChangeRequest(key, task) {
+    const prev = writeQueues.get(key) ?? Promise.resolve();
+    // 前一个任务失败不能卡死后续写入，所以用 catch 吞掉它的拒绝再接链
+    const next = prev.catch(() => undefined).then(task);
+    writeQueues.set(key, next.catch(() => undefined));
+    return next;
+}
+/** 仅供测试重置队列，避免用例之间互相串 */
+function _resetWriteQueues() {
+    writeQueues.clear();
+}
+/**
+ * 读最新 → 只改自己那段 → 写回 → 读回校验 → 冲突则重试（STATE-016）。
+ *
+ * 注意这是乐观并发，不是 CAS：两个写入若真的同时落地，仍可能有一方被覆盖，
+ * 但重试会重新读到最新值并再写一次，最终两段内容都在。
+ */
+async function updateDescriptionSection(opts) {
+    // 同一 PR/MR 的写入排队：进程内的交错由此彻底消除
+    return await serializePerChangeRequest(`${opts.owner}/${opts.repo}#${opts.changeRequestId}`, async () => await updateDescriptionSectionUnlocked(opts));
+}
+async function updateDescriptionSectionUnlocked(opts) {
+    const { owner, repo, changeRequestId, startTag, endTag, render } = opts;
+    const maxAttempts = opts.maxAttempts ?? 3;
+    const platform = getPlatform();
+    const logger = getLogger();
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        let body;
+        try {
+            // 每一轮都重新读：上一轮失败很可能正是因为别人写了新内容
+            const cr = await platform.getChangeRequest(owner, repo, changeRequestId);
+            body = cr.body ?? '';
+        }
+        catch (e) {
+            logger.warning(`description-state: failed to read description: ${String(e)}`);
+            return { ok: false, attempts: attempt, reason: 'error' };
+        }
+        const { location, problem } = locateSection(body, startTag, endTag);
+        if (location == null && problem !== 'absent') {
+            // 用户可能手工删了半个 marker。此时任何就地修改都可能吞掉他的正文
+            logger.warning(`description-state: section markers are damaged (${problem}) — skipped updating to ` +
+                'avoid corrupting the description');
+            return { ok: false, attempts: attempt, reason: 'corrupted' };
+        }
+        if (problem === 'duplicated') {
+            logger.warning('description-state: found more than one marker block; updating the first one only');
+        }
+        const current = location == null
+            ? null
+            : body.slice(location.start + location.startTag.length, location.end - location.endTag.length);
+        const next = render(current);
+        if (next == null)
+            return { ok: false, attempts: attempt, reason: 'skipped' };
+        // 紧邻写入前再读一次，把自己那段贴到**最新**正文上。
+        // 少了这一步，render 期间别人写入的区块就会被我们手里的旧快照覆盖掉——
+        // 这正是 pause 状态被 release notes 抹掉的成因。
+        let latest = body;
+        try {
+            const fresh = await platform.getChangeRequest(owner, repo, changeRequestId);
+            latest = fresh.body ?? '';
+        }
+        catch (e) {
+            logger.warning(`description-state: failed to re-read before write: ${String(e)}`);
+            return { ok: false, attempts: attempt, reason: 'error' };
+        }
+        const newBody = writeSection(latest, startTag, endTag, next);
+        if (newBody == null)
+            return { ok: false, attempts: attempt, reason: 'corrupted' };
+        if (newBody === latest)
+            return { ok: true, attempts: attempt, changed: false };
+        try {
+            await platform.updateChangeRequestBody(owner, repo, changeRequestId, newBody);
+        }
+        catch (e) {
+            logger.warning(`description-state: failed to write description: ${String(e)}`);
+            return { ok: false, attempts: attempt, reason: 'error' };
+        }
+        // 写后校验：读回来确认自己的内容确实落上了。并发写入时对方可能刚好覆盖，
+        // 这里能发现并重试——没有这一步，"重试"就无从触发。
+        try {
+            const verify = await platform.getChangeRequest(owner, repo, changeRequestId);
+            const landed = readSection(verify.body ?? '', startTag, endTag);
+            // 比较要去掉区块框架带来的换行：writeSection 会把内容包成
+            // `start\n内容\nend`，读回来的切片自带首尾换行，直接和 render 的返回值
+            // 比较永远不等，会白白多跑一轮重试
+            if (landed != null && landed.trim() === next.trim()) {
+                return { ok: true, attempts: attempt, changed: true };
+            }
+            logger.info(`description-state: section was overwritten concurrently, retrying (attempt ${attempt}/${maxAttempts})`);
+        }
+        catch (e) {
+            // 读回失败不代表写失败，不重试也不谎报成功
+            logger.warning(`description-state: write succeeded but verification failed: ${String(e)}`);
+            return { ok: true, attempts: attempt, changed: true };
+        }
+    }
+    return { ok: false, attempts: maxAttempts, reason: 'conflict' };
+}
+
+;// CONCATENATED MODULE: ./lib/review-state.js
+/**
+ * review-state.ts — PR/MR body 中的 pause/resume marker（GH-012）
+ *
+ * marker 带平台命名空间（GH-014）；匹配同时接受历史格式，升级不会把在途 PR 的
+ * 暂停状态读成 active。已存在的历史区块就地保留其标签，只有新建区块用新格式——
+ * 这样即使回滚到旧版本，旧版本仍能读到自己认识的暂停状态。
+ */
+
+
+
+/** 历史格式起止标签（无平台命名空间），仅用于匹配在途 PR 的旧区块 */
+const REVIEW_STATE_START_TAG = STATE_MARKERS.reviewStateStart.legacy;
+const REVIEW_STATE_END_TAG = STATE_MARKERS.reviewStateEnd.legacy;
+/** 当前平台命名空间下的 pause/resume 区块标签（用于新建区块） */
+function reviewStateTags() {
+    return { start: stateMarker('reviewStateStart'), end: stateMarker('reviewStateEnd') };
+}
+/** 定位 pause/resume 区块，命名空间格式优先，回退历史格式 */
+function locateStateBlock(body) {
+    const namespaced = reviewStateTags();
+    for (const { start: startTag, end: endTag } of [
+        namespaced,
+        { start: REVIEW_STATE_START_TAG, end: REVIEW_STATE_END_TAG }
+    ]) {
+        const start = body.indexOf(startTag);
+        const end = body.indexOf(endTag);
+        if (start !== -1 && end !== -1)
+            return { start, end, startTag, endTag };
+    }
+    return null;
+}
+function getReviewStateFromBody(body = '') {
+    const block = locateStateBlock(body);
+    if (block == null)
+        return 'active';
+    const content = body.slice(block.start + block.startTag.length, block.end);
+    return content.includes('state: paused') ? 'paused' : 'active';
+}
+function writeReviewStateToBody(body, state) {
+    const existing = locateStateBlock(body);
+    // 已有区块保持其原有标签（回滚到旧版本仍能读懂），新建区块才用命名空间格式
+    const fresh = reviewStateTags();
+    const startTag = existing?.startTag ?? fresh.start;
+    const endTag = existing?.endTag ?? fresh.end;
+    const stateBlock = `${startTag}
+state: ${state}
+${endTag}`;
+    if (existing != null) {
+        const before = body.slice(0, existing.start).trimEnd();
+        const after = body.slice(existing.end + existing.endTag.length).trim();
+        return [before, stateBlock, after].filter(Boolean).join('\n\n');
+    }
+    return [body.trimEnd(), stateBlock].filter(Boolean).join('\n\n');
+}
+async function getReviewState(owner, repo, pullNumber) {
+    const platform = getPlatform();
+    const cr = await platform.getChangeRequest(owner, repo, pullNumber);
+    return getReviewStateFromBody(cr.body ?? '');
+}
+async function setReviewState(owner, repo, pullNumber, state) {
+    // STATE-016：与 release notes 共用分区更新路径。
+    // 早先两边各自「读整份 body → 拼 → 整份写回」，交错时后写方会用旧快照
+    // 覆盖掉对方刚落下的区块——pause 状态被 release notes 抹掉是最典型的表现。
+    //
+    // 区块内已有的历史标签形态由 writeSection 保留，因此这里传当前命名空间标签
+    // 即可，不会把在途 PR 的旧区块改名。
+    const tags = reviewStateTags();
+    const outcome = await updateDescriptionSection({
+        owner,
+        repo,
+        changeRequestId: pullNumber,
+        startTag: tags.start,
+        endTag: tags.end,
+        render: () => `state: ${state}`
+    });
+    if (!outcome.ok) {
+        // pause/resume 是用户显式下达的命令，静默失败会让他以为已经生效
+        throw new Error(`Failed to persist review state "${state}" (${outcome.reason}, ${outcome.attempts} attempt(s))`);
+    }
+}
+
+;// CONCATENATED MODULE: ./lib/platform/run-context.js
+/**
+ * platform/run-context.ts — 当前运行的执行上下文（ARCH-005 context 迁移）
+ *
+ * 解决的问题：`review.ts` / `commenter.ts` / `commands/dispatcher.ts` 长期直接
+ * `import {context} from '@actions/github'`，且在**模块级**求值 `context.repo`。
+ * 而 `context.repo` 在没有 `GITHUB_REPOSITORY` 时会抛：
+ *
+ *   context.repo requires a GITHUB_REPOSITORY environment variable like 'owner/repo'
+ *
+ * 于是 GitLab 入口只要 import 到共享核心，**模块加载阶段就崩**，run() 根本
+ * 执行不到。这是 gitlab-trigger.ts 迟迟接不上审查核心的真正原因。
+ *
+ * 沿用代码库既有的注入模式（setPlatform / setLogger / setStateNamespace）：
+ * 入口在启动时 setExecCtx 一次，共享核心通过 getExecCtx() 读归一化坐标，
+ * 不再触碰任何平台 SDK。
+ *
+ * 为什么用模块级单例而不是逐层传参：仓库坐标在一次运行内是恒定的，属于典型的
+ * 环境量；而 Commenter 在十几处被构造，把它塞进构造函数会牵动大量无关调用点。
+ * 这与 setPlatform/setLogger 的取舍一致。
+ */
+let current = null;
+/** 入口在启动时调用一次（main.ts / gitlab-trigger.ts） */
+function setExecCtx(ctx) {
+    current = ctx;
+}
+/**
+ * 读取当前执行上下文。
+ *
+ * 未设置时抛错而不是返回 null——共享核心的每一处调用都依赖它拿事件坐标，
+ * 静默返回空值只会把「没初始化」变成后面某处莫名其妙的 undefined。
+ */
+function getExecCtx() {
+    if (current == null) {
+        throw new Error('run context is not initialized — the entry point must call setExecCtx() ' +
+            'before invoking the shared review core');
+    }
+    return current;
+}
+/** 是否已初始化（供过渡期的兼容分支判断，不用于业务决策） */
+function hasExecCtx() {
+    return current != null;
+}
+/** 仅供测试重置，避免用例之间互相污染 */
+function resetExecCtx() {
+    current = null;
+}
+/**
+ * 把 projectPath 拆成平台 API 需要的 (owner, repo) 二元组。
+ *
+ * 两个平台的 adapter 都按 `${owner}/${repo}` 还原完整路径，因此**从最后一个
+ * 斜杠**切分才是通用解：
+ *
+ *   GitHub  "octo/demo"                  → owner="octo",            repo="demo"
+ *   GitLab  "group/subgroup/project"     → owner="group/subgroup",  repo="project"
+ *
+ * 按第一个斜杠切会把 GitLab 的 subgroup 项目切错（见 gitlab-platform.ts 的
+ * projectPath 拼接注释）。
+ */
+function repoCoordsOf(ctx) {
+    const projectPath = ctx.projectPath;
+    const idx = projectPath.lastIndexOf('/');
+    if (idx <= 0 || idx === projectPath.length - 1) {
+        throw new Error(`invalid projectPath: "${projectPath}" (expected "owner/repo")`);
+    }
+    return { owner: projectPath.slice(0, idx), repo: projectPath.slice(idx + 1) };
+}
+/**
+ * 同上，但从模块级上下文取。
+ *
+ * 手里已经有 execCtx 的调用方（dispatcher、review）应当直接用 repoCoordsOf(ctx)——
+ * 显式传参优于隐式单例；本函数只服务于拿不到 execCtx 的位置（如 Commenter，
+ * 它在十几处被构造，签名里没有 execCtx）。
+ */
+function getRepoCoords() {
+    return repoCoordsOf(getExecCtx());
+}
+
+;// CONCATENATED MODULE: ./lib/commenter.js
+/**
+ * commenter.ts - GitHub 评论管理模块
+ *
+ * 负责所有与 GitHub PR 评论相关的操作，包括：
+ * 1. 创建/替换 PR 评论（issue comment）
+ * 2. 缓冲和批量提交代码审查评论（review comment）
+ * 3. 回复用户的 review comment
+ * 4. 更新 PR 描述（写入发布说明）
+ * 5. 管理增量审查状态（已审查的 commit ID 追踪）
+ * 6. 评论链（conversation chain）的获取和组装
+ *
+ * 使用 HTML 注释标签（如 <!-- tag -->）作为唯一标识，
+ * 实现评论的幂等性操作（查找并替换已有评论，而非重复创建）
+ */
+
+
+
+
+/**
+ * 仓库坐标（ARCH-005）。
+ *
+ * 原先是模块级的 `const repo = context.repo`——`@actions/github` 的 getter 在
+ * 没有 GITHUB_REPOSITORY 时直接抛，导致 GitLab 入口一 import 本文件就崩。
+ *
+ * 这里保留 `repo.owner` / `repo.repo` 的写法（18 个调用点一字不改），只把求值
+ * 从**加载期**挪到**调用期**：属性访问器每次现算，不再依赖任何平台 SDK。
+ */
+const repo = {
+    get owner() {
+        return getRepoCoords().owner;
+    },
+    get repo() {
+        return getRepoCoords().repo;
+    }
+};
+// ==================== 标签常量 ====================
+// 这些 HTML 注释标签用于标识和定位 bot 生成的各类评论
+/**
+ * 评论顶部的问候语（包含 bot 图标 + 可配置名称）。
+ * 由 initBotGreeting() 初始化，避免模块级直读 @actions/core getInput（CFG-005）。
+ */
+let _commentGreeting = '🤖   AI Reviewer';
+/** 获取 bot 问候语，用于评论头部 */
+function getCommentGreeting() {
+    return _commentGreeting;
+}
+/**
+ * 配置的 bot 登录名（GitHub: bot_github_login；GitLab: PAT 用户名）。
+ * 空串表示未配置，此时退化为向平台查询。
+ */
+let _configuredBotLogin = '';
+/**
+ * 初始化 bot 问候语与身份。由入口在构建 Options 后调用一次。
+ */
+function initBotGreeting(icon, name, botLogin = '') {
+    _commentGreeting = `${icon}   ${name}`;
+    _configuredBotLogin = botLogin.trim();
+    _resolvedBotLogin = undefined;
+}
+/** 解析结果缓存：undefined = 还没查过，null = 查不到 */
+let _resolvedBotLogin;
+/**
+ * 本次运行的 bot 登录名（REVIEW-008 / STATE-008）。
+ *
+ * 为什么必须知道「我是谁」：定位既有摘要评论靠的是正文里的 marker，而用户用
+ * 「引用回复」会把整段正文连同 marker 一起复制过去。不校验作者的话：
+ *
+ *   - 用户那条引用可能被当成我们的摘要**覆盖**掉；
+ *   - 匹配到多条时，除第一条外全部会被**删除**；
+ *   - findCommentWithTag 可能读到用户引用里的旧 reviewed SHA，污染增量审查状态。
+ *
+ * 优先用配置值（省一次 API），否则查一次并缓存。两者都拿不到时返回 null，
+ * 调用方按「身份未知」fail closed。
+ */
+async function resolveBotLogin() {
+    if (_resolvedBotLogin !== undefined)
+        return _resolvedBotLogin;
+    if (_configuredBotLogin !== '') {
+        _resolvedBotLogin = _configuredBotLogin;
+        return _resolvedBotLogin;
+    }
+    try {
+        const login = await getPlatform().getAuthenticatedLogin();
+        // adapter 理论上返回 string，但真实现可能因 API 变更/降级返回空值。
+        // 靠 try/catch 兜 TypeError 会把「身份拿不到」和「调用出错」混成一件事，
+        // 这里显式判类型，两种情况都 fail closed。
+        const trimmed = typeof login === 'string' ? login.trim() : '';
+        _resolvedBotLogin = trimmed === '' ? null : trimmed;
+    }
+    catch (e) {
+        getLogger().warning(`Failed to resolve bot identity: ${String(e)} — comment ownership checks will fail closed`);
+        _resolvedBotLogin = null;
+    }
+    return _resolvedBotLogin;
+}
+/** 仅供测试重置身份缓存 */
+function _resetBotIdentity() {
+    _configuredBotLogin = '';
+    _resolvedBotLogin = undefined;
+}
+/** 行级评论的位置键，用于把「待清理的旧评论」和「这次要发的新评论」对上 */
+function commentKey(c) {
+    return `${c.path}:${c.startLine}-${c.endLine}`;
+}
+/**
+ * 平台 draft 的位置键，必须与 commentKey 算出同一个值。
+ *
+ * toDraft 在单行时会把 startLine 置成 undefined（平台要求），所以这里要还原成
+ * endLine，否则单行评论的失败项对不回本地缓冲。
+ */
+function draftKey(d) {
+    return `${d.path}:${d.startLine ?? d.line}-${d.line}`;
+}
+/** 这条评论是不是我们自己发的（身份未知时返回 null，表示无法判断） */
+function isOwnComment(comment, botLogin) {
+    if (botLogin == null)
+        return null;
+    const author = (comment.user?.login ?? '').trim();
+    if (author === '')
+        return null;
+    return author.toLowerCase() === botLogin.toLowerCase();
+}
+/**
+ * 按作者判断某条评论是否出自本 reviewer（REVIEW-012/013）。
+ *
+ * 供 commenter 之外的去重逻辑复用（如 review.ts 的 full review 覆盖范围计算）。
+ * 返回 null 表示「判断不了」——调用方必须自己决定保守方向，不要当成 false。
+ */
+async function isOwnAuthor(author) {
+    const botLogin = await resolveBotLogin();
+    return isOwnComment({ user: { login: author ?? undefined } }, botLogin);
+}
+// 状态 marker 清单集中在 state-markers.ts（GH-014），此处 re-export 保持调用方 import 不变
+
+
+/** 定位摘要评论里的「审查进行中」区块（新旧格式皆可） */
+function locateInProgressBlock(body) {
+    return locateMarkerBlock(body, 'inProgressStart', 'inProgressEnd');
+}
+/** 标识 bot 自动生成的代码审查评论 */
+function commentTag() {
+    return stateMarker('comment');
+}
+/** 标识 bot 自动生成的回复评论 */
+function commentReplyTag() {
+    return stateMarker('commentReply');
+}
+/** 标识 bot 的摘要评论 */
+function commenter_summarizeTag() {
+    return stateMarker('summarize');
+}
+/** 标识审查进行中的状态标签（开始 / 结束） */
+function inProgressStartTag() {
+    return stateMarker('inProgressStart');
+}
+function inProgressEndTag() {
+    return stateMarker('inProgressEnd');
+}
+/** 标识 PR 描述中发布说明区域（开始 / 结束） */
+function descriptionStartTag() {
+    return stateMarker('descriptionStart');
+}
+function descriptionEndTag() {
+    return stateMarker('descriptionEnd');
+}
+/** 标识隐藏的原始摘要区域（开始 / 结束） */
+function rawSummaryStartTag() {
+    return stateMarker('rawSummaryStart');
+}
+function rawSummaryEndTag() {
+    return stateMarker('rawSummaryEnd');
+}
+/** 标识隐藏的精简摘要区域（开始 / 结束） */
+function shortSummaryStartTag() {
+    return stateMarker('shortSummaryStart');
+}
+function shortSummaryEndTag() {
+    return stateMarker('shortSummaryEnd');
+}
+/** 标识已审查的 commit ID 列表（开始） */
+/**
+ * 已审查 commit ID 区块的历史起止标签（无平台命名空间）。
+ * 仍用于**匹配**在途 PR 里已存在的旧区块；新写入走 commitIdTags()。
+ */
+const COMMIT_ID_START_TAG = STATE_MARKERS.commitIdsStart.legacy;
+/** 标识已审查的 commit ID 列表（结束） */
+const COMMIT_ID_END_TAG = STATE_MARKERS.commitIdsEnd.legacy;
+/** 当前平台命名空间下的已审查 commit ID 区块标签（用于新建区块） */
+function commitIdTags() {
+    return { start: stateMarker('commitIdsStart'), end: stateMarker('commitIdsEnd') };
+}
+/**
+ * 在正文中定位已审查 commit ID 区块，命名空间格式优先，回退历史格式。
+ *
+ * 返回命中的标签本身，调用方据此就地改写，不会把旧区块的标签换成新的——
+ * 升级不需要重写在途 PR 已有的 marker。
+ */
+function commenter_locateCommitIdBlock(body) {
+    const namespaced = commitIdTags();
+    for (const { start: startTag, end: endTag } of [
+        namespaced,
+        { start: COMMIT_ID_START_TAG, end: COMMIT_ID_END_TAG }
+    ]) {
+        const start = body.indexOf(startTag);
+        const end = body.indexOf(endTag);
+        if (start !== -1 && end !== -1)
+            return { start, end, startTag, endTag };
+    }
+    return null;
+}
+/**
+ * Commenter 类 - GitHub 评论管理器
+ *
+ * 封装所有 GitHub 评论的 CRUD 操作，提供：
+ * - 评论的创建、替换、查找
+ * - 审查评论的缓冲和批量提交
+ * - 评论链的获取和组装
+ * - 增量审查状态管理
+ */
+class commenter_Commenter {
+    /**
+     * 创建或替换 PR 评论
+     * @param message - 评论内容
+     * @param tag - HTML 标签，用于标识和查找评论
+     * @param mode - "create"（新建）或 "replace"（查找并替换已有评论）
+     */
+    /**
+     * 发布/更新一条顶层评论。
+     *
+     * 返回是否真的投递成功。此前内部 create()/replace() 各自吞掉异常，调用方拿不到
+     * 任何信号——REVIEW-014 的降级路径因此在评论创建失败时仍打印「已发布」，
+     * 发现照样静默丢失。
+     */
+    async comment(message, tag, mode) {
+        // PR number / MR iid 已由 ExecutionContext 归一化（GitHub 的 payload 里
+        // 它可能来自 pull_request 也可能来自 issue，两者在构造阶段已经合流）
+        const target = getExecCtx().changeRequestId;
+        if (!target) {
+            getLogger().warning('Skipped: execution context carries no change request id');
+            return false;
+        }
+        if (!tag) {
+            tag = commentTag();
+        }
+        // 组装评论正文：问候语 + 消息内容 + 标签
+        const body = `${getCommentGreeting()}
+
+${message}
+
+${tag}`;
+        if (mode === 'create') {
+            return await this.create(body, target);
+        }
+        else if (mode === 'replace') {
+            return await this.replace(body, tag, target);
+        }
+        else {
+            getLogger().warning(`Unknown mode: ${mode}, use "replace" instead`);
+            return await this.replace(body, tag, target);
+        }
+    }
+    /**
+     * 提取标签对之间的内容
+     * 用于从评论正文中提取隐藏的状态数据（如原始摘要、已审查 commit ID 等）
+     */
+    getContentWithinTags(content, startTag, endTag) {
+        // 写新读旧：先按传入（新格式）标签找，找不到再回退到对应的历史标签
+        for (const [s, e] of tagPairVariants(startTag, endTag)) {
+            const start = content.indexOf(s);
+            const end = content.indexOf(e);
+            if (start >= 0 && end >= 0) {
+                return content.slice(start + s.length, end);
+            }
+        }
+        return '';
+    }
+    /** 移除标签对及其包含的内容 */
+    removeContentWithinTags(content, startTag, endTag) {
+        for (const [s, e] of tagPairVariants(startTag, endTag)) {
+            const start = content.indexOf(s);
+            const end = content.lastIndexOf(e);
+            if (start >= 0 && end >= 0) {
+                return content.slice(0, start) + content.slice(end + e.length);
+            }
+        }
+        return content;
+    }
+    /** 从摘要评论中提取原始摘要内容 */
+    getRawSummary(summary) {
+        return this.getContentWithinTags(summary, rawSummaryStartTag(), rawSummaryEndTag());
+    }
+    /** 从摘要评论中提取精简摘要内容 */
+    getShortSummary(summary) {
+        return this.getContentWithinTags(summary, shortSummaryStartTag(), shortSummaryEndTag());
+    }
+    /** 从 PR 描述中提取用户原始描述（移除 bot 生成的发布说明部分） */
+    getDescription(description) {
+        return this.removeContentWithinTags(description, descriptionStartTag(), descriptionEndTag());
+    }
+    /** 从 PR 描述中提取发布说明内容 */
+    getReleaseNotes(description) {
+        const releaseNotes = this.getContentWithinTags(description, descriptionStartTag(), descriptionEndTag());
+        return releaseNotes.replace(/(^|\n)> .*/g, '');
+    }
+    /**
+     * 更新 PR 描述，写入 AI 生成的发布说明
+     * 将发布说明嵌入到 descriptionStartTag() 和 descriptionEndTag() 之间
+     */
+    async updateDescription(pullNumber, message) {
+        // STATE-016：走分区更新而不是「读整份 → 拼 → 整份写回」。
+        // 旧写法与 pause/resume（review-state.ts）是两条独立的整份覆盖路径，
+        // 交错执行时后写的一方会用自己读到的旧快照抹掉对方刚写入的区块。
+        const messageClean = this.removeContentWithinTags(message, descriptionStartTag(), descriptionEndTag());
+        const outcome = await updateDescriptionSection({
+            owner: repo.owner,
+            repo: repo.repo,
+            changeRequestId: pullNumber,
+            startTag: descriptionStartTag(),
+            endTag: descriptionEndTag(),
+            render: () => messageClean
+        });
+        if (!outcome.ok) {
+            getLogger().warning(`Skipped adding release notes to description (${outcome.reason}, ` +
+                `${outcome.attempts} attempt(s)).`);
+        }
+    }
+    // ==================== 代码审查评论缓冲区 ====================
+    /** 审查评论缓冲区：在内存中暂存所有审查评论，最后一次性提交 */
+    reviewCommentsBuffer = [];
+    /**
+     * 将审查评论添加到缓冲区（不立即提交）
+     * 所有缓冲的评论将在 submitReview() 中一次性提交
+     */
+    async bufferReviewComment(path, startLine, endLine, message) {
+        message = `${getCommentGreeting()}
+
+${message}
+
+${commentTag()}`;
+        this.reviewCommentsBuffer.push({
+            path,
+            startLine,
+            endLine,
+            message
+        });
+    }
+    /**
+     * 删除处于 PENDING 状态的审查
+     * 在提交新审查前调用，避免残留的待处理审查
+     */
+    async deletePendingReview(pullNumber) {
+        try {
+            await getPlatform().deletePendingReview(repo.owner, repo.repo, pullNumber);
+        }
+        catch (e) {
+            getLogger().warning(`Failed to delete pending review: ${e}`);
+        }
+    }
+    /**
+     * 提交所有缓冲的审查评论
+     *
+     * 流程：
+     * 1. 如果缓冲区为空，提交一个仅包含状态消息的空审查
+     * 2. 删除同一位置的旧 bot 评论（避免重复）
+     * 3. 清理已有的 PENDING 审查
+     * 4. 尝试一次性提交所有评论（createReview + submitReview）
+     * 5. 如果批量提交失败，降级为逐条提交（createReviewComment）
+     *
+     * @param pullNumber - PR 编号
+     * @param commitId - 提交的 commit SHA
+     * @param statusMsg - 审查状态消息（包含处理统计信息）
+     */
+    async submitReview(pullNumber, commitId, statusMsg, threadStatusMap, 
+    /** STATE-011/012：每次逻辑写入前的 HEAD 新鲜度回调，由 review.ts 提供 */
+    ensureFresh) {
+        const body = `${getCommentGreeting()}
+
+${statusMsg}
+`;
+        const platform = getPlatform();
+        const logger = getLogger();
+        if (this.reviewCommentsBuffer.length === 0) {
+            // 没有审查评论时，跳过空审查提交（GitHub API 不允许无评论的 COMMENT 审查）
+            logger.info(`Skipping empty review for PR #${pullNumber} — no review comments to submit`);
+            return;
+        }
+        // 去重：跳过同位置已有未 resolved bot 评论的新评论，避免重复
+        const commentsToSubmit = [];
+        // REVIEW-013：位置 → 待清理的旧评论 id。发布成功后才真正删除。
+        const pendingDeletions = new Map();
+        for (const comment of this.reviewCommentsBuffer) {
+            const existingComments = await this.getCommentsAtRange(pullNumber, comment.path, comment.startLine, comment.endLine);
+            // REVIEW-012/013：带 marker 不等于是我们发的。用户引用回复会把 marker 一起
+            // 复制过去，只按 marker 判定会造成两种损失：
+            //   未 resolved → 误判为「同位置已有我们的评论」，本次发现被丢弃；
+            //   已 resolved → 把用户那条评论当成自己的旧评论**删掉**。
+            const taggedAtRange = existingComments.filter(c => bodyHasMarker(c.body, 'comment'));
+            // 注意字段：listReviewComments 映射后作者在 user.login，不是 c.author
+            const ownership = await Promise.all(taggedAtRange.map(async (c) => await isOwnAuthor(c.user?.login)));
+            const existingBotComments = taggedAtRange.filter((_c, i) => ownership[i] === true);
+            // 身份判断不了时 ownership 全是 null，existingBotComments 因此为空，
+            // 于是这条发现会被照常发布——可能与旧评论重复，但绝不会删掉任何东西。
+            // 这个方向是刻意选的：重复可以人工清理，删错的内容找不回来。
+            if (ownership.some(o => o == null)) {
+                logger.warning(`[submit-dedup] bot identity is unknown — publishing at ` +
+                    `${comment.path}:${comment.startLine}-${comment.endLine} without deduplication; ` +
+                    'existing comments are left untouched');
+            }
+            else if (taggedAtRange.length > existingBotComments.length) {
+                logger.info(`[submit-dedup] ignoring ${taggedAtRange.length - existingBotComments.length} ` +
+                    `comment(s) at ${comment.path}:${comment.startLine}-${comment.endLine} that carry our ` +
+                    'marker but were authored by someone else');
+            }
+            if (existingBotComments.length > 0) {
+                // 检查该位置是否已 resolved
+                const key = `${comment.path}:${comment.endLine}`;
+                const isResolved = threadStatusMap?.get(key);
+                if (isResolved !== true) {
+                    logger.info(`[submit-dedup] skipping comment for ${comment.path}:${comment.startLine}-${comment.endLine} — existing unresolved bot comment found`);
+                    continue;
+                }
+                // 已 resolved 的旧评论要被新发现取代，但**不能在这里就删**。
+                //
+                // 真正的发布发生在后面的批量/逐条请求里；先删后发的话，一旦平台拒收新
+                // 行号（422），旧讨论已经没了，新发现也发不出去——历史和新内容一起丢。
+                // 这里只登记，等确认新评论落地后再清理。
+                pendingDeletions.set(commentKey(comment), existingBotComments.map(c => c.id));
+            }
+            commentsToSubmit.push(comment);
+        }
+        if (commentsToSubmit.length === 0) {
+            logger.info(`[submit-dedup] all ${this.reviewCommentsBuffer.length} comment(s) skipped — already covered by existing bot comments`);
+            return;
+        }
+        // 清理已有的 PENDING 审查
+        await this.deletePendingReview(pullNumber);
+        // 生成 ReviewCommentDraft 格式
+        const toDraft = (comment) => ({
+            path: comment.path,
+            body: comment.message,
+            line: comment.endLine,
+            startLine: comment.startLine !== comment.endLine ? comment.startLine : undefined,
+            startSide: comment.startLine !== comment.endLine ? 'RIGHT' : undefined
+        });
+        try {
+            const result = await platform.submitReviewComments(repo.owner, repo.repo, pullNumber, commitId, commentsToSubmit.map(toDraft), body, { ensureFresh });
+            const staleSkipped = result.staleSkipped ?? [];
+            logger.info(`Submitting review for PR #${pullNumber}, delivered: ${result.delivered.length}, ` +
+                `failed: ${result.failed.length}, staleSkipped: ${staleSkipped.length}`);
+            // adapter 可能部分成功：GitHub 的 createReview 是原子的，GitLab 则逐条创建
+            // discussion，部分失败时只返回一个总数是不够的。按位置对回本地缓冲，
+            // **只清理确认投递成功的那些**，否则新发现没发成、被取代的旧讨论却已经删了。
+            const failedKeys = new Set(result.failed.map(d => draftKey(d)));
+            // HEAD 变化而主动放弃的那些，既不算投递成功（不能删对应的旧讨论），
+            // 也不能走顶层降级（降级发出去正是要避免的事）——直接排除在两条路径之外。
+            const staleKeys = new Set(staleSkipped.map(d => draftKey(d)));
+            const deliveredComments = commentsToSubmit.filter(c => !failedKeys.has(commentKey(c)) && !staleKeys.has(commentKey(c)));
+            await this.flushPendingDeletions(deliveredComments, pendingDeletions);
+            // 两层都没送出去的，交给统一的顶层降级（REVIEW-014），
+            // 而不是让 adapter 各自静默跳过
+            if (result.failed.length > 0) {
+                const undelivered = commentsToSubmit.filter(c => failedKeys.has(commentKey(c)));
+                await this.postUndeliverableAsTopLevel(pullNumber, undelivered);
+            }
+        }
+        catch (e) {
+            // 批量提交失败时，降级为逐条提交
+            logger.warning(`Failed to create review: ${e}. Falling back to individual comments.`);
+            await this.deletePendingReview(pullNumber);
+            let commentCounter = 0;
+            // REVIEW-014：逐条也发不出去的（最常见是行号不在 diff 内，平台返回 422），
+            // 原先只打一条 warning 就没了——审查发现被静默丢弃。收集起来，最后统一
+            // 降级到顶层评论：位置精度不如行级，但至少内容不会消失。
+            const undeliverable = [];
+            for (const comment of commentsToSubmit) {
+                logger.info(`Creating new review comment for ${comment.path}:${comment.startLine}-${comment.endLine}: ${comment.message}`);
+                try {
+                    await platform.createReviewComment(repo.owner, repo.repo, pullNumber, commitId, toDraft(comment));
+                }
+                catch (ee) {
+                    logger.warning(`Failed to create review comment at ${comment.path}:${comment.startLine}-${comment.endLine}: ${ee}`);
+                    undeliverable.push(comment);
+                }
+                commentCounter++;
+                logger.info(`Comment ${commentCounter}/${commentsToSubmit.length} posted`);
+            }
+            // 只清理「新评论确实发出去了」的那些位置；发不出去的保留旧讨论，
+            // 否则用户既看不到新发现，也失去了历史上下文
+            const undeliverableKeys = new Set(undeliverable.map(commentKey));
+            const delivered = commentsToSubmit.filter(c => !undeliverableKeys.has(commentKey(c)));
+            await this.flushPendingDeletions(delivered, pendingDeletions);
+            if (undeliverable.length > 0) {
+                await this.postUndeliverableAsTopLevel(pullNumber, undeliverable);
+            }
+        }
+    }
+    /**
+     * 清理被新评论取代的旧讨论（REVIEW-013）。
+     *
+     * 只对**确认已发布**的位置执行——见 submitReview 里登记 pendingDeletions 的
+     * 注释：先删后发会在平台拒收新行号时把历史和新发现一起弄丢。
+     */
+    async flushPendingDeletions(published, pending) {
+        const platform = getPlatform();
+        const logger = getLogger();
+        for (const comment of published) {
+            const ids = pending.get(commentKey(comment));
+            if (ids == null)
+                continue;
+            for (const id of ids) {
+                logger.info(`Deleting superseded resolved review comment ${id} at ${commentKey(comment)}`);
+                try {
+                    await platform.deleteReviewComment(repo.owner, repo.repo, id);
+                }
+                catch (e) {
+                    logger.warning(`Failed to delete review comment: ${e}`);
+                }
+            }
+        }
+    }
+    /**
+     * 把发不出去的行级评论降级为一条顶层评论（REVIEW-014）。
+     *
+     * 触发场景是行号映射失败：模型给出的行不在本次 diff 的可评论范围内，平台
+     * 直接拒收（GitHub 422 "line must be part of the diff"）。这类失败无法靠重试
+     * 解决，但发现本身是有价值的——把文件与行号写进正文，用户照样能定位。
+     *
+     * 用 replace 模式发，避免每次审查都堆一条新的。
+     */
+    async postUndeliverableAsTopLevel(pullNumber, comments) {
+        const logger = getLogger();
+        const items = comments
+            .map(c => {
+            const range = c.startLine === c.endLine ? `${c.endLine}` : `${c.startLine}-${c.endLine}`;
+            return `<details>\n<summary><code>${c.path}:${range}</code></summary>\n\n${c.message}\n\n</details>`;
+        })
+            .join('\n');
+        const body = `> ⚠️ 以下 ${comments.length} 条发现无法作为行级评论发布（通常是行号不在本次 diff 的可评论范围内），改以顶层评论呈现：\n\n${items}`;
+        const delivered = await this.comment(body, stateMarker('undeliverableFindings'), 'replace');
+        if (delivered) {
+            logger.info(`[review-014] posted ${comments.length} undeliverable finding(s) as a top-level comment`);
+            return;
+        }
+        // 最后一层也没送出去：如实报告「彻底丢失」，并把内容写进日志，让运维至少能
+        // 从 job 日志里捞回来。此前这里靠 try/catch 判断成功，而 comment() 内部把
+        // 异常吞了，于是失败也照样打印「已发布」。
+        logger.error(`[review-014] failed to deliver ${comments.length} finding(s) — they are NOT visible on the ` +
+            'pull request. Contents follow so they are at least recoverable from this log:');
+        for (const c of comments) {
+            logger.error(`  ${commentKey(c)}: ${c.message}`);
+        }
+    }
+    /**
+     * 回复用户的 review comment
+     *
+     * 在顶层评论下创建回复，并将顶层评论的标签从 commentTag() 更新为 commentReplyTag()，
+     * 表示该评论链已有 bot 参与回复
+     */
+    async reviewCommentReply(pullNumber, topLevelComment, message) {
+        const platform = getPlatform();
+        const logger = getLogger();
+        const reply = `${getCommentGreeting()}
+
+${message}
+
+${commentReplyTag()}
+`;
+        try {
+            await platform.replyToReviewComment(repo.owner, repo.repo, pullNumber, topLevelComment.id, reply);
+        }
+        catch (error) {
+            logger.warning(`Failed to reply to the top-level comment ${error}`);
+            try {
+                await platform.replyToReviewComment(repo.owner, repo.repo, pullNumber, topLevelComment.id, `Could not post the reply to the top-level comment due to the following error: ${error}`);
+            }
+            catch (e) {
+                logger.warning(`Failed to reply to the top-level comment ${e}`);
+            }
+        }
+        try {
+            const hitTag = stateMarkerVariantsFor('comment').find((v) => topLevelComment.body.includes(v));
+            if (hitTag != null) {
+                // 命中哪种形态就替换哪种：历史评论保持历史格式，新评论用命名空间格式
+                const replacement = hitTag === STATE_MARKERS.comment.legacy
+                    ? STATE_MARKERS.commentReply.legacy
+                    : commentReplyTag();
+                const newBody = topLevelComment.body.replace(hitTag, replacement);
+                await platform.updateReviewComment(repo.owner, repo.repo, topLevelComment.id, newBody);
+            }
+        }
+        catch (error) {
+            logger.warning(`Failed to update the top-level comment ${error}`);
+        }
+    }
+    // ==================== 评论查询方法 ====================
+    /** 获取指定行号范围内的所有 review comment */
+    async getCommentsWithinRange(pullNumber, path, startLine, endLine) {
+        const comments = await this.listReviewComments(pullNumber);
+        return comments.filter((comment) => comment.path === path &&
+            comment.body !== '' &&
+            ((comment.start_line !== undefined &&
+                comment.start_line >= startLine &&
+                comment.line <= endLine) ||
+                (startLine === endLine && comment.line === endLine)));
+    }
+    /** 获取精确匹配指定行号范围的 review comment */
+    async getCommentsAtRange(pullNumber, path, startLine, endLine) {
+        const comments = await this.listReviewComments(pullNumber);
+        return comments.filter((comment) => comment.path === path &&
+            comment.body !== '' &&
+            ((comment.start_line !== undefined &&
+                comment.start_line === startLine &&
+                comment.line === endLine) ||
+                (startLine === endLine && comment.line === endLine)));
+    }
+    /**
+     * 获取指定行号范围内的所有评论对话链
+     * 用于在代码审查时提供已有评论上下文
+     *
+     * @param threadStatusMap 可选的线程状态 map（path:line → isResolved），
+     *   由 fetchThreadStatusMap() 生成。传入后每条链头部会加上
+     *   [OPEN] 或 [RESOLVED] 标签，让 AI 知道是否应跳过 / reopen。
+     */
+    async getCommentChainsWithinRange(pullNumber, path, startLine, endLine, tag = '', threadStatusMap) {
+        const existingComments = await this.getCommentsWithinRange(pullNumber, path, startLine, endLine);
+        // 找出所有顶层评论（没有 in_reply_to_id 的评论）
+        const topLevelComments = [];
+        for (const comment of existingComments) {
+            if (!comment.in_reply_to_id) {
+                topLevelComments.push(comment);
+            }
+        }
+        // 组装所有包含指定标签的对话链
+        let allChains = '';
+        let chainNum = 0;
+        for (const topLevelComment of topLevelComments) {
+            const chain = await this.composeCommentChain(existingComments, topLevelComment);
+            if (chain && chain.includes(tag)) {
+                chainNum += 1;
+                // 从 threadStatusMap 推断该评论所在行是否已 resolved
+                let statusLabel = '';
+                if (threadStatusMap != null) {
+                    const commentLine = topLevelComment.line ?? topLevelComment.original_line ?? startLine;
+                    const key = `${path}:${commentLine}`;
+                    const isResolved = threadStatusMap.get(key);
+                    // 只在明确知道状态时加标签；未命中 map 的保持无标签（兼容旧行为）
+                    if (isResolved === true) {
+                        statusLabel = ' [RESOLVED]';
+                    }
+                    else if (isResolved === false) {
+                        statusLabel = ' [OPEN]';
+                    }
+                }
+                allChains += `Conversation Chain ${chainNum}${statusLabel}:
+${chain}
+---
+`;
+            }
+        }
+        return allChains;
+    }
+    /**
+     * 组装单个评论对话链
+     * 将顶层评论和其所有回复按顺序拼接为 "用户: 内容" 格式的字符串
+     */
+    async composeCommentChain(reviewComments, topLevelComment) {
+        const conversationChain = reviewComments
+            .filter((cmt) => cmt.in_reply_to_id === topLevelComment.id)
+            .map((cmt) => `${cmt.user.login}: ${cmt.body}`);
+        conversationChain.unshift(`${topLevelComment.user.login}: ${topLevelComment.body}`);
+        return conversationChain.join('\n---\n');
+    }
+    /**
+     * 获取指定评论的完整对话链
+     * @returns { chain: 对话链字符串, topLevelComment: 顶层评论对象 }
+     */
+    async getCommentChain(pullNumber, comment) {
+        try {
+            const reviewComments = await this.listReviewComments(pullNumber);
+            const topLevelComment = await this.getTopLevelComment(reviewComments, comment);
+            const chain = await this.composeCommentChain(reviewComments, topLevelComment);
+            return { chain, topLevelComment };
+        }
+        catch (e) {
+            getLogger().warning(`Failed to get conversation chain: ${e}`);
+            return {
+                chain: '',
+                topLevelComment: null
+            };
+        }
+    }
+    /**
+     * 沿着 in_reply_to_id 链向上查找顶层评论
+     * 顶层评论是对话链的起始评论（没有 in_reply_to_id）
+     */
+    async getTopLevelComment(reviewComments, comment) {
+        let topLevelComment = comment;
+        while (topLevelComment.in_reply_to_id) {
+            const parentComment = reviewComments.find((cmt) => cmt.id === topLevelComment.in_reply_to_id);
+            if (parentComment) {
+                topLevelComment = parentComment;
+            }
+            else {
+                break;
+            }
+        }
+        return topLevelComment;
+    }
+    // ==================== 评论缓存和分页列表 ====================
+    /** review comment 缓存（按 PR 编号索引），避免重复 API 调用 */
+    reviewCommentsCache = {};
+    /**
+     * 分页获取 PR 的所有 review comment
+     * 结果会被缓存，同一 PR 编号的后续调用直接返回缓存
+     */
+    async listReviewComments(target) {
+        if (this.reviewCommentsCache[target]) {
+            return this.reviewCommentsCache[target];
+        }
+        try {
+            const comments = await getPlatform().listReviewComments(repo.owner, repo.repo, target);
+            // 映射为旧 Octokit 格式以保持 getCommentsWithinRange 等消费者兼容
+            const mapped = comments.map(c => ({
+                id: c.id,
+                body: c.body,
+                path: c.path,
+                line: c.line,
+                // eslint-disable-next-line camelcase
+                start_line: c.startLine,
+                // eslint-disable-next-line camelcase
+                original_line: c.originalLine,
+                // eslint-disable-next-line camelcase
+                in_reply_to_id: c.in_reply_to_id,
+                user: { login: c.author },
+                // eslint-disable-next-line camelcase
+                node_id: c.nodeId,
+                // eslint-disable-next-line camelcase
+                created_at: c.createdAt
+            }));
+            this.reviewCommentsCache[target] = mapped;
+            return mapped;
+        }
+        catch (e) {
+            getLogger().warning(`Failed to list review comments: ${e}`);
+            return [];
+        }
+    }
+    /** 创建新的 issue comment */
+    async create(body, target) {
+        try {
+            const result = await getPlatform().createComment(repo.owner, repo.repo, target, body);
+            const data = {
+                id: result.id,
+                body: result.body,
+                user: { login: result.author },
+                // eslint-disable-next-line camelcase
+                node_id: result.nodeId,
+                // eslint-disable-next-line camelcase
+                created_at: result.createdAt
+            };
+            if (this.issueCommentsCache[target]) {
+                this.issueCommentsCache[target].push(data);
+            }
+            else {
+                this.issueCommentsCache[target] = [data];
+            }
+            return true;
+        }
+        catch (e) {
+            getLogger().warning(`Failed to create comment: ${e}`);
+            return false;
+        }
+    }
+    /** 查找并替换已有评论；如果不存在则新建。同时清理并发运行产生的重复评论 */
+    async replace(body, tag, target) {
+        const platform = getPlatform();
+        const logger = getLogger();
+        try {
+            const comments = await this.listComments(target);
+            const variants = variantsForTag(tag);
+            const taggedComments = comments.filter((cmt) => cmt.body && variants.some(v => cmt.body.includes(v)));
+            // REVIEW-008：带 marker 不等于是我们发的。用户「引用回复」会把整段正文连同
+            // marker 一起复制过去，不校验作者就会覆盖甚至删掉用户自己的评论。
+            const botLogin = await resolveBotLogin();
+            // 身份未知时 fail closed：既不更新也不删除任何既有评论，直接新发一条。
+            //
+            // 只挡删除是不够的——覆盖比删除破坏性更大：被删的评论用户还能从邮件通知里
+            // 找回原文，被覆盖的内容彻底消失。宁可留下重复的摘要（下次身份可解析时会
+            // 自动收敛），也不能赌「第一条带 marker 的评论就是我们自己的」。
+            if (botLogin == null) {
+                logger.warning(`Bot identity is unknown — posting a new comment with tag ${tag} instead of updating ` +
+                    `${taggedComments.length} existing match(es), to avoid overwriting user comments. ` +
+                    'Set the bot login in configuration to restore in-place updates.');
+                return await this.create(body, target);
+            }
+            const ownComments = taggedComments.filter((cmt) => isOwnComment(cmt, botLogin) === true);
+            const foreignCount = taggedComments.length - ownComments.length;
+            if (foreignCount > 0) {
+                logger.info(`Ignoring ${foreignCount} comment(s) carrying tag ${tag} but authored by someone else ` +
+                    '(likely a quoted reply)');
+            }
+            if (ownComments.length > 0) {
+                await platform.updateComment(repo.owner, repo.repo, ownComments[0].id, body);
+                for (let i = 1; i < ownComments.length; i++) {
+                    logger.info(`Deleting duplicate comment ${ownComments[i].id} with tag ${tag}`);
+                    try {
+                        await platform.deleteComment(repo.owner, repo.repo, ownComments[i].id);
+                    }
+                    catch (e) {
+                        logger.warning(`Failed to delete duplicate comment: ${e}`);
+                    }
+                }
+                return true;
+            }
+            return await this.create(body, target);
+        }
+        catch (e) {
+            logger.warning(`Failed to replace comment: ${e}`);
+            return false;
+        }
+    }
+    /** 查找包含指定标签的 issue comment */
+    async findCommentWithTag(tag, target) {
+        try {
+            const comments = await this.listComments(target);
+            const variants = variantsForTag(tag);
+            // 同 replace()：用户引用回复里的 marker 不能被当成我们自己的状态，
+            // 否则会从中读出过期的 reviewed SHA，把增量审查的起点带偏。
+            //
+            // 身份未知时返回 null 而不是「第一条带 marker 的」：拿不准归属就不恢复
+            // 状态。代价是这次退化成全量审查，比从用户引用里读出错误的起点安全。
+            const botLogin = await resolveBotLogin();
+            if (botLogin == null) {
+                getLogger().warning(`Bot identity is unknown — not restoring state from comments with tag ${tag}; ` +
+                    'this run will not use previous review state.');
+                return null;
+            }
+            for (const cmt of comments) {
+                if (!cmt.body || !variants.some(v => cmt.body.includes(v)))
+                    continue;
+                if (isOwnComment(cmt, botLogin) !== true)
+                    continue;
+                return cmt;
+            }
+            return null;
+        }
+        catch (e) {
+            getLogger().warning(`Failed to find comment with tag: ${e}`);
+            return null;
+        }
+    }
+    /** issue comment 缓存（按 issue/PR 编号索引） */
+    issueCommentsCache = {};
+    /** 分页获取 PR/issue 的所有 issue comment（带缓存） */
+    async listComments(target) {
+        if (this.issueCommentsCache[target]) {
+            return this.issueCommentsCache[target];
+        }
+        try {
+            const comments = await getPlatform().listComments(repo.owner, repo.repo, target);
+            const mapped = comments.map(c => ({
+                id: c.id,
+                body: c.body,
+                user: { login: c.author },
+                // eslint-disable-next-line camelcase
+                node_id: c.nodeId,
+                // eslint-disable-next-line camelcase
+                created_at: c.createdAt
+            }));
+            this.issueCommentsCache[target] = mapped;
+            return mapped;
+        }
+        catch (e) {
+            getLogger().warning(`Failed to list comments: ${e}`);
+            return [];
+        }
+    }
+    // ==================== 增量审查状态管理 ====================
+    // 使用 HTML 注释标签在摘要评论中存储已审查的 commit ID 列表
+    // 格式：<!-- commit_ids_reviewed_start --><!-- sha1 --><!-- sha2 --><!-- commit_ids_reviewed_end -->
+    /**
+     * 从评论正文中提取已审查的 commit ID 列表
+     * @returns commit SHA 字符串数组
+     */
+    getReviewedCommitIds(commentBody) {
+        const block = commenter_locateCommitIdBlock(commentBody);
+        if (block == null) {
+            return [];
+        }
+        const ids = commentBody.substring(block.start + block.startTag.length, block.end);
+        // 解析 <!-- sha --> 格式的 commit ID
+        return ids
+            .split('<!--')
+            .map(id => id.replace('-->', '').trim())
+            .filter(id => id !== '');
+    }
+    /** 提取已审查 commit ID 的完整区块（包含标签） */
+    getReviewedCommitIdsBlock(commentBody) {
+        const block = commenter_locateCommitIdBlock(commentBody);
+        if (block == null) {
+            return '';
+        }
+        return commentBody.substring(block.start, block.end + block.endTag.length);
+    }
+    /**
+     * 向已审查 commit ID 列表中添加新的 commit ID
+     * 如果标签不存在则创建新的区块
+     */
+    addReviewedCommitId(commentBody, commitId) {
+        const block = commenter_locateCommitIdBlock(commentBody);
+        if (block == null) {
+            // 新建区块用当前平台命名空间；已存在的旧区块保持原标签就地追加
+            const tags = commitIdTags();
+            return `${commentBody}\n${tags.start}\n<!-- ${commitId} -->\n${tags.end}`;
+        }
+        if (this.getReviewedCommitIds(commentBody).includes(commitId)) {
+            return commentBody;
+        }
+        const ids = commentBody.substring(block.start + block.startTag.length, block.end);
+        return `${commentBody.substring(0, block.start + block.startTag.length)}${ids}<!-- ${commitId} -->\n${commentBody.substring(block.end)}`;
+    }
+    /**
+     * 从 commit 列表中找到最近一次已审查的 commit ID
+     * 从后向前遍历，返回第一个匹配的已审查 commit
+     */
+    getHighestReviewedCommitId(commitIds, reviewedCommitIds) {
+        for (let i = commitIds.length - 1; i >= 0; i--) {
+            if (reviewedCommitIds.includes(commitIds[i])) {
+                return commitIds[i];
+            }
+        }
+        return '';
+    }
+    /** 获取 PR 的所有 commit ID（分页获取完整列表） */
+    async getAllCommitIds() {
+        const execCtx = getExecCtx();
+        if (execCtx.changeRequestId) {
+            return getPlatform().listChangeRequestCommits(repo.owner, repo.repo, execCtx.changeRequestId);
+        }
+        return [];
+    }
+    // ==================== 审查进度状态管理 ====================
+    /**
+     * 在摘要评论中添加"审查进行中"的状态提示
+     * 如果已存在则不重复添加
+     */
+    addInProgressStatus(commentBody, statusMsg) {
+        // 写新读旧：已有历史格式的进度块时不重复插入
+        if (locateInProgressBlock(commentBody) != null) {
+            return commentBody;
+        }
+        {
+            return `${inProgressStartTag()}
+
+Currently reviewing new changes in this PR...
+
+${statusMsg}
+
+${inProgressEndTag()}
+
+---
+
+${commentBody}`;
+        }
+    }
+    /** 从摘要评论中移除"审查进行中"的状态提示 */
+    removeInProgressStatus(commentBody) {
+        const block = locateInProgressBlock(commentBody);
+        if (block != null) {
+            return (commentBody.substring(0, block.start) +
+                commentBody.substring(block.end + block.endTag.length));
+        }
+        return commentBody;
+    }
+}
+
+;// CONCATENATED MODULE: ./lib/review-commit-ids.js
+
+async function isHeadAlreadyReviewed(prNumber, headSha) {
+    const commenter = new commenter_Commenter();
+    const comment = await commenter.findCommentWithTag(commenter_summarizeTag(), prNumber);
+    if (comment == null)
+        return false;
+    const reviewedIds = commenter.getReviewedCommitIds(comment.body);
+    return reviewedIds.includes(headSha);
+}
+async function clearReviewedCommitIds(prNumber) {
+    const commenter = new Commenter();
+    const comment = await commenter.findCommentWithTag(summarizeTag(), prNumber);
+    if (comment == null)
+        return;
+    const block = locateCommitIdBlock(comment.body);
+    if (block == null)
+        return;
+    const newBody = comment.body.substring(0, block.start) + comment.body.substring(block.end + block.endTag.length);
+    await commenter.comment(newBody.trim(), summarizeTag(), 'replace');
+}
+
+;// CONCATENATED MODULE: ./lib/commands/handlers/review.js
+
+
+
+
+/**
+ * 审查命令必须知道当前 HEAD 才能做正确的事。
+ *
+ * dispatcher 会在事件处理开头统一查一次 change request 补齐 head/base SHA
+ * （CMD-017 要求「针对最新 HEAD」，所以取的是现查值而不是 payload 里可能过期的
+ * 那个）。那次查询失败时 headSha 是空串——此时**不能**继续：
+ *
+ *   - `full review`：`isHeadAlreadyReviewed(pr, '')` 必然返回 false，于是明明
+ *     刚审过也会再跑一次全量，白烧一轮模型调用
+ *   - `review`：对着未知 HEAD 跑增量，结果写到哪个 SHA 上都说不清
+ *
+ * 宁可让用户重发一次命令。
+ */
+function requireHeadSha(ctx, command) {
+    if (ctx.headSha !== '')
+        return null;
+    getLogger().warning(`${command}: aborted — current HEAD is unknown (change request query failed)`);
+    return {
+        message: '⚠️ 无法获取当前 HEAD，已中止。这通常是平台 API 暂时不可用，请稍后重试；' +
+            '若持续出现请检查 token 权限。'
+    };
+}
+/** triggerReview 未接线时（单测直接构造 ctx）走统一的 NOT_IMPLEMENTED */
+function notWired(name) {
+    const e = new Error(`Command not implemented: ${name}`);
+    e.code = 'NOT_IMPLEMENTED';
+    throw e;
+}
+const reviewHandler = {
+    name: 'review',
+    description: '触发增量审查（仅审查自上次审查以来的新增变更）',
+    usage: `${PRIMARY_BOT_MENTION} review`,
+    needsAck: true,
+    minPermission: 'write',
+    async execute(ctx) {
+        if (ctx.triggerReview == null)
+            notWired('review');
+        const aborted = requireHeadSha(ctx, 'review');
+        if (aborted != null)
+            return aborted;
+        // 自动审查处于活跃状态时，增量审查本来就会随 push 事件发生，手动再触发一次
+        // 只会重复审已审过的 commit。这里直接说明，而不是空跑一轮。
+        const state = await getReviewState(ctx.owner, ctx.repo, ctx.prNumber);
+        if (state !== 'paused') {
+            return {
+                message: `<details>
+✅ Review finished.
+
+> **Note:** CodeSentinel is an incremental review system and does not re-review already reviewed commits. This command is applicable only when automatic reviews are paused.
+
+</details>`
+            };
+        }
+        await ctx.triggerReview('incremental');
+        return { message: '增量审查已完成' };
+    }
+};
+const fullReviewHandler = {
+    name: 'full review',
+    description: '触发全量审查（从 base 到 HEAD 的完整 diff）',
+    usage: `${PRIMARY_BOT_MENTION} full review`,
+    needsAck: true,
+    minPermission: 'write',
+    async execute(ctx) {
+        if (ctx.triggerReview == null)
+            notWired('full review');
+        const aborted = requireHeadSha(ctx, 'full review');
+        if (aborted != null)
+            return aborted;
+        if (await isHeadAlreadyReviewed(ctx.prNumber, ctx.headSha)) {
+            return {
+                message: `✅ Full review finished.\n\n> **Note:** The current HEAD ` +
+                    `(\`${ctx.headSha.slice(0, 7)}\`) has already been reviewed. ` +
+                    `No new changes detected since the last review.`
+            };
+        }
+        await ctx.triggerReview('full');
+        return { message: '✅ Full review finished.' };
+    }
+};
+const summaryHandler = {
+    name: 'summary',
+    description: '基于当前最新代码重新生成 PR 摘要',
+    usage: `${PRIMARY_BOT_MENTION} summary`,
+    needsAck: true,
+    minPermission: 'write',
+    async execute(ctx) {
+        if (ctx.triggerReview == null)
+            notWired('summary');
+        // summary 同样要基于最新 HEAD 重建，HEAD 未知时重建出来的摘要会指向错误的
+        // commit 范围（CMD-019）。
+        const aborted = requireHeadSha(ctx, 'summary');
+        if (aborted != null)
+            return aborted;
+        await ctx.triggerReview('summary');
+        return { message: 'PR 摘要已重新生成' };
+    }
+};
+
+;// CONCATENATED MODULE: ./lib/commands/handlers/pause.js
+
+
+const pauseHandler = {
+    name: 'pause',
+    description: '暂停对当前 PR 的自动审查',
+    usage: `${PRIMARY_BOT_MENTION} pause`,
+    needsAck: false,
+    minPermission: 'write',
+    async execute(ctx) {
+        // 重复 pause 是幂等的：状态已是 paused 就不再写 description，避免无谓的
+        // 读改写把并发窗口拉长（CMD-021 的幂等要求对 pause 同样成立）。
+        const current = await getReviewState(ctx.owner, ctx.repo, ctx.prNumber);
+        if (current === 'paused') {
+            return {
+                message: `ℹ️ 当前 PR 的自动审查已处于暂停状态。使用 \`${PRIMARY_BOT_MENTION} resume\` 恢复。`
+            };
+        }
+        await setReviewState(ctx.owner, ctx.repo, ctx.prNumber, 'paused');
+        return {
+            message: `已暂停当前 PR 的自动审查。使用 \`${PRIMARY_BOT_MENTION} resume\` 恢复。`
+        };
+    }
+};
+const resumeHandler = {
+    name: 'resume',
+    description: '恢复对当前 PR 的自动审查',
+    usage: `${PRIMARY_BOT_MENTION} resume`,
+    needsAck: false,
+    minPermission: 'write',
+    async execute(ctx) {
+        const current = await getReviewState(ctx.owner, ctx.repo, ctx.prNumber);
+        if (current === 'active') {
+            return { message: 'ℹ️ 当前 PR 的自动审查已处于启用状态。' };
+        }
+        await setReviewState(ctx.owner, ctx.repo, ctx.prNumber, 'active');
+        return { message: '已恢复当前 PR 的自动审查。' };
+    }
+};
+
+;// CONCATENATED MODULE: ./lib/commands/handlers/configuration.js
+
+
+const ROWS = [
+    { key: 'disable_review', value: o => o.disableReview },
+    { key: 'disable_release_notes', value: o => o.disableReleaseNotes },
+    { key: 'max_files', value: o => o.maxFiles },
+    { key: 'review_simple_changes', value: o => o.reviewSimpleChanges },
+    { key: 'review_comment_lgtm', value: o => o.reviewCommentLGTM },
+    { key: 'max_review_comments', value: o => o.maxReviewComments },
+    { key: 'openai_light_model', value: o => o.openaiLightModel },
+    { key: 'openai_heavy_model', value: o => o.openaiHeavyModel },
+    { key: 'openai_concurrency_limit', value: o => o.openaiConcurrencyLimit },
+    { key: 'github_concurrency_limit', value: o => o.githubConcurrencyLimit },
+    { key: 'enable_dependency_analysis', value: o => o.enableDependencyAnalysis },
+    { key: 'max_dependency_files', value: o => o.maxDependencyFiles },
+    { key: 'enable_web_search', value: o => o.enableWebSearch },
+    {
+        key: 'enable_shell',
+        value: o => o.enableShell,
+        forcedOn: { gitlab: 'trigger 强制关闭（LOCAL-001）' }
+    },
+    {
+        key: 'enable_lint_tools',
+        value: o => o.enableLintTools,
+        forcedOn: { gitlab: 'trigger 强制关闭（LOCAL-002）' }
+    },
+    { key: 'language', value: o => o.language }
+];
+/** 本平台上这一项的配置键；顺便说明未显式配置时会落到默认值 */
+function describeSource(platform, key) {
+    return platform === 'gitlab'
+        ? `CI 变量 \`AI_REVIEWER_${key.toUpperCase()}\``
+        : `Action input \`${key}\``;
+}
+/**
+ * 描述这一项的取值来源。
+ *
+ * **只有 GitLab 能区分「显式配置」与「默认值」。** GitLab CI 只为用户真正定义过
+ * 的变量注入环境变量，读不到就是没配。
+ *
+ * GitHub 不行：`action.yml` 里带 `default:` 的 input（本仓库 46 处）在 Actions
+ * 运行时同样会展开成 `INPUT_<KEY>`，无论用户在 `with:` 里写没写。按环境变量有无
+ * 判断，会把默认值一律标成「用户显式设置」——这比不标更糟，用户会照着一个并不
+ * 存在的配置去找。所以 GitHub 侧只给键名，不声称能区分。
+ *
+ * 要真正区分得在 ConfigProvider 阶段留下来源元数据，那属于 §4，不在本章范围。
+ */
+function describeValueSource(platform, key, env = process.env) {
+    const source = describeSource(platform, key);
+    if (platform !== 'gitlab')
+        return `${source}（或 action.yml 默认值）`;
+    const raw = env[`AI_REVIEWER_${key.toUpperCase()}`];
+    return raw != null && raw.trim() !== '' ? source : `默认值（未设置 ${source}）`;
+}
+function buildConfigurationMessage(platform, options, reviewState, env = process.env) {
+    const lines = [];
+    lines.push('## 当前审查配置');
+    lines.push('');
+    lines.push(`平台：\`${platform}\``);
+    lines.push('');
+    lines.push('| 配置 | 生效值 | 来源 |');
+    lines.push('| :--- | :--- | :--- |');
+    lines.push(`| 自动审查状态 | \`${reviewState}\` | PR/MR 描述中的 reviewer 区块 |`);
+    for (const row of ROWS) {
+        const forced = row.forcedOn?.[platform];
+        const source = forced ?? describeValueSource(platform, row.key, env);
+        lines.push(`| ${row.key} | \`${String(row.value(options))}\` | ${source} |`);
+    }
+    lines.push('');
+    lines.push('> 仅显示生效后的非敏感配置。API Key、PAT、Trigger token 不经过配置层，也不会在此显示。');
+    return lines.join('\n');
+}
+const configurationHandler = {
+    name: 'configuration',
+    description: '显示当前仓库的审查配置',
+    usage: `${PRIMARY_BOT_MENTION} configuration`,
+    needsAck: false,
+    // CMD-012：Reporter+。GitLab 的 REPORTER(20) 映射为 'triage'，
+    // 与运行差异文档的权限基线一致。此前是 'read'，等于放行 GitLab GUEST。
+    minPermission: 'triage',
+    async execute(ctx) {
+        const state = await getReviewState(ctx.owner, ctx.repo, ctx.prNumber);
+        const platform = ctx.execCtx?.platform ?? 'github';
+        return { message: buildConfigurationMessage(platform, ctx.options, state) };
+    }
+};
+
+;// CONCATENATED MODULE: ./lib/commands/bootstrap.js
+/**
+ * commands/bootstrap.ts - 命令框架启动注册
+ *
+ * 统一在应用启动时把所有 handler 注册到 registry。
+ *
+ * 注意: 注册表是单例，且 register 在重复注册时抛异常。
+ * 因此 bootstrap 必须保证只被调用一次（用模块级 flag 保护）。
+ */
+
+
+
+
+
+
+/**
+ * 全部已实现的命令（§9.3 完成后 stubs.ts 不再存在）。
+ * 新增命令在这里挂上即可，registry 会拒绝重名注册。
+ */
+const ALL_HANDLERS = [
+    helpHandler,
+    resolveHandler,
+    reviewHandler,
+    fullReviewHandler,
+    summaryHandler,
+    pauseHandler,
+    resumeHandler,
+    configurationHandler
+];
+let bootstrapped = false;
+function bootstrapCommands() {
+    if (bootstrapped)
+        return;
+    const reg = registry_getRegistry();
+    for (const h of ALL_HANDLERS) {
+        reg.register(h);
+    }
+    bootstrapped = true;
+}
+/** 仅供测试: 清空注册表并允许再次 bootstrap */
+function _resetBootstrap() {
+    getRegistry()._reset();
+    bootstrapped = false;
+}
+
+;// CONCATENATED MODULE: ./lib/commands/reaction.js
+/**
+ * commands/reaction.ts - 命令 ACK 表情反应
+ *
+ * 当 dispatcher 识别到 `@bot <cmd>` 时，会在用户原评论上打一个表情反应
+ * （默认 👀），以在正文回复之前先给一个可见的 "收到" 信号。
+ *
+ * 设计要点：
+ * - content 值来自 action input `command_ack_reaction`，通过 options 透传
+ * - 空字符串 / 'off' / 'none' 视为禁用
+ * - 非法值会被丢弃并给 warning，不阻塞命令执行
+ * - issue_comment 与 pull_request_review_comment 走不同 endpoint
+ * - 任何失败都只打 warning，不让命令主流程受影响
+ */
+
+
+const VALID_REACTIONS = [
+    '+1',
+    '-1',
+    'laugh',
+    'confused',
+    'heart',
+    'hooray',
+    'rocket',
+    'eyes'
+];
+/**
+ * 把 raw 配置归一化为合法的 ReactionContent；不合法或禁用时返回 null。
+ */
+function normalizeReaction(raw) {
+    if (raw == null)
+        return null;
+    const trimmed = raw.trim().toLowerCase();
+    if (trimmed === '' || trimmed === 'off' || trimmed === 'none' || trimmed === 'false') {
+        return null;
+    }
+    if (VALID_REACTIONS.includes(trimmed)) {
+        return trimmed;
+    }
+    getLogger().warning(`command_ack_reaction "${raw}" is not a valid GitHub reaction ` +
+        `(expected one of ${VALID_REACTIONS.join(', ')}); ACK reaction will be skipped.`);
+    return null;
+}
+/**
+ * 在触发命令的用户评论上加表情反应。失败只 warning，不抛错。
+ */
+async function addAckReaction(params) {
+    const content = normalizeReaction(params.rawReaction);
+    if (content == null) {
+        return;
+    }
+    const logger = getLogger();
+    try {
+        const commentKind = params.eventName === 'pull_request_review_comment' ? 'review_comment' : 'issue_comment';
+        await getPlatform().addReaction(params.owner, params.repo, params.changeRequestId, params.commentId, content, commentKind);
+        logger.info(`ack reaction "${content}" added on ${params.eventName} commentId=${params.commentId}`);
+    }
+    catch (e) {
+        logger.warning(`addAckReaction failed (content=${content}, commentId=${params.commentId}): ${String(e)}`);
+    }
+}
+
+;// CONCATENATED MODULE: ./lib/commands/early-reaction.js
+/**
+ * commands/early-reaction.ts - 评论事件的提前 ACK 表情
+ *
+ * 在 main.ts 中、Bot 初始化之前调用。目的是在 Actions 冷启动后尽快
+ * 给用户评论打一个表情反应（默认 👀），让用户知道"已收到"。
+ *
+ * 只做三件事：
+ *   1. 校验评论正文存在 + 发起人不是 bot
+ *   2. 解析评论是否 @bot（命令或对话式追问皆可）
+ *   3. 是 → 打表情；不是 → 跳过
+ *
+ * 不做 Bot 初始化、权限查询、幂等检查等重操作。
+ *
+ * ARCH-005：不直接 import `@actions/github`，也不读取 `execCtx.raw`——
+ * 事件坐标全部来自调用方传入的 ExecutionContext 归一化字段。"action != created"
+ * 和"issue_comment 是否挂在 PR 上"这两条判断已经上移到 `createGitHubExecutionContext()`
+ * 构造阶段（见该文件），构造失败会走 `ignorable_event` 优雅跳过，本函数根本不会被
+ * 调用，因此不需要在这里重复判断（GitHub Issue #88 P2 复核）。
+ */
+
+
+
+
+
+/**
+ * 尝试在 Bot 初始化前尽快给用户评论打 ACK 表情。
+ * 失败或非命令场景下静默返回，不影响后续流程。
+ */
+async function tryEarlyReaction(execCtx, options) {
+    try {
+        if (execCtx.eventKind !== 'comment_created' && execCtx.eventKind !== 'review_comment_created') {
+            return;
+        }
+        const eventName = execCtx.eventKind === 'review_comment_created'
+            ? 'pull_request_review_comment'
+            : 'issue_comment';
+        const comment = execCtx.comment;
+        if (comment == null || typeof comment.body !== 'string')
+            return;
+        if (execCtx.actor.isBot)
+            return;
+        bootstrapCommands();
+        const registry = registry_getRegistry();
+        const outcome = parse(comment.body, {
+            registeredCommands: registry.getRegisteredNames(),
+            botMentions: resolveBotMentions(options.botLogin)
+        });
+        // 命令（@bot <cmd>）与对话式追问（@bot <自然语言>）都先打 ACK 表情：
+        // 二者都会触发后续 bot 回帖，提前给用户一个"已收到"的可见信号。
+        // 'none' 分支（未 @bot / 非触发）不打表情，避免打扰真人之间的普通讨论。
+        if (outcome.kind !== 'command' && outcome.kind !== 'conversation')
+            return;
+        // GitLab subgroup 项目路径可能含多级 namespace（如 group/subgroup/repo），
+        // 用 lastIndexOf 确保 owner 保留完整 namespace
+        const lastSlash = execCtx.projectPath.lastIndexOf('/');
+        const owner = execCtx.projectPath.substring(0, lastSlash);
+        const repo = execCtx.projectPath.substring(lastSlash + 1);
+        await addAckReaction({
+            owner,
+            repo,
+            changeRequestId: execCtx.changeRequestId,
+            commentId: comment.id,
+            eventName,
+            rawReaction: options.commandAckReaction
+        });
+        (0,actions_log.info)(`early ack reaction sent for commentId=${comment.id}`);
+    }
+    catch (e) {
+        (0,actions_log.info)(`early ack reaction skipped: ${String(e)}`);
+    }
+}
+
 // EXTERNAL MODULE: external "child_process"
 var external_child_process_ = __nccwpck_require__(2081);
 ;// CONCATENATED MODULE: ./node_modules/openai/internal/tslib.mjs
@@ -77687,7 +80854,7 @@ const decorateErrorWithCounts = (error, attemptNumber, options) => {
 	return error;
 };
 
-const isNetworkError = errorMessage => networkErrorMsgs.has(errorMessage);
+const p_retry_isNetworkError = errorMessage => networkErrorMsgs.has(errorMessage);
 
 const getDOMException = errorMessage => globalThis.DOMException === undefined
 	? new Error(errorMessage)
@@ -77715,7 +80882,7 @@ async function pRetry(input, options) {
 				if (error instanceof AbortError) {
 					operation.stop();
 					reject(error.originalError);
-				} else if (error instanceof TypeError && !isNetworkError(error.message)) {
+				} else if (error instanceof TypeError && !p_retry_isNetworkError(error.message)) {
 					operation.stop();
 					reject(error);
 				} else {
@@ -77747,45 +80914,6 @@ async function pRetry(input, options) {
 			});
 		}
 	});
-}
-
-;// CONCATENATED MODULE: ./lib/platform/logger.js
-/**
- * platform/logger.ts - 平台无关 Logger 接口（ARCH-012）
- *
- * 定义统一的日志接口，替换共享核心中对 @actions/core info/warning/error 的直接依赖。
- * 入口文件（main.ts / gitlab-trigger.ts）在启动时调用 setLogger() 设置平台实现，
- * 共享核心通过 getLogger() 或便捷函数（logger.info 等）输出日志。
- *
- * ARCH-015：GitLab-only 启动不得初始化 @actions/core，因此 GitLabLogger
- * 不 import @actions/core，只使用 console。
- */
-/**
- * 控制台 Logger（默认 fallback）。
- * 在 setLogger() 调用前或未初始化时使用，保证日志不会丢失。
- */
-const consoleLogger = {
-    // eslint-disable-next-line no-console
-    info: (msg) => console.log(msg),
-    // eslint-disable-next-line no-console
-    warning: (msg) => console.warn(msg),
-    // eslint-disable-next-line no-console
-    error: (msg) => console.error(msg),
-    // eslint-disable-next-line no-console
-    debug: (msg) => console.log(`[DEBUG] ${msg}`)
-};
-let _logger = consoleLogger;
-/** 设置全局 Logger 实例（入口文件调用） */
-function setLogger(logger) {
-    _logger = logger;
-}
-/** 获取当前 Logger 实例 */
-function getLogger() {
-    return _logger;
-}
-/** 重置为默认 console logger（仅供测试使用） */
-function resetLogger() {
-    _logger = consoleLogger;
 }
 
 ;// CONCATENATED MODULE: ./lib/sanitize-model-output.js
@@ -78062,7 +81190,10 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
                 for (let i = 0; i < response.output.length; i++) {
                     const item = response.output[i];
                     (0,actions_log.info)(`[analysis_chain_debug] output[${i}] type="${item.type}", keys=${JSON.stringify(Object.keys(item))}`);
-                    if (item.type === 'web_search_call') {
+                    // WS-003：开关必须同时校验。只看响应项类型的话，兼容 API 返回了意外的
+                    // web_search_call、或响应协议漂移时，开关为 false 也会记下 web search
+                    // analysis step——那条 step 会进 PR 评论，等于对外宣称做过搜索。
+                    if (this.enableWebSearch && item.type === 'web_search_call') {
                         (0,actions_log.info)(`[web_search] executed, id: ${item.id}, status: ${item.status}`);
                         analysisSteps.push({
                             type: 'web_search',
@@ -78321,2144 +81452,6 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
             };
         }
     };
-}
-
-;// CONCATENATED MODULE: ./lib/commands/registry.js
-
-class CommandRegistry {
-    handlers = new Map();
-    /** 规范名 → 注册顺序，help 命令按注册顺序输出 */
-    order = [];
-    // {
-    //   name: "review",
-    //   aliases: ['r', 're']
-    // }
-    // {
-    //   name: 'review',
-    // }
-    register(handler) {
-        const primary = handler.name.toLowerCase();
-        if (this.handlers.has(primary)) {
-            throw new Error(`Command already registered: ${primary}`);
-        }
-        this.handlers.set(primary, handler);
-        this.order.push(primary);
-        for (const alias of handler.aliases ?? []) {
-            const a = alias.toLowerCase();
-            if (this.handlers.has(a)) {
-                throw new Error(`Command alias collides with existing command: ${a}`);
-            }
-            this.handlers.set(a, handler);
-        }
-        getLogger().info(`[Registered command]: ${handler.name} aliases: ${(handler.aliases ?? []).join(', ')}`);
-    }
-    get(name) {
-        return this.handlers.get(name.toLowerCase());
-    }
-    has(name) {
-        return this.handlers.has(name.toLowerCase());
-    }
-    /** 仅返回主名 + 别名，用于 parser 命中检测 */
-    getRegisteredNames() {
-        return new Set(this.handlers.keys());
-    }
-    /** 按注册顺序返回所有主命令（不含别名），供 help 使用 */
-    listCommands() {
-        return this.order
-            .map(n => this.handlers.get(n))
-            .filter((h) => h !== undefined);
-    }
-    /** 仅供测试使用 */
-    _reset() {
-        this.handlers.clear();
-        this.order.length = 0;
-    }
-}
-const globalRegistry = new CommandRegistry();
-function registry_getRegistry() {
-    return globalRegistry;
-}
-
-
-;// CONCATENATED MODULE: ./lib/constants.js
-/**
- * constants.ts - 全局共享常量
- *
- * 跨多个领域模块（命令解析 / 对话识别 / 文案展示）复用的常量集中在此，
- * 避免同一个值在多处硬编码后发生分叉。
- */
-/**
- * bot mention 别名（小写，已带 @）。
- *
- * 命令解析（parser）与对话追问识别（conversation）共用同一份触发别名——
- * 二者必须保持一致，否则会出现「命令能触发但对话不认」之类的隐蔽 bug。
- * 新增/调整别名只改这里一处。
- */
-const BOT_MENTIONS = ['@ai-reviewer', '@codesentinel'];
-/**
- * 主 mention 别名，用于面向用户的文案/用法示例（help、命令 usage 等）。
- * 取 BOT_MENTIONS 的第一个，保证与触发别名同源。
- */
-const PRIMARY_BOT_MENTION = BOT_MENTIONS[0];
-
-;// CONCATENATED MODULE: ./lib/commands/handlers/help.js
-
-
-/**
- * 纯函数：根据命令列表生成 help Markdown。
- * 提取出来便于单元测试（不依赖 registry 单例）。
- * @param botIcon 可选 bot 图标，用于底部提示（CFG-005）
- */
-function buildHelpMessage(commands, botIcon = '🤖') {
-    const lines = [];
-    lines.push('## 支持的命令');
-    lines.push('');
-    lines.push('| 命令 | 描述 | 最低权限 |');
-    lines.push('| :--- | :--- | :------- |');
-    // help 自身也要出现在列表里，但排在最后
-    const ordered = [...commands].sort((a, b) => {
-        if (a.name === 'help')
-            return 1;
-        if (b.name === 'help')
-            return -1;
-        return 0;
-    });
-    for (const c of ordered) {
-        const perm = c.minPermission ?? 'write';
-        const usage = c.usage ?? `${PRIMARY_BOT_MENTION} ${c.name}`;
-        lines.push(`| \`${usage}\` | ${c.description} | \`${perm}\` |`);
-    }
-    if (ordered.some(c => (c.aliases?.length ?? 0) > 0)) {
-        lines.push('');
-        lines.push('### 别名');
-        for (const c of ordered) {
-            if (c.aliases && c.aliases.length > 0) {
-                lines.push(`- \`${c.name}\` → ${c.aliases.map(a => `\`${a}\``).join(', ')}`);
-            }
-        }
-    }
-    lines.push('');
-    lines.push(`> ${botIcon} Bot 同时支持 ${BOT_MENTIONS.map(m => `\`${m}\``).join(' 与 ')} 共 ${BOT_MENTIONS.length} 个 mention。`);
-    return lines.join('\n');
-}
-/**
- * 构造"未知命令"回复消息，列出所有支持的命令。
- * 参考 coderabbitai 格式: @user, I didn't recognize `xxx` as a valid command.
- */
-function buildUnknownCommandMessage(invalidCmd, actorLogin, commands) {
-    const lines = [];
-    lines.push(`@${actorLogin} , I didn't recognize \`${invalidCmd}\` as a valid command. Here are the commands I support:`);
-    lines.push('');
-    const ordered = [...commands].sort((a, b) => {
-        if (a.name === 'help')
-            return 1;
-        if (b.name === 'help')
-            return -1;
-        return 0;
-    });
-    for (const c of ordered) {
-        const usage = c.usage ?? `${PRIMARY_BOT_MENTION} ${c.name}`;
-        lines.push(`- \`${usage}\` — ${c.description}`);
-    }
-    lines.push('');
-    lines.push(`Let me know which one you'd like to run, or feel free to ask me a question directly!`);
-    return lines.join('\n');
-}
-const helpHandler = {
-    name: 'help',
-    description: '显示所有支持的命令及用法',
-    usage: `${PRIMARY_BOT_MENTION} help`,
-    needsAck: false,
-    minPermission: 'read',
-    async execute(ctx) {
-        const cmds = registry_getRegistry().listCommands();
-        return { message: buildHelpMessage(cmds, ctx.options.botIcon) };
-    }
-};
-
-;// CONCATENATED MODULE: ./node_modules/yocto-queue/index.js
-/*
-How it works:
-`this.#head` is an instance of `Node` which keeps track of its current value and nests another instance of `Node` that keeps the value that comes after it. When a value is provided to `.enqueue()`, the code needs to iterate through `this.#head`, going deeper and deeper to find the last value. However, iterating through every single item is slow. This problem is solved by saving a reference to the last value as `this.#tail` so that it can reference it to add a new value.
-*/
-
-class Node {
-	value;
-	next;
-
-	constructor(value) {
-		this.value = value;
-	}
-}
-
-class Queue {
-	#head;
-	#tail;
-	#size;
-
-	constructor() {
-		this.clear();
-	}
-
-	enqueue(value) {
-		const node = new Node(value);
-
-		if (this.#head) {
-			this.#tail.next = node;
-			this.#tail = node;
-		} else {
-			this.#head = node;
-			this.#tail = node;
-		}
-
-		this.#size++;
-	}
-
-	dequeue() {
-		const current = this.#head;
-		if (!current) {
-			return;
-		}
-
-		this.#head = this.#head.next;
-		this.#size--;
-
-		// Clean up tail reference when queue becomes empty
-		if (!this.#head) {
-			this.#tail = undefined;
-		}
-
-		return current.value;
-	}
-
-	peek() {
-		if (!this.#head) {
-			return;
-		}
-
-		return this.#head.value;
-
-		// TODO: Node.js 18.
-		// return this.#head?.value;
-	}
-
-	clear() {
-		this.#head = undefined;
-		this.#tail = undefined;
-		this.#size = 0;
-	}
-
-	get size() {
-		return this.#size;
-	}
-
-	* [Symbol.iterator]() {
-		let current = this.#head;
-
-		while (current) {
-			yield current.value;
-			current = current.next;
-		}
-	}
-
-	* drain() {
-		while (this.#head) {
-			yield this.dequeue();
-		}
-	}
-}
-
-;// CONCATENATED MODULE: ./node_modules/p-limit/index.js
-
-
-function pLimit(concurrency) {
-	if (!((Number.isInteger(concurrency) || concurrency === Number.POSITIVE_INFINITY) && concurrency > 0)) {
-		throw new TypeError('Expected `concurrency` to be a number from 1 and up');
-	}
-
-	const queue = new Queue();
-	let activeCount = 0;
-
-	const next = () => {
-		activeCount--;
-
-		if (queue.size > 0) {
-			queue.dequeue()();
-		}
-	};
-
-	const run = async (fn, resolve, args) => {
-		activeCount++;
-
-		const result = (async () => fn(...args))();
-
-		resolve(result);
-
-		try {
-			await result;
-		} catch {}
-
-		next();
-	};
-
-	const enqueue = (fn, resolve, args) => {
-		queue.enqueue(run.bind(undefined, fn, resolve, args));
-
-		(async () => {
-			// This function needs to wait until the next microtask before comparing
-			// `activeCount` to `concurrency`, because `activeCount` is updated asynchronously
-			// when the run function is dequeued and called. The comparison in the if-statement
-			// needs to happen asynchronously as well to get an up-to-date value for `activeCount`.
-			await Promise.resolve();
-
-			if (activeCount < concurrency && queue.size > 0) {
-				queue.dequeue()();
-			}
-		})();
-	};
-
-	const generator = (fn, ...args) => new Promise(resolve => {
-		enqueue(fn, resolve, args);
-	});
-
-	Object.defineProperties(generator, {
-		activeCount: {
-			get: () => activeCount,
-		},
-		pendingCount: {
-			get: () => queue.size,
-		},
-		clearQueue: {
-			value: () => {
-				queue.clear();
-			},
-		},
-	});
-
-	return generator;
-}
-
-;// CONCATENATED MODULE: ./lib/platform/git-platform.js
-/**
- * platform/git-platform.ts - 平台无关 Git 服务接口（ARCH-016 / ARCH-017）
- *
- * 定义 GitHub 和 GitLab 共用的 Git 平台操作抽象。业务层（review.ts、commenter.ts、
- * commands/**、conversation.ts 等）通过此接口访问平台 API，不得直接 import
- * octokit / @gitbeaker/rest。
- *
- * 方法签名以"需要什么数据"为导向，而非"哪个 REST endpoint"。GitHub adapter
- * 和 GitLab adapter 各自负责把调用翻译到对应平台 API。
- *
- * ARCH-021: PR number / MR IID 统一为 changeRequestId（number），
- *   comment/note ID 统一为 commentId（number），
- *   thread node ID / discussion ID 统一为 threadId（string）。
- *
- * ARCH-022: 所有方法在遇到平台 API 错误时抛出 GitPlatformError，
- *   业务层按 errorKind 分支处理。
- */
-class GitPlatformError extends Error {
-    errorKind;
-    statusCode;
-    cause;
-    constructor(message, errorKind, statusCode, cause) {
-        super(message);
-        this.errorKind = errorKind;
-        this.statusCode = statusCode;
-        this.cause = cause;
-        this.name = 'GitPlatformError';
-    }
-}
-// ─── 平台单例（ARCH-018）────────────────────────────────────────────────
-let _platform = null;
-/** 获取当前平台实例。未设置时抛错（入口文件必须先调用 setPlatform） */
-function getPlatform() {
-    if (_platform == null) {
-        throw new Error('getPlatform() called before setPlatform(). ' +
-            'Entry point (main.ts / gitlab-trigger.ts) must call setPlatform() first.');
-    }
-    return _platform;
-}
-/** 设置全局平台实例（入口文件调用） */
-function setPlatform(platform) {
-    _platform = platform;
-}
-/** 重置为未初始化状态（仅供测试使用） */
-function resetPlatform() {
-    _platform = null;
-}
-
-;// CONCATENATED MODULE: ./lib/github/review-thread.js
-
-
-
-// ─── Bot identity ─────────────────────────────────────────────────────────────
-let cachedBotLogin = null;
-async function getBotLogin(options) {
-    if (cachedBotLogin !== null)
-        return cachedBotLogin;
-    void options;
-    // Explicit override for custom GitHub App: installation tokens cannot call
-    // GET /user, so auto-detection would wrongly fall back to 'github-actions'.
-    const explicitLogin = options.botLogin;
-    if (explicitLogin) {
-        cachedBotLogin = explicitLogin;
-        return cachedBotLogin;
-    }
-    cachedBotLogin = await getPlatform().getAuthenticatedLogin();
-    return cachedBotLogin;
-}
-/** Visible for testing only */
-function _resetBotLoginCache() {
-    cachedBotLogin = null;
-}
-async function fetchThreadStatusMap(params) {
-    return getPlatform().fetchThreadStatusMap(params.owner, params.repo, params.prNumber);
-}
-async function fetchUnresolvedBotThreads(params, botLogin) {
-    const threads = await getPlatform().fetchUnresolvedBotThreads(params.owner, params.repo, params.prNumber, botLogin);
-    return threads.map(t => ({
-        id: t.id,
-        isResolved: t.isResolved,
-        firstCommentAuthorLogin: t.firstCommentAuthorLogin,
-        path: t.path,
-        line: t.line,
-        firstCommentBody: t.firstCommentBody
-    }));
-}
-function isPermissionError(e) {
-    return String(e).includes('not accessible by integration');
-}
-/** 网络/超时类错误（与权限、node-not-found 区分，便于给出不同提示） */
-function review_thread_isNetworkError(e) {
-    return /ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|network|timed? ?out/i.test(String(e));
-}
-/**
- * 测试用：识别注入的假 thread ID（`PRRT_debug_inject_<kind>_<n>`），
- * 返回对应类型的模拟错误，不实际发起 GraphQL 请求。
- *
- * 真实运行时 thread ID 不会带此前缀，函数返回 null，走正常 GraphQL 流程。
- */
-function simulateDebugError(threadId) {
-    if (!threadId.startsWith('PRRT_debug_inject_'))
-        return null;
-    if (threadId.includes('_permission_')) {
-        return new Error("Resource not accessible by integration (mutation 'resolveReviewThread')");
-    }
-    if (threadId.includes('_network_')) {
-        // TODO: Maybe gitlab in the future, or other network errors, but for now just simulate a connection reset.
-        return new Error('request to https://api.github.com/graphql failed, reason: read ECONNRESET');
-    }
-    // 默认：node not found（无效的 global id）
-    return new Error('Request failed due to following response errors:\n' +
-        ` - Could not resolve to a node with the global id of '${threadId}'`);
-}
-function threadLabel(t) {
-    if (t.path) {
-        const loc = t.line != null ? `${t.path}:${t.line}` : t.path;
-        if (t.firstCommentBody) {
-            const snippet = t.firstCommentBody.trim().replace(/\s+/g, ' ').slice(0, 60);
-            const ellipsis = snippet.length === 60 ? '…' : '';
-            return `${loc} – "${snippet}${ellipsis}"`;
-        }
-        return loc;
-    }
-    return t.id;
-}
-async function batchResolve(threads) {
-    const logger = getLogger();
-    const limit = pLimit(6);
-    let ok = 0;
-    const errors = [];
-    const failedItems = [];
-    // 先过滤掉 debug 注入的假 thread ID，模拟错误
-    const debugThreads = [];
-    const realThreads = [];
-    for (const t of threads) {
-        const simulated = simulateDebugError(t.id);
-        if (simulated) {
-            const err = simulated;
-            errors.push(err);
-            failedItems.push({ thread: t, error: err });
-            debugThreads.push(t);
-        }
-        else {
-            realThreads.push(t);
-        }
-    }
-    // 批量 resolve 真实 thread
-    if (realThreads.length > 0) {
-        const platform = getPlatform();
-        await Promise.allSettled(realThreads.map(t => limit(async () => {
-            try {
-                const result = await platform.resolveThreads([t.id]);
-                if (result.failed > 0) {
-                    // adapter 吞掉 GraphQL 异常并放进 errors 返回，不 throw
-                    for (const err of result.errors) {
-                        errors.push(err);
-                        failedItems.push({ thread: t, error: err });
-                    }
-                }
-                else {
-                    ok++;
-                }
-            }
-            catch (e) {
-                const err = e instanceof Error ? e : new Error(String(e));
-                errors.push(err);
-                failedItems.push({ thread: t, error: err });
-            }
-        })));
-    }
-    const permissionFailed = failedItems.filter(({ error }) => isPermissionError(error));
-    const otherFailed = failedItems.filter(({ error }) => !isPermissionError(error));
-    if (permissionFailed.length > 0) {
-        logger.warning('batchResolve: token lacks permission to resolve review threads ' +
-            '("Resource not accessible by integration"). ' +
-            'Set the `resolve_token` input to a classic PAT with repo scope.');
-    }
-    if (otherFailed.length > 0) {
-        const lines = otherFailed
-            .map(({ thread, error }) => `  • ${threadLabel(thread)}: ${error.message}`)
-            .join('\n');
-        logger.warning(`batchResolve: failed to resolve ${otherFailed.length}/${threads.length} thread(s):\n${lines}`);
-    }
-    return { ok, failed: errors.length, errors, failedItems };
-}
-
-;// CONCATENATED MODULE: ./lib/commands/handlers/resolve.js
-
-
-// ─── Handler ──────────────────────────────────────────────────────────────────
-const resolveHandler = {
-    name: 'resolve',
-    description: '批量将所有 CodeSentinel 审查意见标记为已解决',
-    usage: `${PRIMARY_BOT_MENTION} resolve`,
-    needsAck: true,
-    minPermission: 'write',
-    execute
-};
-async function execute(ctx) {
-    const botLogin = await getBotLogin(ctx.options);
-    const threads = await fetchUnresolvedBotThreads({ owner: ctx.owner, repo: ctx.repo, prNumber: ctx.prNumber }, botLogin);
-    if (threads.length === 0) {
-        return { message: 'ℹ️ 没有找到待解决的 CodeSentinel 审查意见' };
-    }
-    // 测试用：注入假 thread ID，模拟部分失败场景。
-    // 按 notfound → permission → network 轮换，覆盖三类错误。
-    // const injectCount = ctx.options.debugResolveInjectFailures
-    // if (injectCount > 0) {
-    //   const kinds = ['notfound', 'permission', 'network'] as const
-    //   for (let i = 0; i < injectCount; i++) {
-    //     const kind = kinds[i % kinds.length]
-    //     threads.push({
-    //       id: `PRRT_debug_inject_${kind}_${i + 1}`,
-    //       isResolved: false,
-    //       firstCommentAuthorLogin: botLogin,
-    //       path: threads[0].path,
-    //       line: 9000 + i,
-    //       firstCommentBody: `[debug] injected ${kind} failure ${i + 1}`
-    //     })
-    //   }
-    // }
-    const { ok, failed, failedItems } = await batchResolve(threads);
-    return { message: formatResult(ok, failed, threads.length, failedItems) };
-}
-// ─── Formatting ───────────────────────────────────────────────────────────────
-// TODO Refer to CodeRabbit for the original implementation of this formatting logic.
-function formatResult(ok, failed, total, failedItems) {
-    if (failed === 0) {
-        return `✅ 已解决 **${ok}** 条 CodeSentinel 审查意见`;
-    }
-    const errDetail = failedItems.length > 0
-        ? `\n\n失败详情：\n${failedItems
-            .map(({ thread, error }) => `- ${errorTag(error)} \`${threadLabel(thread)}\`：${flattenError(error.message)}`)
-            .join('\n')}${permissionHint(failedItems)}`
-        : '';
-    if (ok === 0) {
-        // 全部失败时几乎一定是权限问题：resolveReviewThread mutation 需要用户 PAT，
-        // GITHUB_TOKEN 会被 GitHub 拒为 "Resource not accessible by integration"。
-        // 给出可操作提示，避免用户只看到一句干巴巴的 forbidden。
-        const permissionHint = '\n\n💡 这通常是权限不足：解决评论线程需要把用户 PAT 配置到 `resolve_token`，' +
-            '或在 workflow 中授予 `permissions: pull-requests: write`。';
-        return `❌ 解决失败（共 **${total}** 条）${errDetail}${permissionHint}`;
-    }
-    return `⚠️ 共 **${total}** 条，成功解决 **${ok}** 条，**${failed}** 条失败（可手动解决）${errDetail}`;
-}
-/** 给每条失败打上分类标签，方便用户一眼区分错误类型 */
-function errorTag(error) {
-    if (isPermissionError(error))
-        return '🔒 权限不足';
-    if (review_thread_isNetworkError(error))
-        return '🌐 网络错误';
-    return '⚠️ 其他错误';
-}
-/** 存在权限错误时，追加可操作提示 */
-function permissionHint(failedItems) {
-    if (!failedItems.some(({ error }) => isPermissionError(error)))
-        return '';
-    return ('\n\n💡 存在权限不足导致的失败：当前 token 无法解决审查线程，' +
-        '请将 `resolve_token` 输入配置为具有 repo 权限的 classic PAT，或手动解决。');
-}
-/** 将多行错误信息压成单行，避免错误中的 ` - ` 被 Markdown 当作嵌套列表渲染 */
-function flattenError(message) {
-    return message.replace(/\s+/g, ' ').trim();
-}
-
-;// CONCATENATED MODULE: ./lib/platform/state-namespace.js
-/**
- * platform/state-namespace.ts — marker 与幂等键的平台命名空间（GH-014 / STATE-006）
- *
- * 双平台同时启用时，marker 和幂等键必须能区分来源，禁止用同一把 key 合并两平台的
- * 任务状态。做法是给所有**状态类** marker 加 `ai-reviewer:{platform}:` 前缀：
- *
- *   <!-- ai-reviewer:github:cmd-reply:12345:help -->
- *   <!-- ai-reviewer:gitlab:conv-reply:12345 -->
- *
- * 两条边界：
- *
- * - **命名空间来自入口**：共享核心（commenter / conversation / commands）不读平台
- *   payload，也不该猜自己跑在哪个平台上。入口（main.ts / gitlab-trigger.ts）在
- *   setPlatform() 之后调用 setStateNamespace()，共享核心只消费结果。未设置时按
- *   'github' 处理——这是历史行为，且 GitLab 命令路径尚未接入（CMD-* / STATE-*）。
- * - **写新读旧**：命名空间是本次新增的，线上在途 PR 里已经存在无前缀的旧 marker。
- *   写入一律用新格式，匹配则同时接受新旧两种形态，否则升级当天所有在途 PR 会
- *   「找不到自己写过的 marker」，造成重复回帖或重复审查。旧格式在所有在途 PR
- *   关闭后即可删除。
- */
-const MARKER_PREFIX = 'ai-reviewer';
-let _namespace = 'github';
-/** 入口在 setPlatform() 之后调用，声明本次运行的状态命名空间 */
-function setStateNamespace(platform) {
-    _namespace = platform;
-}
-/** 当前状态命名空间；未显式设置时为 'github'（历史行为） */
-function getStateNamespace() {
-    return _namespace;
-}
-/** 重置为默认值（仅供测试使用） */
-function resetStateNamespace() {
-    _namespace = 'github';
-}
-/**
- * 构造带命名空间的状态 marker。
- *
- * @param kind marker 种类，如 'cmd-reply' / 'conv-reply' / 'commit-ids-start'
- * @param parts 附加标识（评论 ID、命令名等），按顺序拼在 kind 之后
- */
-function buildStateMarker(kind, ...parts) {
-    const suffix = parts.length > 0 ? `:${parts.join(':')}` : '';
-    return `<!-- ${MARKER_PREFIX}:${_namespace}:${kind}${suffix} -->`;
-}
-/**
- * 返回匹配时应接受的全部 marker 形态：当前命名空间的新格式 + 传入的历史格式。
- *
- * 只用于**读取/匹配**；写入必须只用 buildStateMarker() 的结果。
- */
-function stateMarkerVariants(kind, legacy, ...parts) {
-    return [buildStateMarker(kind, ...parts), legacy];
-}
-/** 判断正文是否包含某个状态 marker（新旧格式皆可） */
-function hasStateMarker(body, variants) {
-    if (typeof body !== 'string')
-        return false;
-    return variants.some(v => body.includes(v));
-}
-
-;// CONCATENATED MODULE: ./lib/state-markers.js
-/**
- * state-markers.ts — 状态 marker 权威清单（GH-014）
- *
- * 独立于 commenter.ts：清单是纯数据 + 命名空间逻辑，不依赖 GitHub context，
- * 这样架构守卫等静态检查可以直接读取它，而不会因为 import 链上的
- * `context.repo` 而炸掉。commenter.ts 负责 re-export，调用方无需改 import。
- */
-
-/** 把 kind 包成隐藏 HTML 注释块的开/闭形态（raw/short summary 用） */
-function wrappedStart(kind) {
-    return `${buildStateMarker(kind)}\n<!--\n`;
-}
-function wrappedEnd(kind) {
-    return `-->\n${buildStateMarker(kind)}`;
-}
-/**
- * 全部状态 marker 的权威清单。
- *
- * 新增任何参与查找/去重/状态更新的 marker 都必须登记在此——
- * `state-marker-inventory.test.ts` 会校验清单完整性与命名空间正确性。
- */
-const STATE_MARKERS = {
-    comment: {
-        kind: 'comment',
-        legacy: '<!-- This is an auto-generated comment by AI Reviewer -->',
-        current: () => buildStateMarker('comment')
-    },
-    commentReply: {
-        kind: 'comment-reply',
-        legacy: '<!-- This is an auto-generated reply by AI Reviewer -->',
-        current: () => buildStateMarker('comment-reply')
-    },
-    summarize: {
-        kind: 'summarize',
-        legacy: '<!-- This is an auto-generated comment: summarize by AI Reviewer -->',
-        current: () => buildStateMarker('summarize')
-    },
-    inProgressStart: {
-        kind: 'in-progress-start',
-        legacy: '<!-- This is an auto-generated comment: summarize review in progress by AI Reviewer -->',
-        current: () => buildStateMarker('in-progress-start')
-    },
-    inProgressEnd: {
-        kind: 'in-progress-end',
-        legacy: '<!-- end of auto-generated comment: summarize review in progress by AI Reviewer -->',
-        current: () => buildStateMarker('in-progress-end')
-    },
-    descriptionStart: {
-        kind: 'release-notes-start',
-        legacy: '<!-- This is an auto-generated comment: release notes by AI Reviewer -->',
-        current: () => buildStateMarker('release-notes-start')
-    },
-    descriptionEnd: {
-        kind: 'release-notes-end',
-        legacy: '<!-- end of auto-generated comment: release notes by AI Reviewer -->',
-        current: () => buildStateMarker('release-notes-end')
-    },
-    rawSummaryStart: {
-        kind: 'raw-summary-start',
-        legacy: `<!-- This is an auto-generated comment: raw summary by AI Reviewer -->\n<!--\n`,
-        current: () => wrappedStart('raw-summary-start')
-    },
-    rawSummaryEnd: {
-        kind: 'raw-summary-end',
-        legacy: `-->\n<!-- end of auto-generated comment: raw summary by AI Reviewer -->`,
-        current: () => wrappedEnd('raw-summary-end')
-    },
-    shortSummaryStart: {
-        kind: 'short-summary-start',
-        legacy: `<!-- This is an auto-generated comment: short summary by AI Reviewer -->\n<!--\n`,
-        current: () => wrappedStart('short-summary-start')
-    },
-    shortSummaryEnd: {
-        kind: 'short-summary-end',
-        legacy: `-->\n<!-- end of auto-generated comment: short summary by AI Reviewer -->`,
-        current: () => wrappedEnd('short-summary-end')
-    },
-    commitIdsStart: {
-        kind: 'commit-ids-reviewed-start',
-        legacy: '<!-- commit_ids_reviewed_start -->',
-        current: () => buildStateMarker('commit-ids-reviewed-start')
-    },
-    commitIdsEnd: {
-        kind: 'commit-ids-reviewed-end',
-        legacy: '<!-- commit_ids_reviewed_end -->',
-        current: () => buildStateMarker('commit-ids-reviewed-end')
-    },
-    reviewStateStart: {
-        kind: 'review-state-start',
-        legacy: '<!-- codesentinel-review-state:start -->',
-        current: () => buildStateMarker('review-state-start')
-    },
-    reviewStateEnd: {
-        kind: 'review-state-end',
-        legacy: '<!-- codesentinel-review-state:end -->',
-        current: () => buildStateMarker('review-state-end')
-    }
-};
-/** 当前平台命名空间下的 marker（用于写入） */
-function stateMarker(name) {
-    return STATE_MARKERS[name].current();
-}
-/** 匹配时应接受的全部形态：当前命名空间格式 + 历史格式 */
-function stateMarkerVariantsFor(name) {
-    return [STATE_MARKERS[name].current(), STATE_MARKERS[name].legacy];
-}
-/**
- * 由一个 marker 字符串反查其全部形态。
- *
- * `comment()` / `findCommentWithTag()` 接受调用方传入的 tag 字符串，
- * 这里把它还原成 [新格式, 历史格式] 以便写新读旧。未登记的自定义 tag 原样返回。
- */
-function variantsForTag(tag) {
-    for (const spec of Object.values(STATE_MARKERS)) {
-        if (tag === spec.current() || tag === spec.legacy) {
-            return [spec.current(), spec.legacy];
-        }
-    }
-    return [tag];
-}
-/**
- * 由一对（起始、结束）标签反查其新旧两种组合。
- *
- * 起止标签必须成对回退：不能用新的起始标签配历史的结束标签，
- * 否则会截出错误区间、写坏用户正文。
- */
-function tagPairVariants(startTag, endTag) {
-    for (const spec of Object.values(STATE_MARKERS)) {
-        if (startTag !== spec.current() && startTag !== spec.legacy)
-            continue;
-        const endSpec = Object.values(STATE_MARKERS).find(e => endTag === e.current() || endTag === e.legacy);
-        if (endSpec == null)
-            break;
-        return [
-            [spec.current(), endSpec.current()],
-            [spec.legacy, endSpec.legacy]
-        ];
-    }
-    return [[startTag, endTag]];
-}
-/**
- * 按 marker 名定位一个成对区块（新格式优先，回退历史格式）。
- *
- * 返回命中的标签本身，调用方据此就地改写——历史区块保持历史标签，
- * 回滚到旧版本时旧版本仍能认出它。
- */
-function locateMarkerBlock(body, startName, endName) {
-    const pairs = [
-        [STATE_MARKERS[startName].current(), STATE_MARKERS[endName].current()],
-        [STATE_MARKERS[startName].legacy, STATE_MARKERS[endName].legacy]
-    ];
-    for (const [startTag, endTag] of pairs) {
-        const start = body.indexOf(startTag);
-        const end = body.indexOf(endTag);
-        if (start !== -1 && end !== -1)
-            return { start, end, startTag, endTag };
-    }
-    return null;
-}
-/** 判断正文是否含指定 marker（新旧格式皆可） */
-function bodyHasMarker(body, name) {
-    if (typeof body !== 'string')
-        return false;
-    return stateMarkerVariantsFor(name).some(v => body.includes(v));
-}
-
-;// CONCATENATED MODULE: ./lib/review-state.js
-/**
- * review-state.ts — PR/MR body 中的 pause/resume marker（GH-012）
- *
- * marker 带平台命名空间（GH-014）；匹配同时接受历史格式，升级不会把在途 PR 的
- * 暂停状态读成 active。已存在的历史区块就地保留其标签，只有新建区块用新格式——
- * 这样即使回滚到旧版本，旧版本仍能读到自己认识的暂停状态。
- */
-
-
-/** 历史格式起止标签（无平台命名空间），仅用于匹配在途 PR 的旧区块 */
-const REVIEW_STATE_START_TAG = STATE_MARKERS.reviewStateStart.legacy;
-const REVIEW_STATE_END_TAG = STATE_MARKERS.reviewStateEnd.legacy;
-/** 当前平台命名空间下的 pause/resume 区块标签（用于新建区块） */
-function reviewStateTags() {
-    return { start: stateMarker('reviewStateStart'), end: stateMarker('reviewStateEnd') };
-}
-/** 定位 pause/resume 区块，命名空间格式优先，回退历史格式 */
-function locateStateBlock(body) {
-    const namespaced = reviewStateTags();
-    for (const { start: startTag, end: endTag } of [
-        namespaced,
-        { start: REVIEW_STATE_START_TAG, end: REVIEW_STATE_END_TAG }
-    ]) {
-        const start = body.indexOf(startTag);
-        const end = body.indexOf(endTag);
-        if (start !== -1 && end !== -1)
-            return { start, end, startTag, endTag };
-    }
-    return null;
-}
-function getReviewStateFromBody(body = '') {
-    const block = locateStateBlock(body);
-    if (block == null)
-        return 'active';
-    const content = body.slice(block.start + block.startTag.length, block.end);
-    return content.includes('state: paused') ? 'paused' : 'active';
-}
-function writeReviewStateToBody(body, state) {
-    const existing = locateStateBlock(body);
-    // 已有区块保持其原有标签（回滚到旧版本仍能读懂），新建区块才用命名空间格式
-    const fresh = reviewStateTags();
-    const startTag = existing?.startTag ?? fresh.start;
-    const endTag = existing?.endTag ?? fresh.end;
-    const stateBlock = `${startTag}
-state: ${state}
-${endTag}`;
-    if (existing != null) {
-        const before = body.slice(0, existing.start).trimEnd();
-        const after = body.slice(existing.end + existing.endTag.length).trim();
-        return [before, stateBlock, after].filter(Boolean).join('\n\n');
-    }
-    return [body.trimEnd(), stateBlock].filter(Boolean).join('\n\n');
-}
-async function getReviewState(owner, repo, pullNumber) {
-    const platform = getPlatform();
-    const cr = await platform.getChangeRequest(owner, repo, pullNumber);
-    return getReviewStateFromBody(cr.body ?? '');
-}
-async function setReviewState(owner, repo, pullNumber, state) {
-    const platform = getPlatform();
-    const cr = await platform.getChangeRequest(owner, repo, pullNumber);
-    await platform.updateChangeRequestBody(owner, repo, pullNumber, writeReviewStateToBody(cr.body ?? '', state));
-}
-
-// EXTERNAL MODULE: ./node_modules/@actions/github/lib/github.js
-var github = __nccwpck_require__(5438);
-;// CONCATENATED MODULE: ./lib/commenter.js
-/**
- * commenter.ts - GitHub 评论管理模块
- *
- * 负责所有与 GitHub PR 评论相关的操作，包括：
- * 1. 创建/替换 PR 评论（issue comment）
- * 2. 缓冲和批量提交代码审查评论（review comment）
- * 3. 回复用户的 review comment
- * 4. 更新 PR 描述（写入发布说明）
- * 5. 管理增量审查状态（已审查的 commit ID 追踪）
- * 6. 评论链（conversation chain）的获取和组装
- *
- * 使用 HTML 注释标签（如 <!-- tag -->）作为唯一标识，
- * 实现评论的幂等性操作（查找并替换已有评论，而非重复创建）
- */
-// eslint-disable-next-line camelcase
-
-
-
-// eslint-disable-next-line camelcase
-const context = github.context;
-const repo = context.repo;
-// ==================== 标签常量 ====================
-// 这些 HTML 注释标签用于标识和定位 bot 生成的各类评论
-/**
- * 评论顶部的问候语（包含 bot 图标 + 可配置名称）。
- * 由 initBotGreeting() 初始化，避免模块级直读 @actions/core getInput（CFG-005）。
- */
-let _commentGreeting = '🤖   AI Reviewer';
-/** 获取 bot 问候语，用于评论头部 */
-function getCommentGreeting() {
-    return _commentGreeting;
-}
-/**
- * 初始化 bot 问候语。由 main.ts 在构建 Options 后调用一次。
- */
-function initBotGreeting(icon, name) {
-    _commentGreeting = `${icon}   ${name}`;
-}
-// 状态 marker 清单集中在 state-markers.ts（GH-014），此处 re-export 保持调用方 import 不变
-
-
-/** 定位摘要评论里的「审查进行中」区块（新旧格式皆可） */
-function locateInProgressBlock(body) {
-    return locateMarkerBlock(body, 'inProgressStart', 'inProgressEnd');
-}
-/** 标识 bot 自动生成的代码审查评论 */
-function commentTag() {
-    return stateMarker('comment');
-}
-/** 标识 bot 自动生成的回复评论 */
-function commentReplyTag() {
-    return stateMarker('commentReply');
-}
-/** 标识 bot 的摘要评论 */
-function summarizeTag() {
-    return stateMarker('summarize');
-}
-/** 标识审查进行中的状态标签（开始 / 结束） */
-function inProgressStartTag() {
-    return stateMarker('inProgressStart');
-}
-function inProgressEndTag() {
-    return stateMarker('inProgressEnd');
-}
-/** 标识 PR 描述中发布说明区域（开始 / 结束） */
-function descriptionStartTag() {
-    return stateMarker('descriptionStart');
-}
-function descriptionEndTag() {
-    return stateMarker('descriptionEnd');
-}
-/** 标识隐藏的原始摘要区域（开始 / 结束） */
-function rawSummaryStartTag() {
-    return stateMarker('rawSummaryStart');
-}
-function rawSummaryEndTag() {
-    return stateMarker('rawSummaryEnd');
-}
-/** 标识隐藏的精简摘要区域（开始 / 结束） */
-function shortSummaryStartTag() {
-    return stateMarker('shortSummaryStart');
-}
-function shortSummaryEndTag() {
-    return stateMarker('shortSummaryEnd');
-}
-/** 标识已审查的 commit ID 列表（开始） */
-/**
- * 已审查 commit ID 区块的历史起止标签（无平台命名空间）。
- * 仍用于**匹配**在途 PR 里已存在的旧区块；新写入走 commitIdTags()。
- */
-const COMMIT_ID_START_TAG = STATE_MARKERS.commitIdsStart.legacy;
-/** 标识已审查的 commit ID 列表（结束） */
-const COMMIT_ID_END_TAG = STATE_MARKERS.commitIdsEnd.legacy;
-/** 当前平台命名空间下的已审查 commit ID 区块标签（用于新建区块） */
-function commitIdTags() {
-    return { start: stateMarker('commitIdsStart'), end: stateMarker('commitIdsEnd') };
-}
-/**
- * 在正文中定位已审查 commit ID 区块，命名空间格式优先，回退历史格式。
- *
- * 返回命中的标签本身，调用方据此就地改写，不会把旧区块的标签换成新的——
- * 升级不需要重写在途 PR 已有的 marker。
- */
-function locateCommitIdBlock(body) {
-    const namespaced = commitIdTags();
-    for (const { start: startTag, end: endTag } of [
-        namespaced,
-        { start: COMMIT_ID_START_TAG, end: COMMIT_ID_END_TAG }
-    ]) {
-        const start = body.indexOf(startTag);
-        const end = body.indexOf(endTag);
-        if (start !== -1 && end !== -1)
-            return { start, end, startTag, endTag };
-    }
-    return null;
-}
-/**
- * Commenter 类 - GitHub 评论管理器
- *
- * 封装所有 GitHub 评论的 CRUD 操作，提供：
- * - 评论的创建、替换、查找
- * - 审查评论的缓冲和批量提交
- * - 评论链的获取和组装
- * - 增量审查状态管理
- */
-class Commenter {
-    /**
-     * 创建或替换 PR 评论
-     * @param message - 评论内容
-     * @param tag - HTML 标签，用于标识和查找评论
-     * @param mode - "create"（新建）或 "replace"（查找并替换已有评论）
-     */
-    async comment(message, tag, mode) {
-        let target;
-        if (context.payload.pull_request != null) {
-            target = context.payload.pull_request.number;
-        }
-        else if (context.payload.issue != null) {
-            target = context.payload.issue.number;
-        }
-        else {
-            getLogger().warning('Skipped: context.payload.pull_request and context.payload.issue are both null');
-            return;
-        }
-        if (!tag) {
-            tag = commentTag();
-        }
-        // 组装评论正文：问候语 + 消息内容 + 标签
-        const body = `${getCommentGreeting()}
-
-${message}
-
-${tag}`;
-        if (mode === 'create') {
-            await this.create(body, target);
-        }
-        else if (mode === 'replace') {
-            await this.replace(body, tag, target);
-        }
-        else {
-            getLogger().warning(`Unknown mode: ${mode}, use "replace" instead`);
-            await this.replace(body, tag, target);
-        }
-    }
-    /**
-     * 提取标签对之间的内容
-     * 用于从评论正文中提取隐藏的状态数据（如原始摘要、已审查 commit ID 等）
-     */
-    getContentWithinTags(content, startTag, endTag) {
-        // 写新读旧：先按传入（新格式）标签找，找不到再回退到对应的历史标签
-        for (const [s, e] of tagPairVariants(startTag, endTag)) {
-            const start = content.indexOf(s);
-            const end = content.indexOf(e);
-            if (start >= 0 && end >= 0) {
-                return content.slice(start + s.length, end);
-            }
-        }
-        return '';
-    }
-    /** 移除标签对及其包含的内容 */
-    removeContentWithinTags(content, startTag, endTag) {
-        for (const [s, e] of tagPairVariants(startTag, endTag)) {
-            const start = content.indexOf(s);
-            const end = content.lastIndexOf(e);
-            if (start >= 0 && end >= 0) {
-                return content.slice(0, start) + content.slice(end + e.length);
-            }
-        }
-        return content;
-    }
-    /** 从摘要评论中提取原始摘要内容 */
-    getRawSummary(summary) {
-        return this.getContentWithinTags(summary, rawSummaryStartTag(), rawSummaryEndTag());
-    }
-    /** 从摘要评论中提取精简摘要内容 */
-    getShortSummary(summary) {
-        return this.getContentWithinTags(summary, shortSummaryStartTag(), shortSummaryEndTag());
-    }
-    /** 从 PR 描述中提取用户原始描述（移除 bot 生成的发布说明部分） */
-    getDescription(description) {
-        return this.removeContentWithinTags(description, descriptionStartTag(), descriptionEndTag());
-    }
-    /** 从 PR 描述中提取发布说明内容 */
-    getReleaseNotes(description) {
-        const releaseNotes = this.getContentWithinTags(description, descriptionStartTag(), descriptionEndTag());
-        return releaseNotes.replace(/(^|\n)> .*/g, '');
-    }
-    /**
-     * 更新 PR 描述，写入 AI 生成的发布说明
-     * 将发布说明嵌入到 descriptionStartTag() 和 descriptionEndTag() 之间
-     */
-    async updateDescription(pullNumber, message) {
-        const platform = getPlatform();
-        try {
-            const cr = await platform.getChangeRequest(repo.owner, repo.repo, pullNumber);
-            let body = '';
-            if (cr.body) {
-                body = cr.body;
-            }
-            const description = this.getDescription(body);
-            const messageClean = this.removeContentWithinTags(message, descriptionStartTag(), descriptionEndTag());
-            const newDescription = `${description}\n${descriptionStartTag()}\n${messageClean}\n${descriptionEndTag()}`;
-            await platform.updateChangeRequestBody(repo.owner, repo.repo, pullNumber, newDescription);
-        }
-        catch (e) {
-            getLogger().warning(`Failed to get PR: ${e}, skipping adding release notes to description.`);
-        }
-    }
-    // ==================== 代码审查评论缓冲区 ====================
-    /** 审查评论缓冲区：在内存中暂存所有审查评论，最后一次性提交 */
-    reviewCommentsBuffer = [];
-    /**
-     * 将审查评论添加到缓冲区（不立即提交）
-     * 所有缓冲的评论将在 submitReview() 中一次性提交
-     */
-    async bufferReviewComment(path, startLine, endLine, message) {
-        message = `${getCommentGreeting()}
-
-${message}
-
-${commentTag()}`;
-        this.reviewCommentsBuffer.push({
-            path,
-            startLine,
-            endLine,
-            message
-        });
-    }
-    /**
-     * 删除处于 PENDING 状态的审查
-     * 在提交新审查前调用，避免残留的待处理审查
-     */
-    async deletePendingReview(pullNumber) {
-        try {
-            await getPlatform().deletePendingReview(repo.owner, repo.repo, pullNumber);
-        }
-        catch (e) {
-            getLogger().warning(`Failed to delete pending review: ${e}`);
-        }
-    }
-    /**
-     * 提交所有缓冲的审查评论
-     *
-     * 流程：
-     * 1. 如果缓冲区为空，提交一个仅包含状态消息的空审查
-     * 2. 删除同一位置的旧 bot 评论（避免重复）
-     * 3. 清理已有的 PENDING 审查
-     * 4. 尝试一次性提交所有评论（createReview + submitReview）
-     * 5. 如果批量提交失败，降级为逐条提交（createReviewComment）
-     *
-     * @param pullNumber - PR 编号
-     * @param commitId - 提交的 commit SHA
-     * @param statusMsg - 审查状态消息（包含处理统计信息）
-     */
-    async submitReview(pullNumber, commitId, statusMsg, threadStatusMap) {
-        const body = `${getCommentGreeting()}
-
-${statusMsg}
-`;
-        const platform = getPlatform();
-        const logger = getLogger();
-        if (this.reviewCommentsBuffer.length === 0) {
-            // 没有审查评论时，跳过空审查提交（GitHub API 不允许无评论的 COMMENT 审查）
-            logger.info(`Skipping empty review for PR #${pullNumber} — no review comments to submit`);
-            return;
-        }
-        // 去重：跳过同位置已有未 resolved bot 评论的新评论，避免重复
-        const commentsToSubmit = [];
-        for (const comment of this.reviewCommentsBuffer) {
-            const existingComments = await this.getCommentsAtRange(pullNumber, comment.path, comment.startLine, comment.endLine);
-            const existingBotComments = existingComments.filter(c => bodyHasMarker(c.body, 'comment'));
-            if (existingBotComments.length > 0) {
-                // 检查该位置是否已 resolved
-                const key = `${comment.path}:${comment.endLine}`;
-                const isResolved = threadStatusMap?.get(key);
-                if (isResolved !== true) {
-                    logger.info(`[submit-dedup] skipping comment for ${comment.path}:${comment.startLine}-${comment.endLine} — existing unresolved bot comment found`);
-                    continue;
-                }
-                // 已 resolved 的旧评论：删除后重新发布
-                for (const c of existingBotComments) {
-                    logger.info(`Deleting resolved review comment for ${comment.path}:${comment.startLine}-${comment.endLine}`);
-                    try {
-                        await platform.deleteReviewComment(repo.owner, repo.repo, c.id);
-                    }
-                    catch (e) {
-                        logger.warning(`Failed to delete review comment: ${e}`);
-                    }
-                }
-            }
-            commentsToSubmit.push(comment);
-        }
-        if (commentsToSubmit.length === 0) {
-            logger.info(`[submit-dedup] all ${this.reviewCommentsBuffer.length} comment(s) skipped — already covered by existing bot comments`);
-            return;
-        }
-        // 清理已有的 PENDING 审查
-        await this.deletePendingReview(pullNumber);
-        // 生成 ReviewCommentDraft 格式
-        const toDraft = (comment) => ({
-            path: comment.path,
-            body: comment.message,
-            line: comment.endLine,
-            startLine: comment.startLine !== comment.endLine ? comment.startLine : undefined,
-            startSide: comment.startLine !== comment.endLine ? 'RIGHT' : undefined
-        });
-        try {
-            const submitted = await platform.submitReviewComments(repo.owner, repo.repo, pullNumber, commitId, commentsToSubmit.map(toDraft), body);
-            logger.info(`Submitting review for PR #${pullNumber}, total comments: ${submitted}`);
-        }
-        catch (e) {
-            // 批量提交失败时，降级为逐条提交
-            logger.warning(`Failed to create review: ${e}. Falling back to individual comments.`);
-            await this.deletePendingReview(pullNumber);
-            let commentCounter = 0;
-            for (const comment of commentsToSubmit) {
-                logger.info(`Creating new review comment for ${comment.path}:${comment.startLine}-${comment.endLine}: ${comment.message}`);
-                try {
-                    await platform.createReviewComment(repo.owner, repo.repo, pullNumber, commitId, toDraft(comment));
-                }
-                catch (ee) {
-                    logger.warning(`Failed to create review comment: ${ee}`);
-                }
-                commentCounter++;
-                logger.info(`Comment ${commentCounter}/${commentsToSubmit.length} posted`);
-            }
-        }
-    }
-    /**
-     * 回复用户的 review comment
-     *
-     * 在顶层评论下创建回复，并将顶层评论的标签从 commentTag() 更新为 commentReplyTag()，
-     * 表示该评论链已有 bot 参与回复
-     */
-    async reviewCommentReply(pullNumber, topLevelComment, message) {
-        const platform = getPlatform();
-        const logger = getLogger();
-        const reply = `${getCommentGreeting()}
-
-${message}
-
-${commentReplyTag()}
-`;
-        try {
-            await platform.replyToReviewComment(repo.owner, repo.repo, pullNumber, topLevelComment.id, reply);
-        }
-        catch (error) {
-            logger.warning(`Failed to reply to the top-level comment ${error}`);
-            try {
-                await platform.replyToReviewComment(repo.owner, repo.repo, pullNumber, topLevelComment.id, `Could not post the reply to the top-level comment due to the following error: ${error}`);
-            }
-            catch (e) {
-                logger.warning(`Failed to reply to the top-level comment ${e}`);
-            }
-        }
-        try {
-            const hitTag = stateMarkerVariantsFor('comment').find((v) => topLevelComment.body.includes(v));
-            if (hitTag != null) {
-                // 命中哪种形态就替换哪种：历史评论保持历史格式，新评论用命名空间格式
-                const replacement = hitTag === STATE_MARKERS.comment.legacy
-                    ? STATE_MARKERS.commentReply.legacy
-                    : commentReplyTag();
-                const newBody = topLevelComment.body.replace(hitTag, replacement);
-                await platform.updateReviewComment(repo.owner, repo.repo, topLevelComment.id, newBody);
-            }
-        }
-        catch (error) {
-            logger.warning(`Failed to update the top-level comment ${error}`);
-        }
-    }
-    // ==================== 评论查询方法 ====================
-    /** 获取指定行号范围内的所有 review comment */
-    async getCommentsWithinRange(pullNumber, path, startLine, endLine) {
-        const comments = await this.listReviewComments(pullNumber);
-        return comments.filter((comment) => comment.path === path &&
-            comment.body !== '' &&
-            ((comment.start_line !== undefined &&
-                comment.start_line >= startLine &&
-                comment.line <= endLine) ||
-                (startLine === endLine && comment.line === endLine)));
-    }
-    /** 获取精确匹配指定行号范围的 review comment */
-    async getCommentsAtRange(pullNumber, path, startLine, endLine) {
-        const comments = await this.listReviewComments(pullNumber);
-        return comments.filter((comment) => comment.path === path &&
-            comment.body !== '' &&
-            ((comment.start_line !== undefined &&
-                comment.start_line === startLine &&
-                comment.line === endLine) ||
-                (startLine === endLine && comment.line === endLine)));
-    }
-    /**
-     * 获取指定行号范围内的所有评论对话链
-     * 用于在代码审查时提供已有评论上下文
-     *
-     * @param threadStatusMap 可选的线程状态 map（path:line → isResolved），
-     *   由 fetchThreadStatusMap() 生成。传入后每条链头部会加上
-     *   [OPEN] 或 [RESOLVED] 标签，让 AI 知道是否应跳过 / reopen。
-     */
-    async getCommentChainsWithinRange(pullNumber, path, startLine, endLine, tag = '', threadStatusMap) {
-        const existingComments = await this.getCommentsWithinRange(pullNumber, path, startLine, endLine);
-        // 找出所有顶层评论（没有 in_reply_to_id 的评论）
-        const topLevelComments = [];
-        for (const comment of existingComments) {
-            if (!comment.in_reply_to_id) {
-                topLevelComments.push(comment);
-            }
-        }
-        // 组装所有包含指定标签的对话链
-        let allChains = '';
-        let chainNum = 0;
-        for (const topLevelComment of topLevelComments) {
-            const chain = await this.composeCommentChain(existingComments, topLevelComment);
-            if (chain && chain.includes(tag)) {
-                chainNum += 1;
-                // 从 threadStatusMap 推断该评论所在行是否已 resolved
-                let statusLabel = '';
-                if (threadStatusMap != null) {
-                    const commentLine = topLevelComment.line ?? topLevelComment.original_line ?? startLine;
-                    const key = `${path}:${commentLine}`;
-                    const isResolved = threadStatusMap.get(key);
-                    // 只在明确知道状态时加标签；未命中 map 的保持无标签（兼容旧行为）
-                    if (isResolved === true) {
-                        statusLabel = ' [RESOLVED]';
-                    }
-                    else if (isResolved === false) {
-                        statusLabel = ' [OPEN]';
-                    }
-                }
-                allChains += `Conversation Chain ${chainNum}${statusLabel}:
-${chain}
----
-`;
-            }
-        }
-        return allChains;
-    }
-    /**
-     * 组装单个评论对话链
-     * 将顶层评论和其所有回复按顺序拼接为 "用户: 内容" 格式的字符串
-     */
-    async composeCommentChain(reviewComments, topLevelComment) {
-        const conversationChain = reviewComments
-            .filter((cmt) => cmt.in_reply_to_id === topLevelComment.id)
-            .map((cmt) => `${cmt.user.login}: ${cmt.body}`);
-        conversationChain.unshift(`${topLevelComment.user.login}: ${topLevelComment.body}`);
-        return conversationChain.join('\n---\n');
-    }
-    /**
-     * 获取指定评论的完整对话链
-     * @returns { chain: 对话链字符串, topLevelComment: 顶层评论对象 }
-     */
-    async getCommentChain(pullNumber, comment) {
-        try {
-            const reviewComments = await this.listReviewComments(pullNumber);
-            const topLevelComment = await this.getTopLevelComment(reviewComments, comment);
-            const chain = await this.composeCommentChain(reviewComments, topLevelComment);
-            return { chain, topLevelComment };
-        }
-        catch (e) {
-            getLogger().warning(`Failed to get conversation chain: ${e}`);
-            return {
-                chain: '',
-                topLevelComment: null
-            };
-        }
-    }
-    /**
-     * 沿着 in_reply_to_id 链向上查找顶层评论
-     * 顶层评论是对话链的起始评论（没有 in_reply_to_id）
-     */
-    async getTopLevelComment(reviewComments, comment) {
-        let topLevelComment = comment;
-        while (topLevelComment.in_reply_to_id) {
-            const parentComment = reviewComments.find((cmt) => cmt.id === topLevelComment.in_reply_to_id);
-            if (parentComment) {
-                topLevelComment = parentComment;
-            }
-            else {
-                break;
-            }
-        }
-        return topLevelComment;
-    }
-    // ==================== 评论缓存和分页列表 ====================
-    /** review comment 缓存（按 PR 编号索引），避免重复 API 调用 */
-    reviewCommentsCache = {};
-    /**
-     * 分页获取 PR 的所有 review comment
-     * 结果会被缓存，同一 PR 编号的后续调用直接返回缓存
-     */
-    async listReviewComments(target) {
-        if (this.reviewCommentsCache[target]) {
-            return this.reviewCommentsCache[target];
-        }
-        try {
-            const comments = await getPlatform().listReviewComments(repo.owner, repo.repo, target);
-            // 映射为旧 Octokit 格式以保持 getCommentsWithinRange 等消费者兼容
-            const mapped = comments.map(c => ({
-                id: c.id,
-                body: c.body,
-                path: c.path,
-                line: c.line,
-                // eslint-disable-next-line camelcase
-                start_line: c.startLine,
-                // eslint-disable-next-line camelcase
-                original_line: c.originalLine,
-                // eslint-disable-next-line camelcase
-                in_reply_to_id: c.in_reply_to_id,
-                user: { login: c.author },
-                // eslint-disable-next-line camelcase
-                node_id: c.nodeId,
-                // eslint-disable-next-line camelcase
-                created_at: c.createdAt
-            }));
-            this.reviewCommentsCache[target] = mapped;
-            return mapped;
-        }
-        catch (e) {
-            getLogger().warning(`Failed to list review comments: ${e}`);
-            return [];
-        }
-    }
-    /** 创建新的 issue comment */
-    async create(body, target) {
-        try {
-            const result = await getPlatform().createComment(repo.owner, repo.repo, target, body);
-            const data = {
-                id: result.id,
-                body: result.body,
-                user: { login: result.author },
-                // eslint-disable-next-line camelcase
-                node_id: result.nodeId,
-                // eslint-disable-next-line camelcase
-                created_at: result.createdAt
-            };
-            if (this.issueCommentsCache[target]) {
-                this.issueCommentsCache[target].push(data);
-            }
-            else {
-                this.issueCommentsCache[target] = [data];
-            }
-        }
-        catch (e) {
-            getLogger().warning(`Failed to create comment: ${e}`);
-        }
-    }
-    /** 查找并替换已有评论；如果不存在则新建。同时清理并发运行产生的重复评论 */
-    async replace(body, tag, target) {
-        const platform = getPlatform();
-        const logger = getLogger();
-        try {
-            const comments = await this.listComments(target);
-            const variants = variantsForTag(tag);
-            const matchedComments = comments.filter((cmt) => cmt.body && variants.some(v => cmt.body.includes(v)));
-            if (matchedComments.length > 0) {
-                await platform.updateComment(repo.owner, repo.repo, matchedComments[0].id, body);
-                for (let i = 1; i < matchedComments.length; i++) {
-                    logger.info(`Deleting duplicate comment ${matchedComments[i].id} with tag ${tag}`);
-                    try {
-                        await platform.deleteComment(repo.owner, repo.repo, matchedComments[i].id);
-                    }
-                    catch (e) {
-                        logger.warning(`Failed to delete duplicate comment: ${e}`);
-                    }
-                }
-            }
-            else {
-                await this.create(body, target);
-            }
-        }
-        catch (e) {
-            logger.warning(`Failed to replace comment: ${e}`);
-        }
-    }
-    /** 查找包含指定标签的 issue comment */
-    async findCommentWithTag(tag, target) {
-        try {
-            const comments = await this.listComments(target);
-            const variants = variantsForTag(tag);
-            for (const cmt of comments) {
-                if (cmt.body && variants.some(v => cmt.body.includes(v))) {
-                    return cmt;
-                }
-            }
-            return null;
-        }
-        catch (e) {
-            getLogger().warning(`Failed to find comment with tag: ${e}`);
-            return null;
-        }
-    }
-    /** issue comment 缓存（按 issue/PR 编号索引） */
-    issueCommentsCache = {};
-    /** 分页获取 PR/issue 的所有 issue comment（带缓存） */
-    async listComments(target) {
-        if (this.issueCommentsCache[target]) {
-            return this.issueCommentsCache[target];
-        }
-        try {
-            const comments = await getPlatform().listComments(repo.owner, repo.repo, target);
-            const mapped = comments.map(c => ({
-                id: c.id,
-                body: c.body,
-                user: { login: c.author },
-                // eslint-disable-next-line camelcase
-                node_id: c.nodeId,
-                // eslint-disable-next-line camelcase
-                created_at: c.createdAt
-            }));
-            this.issueCommentsCache[target] = mapped;
-            return mapped;
-        }
-        catch (e) {
-            getLogger().warning(`Failed to list comments: ${e}`);
-            return [];
-        }
-    }
-    // ==================== 增量审查状态管理 ====================
-    // 使用 HTML 注释标签在摘要评论中存储已审查的 commit ID 列表
-    // 格式：<!-- commit_ids_reviewed_start --><!-- sha1 --><!-- sha2 --><!-- commit_ids_reviewed_end -->
-    /**
-     * 从评论正文中提取已审查的 commit ID 列表
-     * @returns commit SHA 字符串数组
-     */
-    getReviewedCommitIds(commentBody) {
-        const block = locateCommitIdBlock(commentBody);
-        if (block == null) {
-            return [];
-        }
-        const ids = commentBody.substring(block.start + block.startTag.length, block.end);
-        // 解析 <!-- sha --> 格式的 commit ID
-        return ids
-            .split('<!--')
-            .map(id => id.replace('-->', '').trim())
-            .filter(id => id !== '');
-    }
-    /** 提取已审查 commit ID 的完整区块（包含标签） */
-    getReviewedCommitIdsBlock(commentBody) {
-        const block = locateCommitIdBlock(commentBody);
-        if (block == null) {
-            return '';
-        }
-        return commentBody.substring(block.start, block.end + block.endTag.length);
-    }
-    /**
-     * 向已审查 commit ID 列表中添加新的 commit ID
-     * 如果标签不存在则创建新的区块
-     */
-    addReviewedCommitId(commentBody, commitId) {
-        const block = locateCommitIdBlock(commentBody);
-        if (block == null) {
-            // 新建区块用当前平台命名空间；已存在的旧区块保持原标签就地追加
-            const tags = commitIdTags();
-            return `${commentBody}\n${tags.start}\n<!-- ${commitId} -->\n${tags.end}`;
-        }
-        if (this.getReviewedCommitIds(commentBody).includes(commitId)) {
-            return commentBody;
-        }
-        const ids = commentBody.substring(block.start + block.startTag.length, block.end);
-        return `${commentBody.substring(0, block.start + block.startTag.length)}${ids}<!-- ${commitId} -->\n${commentBody.substring(block.end)}`;
-    }
-    /**
-     * 从 commit 列表中找到最近一次已审查的 commit ID
-     * 从后向前遍历，返回第一个匹配的已审查 commit
-     */
-    getHighestReviewedCommitId(commitIds, reviewedCommitIds) {
-        for (let i = commitIds.length - 1; i >= 0; i--) {
-            if (reviewedCommitIds.includes(commitIds[i])) {
-                return commitIds[i];
-            }
-        }
-        return '';
-    }
-    /** 获取 PR 的所有 commit ID（分页获取完整列表） */
-    async getAllCommitIds() {
-        if (context && context.payload && context.payload.pull_request != null) {
-            return getPlatform().listChangeRequestCommits(repo.owner, repo.repo, context.payload.pull_request.number);
-        }
-        return [];
-    }
-    // ==================== 审查进度状态管理 ====================
-    /**
-     * 在摘要评论中添加"审查进行中"的状态提示
-     * 如果已存在则不重复添加
-     */
-    addInProgressStatus(commentBody, statusMsg) {
-        // 写新读旧：已有历史格式的进度块时不重复插入
-        if (locateInProgressBlock(commentBody) != null) {
-            return commentBody;
-        }
-        {
-            return `${inProgressStartTag()}
-
-Currently reviewing new changes in this PR...
-
-${statusMsg}
-
-${inProgressEndTag()}
-
----
-
-${commentBody}`;
-        }
-    }
-    /** 从摘要评论中移除"审查进行中"的状态提示 */
-    removeInProgressStatus(commentBody) {
-        const block = locateInProgressBlock(commentBody);
-        if (block != null) {
-            return (commentBody.substring(0, block.start) +
-                commentBody.substring(block.end + block.endTag.length));
-        }
-        return commentBody;
-    }
-}
-
-;// CONCATENATED MODULE: ./lib/review-commit-ids.js
-
-async function isHeadAlreadyReviewed(prNumber, headSha) {
-    const commenter = new Commenter();
-    const comment = await commenter.findCommentWithTag(summarizeTag(), prNumber);
-    if (comment == null)
-        return false;
-    const reviewedIds = commenter.getReviewedCommitIds(comment.body);
-    return reviewedIds.includes(headSha);
-}
-async function clearReviewedCommitIds(prNumber) {
-    const commenter = new Commenter();
-    const comment = await commenter.findCommentWithTag(summarizeTag(), prNumber);
-    if (comment == null)
-        return;
-    const block = locateCommitIdBlock(comment.body);
-    if (block == null)
-        return;
-    const newBody = comment.body.substring(0, block.start) + comment.body.substring(block.end + block.endTag.length);
-    await commenter.comment(newBody.trim(), summarizeTag(), 'replace');
-}
-
-;// CONCATENATED MODULE: ./lib/commands/handlers/stubs.js
-
-
-
-function notImplemented(name) {
-    return async (_ctx) => {
-        // 调度器会把抛出的标记型错误转成 NOT_IMPLEMENTED 反馈
-        const e = new Error(`Command not implemented: ${name}`);
-        e.code = 'NOT_IMPLEMENTED';
-        throw e;
-    };
-}
-/** 成员 C */
-const reviewStub = {
-    name: 'review',
-    description: '触发增量审查（仅审查自上次审查以来的新增变更）',
-    usage: `${PRIMARY_BOT_MENTION} review`,
-    needsAck: true,
-    minPermission: 'write',
-    async execute(ctx) {
-        if (ctx.triggerReview == null)
-            return await notImplemented('review')(ctx);
-        const state = await getReviewState(ctx.owner, ctx.repo, ctx.prNumber);
-        if (state !== 'paused') {
-            return {
-                message: `<details>
-✅ Review finished.
-
-> **Note:** CodeSentinel is an incremental review system and does not re-review already reviewed commits. This command is applicable only when automatic reviews are paused.
-
-</details>`
-            };
-        }
-        await ctx.triggerReview('incremental');
-        return { message: '增量审查已完成' };
-    }
-};
-const fullReviewStub = {
-    name: 'full review',
-    description: '触发全量审查（从 base 到 HEAD 的完整 diff）',
-    usage: `${PRIMARY_BOT_MENTION} full review`,
-    needsAck: true,
-    minPermission: 'write',
-    async execute(ctx) {
-        if (ctx.triggerReview == null)
-            return await notImplemented('full review')(ctx);
-        const alreadyReviewed = await isHeadAlreadyReviewed(ctx.prNumber, ctx.headSha);
-        if (alreadyReviewed) {
-            return {
-                message: `✅ Full review finished.\n\n> **Note:** The current HEAD (\`${ctx.headSha.slice(0, 7)}\`) has already been reviewed. No new changes detected since the last review.`
-            };
-        }
-        await ctx.triggerReview('full');
-        return { message: '✅ Full review finished.' };
-    }
-};
-const summaryStub = {
-    name: 'summary',
-    description: '基于当前最新代码重新生成 PR 摘要',
-    usage: `${PRIMARY_BOT_MENTION} summary`,
-    needsAck: true,
-    minPermission: 'write',
-    async execute(ctx) {
-        if (ctx.triggerReview == null)
-            return await notImplemented('summary')(ctx);
-        await ctx.triggerReview('summary');
-        return { message: 'PR 摘要已重新生成' };
-    }
-};
-const pauseStub = {
-    name: 'pause',
-    description: '暂停对当前 PR 的自动审查',
-    usage: `${PRIMARY_BOT_MENTION} pause`,
-    needsAck: false,
-    minPermission: 'write',
-    async execute(ctx) {
-        await setReviewState(ctx.owner, ctx.repo, ctx.prNumber, 'paused');
-        await clearReviewedCommitIds(ctx.prNumber);
-        return {
-            message: `已暂停当前 PR 的自动审查。使用 \`${PRIMARY_BOT_MENTION} resume\` 恢复。`
-        };
-    }
-};
-const resumeStub = {
-    name: 'resume',
-    description: '恢复对当前 PR 的自动审查',
-    usage: `${PRIMARY_BOT_MENTION} resume`,
-    needsAck: false,
-    minPermission: 'write',
-    async execute(ctx) {
-        await setReviewState(ctx.owner, ctx.repo, ctx.prNumber, 'active');
-        return { message: '已恢复当前 PR 的自动审查。' };
-    }
-};
-const configurationStub = {
-    name: 'configuration',
-    description: '显示当前仓库的审查配置',
-    usage: `${PRIMARY_BOT_MENTION} configuration`,
-    needsAck: false,
-    // CMD-012：Reporter+。GitLab 的 REPORTER(20) 映射为 'triage'，
-    // 与运行差异文档的权限基线一致（见 docs/github-vs-gitlab-runtime-differences.md
-    // 「configuration | 显示 Action inputs | ... | Reporter+」）。
-    // 此前是 'read'，等于放行 GitLab GUEST，比基线宽一级。
-    minPermission: 'triage',
-    async execute(ctx) {
-        const state = await getReviewState(ctx.owner, ctx.repo, ctx.prNumber);
-        const o = ctx.options;
-        const message = `## 当前审查配置
-
-| 配置 | 值 |
-| :--- | :--- |
-| 自动审查状态 | \`${state}\` |
-| disable_review | \`${o.disableReview}\` |
-| disable_release_notes | \`${o.disableReleaseNotes}\` |
-| max_files | \`${o.maxFiles}\` |
-| review_simple_changes | \`${o.reviewSimpleChanges}\` |
-| review_comment_lgtm | \`${o.reviewCommentLGTM}\` |
-| openai_light_model | \`${o.openaiLightModel}\` |
-| openai_heavy_model | \`${o.openaiHeavyModel}\` |
-| openai_concurrency_limit | \`${o.openaiConcurrencyLimit}\` |
-| github_concurrency_limit | \`${o.githubConcurrencyLimit}\` |
-| enable_dependency_analysis | \`${o.enableDependencyAnalysis}\` |
-| max_dependency_files | \`${o.maxDependencyFiles}\` |
-| enable_web_search | \`${o.enableWebSearch}\` |
-| enable_shell | \`${o.enableShell}\` |
-| language | \`${o.language}\` |`;
-        return { message };
-    }
-};
-const ALL_STUBS = [
-    reviewStub,
-    fullReviewStub,
-    summaryStub,
-    pauseStub,
-    resumeStub,
-    configurationStub
-];
-
-;// CONCATENATED MODULE: ./lib/commands/bootstrap.js
-/**
- * commands/bootstrap.ts - 命令框架启动注册
- *
- * 统一在应用启动时把所有 handler 注册到 registry。
- * 后续 B/C/D 接入真实 handler 时，将对应的 stub 替换为正式实现即可。
- *
- * 注意: 注册表是单例，且 register 在重复注册时抛异常。
- * 因此 bootstrap 必须保证只被调用一次（用模块级 flag 保护）。
- */
-
-
-
-
-let bootstrapped = false;
-function bootstrapCommands() {
-    if (bootstrapped)
-        return;
-    const reg = registry_getRegistry();
-    reg.register(helpHandler);
-    reg.register(resolveHandler);
-    for (const h of ALL_STUBS) {
-        reg.register(h);
-    }
-    bootstrapped = true;
-}
-/** 仅供测试: 清空注册表并允许再次 bootstrap */
-function _resetBootstrap() {
-    getRegistry()._reset();
-    bootstrapped = false;
-}
-
-;// CONCATENATED MODULE: ./lib/commands/parser.js
-/**
- * commands/parser.ts - 命令解析器
- *
- * 输入: 评论原文 + 已注册命令列表
- * 输出: ParseOutcome，三种情形:
- *   1. command      — 命中白名单的命令（可能带参数）
- *   2. conversation — 包含 @bot 但未命中命令（走对话 fallback）
- *   3. none         — 不包含 @bot 或没有任何有效触发
- *
- * 关键规则（见 §5.4 设计文档）:
- *   - 默认支持 @ai-reviewer 与 @codesentinel 两个 mention 别名
- *   - bot mention 不区分大小写
- *   - 命令名不区分大小写（解析后归一化为小写）
- *   - 复合命令按最长前缀匹配（例: "full review" 先于 "full"）
- *   - 仅处理第一行的命令体，换行后的内容进入 rawAfter
- *   - 单条评论只识别第一个命令，其余忽略
- *   - 参数字符集白名单: [A-Za-z0-9_\-./:=]；出现 shell 元字符 → INVALID_ARGS
- *   - 长度上限: 命令行 ≤ 512 字符, 单个 arg ≤ 128 字符, arg 数量 ≤ 16
- */
-
-/** 默认支持的 bot mention 别名（小写，已带 @）。共享自 constants.BOT_MENTIONS。 */
-const DEFAULT_BOT_MENTIONS = [...BOT_MENTIONS];
-/** 命令行长度上限 */
-const MAX_COMMAND_LINE_LENGTH = 512;
-/** 单个 arg 长度上限 */
-const MAX_ARG_LENGTH = 128;
-/** 参数个数上限 */
-const MAX_ARGS_COUNT = 16;
-/** 允许的参数字符集 */
-const SAFE_TOKEN_RE = /^[A-Za-z0-9_\-./:=]+$/;
-/** shell 元字符黑名单（补充检查，用于生成更明确的错误信息） */
-const SHELL_METACHARS_RE = /[`$(){}|&;<>\\'"]/;
-/**
- * 主解析入口
- */
-function parse(body, opts) {
-    if (typeof body !== 'string' || body.length === 0) {
-        return { kind: 'none' };
-    }
-    const mentions = (opts.botMentions ?? DEFAULT_BOT_MENTIONS).map(m => m.toLowerCase());
-    // 1. 找到第一个 bot mention 出现的位置（忽略大小写）
-    const lower = body.toLowerCase();
-    let mentionIdx = -1;
-    let mentionLen = 0;
-    for (const m of mentions) {
-        const idx = lower.indexOf(m);
-        if (idx !== -1 && (mentionIdx === -1 || idx < mentionIdx)) {
-            // 要求 mention 前是行首/空白/标点，避免匹配到 foo@ai-reviewer
-            const prev = idx === 0 ? ' ' : body[idx - 1];
-            if (/\s|[,.;:，。；：]/.test(prev) || idx === 0) {
-                mentionIdx = idx;
-                mentionLen = m.length;
-            }
-        }
-    }
-    if (mentionIdx === -1) {
-        return { kind: 'none' };
-    }
-    // 2. 提取 mention 之后的剩余内容
-    let rest = body.slice(mentionIdx + mentionLen);
-    // 允许 mention 后紧跟标点分隔符
-    rest = rest.replace(/^[,:;，：；]+/, '');
-    // 按第一个换行切分：第一行是命令体，其余是 rawAfter
-    const firstNewline = rest.indexOf('\n');
-    const firstLineRaw = firstNewline === -1 ? rest : rest.slice(0, firstNewline);
-    const rawAfter = firstNewline === -1 ? '' : rest.slice(firstNewline + 1).trim();
-    // 3. 命令行长度校验
-    if (firstLineRaw.length > MAX_COMMAND_LINE_LENGTH) {
-        return {
-            kind: 'command',
-            error: {
-                code: 'INVALID_ARGS',
-                detail: `命令长度超过上限 (${MAX_COMMAND_LINE_LENGTH})`
-            }
-        };
-    }
-    const firstLine = firstLineRaw.trim();
-    if (firstLine.length === 0) {
-        // 仅 @bot 单独出现 → 视为对话触发
-        return { kind: 'conversation' };
-    }
-    // 4. 分词（空白分隔）
-    const tokens = firstLine.split(/\s+/);
-    // 5. 尝试匹配命令名（最长前缀匹配，最多看前 3 个 token）
-    const matched = matchCommandName(tokens, opts.registeredCommands);
-    if (!matched) {
-        // 未命中已注册命令。判断是"无效命令"还是"自然语言对话"：
-        // - 首 token 纯 ASCII 字母（看起来像命令名）→ UNKNOWN_COMMAND
-        // - 否则（含 CJK、标点开头等自然语言）→ conversation fallback
-        if (looksLikeCommandAttempt(tokens[0])) {
-            return {
-                kind: 'command',
-                error: { code: 'UNKNOWN_COMMAND', detail: firstLine }
-            };
-        }
-        return { kind: 'conversation' };
-    }
-    const { name, consumed } = matched;
-    const argTokens = tokens.slice(consumed);
-    // 6. 参数数量校验
-    if (argTokens.length > MAX_ARGS_COUNT) {
-        return {
-            kind: 'command',
-            error: {
-                code: 'INVALID_ARGS',
-                detail: `参数个数超过上限 (${MAX_ARGS_COUNT})`
-            },
-            command: { name, raw: firstLine, args: [], kv: {}, rawAfter }
-        };
-    }
-    // 7. 参数字符集校验
-    for (const t of argTokens) {
-        if (t.length > MAX_ARG_LENGTH) {
-            return {
-                kind: 'command',
-                error: {
-                    code: 'INVALID_ARGS',
-                    detail: `参数过长: \`${truncate(t, 32)}\``
-                },
-                command: { name, raw: firstLine, args: [], kv: {}, rawAfter }
-            };
-        }
-        if (SHELL_METACHARS_RE.test(t)) {
-            return {
-                kind: 'command',
-                error: {
-                    code: 'INVALID_ARGS',
-                    detail: `参数包含非法字符: \`${truncate(t, 32)}\``
-                },
-                command: { name, raw: firstLine, args: [], kv: {}, rawAfter }
-            };
-        }
-        if (!SAFE_TOKEN_RE.test(t)) {
-            return {
-                kind: 'command',
-                error: {
-                    code: 'INVALID_ARGS',
-                    detail: `参数包含不允许的字符: \`${truncate(t, 32)}\``
-                },
-                command: { name, raw: firstLine, args: [], kv: {}, rawAfter }
-            };
-        }
-    }
-    // 8. 拆分 kv
-    const args = [];
-    const kv = {};
-    for (const t of argTokens) {
-        const eq = t.indexOf('=');
-        if (eq > 0 && eq < t.length - 1) {
-            const k = t.slice(0, eq);
-            const v = t.slice(eq + 1);
-            kv[k] = v;
-        }
-        args.push(t);
-    }
-    const command = {
-        name,
-        raw: firstLine,
-        args,
-        kv,
-        rawAfter
-    };
-    return { kind: 'command', command };
-}
-/**
- * 在已注册命令集合中对 token 序列做最长前缀匹配
- *
- * 例如: registered = {"review", "full review"}
- * tokens = ["full", "review"] → 匹配到 "full review"
- * tokens = ["review"]         → 匹配到 "review"
- * tokens = ["full"]           → 不匹配（full 未注册）→ 返回 null
- */
-function matchCommandName(tokens, registered) {
-    const maxDepth = Math.min(tokens.length, 3);
-    // 从最长开始尝试
-    for (let depth = maxDepth; depth >= 1; depth--) {
-        const candidate = tokens
-            .slice(0, depth)
-            .map(t => t.toLowerCase())
-            .join(' ');
-        if (registered.has(candidate)) {
-            return { name: candidate, consumed: depth };
-        }
-    }
-    return null;
-}
-/**
- * 判断 token 是否"看起来像一条命令"。
- * 纯 ASCII 字母（允许连字符）→ 极可能是用户尝试输入命令名；
- * 含中文、日文、韩文等非 ASCII 字符 → 自然语言对话。
- */
-function looksLikeCommandAttempt(token) {
-    return /^[A-Za-z][A-Za-z0-9_-]*$/.test(token);
-}
-function truncate(s, n) {
-    return s.length > n ? `${s.slice(0, n)}...` : s;
-}
-
-;// CONCATENATED MODULE: ./lib/commands/reaction.js
-/**
- * commands/reaction.ts - 命令 ACK 表情反应
- *
- * 当 dispatcher 识别到 `@bot <cmd>` 时，会在用户原评论上打一个表情反应
- * （默认 👀），以在正文回复之前先给一个可见的 "收到" 信号。
- *
- * 设计要点：
- * - content 值来自 action input `command_ack_reaction`，通过 options 透传
- * - 空字符串 / 'off' / 'none' 视为禁用
- * - 非法值会被丢弃并给 warning，不阻塞命令执行
- * - issue_comment 与 pull_request_review_comment 走不同 endpoint
- * - 任何失败都只打 warning，不让命令主流程受影响
- */
-
-
-const VALID_REACTIONS = [
-    '+1',
-    '-1',
-    'laugh',
-    'confused',
-    'heart',
-    'hooray',
-    'rocket',
-    'eyes'
-];
-/**
- * 把 raw 配置归一化为合法的 ReactionContent；不合法或禁用时返回 null。
- */
-function normalizeReaction(raw) {
-    if (raw == null)
-        return null;
-    const trimmed = raw.trim().toLowerCase();
-    if (trimmed === '' || trimmed === 'off' || trimmed === 'none' || trimmed === 'false') {
-        return null;
-    }
-    if (VALID_REACTIONS.includes(trimmed)) {
-        return trimmed;
-    }
-    getLogger().warning(`command_ack_reaction "${raw}" is not a valid GitHub reaction ` +
-        `(expected one of ${VALID_REACTIONS.join(', ')}); ACK reaction will be skipped.`);
-    return null;
-}
-/**
- * 在触发命令的用户评论上加表情反应。失败只 warning，不抛错。
- */
-async function addAckReaction(params) {
-    const content = normalizeReaction(params.rawReaction);
-    if (content == null) {
-        return;
-    }
-    const logger = getLogger();
-    try {
-        const commentKind = params.eventName === 'pull_request_review_comment' ? 'review_comment' : 'issue_comment';
-        await getPlatform().addReaction(params.owner, params.repo, params.changeRequestId, params.commentId, content, commentKind);
-        logger.info(`ack reaction "${content}" added on ${params.eventName} commentId=${params.commentId}`);
-    }
-    catch (e) {
-        logger.warning(`addAckReaction failed (content=${content}, commentId=${params.commentId}): ${String(e)}`);
-    }
-}
-
-;// CONCATENATED MODULE: ./lib/commands/early-reaction.js
-/**
- * commands/early-reaction.ts - 评论事件的提前 ACK 表情
- *
- * 在 main.ts 中、Bot 初始化之前调用。目的是在 Actions 冷启动后尽快
- * 给用户评论打一个表情反应（默认 👀），让用户知道"已收到"。
- *
- * 只做三件事：
- *   1. 校验评论正文存在 + 发起人不是 bot
- *   2. 解析评论是否 @bot（命令或对话式追问皆可）
- *   3. 是 → 打表情；不是 → 跳过
- *
- * 不做 Bot 初始化、权限查询、幂等检查等重操作。
- *
- * ARCH-005：不直接 import `@actions/github`，也不读取 `execCtx.raw`——
- * 事件坐标全部来自调用方传入的 ExecutionContext 归一化字段。"action != created"
- * 和"issue_comment 是否挂在 PR 上"这两条判断已经上移到 `createGitHubExecutionContext()`
- * 构造阶段（见该文件），构造失败会走 `ignorable_event` 优雅跳过，本函数根本不会被
- * 调用，因此不需要在这里重复判断（GitHub Issue #88 P2 复核）。
- */
-
-
-
-
-
-/**
- * 尝试在 Bot 初始化前尽快给用户评论打 ACK 表情。
- * 失败或非命令场景下静默返回，不影响后续流程。
- */
-async function tryEarlyReaction(execCtx, rawReaction) {
-    try {
-        if (execCtx.eventKind !== 'comment_created' && execCtx.eventKind !== 'review_comment_created') {
-            return;
-        }
-        const eventName = execCtx.eventKind === 'review_comment_created'
-            ? 'pull_request_review_comment'
-            : 'issue_comment';
-        const comment = execCtx.comment;
-        if (comment == null || typeof comment.body !== 'string')
-            return;
-        if (execCtx.actor.isBot)
-            return;
-        bootstrapCommands();
-        const registry = registry_getRegistry();
-        const outcome = parse(comment.body, {
-            registeredCommands: registry.getRegisteredNames(),
-            botMentions: DEFAULT_BOT_MENTIONS
-        });
-        // 命令（@bot <cmd>）与对话式追问（@bot <自然语言>）都先打 ACK 表情：
-        // 二者都会触发后续 bot 回帖，提前给用户一个"已收到"的可见信号。
-        // 'none' 分支（未 @bot / 非触发）不打表情，避免打扰真人之间的普通讨论。
-        if (outcome.kind !== 'command' && outcome.kind !== 'conversation')
-            return;
-        // GitLab subgroup 项目路径可能含多级 namespace（如 group/subgroup/repo），
-        // 用 lastIndexOf 确保 owner 保留完整 namespace
-        const lastSlash = execCtx.projectPath.lastIndexOf('/');
-        const owner = execCtx.projectPath.substring(0, lastSlash);
-        const repo = execCtx.projectPath.substring(lastSlash + 1);
-        await addAckReaction({
-            owner,
-            repo,
-            changeRequestId: execCtx.changeRequestId,
-            commentId: comment.id,
-            eventName,
-            rawReaction
-        });
-        (0,actions_log.info)(`early ack reaction sent for commentId=${comment.id}`);
-    }
-    catch (e) {
-        (0,actions_log.info)(`early ack reaction skipped: ${String(e)}`);
-    }
 }
 
 // EXTERNAL MODULE: ./node_modules/brace-expansion/index.js
@@ -82611,7 +83604,7 @@ class Options {
     botLogin; // 平台专有的 bot 登录标识
     /**
      * 外部 lint 报告路径（SEC-002）。非空时 reviewer **不自己跑工具**，
-     * 而是读取无密钥 job 产出的 JSON 报告——有密钥的执行面不接触 PR 代码。
+     * 而是读取低权限 lint job 产出的 JSON 报告——持业务密钥的执行面不接触 PR 代码。
      */
     lintReportPath;
     constructor(debug, disableReview, disableReleaseNotes, maxFiles = '0', reviewSimpleChanges = false, reviewCommentLGTM = false, pathFilters = null, systemMessage = '', openaiLightModel = 'gpt-5.4-nano', openaiHeavyModel = 'gpt-5.4-mini', openaiModelTemperature = '0.0', openaiRetries = '3', openaiTimeoutMS = '120000', openaiConcurrencyLimit = '6', githubConcurrencyLimit = '6', apiBaseUrl = 'https://api.openai.com/v1', language = 'en-US', enableDependencyAnalysis = true, maxDependencyFiles = '50', enableWebSearch = true, enableShell = true, enableLintTools = true, toolEnableOverrides = {}, toolVersionOverrides = {}, semgrepConfig = 'p/default', commandAckReaction = 'eyes', maxReviewComments = '20', debugResolveInjectFailures = '0', botIcon = '🤖', botName = 'AI Reviewer', botLogin = '', lintReportPath = '') {
@@ -82780,6 +83773,41 @@ class OpenAIOptions {
     }
 }
 
+;// CONCATENATED MODULE: ./lib/bot-factory.js
+/**
+ * bot-factory.ts — 双入口共享的 Bot 构造（ARCH-025）
+ *
+ * 原先这段逻辑写在 main.ts 里，用的是 GitHub 专用日志出口（actions-log）。
+ * gitlab-trigger.ts 接入共享审查核心后需要同一份逻辑，于是抽出来，把日志出口
+ * 变成参数——GitHub 入口传 actions-log 的 warning，GitLab 入口传 Logger.warning。
+ *
+ * 构造失败返回 null 而不是抛错：模型密钥缺失/无效属于配置问题，应当以「跳过本次
+ * 审查」收场，而不是让整个 job 崩掉（这是 main.ts 的既有语义，原样保留）。
+ */
+
+
+function createBots(options, warn) {
+    let lightBot;
+    try {
+        lightBot = new Bot(options, new OpenAIOptions(options.openaiLightModel, options.lightTokenLimits, false, false));
+    }
+    catch (e) {
+        warn(`Skipped: failed to create summary bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`);
+        return null;
+    }
+    let heavyBot;
+    try {
+        heavyBot = new Bot(options, new OpenAIOptions(options.openaiHeavyModel, options.heavyTokenLimits, options.enableWebSearch, options.enableShell));
+    }
+    catch (e) {
+        warn(`Skipped: failed to create review bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`);
+        return null;
+    }
+    return { lightBot, heavyBot };
+}
+
+// EXTERNAL MODULE: ./node_modules/@actions/github/lib/github.js
+var github = __nccwpck_require__(5438);
 ;// CONCATENATED MODULE: ./lib/platform/execution-context.js
 /**
  * platform/execution-context.ts - 平台无关执行上下文（ARCH-001 / ARCH-002）
@@ -82920,7 +83948,12 @@ function createGitHubExecutionContext() {
         comment: {
             kind: eventKind === 'review_comment_created' ? 'review_thread' : 'top_level',
             id: comment.id,
-            body: typeof comment.body === 'string' ? comment.body : undefined
+            body: typeof comment.body === 'string' ? comment.body : undefined,
+            nodeId: typeof comment.node_id === 'string' ? comment.node_id : undefined,
+            // 行级对话定位所需（REVIEW-015）
+            path: typeof comment.path === 'string' ? comment.path : undefined,
+            line: typeof comment.line === 'number' ? comment.line : undefined,
+            diffHunk: typeof comment.diff_hunk === 'string' ? comment.diff_hunk : undefined
             // threadId 故意不填充——见 CommentRef.threadId 的文档注释（ARCH-021/Issue #88 P2）。
         },
         raw: github.context.payload
@@ -83204,7 +84237,12 @@ class GitHubConfigProvider {
             tsc: (0,core.getBooleanInput)('enable_tsc'),
             prettier: (0,core.getBooleanInput)('enable_prettier'),
             semgrep: (0,core.getBooleanInput)('enable_semgrep')
-        }, toolVersionOverrides, (0,core.getInput)('semgrep_config'), (0,core.getInput)('command_ack_reaction'), validateIntStr((0,core.getInput)('max_review_comments'), P, 'max_review_comments'), validateIntStr((0,core.getInput)('debug_resolve_inject_failures'), P, 'debug_resolve_inject_failures'), (0,core.getInput)('bot_icon') || '🤖', (0,core.getInput)('bot_name') || 'AI Reviewer', (0,core.getInput)('bot_github_login'), (0,core.getInput)('lint_report_path'));
+        }, toolVersionOverrides, 
+        // 空值回退到受控默认。用户在 with: 里显式写成空串时 getInput 返回 ''，
+        // 而 Options 的默认参数只对 undefined 生效、SemgrepAdapter 用的是 `??`，
+        // 两处都接不住空串——最终会以 `semgrep --config=` 运行。
+        // GitLab 侧的 envStr() 已经把 '' 当作未设置，这里对齐同一语义。
+        (0,core.getInput)('semgrep_config').trim() || CONFIG_DEFAULTS.semgrepConfig, (0,core.getInput)('command_ack_reaction'), validateIntStr((0,core.getInput)('max_review_comments'), P, 'max_review_comments'), validateIntStr((0,core.getInput)('debug_resolve_inject_failures'), P, 'debug_resolve_inject_failures'), (0,core.getInput)('bot_icon') || '🤖', (0,core.getInput)('bot_name') || 'AI Reviewer', (0,core.getInput)('bot_github_login'), (0,core.getInput)('lint_report_path'));
         return this.cachedOptions;
     }
     getPromptConfig() {
@@ -83272,8 +84310,6 @@ class GitHubConfigProvider {
     }
 }
 
-// EXTERNAL MODULE: ./lib/redact.js
-var redact = __nccwpck_require__(1173);
 ;// CONCATENATED MODULE: ./lib/platform/github-logger.js
 /**
  * platform/github-logger.ts - GitHub Actions Logger（ARCH-013）
@@ -83356,6 +84392,99 @@ Retry count: ${retryCount}
     }
 });
 
+// EXTERNAL MODULE: external "crypto"
+var external_crypto_ = __nccwpck_require__(6113);
+;// CONCATENATED MODULE: ./lib/platform/write-marker.js
+/**
+ * platform/write-marker.ts — 写操作幂等 marker（GLAPI-027 / STATE-015）
+ *
+ * 超时/网络中断时无法区分「请求没到平台」和「平台已写入但响应丢了」。
+ * 直接重试后者会产生重复 note/discussion/comment。做法：
+ *
+ * 1. 写入前给正文追加一个隐藏 marker（HTML 注释，两平台的 Markdown 都不渲染）；
+ * 2. 重试前先按 marker 查询已有内容，命中说明上一次其实成功了，直接复用；
+ * 3. 返回给共享核心前把 marker 去掉，核心看到的正文与平台无关。
+ *
+ * 原先只有 GitLab 版（`gitlab-write-marker.ts`）。STATE-015 要求三类重试共用同一
+ * 幂等规则，而 GitHub 侧当时只有 `@octokit/plugin-retry` 的**传输层**重试——它会
+ * 在网络错误时重发 POST，服务端已成功的话就多出一条评论，且无法事后察觉。
+ * 所以把这套 marker 泛化成双平台共用，而不是给 GitHub 再写一份平行实现。
+ *
+ * 两条不变式：
+ *
+ * - **marker 唯一标识「一次逻辑写入」，不是「一段正文」**：每次写入由
+ *   `newWriteOperationId()` 生成随机 operationId，只在该次调用的重试之间复用。
+ *   否则同一 PR/MR 里再次合法发布相同正文时（如两次 pause 回复），重试探测会命中
+ *   历史评论并误判为「本次已成功」，导致新评论丢失。
+ * - **marker 文本只含受限字符**：projectPath、文件路径、正文等外部内容只以
+ *   sha1 摘要形式参与，绝不原样进入 HTML 注释。Git 文件名允许 `>` 甚至 `-->`，
+ *   直接拼接会提前闭合注释并让剥离正则失效，把内部标记暴露给用户。
+ *
+ * marker 带平台命名空间（A4），两平台不混用；也带 PR/MR 编号，便于人工排查。
+ */
+
+const MARKER_ROOT = 'ai-reviewer';
+/** 本平台写 marker 的前缀 */
+function markerPrefix(platform) {
+    return `${MARKER_ROOT}:${platform}:write`;
+}
+/**
+ * 匹配本模块生成的 marker（用于剥离）。
+ * 各字段字符集受限且由本模块生成，外部内容无法构造出能破坏该格式的 marker。
+ */
+const MARKER_PATTERN = new RegExp(`\\n*<!-- ${MARKER_ROOT}:(?:github|gitlab):write:\\d+:[a-z][a-z0-9-]*:[0-9a-f]{16} -->`, 'g');
+/** 为一次逻辑写入生成唯一 ID */
+function newWriteOperationId() {
+    return (0,external_crypto_.randomUUID)();
+}
+/** 把操作种类规范化为受限 slug，保证 marker 文本格式不可被外部内容破坏 */
+function normalizeOpKind(op) {
+    const slug = op
+        .toLowerCase()
+        .replace(/[^a-z0-9-]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+    return /^[a-z]/.test(slug) ? slug : `op-${slug}`;
+}
+/** 生成幂等 marker */
+function buildWriteMarker(input) {
+    const kind = normalizeOpKind(input.op);
+    // \0 作分隔符：合法的项目路径/文件名/正文都不含它，杜绝字段拼接歧义
+    const digest = (0,external_crypto_.createHash)('sha1')
+        .update([
+        input.platform,
+        input.projectPath,
+        String(input.changeRequestId),
+        kind,
+        input.opDetail ?? '',
+        input.operationId,
+        input.body
+    ].join('\u0000'), 'utf8')
+        .digest('hex')
+        .slice(0, 16);
+    return `<!-- ${markerPrefix(input.platform)}:${input.changeRequestId}:${kind}:${digest} -->`;
+}
+/** 追加 marker；已包含时保持原样（重试路径可安全重复调用） */
+function appendWriteMarker(body, marker) {
+    if (body.includes(marker))
+        return body;
+    return `${body}\n\n${marker}`;
+}
+/** 判断一段正文是否带指定 marker */
+function hasWriteMarker(body, marker) {
+    if (body == null)
+        return false;
+    return body.includes(marker);
+}
+/**
+ * 剥离所有本模块的 marker，返回给共享核心的正文不含平台实现细节。
+ * 只删 marker 本身与其前置空行，不触碰用户内容里的其他 HTML 注释。
+ */
+function stripWriteMarkers(body) {
+    if (body == null)
+        return '';
+    return body.replace(MARKER_PATTERN, '');
+}
+
 ;// CONCATENATED MODULE: ./lib/platform/github-platform.js
 /**
  * platform/github-platform.ts - GitHub adapter（ARCH-018 / ARCH-019）
@@ -83369,6 +84498,8 @@ Retry count: ${retryCount}
  *
  * ARCH-022: 所有 Octokit 错误统一转换为 GitPlatformError。
  */
+
+
 
 
 
@@ -83417,7 +84548,14 @@ const RESOLVE_THREAD = `
 `;
 // ─── 错误转换 ─────────────────────────────────────────────────────────────
 function toGitPlatformError(e) {
-    const msg = String(e);
+    // SEC-008：在归一化的源头脱敏。这条 message 之后会被四处传递——进日志、
+    // 进 setFailed、还会被命令失败分支渲染进贴给用户的评论——指望每个下游都
+    // 记得脱敏是不现实的。octokit 的错误文本里出现回显的 URL query token 或
+    // Authorization 头并不罕见。
+    //
+    // GitLab 侧的对称位置（normalizeGitLabError）一直有这一步，GitHub 侧原先
+    // 是裸的 String(e)：同一类故障在 GitHub 上泄露、在 GitLab 上不泄露。
+    const msg = (0,redact/* redactForLog */.vS)(String(e));
     const status = e?.status;
     if (status === 404) {
         return new GitPlatformError(msg, 'not_found', status, e);
@@ -83443,6 +84581,27 @@ function normalizeLogin(login) {
     return login.replace(/\[bot\]$/i, '').toLowerCase();
 }
 // ─── GitHub adapter 实现 ──────────────────────────────────────────────────
+/**
+ * 是不是「仓库是空的」这一类错误。
+ *
+ * 只认 409 + 明确文案的组合。单看状态码会把真正的冲突误吞成空仓，
+ * 单看文案又可能被别的接口的相似措辞蒙混——两者都要。
+ */
+function isEmptyRepositoryError(e) {
+    const status = e?.status;
+    const message = String(e?.message ?? '');
+    return status === 409 && /repository is empty/i.test(message);
+}
+/** API 返回 → 平台无关评论；顺带剥掉写 marker，共享核心看不到平台实现细节 */
+function toPlatformComment(data) {
+    return {
+        id: data.id,
+        body: stripWriteMarkers(data.body ?? ''),
+        author: data.user?.login ?? '',
+        nodeId: data.node_id,
+        createdAt: data.created_at
+    };
+}
 class GitHubPlatform {
     // ─── 1. PR 信息 ───────────────────────────────────────────────────────────
     async getChangeRequest(owner, repo, changeRequestId) {
@@ -83547,26 +84706,143 @@ class GitHubPlatform {
         }
     }
     // ─── 4. 顶层评论 ─────────────────────────────────────────────────────────
+    /**
+     * 创建顶层评论（STATE-015：写级别幂等）。
+     *
+     * 原实现直接 `octokit.issues.createComment`，依赖 `@octokit/plugin-retry` 兜底。
+     * 那是**传输层**重试：网络错误时它会重发 POST，而「服务端已经写成功、响应在
+     * 回程丢了」与「请求根本没到」在客户端看来完全一样——重发就多一条评论，
+     * 事后也无从察觉。GitLab 侧早有 write marker 解决这个问题（GLAPI-027），
+     * GitHub 侧一直空缺。
+     *
+     * 现在两平台共用 `write-marker.ts`：
+     *
+     *   1. 写前在正文尾部埋一个隐藏 marker（本次逻辑写入唯一）
+     *   2. 关掉 octokit 的自动重试，改由这里控制——否则它会在我们看不见的地方
+     *      重发，marker 探测也就无从谈起
+     *   3. 失败后先按 marker 查一遍已有评论：命中说明上一次其实成功了，直接复用；
+     *      没命中才真正重试
+     */
     async createComment(owner, repo, changeRequestId, body) {
-        try {
+        const marker = buildWriteMarker({
+            platform: 'github',
+            projectPath: `${owner}/${repo}`,
+            changeRequestId,
+            op: 'issue-comment',
+            operationId: newWriteOperationId(),
+            body
+        });
+        const markedBody = appendWriteMarker(body, marker);
+        const attempt = async () => {
             const { data } = await octokit.issues.createComment({
                 owner,
                 repo,
                 // eslint-disable-next-line camelcase
                 issue_number: changeRequestId,
-                body
+                body: markedBody,
+                // 自动重试必须关掉：它会在我们察觉不到的情况下重发 POST
+                request: { retries: 0 }
             });
-            return {
-                id: data.id,
-                body: data.body ?? '',
-                author: data.user?.login ?? '',
-                nodeId: data.node_id,
-                createdAt: data.created_at
-            };
+            return toPlatformComment(data);
+        };
+        return await this.writeOnce(attempt, async () => {
+            // 探测必须看**未剥离**的原始正文——marker 正是要找的东西，
+            // 而 listComments() 返回给共享核心的正文已经把它去掉了。
+            const hit = await this.findAcrossPages(async (page) => {
+                const { data } = await octokit.issues.listComments({
+                    owner,
+                    repo,
+                    // eslint-disable-next-line camelcase
+                    issue_number: changeRequestId,
+                    // eslint-disable-next-line camelcase
+                    per_page: 100,
+                    page,
+                    sort: 'created',
+                    direction: 'desc'
+                });
+                return data;
+            }, c => hasWriteMarker(c.body, marker));
+            return hit == null ? null : toPlatformComment(hit);
+        });
+    }
+    /**
+     * 逐页查找，直到命中或翻完（STATE-015）。
+     *
+     * 探测**必须**分页。原实现只取 `per_page: 100` 的第一页——评论超过 100 条的 PR
+     * 上，刚写进去的那条根本不在第一页，探测就会误判「还没写」并重发，幂等形同虚设。
+     * 而「评论很多的 PR」恰恰是长期迭代、最可能触发重试的那种。
+     *
+     * 能指定顺序的端点一律按创建时间倒序取，自己刚写的那条通常就在第一页；
+     * `maxPages` 只是兜底，防止异常情况下无限翻页。
+     */
+    async findAcrossPages(fetchPage, match, maxPages = 20) {
+        for (let page = 1; page <= maxPages; page++) {
+            const items = await fetchPage(page);
+            const hit = items.find(match);
+            if (hit != null)
+                return hit;
+            // 不满一页说明已经是最后一页，再翻也没有
+            if (items.length < 100)
+                return null;
         }
-        catch (e) {
-            throw toGitPlatformError(e);
+        getLogger().warning(`write-marker: probe stopped after ${maxPages} pages without finding the marker`);
+        return null;
+    }
+    /** 为一次逻辑写入生成 marker（STATE-015） */
+    writeMarkerFor(owner, repo, changeRequestId, op, body, opDetail) {
+        return buildWriteMarker({
+            platform: 'github',
+            projectPath: `${owner}/${repo}`,
+            changeRequestId,
+            op,
+            opDetail,
+            operationId: newWriteOperationId(),
+            body
+        });
+    }
+    /** 在行级评论里按 marker 查找（原始正文，未剥离），供写入探测使用 */
+    async findReviewCommentByMarker(owner, repo, changeRequestId, marker) {
+        return await this.findAcrossPages(async (page) => {
+            const { data } = await octokit.pulls.listReviewComments({
+                owner,
+                repo,
+                // eslint-disable-next-line camelcase
+                pull_number: changeRequestId,
+                // eslint-disable-next-line camelcase
+                per_page: 100,
+                page,
+                sort: 'created',
+                direction: 'desc'
+            });
+            return data;
+        }, c => hasWriteMarker(c.body, marker));
+    }
+    /**
+     * 「至多一次」写入：失败后先探测上一次是否其实成功了，没成功才重试。
+     *
+     * 探测本身失败不作数——那只是说明这一刻查不了，继续按重试处理。
+     */
+    async writeOnce(attempt, probe, maxAttempts = 3) {
+        let lastError;
+        for (let i = 0; i < maxAttempts; i++) {
+            try {
+                return await attempt();
+            }
+            catch (e) {
+                lastError = e;
+                try {
+                    const already = await probe();
+                    if (already != null) {
+                        getLogger().info('write-marker: previous attempt actually succeeded (response was lost) — reusing it');
+                        return already;
+                    }
+                }
+                catch (probeError) {
+                    getLogger().warning(`write-marker: probe failed: ${String(probeError)}`);
+                }
+            }
         }
+        throw toGitPlatformError(lastError);
     }
     async updateComment(owner, repo, commentId, body) {
         try {
@@ -83611,7 +84887,7 @@ class GitHubPlatform {
                 });
                 allComments.push(...data.map(c => ({
                     id: c.id,
-                    body: c.body ?? '',
+                    body: stripWriteMarkers(c.body ?? ''),
                     author: c.user?.login ?? '',
                     nodeId: c.node_id,
                     createdAt: c.created_at
@@ -83643,7 +84919,7 @@ class GitHubPlatform {
                 });
                 allComments.push(...data.map(c => ({
                     id: c.id,
-                    body: c.body ?? '',
+                    body: stripWriteMarkers(c.body ?? ''),
                     path: c.path,
                     line: c.line ?? null,
                     startLine: c.start_line ?? null,
@@ -83664,45 +84940,91 @@ class GitHubPlatform {
             throw toGitPlatformError(e);
         }
     }
-    async submitReviewComments(owner, repo, changeRequestId, commitSha, comments, reviewBody) {
+    async submitReviewComments(owner, repo, changeRequestId, commitSha, comments, reviewBody, hooks) {
+        // GitHub 的 createReview 是原子的：要么整批进去，要么抛错。
+        // 因此结果只有「全部投递」或「异常上抛由调用方降级」两种。
         if (comments.length === 0)
-            return 0;
+            return { delivered: [], failed: [] };
+        // STATE-011/012：这里「每次逻辑写入前」等同于「整批之前」——整批评论由一次
+        // createReview 调用写入，中途没有第二个写入点可插。GitLab 那边逐条创建
+        // discussion，所以门禁在循环内部。
+        if (hooks?.ensureFresh != null && !(await hooks.ensureFresh())) {
+            return { delivered: [], failed: [], staleSkipped: [...comments] };
+        }
+        // STATE-015：整批 review 也要写级别幂等。marker 埋在 review body 里，
+        // 探测时按它在已有 review 列表中查找——超时重发会多出一整份 review，
+        // 比多一条评论更醒目，也更该防。
+        const body = reviewBody ?? '';
+        const marker = this.writeMarkerFor(owner, repo, changeRequestId, 'review', body);
+        const markedBody = appendWriteMarker(body, marker);
+        const findExistingReview = async () => {
+            // listReviews 不支持排序方向，只能顺序翻页
+            const hit = await this.findAcrossPages(async (page) => {
+                const { data } = await octokit.pulls.listReviews({
+                    owner,
+                    repo,
+                    // eslint-disable-next-line camelcase
+                    pull_number: changeRequestId,
+                    // eslint-disable-next-line camelcase
+                    per_page: 100,
+                    page
+                });
+                return data;
+            }, r => hasWriteMarker(r.body, marker));
+            return hit == null ? null : { id: hit.id, submitted: hit.state !== 'PENDING' };
+        };
         try {
-            const review = await octokit.pulls.createReview({
-                owner,
-                repo,
-                // eslint-disable-next-line camelcase
-                pull_number: changeRequestId,
-                // eslint-disable-next-line camelcase
-                commit_id: commitSha,
-                comments: comments.map(c => {
-                    const d = { path: c.path, body: c.body, line: c.line };
-                    if (c.startLine != null && c.startLine !== c.line) {
+            const review = await this.writeOnce(async () => {
+                const { data } = await octokit.pulls.createReview({
+                    owner,
+                    repo,
+                    // eslint-disable-next-line camelcase
+                    pull_number: changeRequestId,
+                    // eslint-disable-next-line camelcase
+                    commit_id: commitSha,
+                    body: markedBody,
+                    comments: comments.map(c => {
+                        const d = { path: c.path, body: c.body, line: c.line };
+                        if (c.startLine != null && c.startLine !== c.line) {
+                            // eslint-disable-next-line camelcase
+                            d.start_line = c.startLine;
+                            // eslint-disable-next-line camelcase
+                            d.start_side = c.startSide ?? 'RIGHT';
+                        }
+                        return d;
+                    }),
+                    request: { retries: 0 }
+                });
+                return { id: data.id, submitted: false };
+            }, findExistingReview);
+            // submitReview 是第二个 POST。它自己的「已提交」状态就是天然的幂等依据：
+            // 探测发现 review 不再是 PENDING，说明上一次其实提交成功了。
+            if (!review.submitted) {
+                await this.writeOnce(async () => {
+                    await octokit.pulls.submitReview({
+                        owner,
+                        repo,
                         // eslint-disable-next-line camelcase
-                        d.start_line = c.startLine;
+                        pull_number: changeRequestId,
                         // eslint-disable-next-line camelcase
-                        d.start_side = c.startSide ?? 'RIGHT';
-                    }
-                    return d;
-                })
-            });
-            await octokit.pulls.submitReview({
-                owner,
-                repo,
-                // eslint-disable-next-line camelcase
-                pull_number: changeRequestId,
-                // eslint-disable-next-line camelcase
-                review_id: review.data.id,
-                event: 'COMMENT',
-                body: reviewBody ?? ''
-            });
-            return comments.length;
+                        review_id: review.id,
+                        event: 'COMMENT',
+                        request: { retries: 0 }
+                    });
+                    return true;
+                }, async () => {
+                    const existing = await findExistingReview();
+                    return existing?.submitted === true ? true : null;
+                });
+            }
+            return { delivered: [...comments], failed: [] };
         }
         catch (e) {
             throw toGitPlatformError(e);
         }
     }
     async createReviewComment(owner, repo, changeRequestId, commitSha, comment) {
+        const marker = this.writeMarkerFor(owner, repo, changeRequestId, 'review-comment', comment.body, `${comment.path}:${comment.line}`);
         try {
             const d = {
                 owner,
@@ -83712,8 +85034,9 @@ class GitHubPlatform {
                 // eslint-disable-next-line camelcase
                 commit_id: commitSha,
                 path: comment.path,
-                body: comment.body,
-                line: comment.line
+                body: appendWriteMarker(comment.body, marker),
+                line: comment.line,
+                request: { retries: 0 }
             };
             if (comment.startLine != null && comment.startLine !== comment.line) {
                 // eslint-disable-next-line camelcase
@@ -83721,22 +85044,32 @@ class GitHubPlatform {
                 // eslint-disable-next-line camelcase
                 d.start_side = comment.startSide ?? 'RIGHT';
             }
-            await octokit.pulls.createReviewComment(d);
+            await this.writeOnce(async () => {
+                await octokit.pulls.createReviewComment(d);
+                return true;
+            }, async () => (await this.findReviewCommentByMarker(owner, repo, changeRequestId, marker)) == null
+                ? null
+                : true);
         }
         catch (e) {
             throw toGitPlatformError(e);
         }
     }
     async replyToReviewComment(owner, repo, changeRequestId, commentId, body) {
+        const marker = this.writeMarkerFor(owner, repo, changeRequestId, 'review-reply', body, String(commentId));
         try {
-            const { data } = await octokit.pulls.createReplyForReviewComment({
+            const { data } = await this.writeOnce(async () => await octokit.pulls.createReplyForReviewComment({
                 owner,
                 repo,
                 // eslint-disable-next-line camelcase
                 pull_number: changeRequestId,
                 // eslint-disable-next-line camelcase
                 comment_id: commentId,
-                body
+                body: appendWriteMarker(body, marker),
+                request: { retries: 0 }
+            }), async () => {
+                const hit = await this.findReviewCommentByMarker(owner, repo, changeRequestId, marker);
+                return hit == null ? null : { data: hit };
             });
             return {
                 id: data.id,
@@ -83953,6 +85286,15 @@ class GitHubPlatform {
             if (path != null && path !== '' && err.errorKind === 'not_found') {
                 return { entries: [], truncated: false };
             }
+            // 空仓库：Git Tree API 对没有任何 commit 的仓库返回 409
+            // "Git Repository is empty."。那是「没有文件」而不是「查询失败」，
+            // 语义上就是一棵空树——GitLab adapter 早就把等价的
+            // "404 Tree Not Found" 这么处理了，两边对齐。
+            //
+            // 判据同时看状态与文案：只看 409 会把真正的冲突（如并发写）误吞成空仓。
+            if (isEmptyRepositoryError(e)) {
+                return { entries: [], truncated: false };
+            }
             throw err;
         }
     }
@@ -84062,23 +85404,26 @@ function _resetPermissionCache() {
 }
 
 ;// CONCATENATED MODULE: ./lib/commands/rate-limit.js
-/**
- * commands/rate-limit.ts - 命令速率限制
- *
- * 简单的进程内令牌桶: 同一 actor 在 WINDOW_MS 内最多 MAX_PER_WINDOW 条命令。
- *
- * 注意: Actions 是无状态环境，跨 run 无法限流；本实现仅在单次 run 内有效。
- * 这足以防止同一次 webhook 抖动下的重复处理，但不防"攻击者分多次提交评论"。
- * 后者需要在更上层做（例如 GitHub 自身的 abuse detection）。
- */
 const WINDOW_MS = 60_000;
 const MAX_PER_WINDOW = 10;
 const buckets = new Map();
-function checkRateLimit(actor, now = Date.now()) {
-    let bucket = buckets.get(actor);
+/**
+ * 组装桶 key。
+ *
+ * 各段单独 encodeURIComponent 再用 `:` 连接：分隔符不会被段内容伪造出来，
+ * 否则一个叫 `a:b` 的项目就能和另一个组合撞 key。
+ */
+function rateLimitKey(scope) {
+    return [scope.platform, scope.projectPath, String(scope.changeRequestId), scope.actor]
+        .map(part => encodeURIComponent(part))
+        .join(':');
+}
+function checkRateLimit(scope, now = Date.now()) {
+    const key = rateLimitKey(scope);
+    let bucket = buckets.get(key);
     if (!bucket) {
         bucket = { timestamps: [] };
-        buckets.set(actor, bucket);
+        buckets.set(key, bucket);
     }
     // 清理窗口外的记录
     const cutoff = now - WINDOW_MS;
@@ -84099,6 +85444,10 @@ function checkRateLimit(actor, now = Date.now()) {
 function _resetRateLimit() {
     buckets.clear();
 }
+/** 仅供测试：当前存在的桶数量，用来断言隔离而不是靠间接现象 */
+function _bucketCount() {
+    return buckets.size;
+}
 const _RATE_LIMIT_CONSTANTS = { WINDOW_MS, MAX_PER_WINDOW };
 
 ;// CONCATENATED MODULE: ./lib/commands/reply.js
@@ -84116,6 +85465,7 @@ const _RATE_LIMIT_CONSTANTS = { WINDOW_MS, MAX_PER_WINDOW };
  * - success/error 若收到 ackId 则 updateComment，否则 createComment
  * - error 文案带错误码，便于日志与用户排查
  */
+
 
 
 
@@ -84150,7 +85500,15 @@ const ERROR_MESSAGES = {
     FORBIDDEN: '🚫 **权限不足**。执行该命令需要仓库 `write` 及以上权限。',
     BOT_FORBIDDEN: '🚫 **Bot 权限不足**。请检查 workflow `permissions` 配置（pull-requests: write / contents: read）。',
     NOT_IMPLEMENTED: '🚧 **命令暂未实现**。该命令已在路线图中，等待实现。',
-    RATE_LIMITED: '⏱️ **请求过于频繁**。同一用户在 60 秒内最多执行 10 条命令，请稍后再试。',
+    // CMD-029：不能给出「N 条 / M 秒」这种配额承诺。
+    //
+    // 桶只活在单个 Node 进程里，而 GitHub comment 与 GitLab note 通常是一条事件一
+    // 个新进程——用户连发 10 条评论会起 10 个进程，每个桶都是空的，谁也限不住。
+    // 说成「同一用户 60 秒内最多 10 条」，用户照着数就会发现根本对不上。
+    //
+    // 它也不负责重复投递——那在 dispatcher 里先被幂等检查拦下了（CMD-030）。
+    // 所以文案只说作用范围，不说场景，也不给数字。
+    RATE_LIMITED: '⏱️ **请求过于频繁**。本次运行中检测到过多命令请求，请稍后再试。',
     DUPLICATE: 'ℹ️ **命令已处理**（重复事件已去重）。',
     INTERNAL: '💥 **命令执行失败**。错误已记录，请联系维护者。'
 };
@@ -84196,8 +85554,21 @@ class Reply {
             getLogger().warning(`reply.progress update failed: ${String(e)}`);
         }
     }
-    /** 新建或更新评论 */
-    async publish(body, ackId) {
+    /**
+     * 新建或更新评论。
+     *
+     * SEC-008：正文在这里统一脱敏，而不是在各个调用点。命令失败时
+     * `error(code, detail)` 会把异常的 message 原样渲染进 `详情:`——那串文本
+     * 来自平台 SDK 或任意 handler，完全可能带着 token（回显的 URL、
+     * Authorization 头、API key）。日志出口早就被 SEC-008 焊死了，但**评论**
+     * 是另一条出口，而且更糟：PR/MR 评论对所有人可见，还会一直留在那里。
+     *
+     * 放在这个收口处而不是 `error()` 里，理由与 Logger 那层相同——将来任何新的
+     * 回帖路径都自动被覆盖，不必指望每个调用点都记得脱敏。对不含密钥的正文
+     * 这是个 no-op，排错信息不会被抹掉。
+     */
+    async publish(rawBody, ackId) {
+        const body = (0,redact/* redactForLog */.vS)(rawBody);
         const platform = getPlatform();
         const logger = getLogger();
         if (ackId != null) {
@@ -84277,7 +85648,6 @@ async function hasBeenProcessed(owner, repo, issueNumber, originalCommentId, com
  *   - dispatchCommentEvent(deps): 主入口，被 command-handler.ts 调用
  *   - DispatchOutcome: 用于测试的明确返回值
  */
-// eslint-disable-next-line camelcase
 
 
 
@@ -84288,8 +85658,7 @@ async function hasBeenProcessed(owner, repo, issueNumber, originalCommentId, com
 
 
 
-// eslint-disable-next-line camelcase
-const dispatcher_context = github.context;
+
 /**
  * 主调度入口。
  * 调用方 (command-handler.ts) 负责:
@@ -84297,61 +85666,40 @@ const dispatcher_context = github.context;
  */
 async function dispatchCommentEvent(deps) {
     const logger = getLogger();
-    // [事件白名单] 仅放行 issue_comment / pull_request_review_comment 两类带评论的事件；
-    // 其余事件（push、pull_request、schedule 等）不携带用户评论，直接忽略，
-    // 同时把 eventName 收窄为 CommandEventName 供后续分支安全使用。
-    const eventName = dispatcher_context.eventName;
-    if (eventName !== 'issue_comment' && eventName !== 'pull_request_review_comment') {
-        return { kind: 'ignored', reason: `unsupported event: ${eventName}` };
+    const execCtx = deps.execCtx;
+    // [事件白名单] 只放行两类带评论的事件。归一化 eventKind → 平台事件名，
+    // 供 Reply / addAckReaction 等仍按 GitHub 事件名分支的下游使用。
+    const eventName = execCtx.eventKind === 'comment_created'
+        ? 'issue_comment'
+        : execCtx.eventKind === 'review_comment_created'
+            ? 'pull_request_review_comment'
+            : null;
+    if (eventName == null) {
+        return { kind: 'ignored', reason: `unsupported event: ${execCtx.eventKind}` };
     }
-    // [action 校验] 只处理"新建评论"(created)，忽略 edited / deleted 等动作，
-    // 避免编辑历史评论时重复触发命令。
-    const payload = dispatcher_context.payload;
-    if (!payload || payload.action !== 'created') {
-        return { kind: 'ignored', reason: `action not created` };
-    }
-    // 提取 PR number & 评论 —— 两种事件的 payload 形态不同
-    let prNumber;
-    let comment;
+    // action != 'created' 和「issue_comment 挂在非 PR issue 上」这两条，已经在
+    // ExecutionContext 构造阶段判掉（ignorable_event，见 github-execution-context.ts），
+    // 走到这里的一定是新建的 PR/MR 评论，不必重复判断。
+    const prNumber = execCtx.changeRequestId;
+    const comment = execCtx.comment;
+    const commentNodeId = comment?.nodeId;
+    const threadNodeId = comment?.threadId;
+    // head/base SHA 与 PR 作者：评论事件的 payload 不保证带全（GitHub 侧构造阶段
+    // 固定留空），统一查一次当前详情补齐。迁移前 issue_comment 分支本来就查这一次，
+    // review_comment 分支从 payload 读——改成统一查询后行为更准，payload 里的 SHA
+    // 可能已经过期。
     let headSha = '';
     let baseSha = '';
     let prAuthor = '';
-    let commentNodeId;
-    let threadNodeId;
-    if (eventName === 'issue_comment') {
-        // [issue_comment 分支] PR 主评论区。GitHub 中 PR 复用 issue 模型，
-        // 只有当该 issue 关联 pull_request 时才是 PR 评论；否则是普通 issue，忽略。
-        if (!payload.issue?.pull_request) {
-            return { kind: 'ignored', reason: 'issue_comment on non-PR issue' };
-        }
-        prNumber = payload.issue.number;
-        comment = payload.comment;
-        prAuthor = payload.issue.user?.login ?? '';
-        // issue_comment 的 payload 没有 head/base SHA，主动查一次 PR 补齐，
-        // 否则 full review 等命令的 headSha 为空、去重逻辑（isHeadAlreadyReviewed）永远失效
-        try {
-            const cr = await getPlatform().getChangeRequest(dispatcher_context.repo.owner, dispatcher_context.repo.repo, prNumber);
-            headSha = cr.headSha;
-            baseSha = cr.baseSha;
-        }
-        catch (e) {
-            logger.warning(`command dispatcher: failed to fetch head/base sha for PR #${prNumber}: ${String(e)}`);
-        }
+    const { owner, repo: repoName } = repoCoordsOf(execCtx);
+    try {
+        const cr = await getPlatform().getChangeRequest(owner, repoName, prNumber);
+        headSha = cr.headSha;
+        baseSha = cr.baseSha;
+        prAuthor = cr.author;
     }
-    else {
-        // [pull_request_review_comment 分支] 代码 diff 上的行级评论。
-        // 缺少 pull_request 字段属于异常 payload，忽略。
-        if (!payload.pull_request) {
-            return { kind: 'ignored', reason: 'review_comment missing pull_request' };
-        }
-        prNumber = payload.pull_request.number;
-        comment = payload.comment;
-        // 行级评论 payload 自带 head/base SHA，可直接用于后续 diff 定位
-        headSha = payload.pull_request.head?.sha ?? '';
-        baseSha = payload.pull_request.base?.sha ?? '';
-        prAuthor = payload.pull_request.user?.login ?? '';
-        commentNodeId = comment?.node_id;
-        // review_thread 的 nodeId 需要另查 GraphQL；此处置空由 B 在 handler 中补齐
+    catch (e) {
+        logger.warning(`command dispatcher: failed to fetch head/base sha for #${prNumber}: ${String(e)}`);
     }
     // [字段完整性校验] 评论体非字符串或缺 PR number 则无法解析命令，忽略。
     if (!comment || typeof comment.body !== 'string' || !prNumber) {
@@ -84359,11 +85707,11 @@ async function dispatchCommentEvent(deps) {
     }
     // [bot 自评论过滤] 通过 user.type 或登录名 `xxx[bot]` 后缀识别机器人，
     // 防止 bot 自己回帖再次触发命令造成死循环。
-    const actorLogin = comment.user?.login ?? '';
-    const actorIsBot = comment.user?.type === 'Bot' || /\[bot\]$/i.test(actorLogin);
-    if (actorIsBot) {
-        // 打印作者信息，便于排查"明明是人却被当成 bot"的情况
-        logger.info(`command dispatcher: ignored comment from bot (login=${actorLogin}, type=${comment.user?.type})`);
+    // bot 识别（user.type === 'Bot' 或 `xxx[bot]` 后缀）已在构造阶段归一化为
+    // actor.isBot，两个平台共用同一判定
+    const actorLogin = execCtx.actor.login;
+    if (execCtx.actor.isBot) {
+        logger.info(`command dispatcher: ignored comment from bot (login=${actorLogin})`);
         return { kind: 'ignored', reason: 'comment from bot' };
     }
     // 命令解析
@@ -84379,14 +85727,31 @@ async function dispatchCommentEvent(deps) {
         // 避免与真人之间的普通讨论冲突。
         return { kind: 'ignored', reason: 'no bot mention' };
     }
+    // [自评论过滤] 以真实账号（PAT / machine user）身份运行时，reviewer 自己的
+    // 评论**不带** `[bot]` 后缀、user.type 也不是 Bot，上面那条 isBot 判不出来。
+    //
+    // GitLab 入口在 EVENT-018 把这种情况改写成 isBot=true 再交给本函数；GitHub
+    // 那条路径没有等价物，于是同一份配置在 GitHub 上少一道防线：reviewer 自己的
+    // 回帖里只要出现一个边界合法的 @mention，就会再触发一次命令，每一轮都是一次
+    // 完整的模型调用，且没有任何东西会喊停。判定放在共享层，两个平台一起兜住。
+    //
+    // 放在 parse 之后：`isOwnAuthor` 可能要查一次平台身份，而绝大多数评论根本没
+    // @ 过 bot，早退掉它们就不必为普通讨论付这次查询（结果在 commenter 内缓存，
+    // 一次运行至多查一次）。判定仍在任何 handler 执行与模型调用之前。
+    //
+    // 只在**确定是自己**时拦截：身份解析失败（token 缺 scope、API 抖动）返回
+    // null，此时不能一并挡下真人的命令——那会让命令系统整体失效。这与
+    // conversation.ts 的 REVIEW-018 取同一个方向，那边还多一层 marker 兜底。
+    if ((await isOwnAuthor(actorLogin)) === true) {
+        logger.info(`command dispatcher: ignored comment authored by the reviewer itself (login=${actorLogin})`);
+        return { kind: 'ignored', reason: 'comment from self' };
+    }
     if (outcome.kind === 'conversation') {
         // conversation：@bot 但非已注册命令 → 交回 command-handler 走对话式追问 fallback。
         return { kind: 'fallback_conversation' };
     }
     // outcome.kind === 'command'：解析出一条已知命令，进入执行流程。
     // 即便解析出错，也尽量构造 reply 以反馈用户
-    const owner = dispatcher_context.repo.owner;
-    const repoName = dispatcher_context.repo.repo;
     const cmdNameForReply = outcome.command?.name ?? 'unknown';
     const reply = new Reply({
         owner,
@@ -84436,8 +85801,16 @@ async function dispatchCommentEvent(deps) {
             error: 'DUPLICATE'
         };
     }
-    // [速率限制] 按操作者维度限流；超限则回帖提示重试时间并结束。
-    const rl = checkRateLimit(actorLogin);
+    // [速率限制] 按 platform + project + PR/MR + actor 四元组限流（CMD-027/028）。
+    // key 全部取自规范化的 execCtx，不读平台 payload——两个平台共用这一个接口。
+    // 注意这步在幂等检查**之后**：重复投递不该消耗用户配额，防重复靠的是幂等
+    // 而不是限流（CMD-030）。
+    const rl = checkRateLimit({
+        platform: execCtx.platform,
+        projectPath: execCtx.projectPath,
+        changeRequestId: prNumber,
+        actor: actorLogin
+    });
     if (!rl.allowed) {
         await reply.error('RATE_LIMITED', `请 ${Math.ceil((rl.retryAfterMs ?? 0) / 1000)} 秒后再试`);
         return {
@@ -84681,6 +86054,22 @@ const LANGUAGE_EXTENSIONS = {
 let cachedTree = null;
 let cachedTreeKey = null;
 /**
+ * 仅供测试：清空模块级缓存。
+ *
+ * 缓存是模块级单例，跨用例不会自动失效。没有这个钩子时，测试只能靠「每个用例
+ * 换一个 repo 名」绕开（见 `dep-tree-consistency.test.ts` 里的 `uniqueProject`）
+ * ——那是在回避缓存，而不是测试它，缓存本身的行为（命中、隔离、截断状态保留）
+ * 反而永远测不到。
+ */
+function _resetTreeCache() {
+    cachedTree = null;
+    cachedTreeKey = null;
+}
+/** 仅供测试：当前缓存键，用来断言隔离而不是靠间接现象 */
+function _currentTreeCacheKey() {
+    return cachedTreeKey;
+}
+/**
  * 获取仓库文件树
  *
  * 通过注入的 TreeFetcher 获取指定 ref 下的所有文件路径。
@@ -84882,6 +86271,16 @@ function tryResolveWithExtensions(basePath, repoFilesSet) {
 /**
  * 按优先级对候选文件排序（同目录文件优先）
  *
+ * 同档内按路径字典序兜底，排序结果与输入顺序无关——这一点是跨平台一致性的
+ * 前提，不是锦上添花：候选列表来自平台的文件树，而两个平台还回条目的顺序
+ * 各按各的规则（git 的树序把目录和文件按名字混排，GitLab 有自己的排序），
+ * 我们的接口契约里从没规定过顺序。只按三档分数排的话，同分候选会保持输入
+ * 顺序，于是 `max_dependency_files` 一截断，两个平台留下的就是**不同的**
+ * 文件集——同一个 PR 得到不同的审查结论，还不报任何错。
+ *
+ * 用 `<`/`>` 而不是 `localeCompare`：后者受运行环境 locale 影响，
+ * 换个 runner 就可能换个顺序，等于把不确定性从平台挪到了机器上。
+ *
  * @param candidateFiles - 候选文件列表
  * @param modifiedFiles - PR 中被修改的文件列表
  * @returns 按优先级排序后的文件列表
@@ -84899,7 +86298,12 @@ function sortByProximity(candidateFiles, modifiedFiles) {
             return 1;
         return 2;
     };
-    return [...candidateFiles].sort((a, b) => getScore(a) - getScore(b));
+    return [...candidateFiles].sort((a, b) => {
+        const byScore = getScore(a) - getScore(b);
+        if (byScore !== 0)
+            return byScore;
+        return a < b ? -1 : a > b ? 1 : 0;
+    });
 }
 
 ;// CONCATENATED MODULE: ./lib/dependency-analyzer.js
@@ -85828,9 +87232,16 @@ async function recoverPathsForImports(contents, repoFilesSet, state, concurrency
     for (const dir of dirs)
         state.listed.add(dir);
     const discovered = [];
+    const truncatedDirs = [];
     await Promise.all(dirs.map(async (dir) => concurrencyLimit(async () => {
         try {
-            for (const f of await state.lister.listDirectory(dir)) {
+            const listing = await state.lister.listDirectory(dir);
+            // 这一层本身也可能被平台 API 截断（超大目录）。不记下来的话，
+            // 回填出来的「半个目录」会被当成完整目录，下游继续把缺失路径
+            // 判成「文件不存在」——正是按需回填要解决的那个问题。
+            if (listing.truncated)
+                truncatedDirs.push(dir);
+            for (const f of listing.files) {
                 if (repoFilesSet.has(f))
                     continue;
                 repoFilesSet.add(f);
@@ -85844,6 +87255,9 @@ async function recoverPathsForImports(contents, repoFilesSet, state, concurrency
     })));
     if (discovered.length > 0) {
         getLogger().info(`dependency analysis [${stage}]: recovered ${discovered.length} file(s) from ${dirs.length} directory probe(s)`);
+    }
+    if (truncatedDirs.length > 0) {
+        getLogger().warning(`dependency analysis [${stage}]: ${truncatedDirs.length} probed director${truncatedDirs.length > 1 ? 'ies were' : 'y was'} truncated by the platform API (${truncatedDirs.slice(0, 5).join(', ')}${truncatedDirs.length > 5 ? ', …' : ''}) — some files in them remain invisible, dependency analysis may still be incomplete`);
     }
     return discovered;
 }
@@ -88550,7 +89964,7 @@ function formatter_truncate(s, max) {
 /**
  * lint/report-schema.ts — 外部 lint 报告的严格校验（SEC-002 / SEC-005）
  *
- * P0 第二步把 lint 挪进**无密钥 job**：它 checkout PR head、跑工具、产出 JSON
+ * P0 第二步把 lint 挪进**低权限 job**：它 checkout PR head、跑工具、产出 JSON
  * 报告；有密钥的 reviewer job 只把这份报告当**数据**读回来。
  *
  * 这份数据完全由 PR 作者间接控制——他能决定被扫描的代码，因而能影响工具输出的
@@ -89256,6 +90670,39 @@ function ensureFixSuggestionHeaders(commentBody) {
     return out.join('\n');
 }
 
+;// CONCATENATED MODULE: ./lib/head-staleness.js
+/**
+ * head-staleness.ts — HEAD 陈旧判定（REVIEW-003 / EVENT-012）
+ *
+ * 两个消费方、两个插入点，但必须共用同一套语义：
+ *
+ *   EVENT-012（§6，GitLab trigger）—— 事件分发**之前**判断，陈旧事件根本不进审查
+ *   REVIEW-003（§8.1，共享审查核心）—— 每个写入阶段**之前**判断，审查跑到一半
+ *                                    HEAD 变了就不写旧结果
+ *
+ * 原先这个纯函数放在 `gitlab-mr-hook-rules.ts` 里。审查核心是平台无关的，从一个
+ * GitLab 专有模块里 import 判定逻辑说不通；各写一份又会让两处语义漂移。
+ * 因此挪到这里，原路径继续 re-export，§6 的接线不受影响。
+ */
+/**
+ * 比较「分析所基于的 HEAD」与「当前 HEAD」。
+ *
+ * 只做比较，不做读取——重新读取当前 HEAD 是调用方的事（GitHub 走
+ * `getChangeRequest`，GitLab 走 GLAPI-006）。
+ *
+ * 任一侧为空时判为**不陈旧**：拿不到基准就无从比较，此时拒绝写入会让评论触发的
+ * 审查永远发不出结果（GitHub 构造评论事件时 execCtx.headSha 固定留空）。
+ * 真正的基准由调用方保证——REVIEW-003 用的是审查开始时读到的 HEAD，不是事件里的。
+ */
+function isHeadStale(eventHeadSha, currentHeadSha) {
+    const known = eventHeadSha !== '' && currentHeadSha !== '';
+    return {
+        stale: known && eventHeadSha !== currentHeadSha,
+        eventHeadSha,
+        currentHeadSha
+    };
+}
+
 // EXTERNAL MODULE: ./node_modules/@dqbd/tiktoken/tiktoken.cjs
 var tiktoken = __nccwpck_require__(3171);
 ;// CONCATENATED MODULE: ./lib/tokenizer.js
@@ -89305,7 +90752,6 @@ function getTokenCount(input) {
  * 后续运行只审查新增的变更，避免重复审查。
  */
 
-// eslint-disable-next-line camelcase
 
 
 
@@ -89325,8 +90771,7 @@ function getTokenCount(input) {
 
 
 
-// eslint-disable-next-line camelcase
-const review_context = github.context;
+
 /** 平台无关的 TreeFetcher 实现（DEP-005 → ARCH-018） */
 const platformTreeFetcher = {
     async getTree(owner, repoName, treeSha) {
@@ -89342,9 +90787,13 @@ function makeDirectoryLister(owner, repoName, ref) {
     return {
         async listDirectory(dirPath) {
             const result = await getPlatform().listRepositoryTree(owner, repoName, ref, dirPath);
-            return result.entries
-                .filter(item => item.type === 'blob' && item.path != null)
-                .map(item => item.path);
+            return {
+                files: result.entries
+                    .filter(item => item.type === 'blob' && item.path != null)
+                    .map(item => item.path),
+                // 截断状态必须带出去：丢掉它等于把「半个目录」当成完整目录
+                truncated: result.truncated
+            };
         }
     };
 }
@@ -89356,18 +90805,29 @@ const platformContentFetcher = {
 };
 /** 跨文件上下文注入的 token 上限 */
 const MAX_CROSS_FILE_CONTEXT_TOKENS = 1500;
-const review_repo = review_context.repo;
+/**
+ * 仓库坐标（ARCH-005）。
+ *
+ * 迁移前是 `const repo = context.repo`——`@actions/github` 的 getter 在没有
+ * GITHUB_REPOSITORY 时直接抛，于是 GitLab 入口一 import 本文件就崩，
+ * run() 根本执行不到。改成属性访问器：调用期才求值，16 个调用点一字不改。
+ */
+const review_repo = {
+    get owner() {
+        return getRepoCoords().owner;
+    },
+    get repo() {
+        return getRepoCoords().repo;
+    }
+};
 /** 在 PR 描述中添加此关键词可跳过 AI 审查 */
 const ignoreKeyword = `${PRIMARY_BOT_MENTION}: ignore`;
 /**
  * 代码审查主函数
  *
- * @param execCtx - 平台无关执行上下文（ARCH-005/ARCH-007 过渡期：本函数内部
- *   仍以模块级 `context`/`repo`（`@actions/github`）为唯一数据源，尚未逐处
- *   替换为 execCtx——40+ 处调用点的完整迁移列入阶段四后续排期，见
- *   docs/tasks/execution-context-design.md 第 6.3 节。当前只接收该参数，
- *   保证 main.ts/command-handler.ts 可以在入口层完成 ExecutionContext 改造，
- *   不阻塞双平台兼容的入口层工作。
+ * @param execCtx - 平台无关执行上下文，本函数唯一的事件坐标来源（ARCH-005 迁移
+ *   完成）。PR/MR 的标题、描述、base/head SHA 一律经 IGitPlatform 现查，
+ *   不再读取任何平台 payload。
  * @param lightBot - 轻量模型 Bot（用于文件摘要和变更分类）
  * @param heavyBot - 重量模型 Bot（用于深度代码审查和最终摘要）
  * @param options - 全局配置选项
@@ -89383,7 +90843,7 @@ const MAX_LINT_REPORT_BYTES = 8 * 1024 * 1024;
 /**
  * 读取并严格校验外部 lint 报告（SEC-002 / SEC-005）。
  *
- * 报告由无密钥 job 产出，内容间接受 PR 作者控制，因此这里把它当敌意数据：
+ * 报告由低权限 lint job 产出，内容间接受 PR 作者控制，因此这里把它当敌意数据：
  * 结构违规整份丢弃、单条目违规逐条丢弃，任何失败都只降级为「没有 lint 结果」，
  * 绝不让审查主流程失败——静态分析是增强项，不是审查的前置条件。
  */
@@ -89423,49 +90883,142 @@ function loadExternalLintReport(reportPath) {
         `${parsed.dropped} dropped, produced by a secret-free job`);
     return parsed.report;
 }
+/**
+ * 最终摘要生成失败时的可见兜底（REVIEW-006）。
+ *
+ * 逐文件摘要本身是已经算出来的，只是原本只存进 `inputs.rawSummary`——而那份内容
+ * 落在隐藏 marker 区块里，用户在评论正文里一个字也看不到。这里把它渲染成可见的
+ * 简表，让「模型整合失败」退化为「摘要质量下降」，而不是「什么都没有」。
+ */
+function renderPerFileSummaryFallback(summaries) {
+    if (summaries.length === 0)
+        return '';
+    const rows = summaries
+        .map(([filename, summary]) => `- **${filename}**：${summary.trim().replace(/\n+/g, ' ')}`)
+        .join('\n');
+    return `> 整合摘要生成失败，以下是未经整合的逐文件摘要：\n\n${rows}`;
+}
 const codeReview = async (execCtx, lightBot, heavyBot, options, prompts, runOptions = {}) => {
-    const commenter = new Commenter();
+    // 登记当前上下文：Commenter 在十几处被构造，签名里没有 execCtx，只能读模块级
+    // 上下文。共享核心入口统一登记一次，调用方（main.ts / gitlab-trigger.ts /
+    // 命令 handler）不必各自记得这件事。
+    setExecCtx(execCtx);
+    const commenter = new commenter_Commenter();
     const fromCommand = runOptions.source === 'command';
     const reviewMode = runOptions.mode ?? 'incremental';
     // 初始化并发控制器：分别限制 OpenAI 和 GitHub API 的并发数
     const openaiConcurrencyLimit = pLimit(options.openaiConcurrencyLimit);
     const githubConcurrencyLimit = pLimit(options.githubConcurrencyLimit);
     // ==================== 事件验证 ====================
-    if (review_context.eventName !== 'pull_request' &&
-        review_context.eventName !== 'pull_request_target' &&
-        !fromCommand) {
-        getLogger().warning(`Skipped: current event is ${review_context.eventName}, only support pull_request event`);
+    // 归一化事件类型：GitHub 的 pull_request / pull_request_target 与 GitLab 的
+    // MR open/update 在构造阶段已经合流成 pr_* 三种
+    const isPrEvent = execCtx.eventKind === 'pr_opened' ||
+        execCtx.eventKind === 'pr_synchronize' ||
+        execCtx.eventKind === 'pr_reopened';
+    if (!isPrEvent && !fromCommand) {
+        getLogger().warning(`Skipped: current event is ${execCtx.eventKind}, only support pull request events`);
         return;
     }
-    if (review_context.payload.pull_request == null && fromCommand) {
-        const issueNumber = review_context.payload.issue?.number;
-        if (issueNumber != null) {
-            const cr = await getPlatform().getChangeRequest(review_repo.owner, review_repo.repo, issueNumber);
-            review_context.payload.pull_request = {
-                number: cr.number,
-                title: cr.title,
-                body: cr.body,
-                state: cr.state,
-                base: { sha: cr.baseSha, ref: cr.baseRef },
-                head: { sha: cr.headSha, ref: cr.headRef },
-                user: { login: cr.author }
-            };
-        }
+    // PR/MR 详情统一现查（ARCH-005）。
+    //
+    // 迁移前这里分两路：PR 事件直接读 context.payload.pull_request，命令路径才去
+    // 查 API 合成一个同形状的对象。现在统一走 API——payload 里的标题/描述/SHA 是
+    // 事件发生那一刻的快照，命令触发时往往已经过期；而且 GitLab 侧根本没有这个
+    // payload 形状。
+    const { owner: prOwner, repo: prRepo } = repoCoordsOf(execCtx);
+    let pr;
+    try {
+        const cr = await getPlatform().getChangeRequest(prOwner, prRepo, execCtx.changeRequestId);
+        pr = {
+            number: cr.number,
+            title: cr.title,
+            body: cr.body,
+            base: { sha: cr.baseSha, ref: cr.baseRef },
+            head: { sha: cr.headSha, ref: cr.headRef }
+        };
     }
-    if (review_context.payload.pull_request == null) {
-        getLogger().warning('Skipped: context.payload.pull_request is null');
+    catch (e) {
+        getLogger().warning(`Skipped: failed to load change request details: ${String(e)}`);
         return;
     }
-    if (!fromCommand &&
-        getReviewStateFromBody(review_context.payload.pull_request.body ?? '') === 'paused') {
+    if (!fromCommand && getReviewStateFromBody(pr.body ?? '') === 'paused') {
         getLogger().info('Skipped: review automation is paused for this PR');
         return;
     }
+    // ── REVIEW-003：只发布针对最新 HEAD 的结果 ──────────────────────────────
+    //
+    // 基线用「审查开始时读到的 HEAD」而不是事件里的：评论触发的运行 execCtx.headSha
+    // 固定为空（见 github-execution-context.ts），拿事件值做基线会让 @ai-reviewer
+    // review 永远发不出结果；而且真正要防的是「分析跑了几分钟，期间又推了新 commit」，
+    // 那正是分析基线与当前 HEAD 的差异。
+    const reviewedHeadSha = pr.head.sha;
+    /**
+     * 写入前的准入判断。返回 fresh=false 表示本次结果已作废，调用方必须放弃写入。
+     *
+     * **查询失败一律判为不新鲜（fail closed）。** 早先这里返回「放行」，理由是
+     * 「一次 API 抖动不该让整轮审查白跑」——那是错的：REVIEW-003 的要求是「旧任务
+     * 不得写摘要或行级评论」，读不到当前 HEAD 就等于无法确认自己是不是旧任务，
+     * 此时继续写入正是它要防的事。整个代码库在权限、幂等、归属判定上都是 fail
+     * closed，唯独这里 fail open 说不通。
+     *
+     * 返回 currentHeadSha 供调用方直接用，避免检测到 stale 后再查一次。
+     */
+    const ensureHeadFresh = async (phase) => {
+        let currentHeadSha = '';
+        try {
+            const fresh = await getPlatform().getChangeRequest(prOwner, prRepo, execCtx.changeRequestId);
+            currentHeadSha = fresh.headSha;
+        }
+        catch (e) {
+            getLogger().warning(`[review-003] cannot confirm current HEAD before ${phase} (${String(e)}) — ` +
+                'discarding results rather than risking a stale write');
+            return { fresh: false, currentHeadSha: '', reason: '无法确认当前 HEAD' };
+        }
+        const check = isHeadStale(reviewedHeadSha, currentHeadSha);
+        if (!check.stale)
+            return { fresh: true, currentHeadSha, reason: '' };
+        getLogger().warning(`[review-003] HEAD moved from ${check.eventHeadSha} to ${check.currentHeadSha} — ` +
+            `discarding results before ${phase}`);
+        return { fresh: false, currentHeadSha, reason: 'HEAD 已变化' };
+    };
+    /**
+     * 发布「本次结果已作废」提示（幂等）。
+     *
+     * **只写自己的 marker 区块，绝不碰摘要评论。** 早先这里还会去读改写摘要评论
+     * 来清掉进度横幅——那正是 REVIEW-003 要防的事：旧任务读改写共享摘要，可能把
+     * 新任务刚写好的结果覆盖掉。进度横幅的问题改为从源头避免：写它之前就先检查，
+     * 陈旧任务根本不会留下横幅。
+     */
+    const publishInvalidationNotice = async (currentHeadSha) => {
+        const body = `> ⚠️ 本次审查的结果已作废：分析基于 \`${reviewedHeadSha.slice(0, 8)}\`，` +
+            `发布前 HEAD 已变为 \`${currentHeadSha.slice(0, 8)}\`。\n>\n` +
+            '> 针对新 HEAD 的审查会自动运行；本条提示会被下一次结果覆盖。\n';
+        const delivered = await commenter.comment(body, stateMarker('reviewInvalidated'), 'replace');
+        if (!delivered) {
+            // comment() 内部会吞异常，只能靠返回值判断（同 REVIEW-014 的教训）
+            getLogger().warning('[review-003] failed to publish invalidation notice');
+        }
+    };
+    /**
+     * 放弃本次运行。
+     *
+     * 只有**确认 HEAD 变了**才发作废提示。查询失败时不发：那种情况下没有任何证据
+     * 表明结果真的过期，贸然贴一条「已作废」反而会误导用户（新审查未必会来）。
+     * 此时只记 error 级日志，让运维能查到这轮为什么没有产出。
+     */
+    const abortStaleRun = async (check) => {
+        if (check.currentHeadSha === '') {
+            getLogger().error(`[review-003] discarded this run: ${check.reason}. No invalidation notice was posted ` +
+                'because there is no evidence the results are actually outdated.');
+            return;
+        }
+        await publishInvalidationNotice(check.currentHeadSha);
+    };
     // ==================== 填充 PR 基本信息 ====================
     const inputs = new Inputs();
-    inputs.title = review_context.payload.pull_request.title;
-    if (review_context.payload.pull_request.body != null) {
-        inputs.description = commenter.getDescription(review_context.payload.pull_request.body);
+    inputs.title = pr.title;
+    if (pr.body != null) {
+        inputs.description = commenter.getDescription(pr.body);
     }
     // 如果 PR 描述中包含忽略关键词，跳过审查
     if (inputs.description.includes(ignoreKeyword)) {
@@ -89476,7 +91029,7 @@ const codeReview = async (execCtx, lightBot, heavyBot, options, prompts, runOpti
     inputs.systemMessage = options.systemMessage;
     // ==================== 恢复增量审查状态 ====================
     // 从已有的摘要评论中恢复上次审查的状态
-    const existingSummarizeCmt = await commenter.findCommentWithTag(summarizeTag(), review_context.payload.pull_request.number);
+    const existingSummarizeCmt = await commenter.findCommentWithTag(commenter_summarizeTag(), pr.number);
     let existingCommitIdsBlock = '';
     let existingSummarizeCmtBody = '';
     if (existingSummarizeCmt != null) {
@@ -89496,14 +91049,13 @@ const codeReview = async (execCtx, lightBot, heavyBot, options, prompts, runOpti
     }
     // 确定 diff 的起始 commit
     if (reviewMode === 'full') {
-        getLogger().info(`Will review full diff from the base commit: ${review_context.payload.pull_request.base.sha}`);
-        highestReviewedCommitId = review_context.payload.pull_request.base.sha;
+        getLogger().info(`Will review full diff from the base commit: ${pr.base.sha}`);
+        highestReviewedCommitId = pr.base.sha;
     }
-    else if (highestReviewedCommitId === '' ||
-        highestReviewedCommitId === review_context.payload.pull_request.head.sha) {
+    else if (highestReviewedCommitId === '' || highestReviewedCommitId === pr.head.sha) {
         // 首次审查或已是最新：从 base 分支开始
-        getLogger().info(`Will review from the base commit: ${review_context.payload.pull_request.base.sha}`);
-        highestReviewedCommitId = review_context.payload.pull_request.base.sha;
+        getLogger().info(`Will review from the base commit: ${pr.base.sha}`);
+        highestReviewedCommitId = pr.base.sha;
     }
     else {
         // 增量审查：从上次审查的 commit 开始
@@ -89511,9 +91063,9 @@ const codeReview = async (execCtx, lightBot, heavyBot, options, prompts, runOpti
     }
     // ==================== 获取 diff 数据 ====================
     // 增量 diff：从上次审查的 commit 到最新 commit（仅包含新增变更）
-    const incrementalDiff = await getPlatform().compareDiff(review_repo.owner, review_repo.repo, highestReviewedCommitId, review_context.payload.pull_request.head.sha);
+    const incrementalDiff = await getPlatform().compareDiff(review_repo.owner, review_repo.repo, highestReviewedCommitId, pr.head.sha);
     // 全量 diff：从目标分支的 base 到最新 commit（完整变更视图）
-    const targetBranchDiff = await getPlatform().compareDiff(review_repo.owner, review_repo.repo, review_context.payload.pull_request.base.sha, review_context.payload.pull_request.head.sha);
+    const targetBranchDiff = await getPlatform().compareDiff(review_repo.owner, review_repo.repo, pr.base.sha, pr.head.sha);
     const incrementalFiles = incrementalDiff.files;
     const targetBranchFiles = targetBranchDiff.files;
     if (incrementalFiles == null || targetBranchFiles == null) {
@@ -89523,7 +91075,7 @@ const codeReview = async (execCtx, lightBot, heavyBot, options, prompts, runOpti
     // 增量审查：使用 incrementalFiles 的 patch（仅包含新增变更的 hunk）
     // 全量审查（首次或 full mode）：incremental 与 targetBranch 相同，直接使用
     // 关键：必须用 incrementalFiles 的 patch 送入 AI，否则 AI 会看到已审查过的旧变更
-    const isFirstOrFullReview = highestReviewedCommitId === review_context.payload.pull_request.base.sha;
+    const isFirstOrFullReview = highestReviewedCommitId === pr.base.sha;
     const files = isFirstOrFullReview
         ? targetBranchFiles.filter(targetBranchFile => incrementalFiles.some(incrementalFile => incrementalFile.filename === targetBranchFile.filename))
         : incrementalFiles.filter(incrementalFile => targetBranchFiles.some(targetBranchFile => targetBranchFile.filename === incrementalFile.filename));
@@ -89558,22 +91110,22 @@ const codeReview = async (execCtx, lightBot, heavyBot, options, prompts, runOpti
     const filteredFiles = await Promise.all(filterSelectedFiles.map(file => githubConcurrencyLimit(async () => {
         // 获取文件在基准分支上的原始内容
         let fileContent = '';
-        if (review_context.payload.pull_request == null) {
-            getLogger().warning('Skipped: context.payload.pull_request is null');
-            return null;
-        }
         if (file.status === 'added') {
             getLogger().info(`skip base content fetch for new file: ${file.filename}`);
         }
         else {
             try {
-                const content = await getPlatform().getFileContent(review_repo.owner, review_repo.repo, file.filename, review_context.payload.pull_request.base.sha);
+                const content = await getPlatform().getFileContent(review_repo.owner, review_repo.repo, file.filename, pr.base.sha);
                 if (content != null) {
                     fileContent = content;
                 }
             }
             catch (e) {
-                getLogger().warning(`Failed to get file contents: ${e}. This is OK if it's a new file.`);
+                // REVIEW-005：新增文件走的是上面的 status === 'added' 分支，根本
+                // 不会到这里。能走到这里说明是真的读不到（权限、超大文件、
+                // 二进制、临时故障），说"这对新文件是正常的"会把真问题盖过去。
+                getLogger().warning(`Failed to read base content of ${file.filename}: ${String(e)}. ` +
+                    'Continuing with diff only — review quality for this file may be reduced.');
             }
         }
         // 提取文件的完整 diff patch
@@ -89614,6 +91166,11 @@ ${hunks.oldHunk}
         }
     })));
     // 过滤掉没有有效 patch 的文件
+    // REVIEW-005：已删除的文件在**摘要**里仍有价值（"某某被删掉了"是重要变更），
+    // 但不该进入**行级审查**——删除后的文件没有新行可挂评论，模型给出的行号无处
+    // 落地，提交行级评论时会被平台拒绝。filesAndChanges 元组不带 status，
+    // 这里旁路记一份文件名集合。
+    const deletedFiles = new Set(files.filter(file => file.status === 'removed').map(file => file.filename));
     const filesAndChanges = filteredFiles.filter(file => file !== null);
     if (filesAndChanges.length === 0) {
         getLogger().error('Skipped: no files to review');
@@ -89628,9 +91185,9 @@ ${hunks.oldHunk}
     // ==================== 阶段零·B：静态分析工具扫描（Linter/SAST） ====================
     //
     // 两条来源，互斥：
-    //   1. lintReportPath 非空 → 读取无密钥 job 产出的报告（SEC-002）。
+    //   1. lintReportPath 非空 → 读取低权限 lint job 产出的报告（SEC-002）。
     //      本 job 持有密钥，绝不能自己 checkout/执行 PR 代码，因此优先走这条。
-    //   2. 否则 enableLintTools=true → 本地跑工具（仅适用于无密钥执行面）。
+    //   2. 否则 enableLintTools=true → 本地跑工具（仅适用于无业务密钥的执行面）。
     let lintReport = null;
     if (options.lintReportPath) {
         lintReport = loadExternalLintReport(options.lintReportPath);
@@ -89666,19 +91223,19 @@ ${hunks.oldHunk}
         try {
             getLogger().info('Phase 0: starting cross-file dependency analysis');
             // 获取仓库文件树（1 次 API 调用，结果缓存）
-            const { files: repoFiles, truncated } = await getRepoFileTree(execCtx.headSha || review_context.payload.pull_request.head.sha, {
+            const { files: repoFiles, truncated } = await getRepoFileTree(execCtx.headSha || pr.head.sha, {
                 platform: execCtx.platform,
                 owner: review_repo.owner,
                 repo: review_repo.repo
             }, platformTreeFetcher);
             repoTreeTruncated = truncated;
             // 分析依赖关系：解析导入、提取被修改的导出符号、搜索引用
-            dependencyContext = await analyzeDependencies(filesAndChanges, repoFiles, options, githubConcurrencyLimit, { owner: review_repo.owner, repo: review_repo.repo }, execCtx.headSha || review_context.payload.pull_request.head.sha, platformContentFetcher, patchScans, 
+            dependencyContext = await analyzeDependencies(filesAndChanges, repoFiles, options, githubConcurrencyLimit, { owner: review_repo.owner, repo: review_repo.repo }, execCtx.headSha || pr.head.sha, platformContentFetcher, patchScans, 
             // 截断时把解析不到的 import 所在目录按需补回来，而不是只提示降级
             {
                 truncated,
                 dirLister: truncated
-                    ? makeDirectoryLister(review_repo.owner, review_repo.repo, execCtx.headSha || review_context.payload.pull_request.head.sha)
+                    ? makeDirectoryLister(review_repo.owner, review_repo.repo, execCtx.headSha || pr.head.sha)
                     : undefined
             });
             getLogger().info('Phase 0: dependency analysis completed');
@@ -89690,7 +91247,7 @@ ${hunks.oldHunk}
     // ==================== 构建状态消息 ====================
     let statusMsg = `<details>
 <summary>Commits</summary>
-Files that changed from the base of the PR and between ${highestReviewedCommitId} and ${review_context.payload.pull_request.head.sha} commits.
+Files that changed from the base of the PR and between ${highestReviewedCommitId} and ${pr.head.sha} commits.
 </details>
 ${repoTreeTruncated ? `\n${TREE_TRUNCATED_NOTICE}\n` : ''}
 ${filesAndChanges.length > 0
@@ -89715,9 +91272,16 @@ ${filterIgnoredFiles.length > 0
 `
         : ''}
 `;
+    // REVIEW-003 第一道：进度横幅本身就是对**共享摘要评论**的一次 replace 写入，
+    // 陈旧任务写它同样会覆盖新任务的结果。所以检查必须在它之前，而不是等到阶段三。
+    const beforeBanner = await ensureHeadFresh('in-progress banner');
+    if (!beforeBanner.fresh) {
+        await abortStaleRun(beforeBanner);
+        return;
+    }
     // 更新摘要评论为"审查进行中"状态
     const inProgressSummarizeCmt = commenter.addInProgressStatus(existingSummarizeCmtBody, statusMsg);
-    await commenter.comment(`${inProgressSummarizeCmt}`, summarizeTag(), 'replace');
+    await commenter.comment(`${inProgressSummarizeCmt}`, commenter_summarizeTag(), 'replace');
     // ==================== 阶段一：并行文件摘要 ====================
     const summariesFailed = [];
     /**
@@ -89730,6 +91294,31 @@ ${filterIgnoredFiles.length > 0
      *
      * @returns [文件名, 摘要内容, 是否需要审查] 三元组，或 null（失败时）
      */
+    // REVIEW-006：阶段三的模型调用原本是裸调用，任一失败都会抛出 codeReview，
+    // 已经算好的 per-file 摘要与行级审查结果全部丢失，PR 上还留着 in-progress
+    // 状态——用户只看到"审查卡住了"，不知道发生了什么。
+    //
+    // 改为：单个阶段失败 → 降级继续，把失败原因收集起来，最后明确写进摘要评论。
+    const degradations = [];
+    /**
+     * 调用模型，失败则降级为 null 并登记。
+     *
+     * 登记进 `degradations` 的文案会**发布到 PR/MR 评论**，因此只放阶段名 +
+     * 一句通用描述。原始 Error.message 来自 OpenAI SDK / 代理，可能带内部
+     * endpoint、响应正文、请求 ID 等不适合公开的内容——那些只写进（已脱敏的）
+     * 运行日志。
+     */
+    const chatOrNull = async (bot, prompt, label) => {
+        try {
+            const [response] = await bot.chat(prompt, {});
+            return response;
+        }
+        catch (e) {
+            getLogger().warning(`${label} failed: ${e instanceof Error ? e.message : String(e)}`);
+            degradations.push(`${label}未完成（模型调用失败，详情见运行日志）`);
+            return null;
+        }
+    };
     const doSummary = async (filename, fileContent, fileDiff) => {
         getLogger().info(`summarize: ${filename}`);
         const ins = inputs.clone();
@@ -89804,9 +91393,10 @@ ${filterIgnoredFiles.length > 0
 ${filename}: ${summary}
 `;
             }
-            // 调用重量模型合并摘要
-            const [summarizeResp] = await heavyBot.chat(prompts.renderSummarizeChangesets(inputs), {});
-            if (summarizeResp === '') {
+            // 调用重量模型合并摘要。失败时保留上一轮的 rawSummary 继续——
+            // 少合并一批好过整份摘要都没有
+            const summarizeResp = await chatOrNull(heavyBot, prompts.renderSummarizeChangesets(inputs), '摘要合并');
+            if (summarizeResp == null || summarizeResp === '') {
                 getLogger().warning('summarize: nothing obtained from openai');
             }
             else {
@@ -89815,23 +91405,35 @@ ${filename}: ${summary}
         }
     }
     // ==================== 阶段三：生成最终摘要和发布说明 ====================
-    // 生成最终摘要
-    const [summarizeFinalResponse] = await heavyBot.chat(prompts.renderSummarize(inputs), {});
+    // 生成最终摘要。失败时用逐文件摘要兜底——注意兜底内容必须落在**用户可见**的
+    // 正文里：inputs.rawSummary 只存在隐藏 marker 区块中，光有它等于什么都没发。
+    const summarizeFinalRaw = await chatOrNull(heavyBot, prompts.renderSummarize(inputs), '最终摘要生成');
+    const summarizeFinalResponse = summarizeFinalRaw != null && summarizeFinalRaw !== ''
+        ? summarizeFinalRaw
+        : renderPerFileSummaryFallback(summaries);
     if (summarizeFinalResponse === '') {
         getLogger().info('summarize: nothing obtained from openai');
     }
     const botName = options.botName;
     // 生成发布说明并写入 PR 描述
     if (options.disableReleaseNotes === false) {
-        const [releaseNotesResponse] = await heavyBot.chat(prompts.renderSummarizeReleaseNotes(inputs), {});
+        const releaseNotesResponse = (await chatOrNull(heavyBot, prompts.renderSummarizeReleaseNotes(inputs), '发布说明生成')) ??
+            '';
         if (releaseNotesResponse === '') {
             getLogger().info('release notes: nothing obtained from openai');
         }
         else {
+            // REVIEW-003 第二道：**紧贴写入**。放在模型调用之前等于没挡——
+            // 生成 release notes 本身就是一次重量模型调用，期间完全可能又推了新 commit。
+            const beforeNotes = await ensureHeadFresh('release notes');
+            if (!beforeNotes.fresh) {
+                await abortStaleRun(beforeNotes);
+                return;
+            }
             let message = `### Summary by ${botName}\n\n`;
             message += releaseNotesResponse;
             try {
-                await commenter.updateDescription(review_context.payload.pull_request.number, message);
+                await commenter.updateDescription(pr.number, message);
             }
             catch (e) {
                 getLogger().warning(`release notes: error from github: ${e.message}`);
@@ -89839,8 +91441,9 @@ ${filename}: ${summary}
         }
     }
     // 生成精简摘要（用于后续代码审查时提供上下文）
-    const [summarizeShortResponse] = await heavyBot.chat(prompts.renderSummarizeShort(inputs), {});
-    inputs.shortSummary = summarizeShortResponse;
+    // 精简摘要只用于后续审查的上下文，失败不影响本次输出
+    inputs.shortSummary =
+        (await chatOrNull(heavyBot, prompts.renderSummarizeShort(inputs), '精简摘要生成')) ?? '';
     // 构建最终的摘要评论内容（包含隐藏的状态数据）
     let summarizeComment = `${summarizeFinalResponse}
 ${rawSummaryStartTag()}
@@ -89883,6 +91486,9 @@ ${summariesFailed.length > 0
 `
         : ''}
 `;
+    // 提到函数作用域：最终摘要评论在审查阶段**之后**发布，需要读这份失败清单
+    // 来生成「本次审查不完整」提示（REVIEW-006）
+    const reviewsFailed = [];
     // ==================== 阶段四：逐文件代码审查 ====================
     if (!options.disableReview && runOptions.summaryOnly !== true) {
         // 筛选出需要审查的文件（分类为 NEEDS_REVIEW 的文件）
@@ -89894,7 +91500,6 @@ ${summariesFailed.length > 0
         const reviewsSkipped = filesAndChanges
             .filter(([filename]) => !filesAndChangesReview.some(([reviewFilename]) => reviewFilename === filename))
             .map(([filename]) => filename);
-        const reviewsFailed = [];
         let lgtmCount = 0; // LGTM 评论计数（被过滤掉的）
         let reviewCount = 0; // 收集到的审查发现总数（去重/截断前）
         // 噪音控制（成员 D · §2.5）：先把所有文件的发现收集起来，
@@ -89904,12 +91509,12 @@ ${summariesFailed.length > 0
         // PR 级别的线程状态 map（path:line → isResolved）
         // 一次性拉取，复用于所有文件的评论链注入，让 AI 感知 [OPEN]/[RESOLVED] 状态
         let threadStatusMap = new Map();
-        if (review_context.payload.pull_request != null) {
+        {
             try {
                 threadStatusMap = await fetchThreadStatusMap({
                     owner: review_repo.owner,
                     repo: review_repo.repo,
-                    prNumber: review_context.payload.pull_request.number
+                    prNumber: pr.number
                 });
                 getLogger().info(`thread-status: fetched ${threadStatusMap.size} thread locations`);
             }
@@ -89920,11 +91525,20 @@ ${summariesFailed.length > 0
         // full review 去重：构建已有未 resolved 的 bot review comment 位置索引
         // 用于跳过已有评论覆盖的 patch，避免重复调用大模型
         const existingBotCommentRanges = new Map();
-        if (reviewMode === 'full' && review_context.payload.pull_request != null) {
+        if (reviewMode === 'full') {
             try {
-                const allReviewComments = await commenter.listReviewComments(review_context.payload.pull_request.number);
+                const allReviewComments = await commenter.listReviewComments(pr.number);
                 for (const c of allReviewComments) {
                     if (!bodyHasMarker(c.body, 'comment'))
+                        continue;
+                    // REVIEW-012：用户引用回复也带 marker。把它算成「已有我们的评论」，
+                    // 该位置本次的新发现就会被当成重复而丢弃。
+                    //
+                    // 只有**确认**是自己发的才建立去重范围。false 和 null 都不抑制审查：
+                    // 身份查不到时若把 null 当成「是自己的」，任何人只要引用一条带 marker
+                    // 的评论，就能让对应 patch 跳过模型审查——那是可被伪造的抑制通道。
+                    // 这与 submitReview() 里「身份未知则不去重」的方向也保持一致。
+                    if ((await isOwnAuthor(c.user?.login)) !== true)
                         continue;
                     const key = `${c.path}:${c.line}`;
                     const isResolved = threadStatusMap.get(key);
@@ -89957,6 +91571,11 @@ ${summariesFailed.length > 0
          * 6. 过滤 LGTM 评论，将有效评论加入缓冲区
          */
         const doReview = async (filename, fileContent, patches) => {
+            if (deletedFiles.has(filename)) {
+                // 摘要阶段已经覆盖过这次删除，这里只是不再为它跑一次深度审查
+                getLogger().info(`skip line-level review for deleted file: ${filename}`);
+                return;
+            }
             getLogger().info(`reviewing ${filename}`);
             const ins = inputs.clone();
             ins.filename = filename;
@@ -90002,10 +91621,6 @@ ${summariesFailed.length > 0
             let patchesPacked = 0;
             let patchesSkippedByDedup = 0;
             for (const [startLine, endLine, patch] of patches) {
-                if (review_context.payload.pull_request == null) {
-                    getLogger().warning('No pull request found, skipping.');
-                    continue;
-                }
                 // full review 去重：跳过已有未 resolved bot 评论覆盖的 patch
                 if (existingBotCommentRanges.has(filename)) {
                     const ranges = existingBotCommentRanges.get(filename);
@@ -90028,7 +91643,7 @@ ${summariesFailed.length > 0
                 // 获取该 patch 行号范围内已有的评论对话链（提供额外上下文）
                 let commentChain = '';
                 try {
-                    const allChains = await commenter.getCommentChainsWithinRange(review_context.payload.pull_request.number, filename, startLine, endLine, commentReplyTag(), threadStatusMap);
+                    const allChains = await commenter.getCommentChainsWithinRange(pr.number, filename, startLine, endLine, commentReplyTag(), threadStatusMap);
                     if (allChains.length > 0) {
                         getLogger().info(`Found comment chains: ${allChains} for ${filename}`);
                         commentChain = allChains;
@@ -90074,7 +91689,7 @@ ${commentChain}
                     }
                     // 格式化 Analysis chain（模型执行的 shell / web_search 步骤）
                     getLogger().info(`[analysis_chain] ${filename}: received ${analysisSteps.length} analysis steps from bot`);
-                    const analysisChainMd = formatAnalysisChain(analysisSteps, resolveAnalysisRepositoryUrl());
+                    const analysisChainMd = formatAnalysisChain(analysisSteps, resolveAnalysisRepositoryUrl(options.enableShell));
                     getLogger().info(`[analysis_chain] ${filename}: formatted markdown length=${analysisChainMd.length}, empty=${analysisChainMd === ''}`);
                     // 解析 AI 响应，提取结构化的审查评论
                     // 然后做**议题级合并去重**：LLM 经常对同一个 tool finding 写出多条
@@ -90093,10 +91708,6 @@ ${commentChain}
                         if (!options.reviewCommentLGTM &&
                             (review.comment.includes('LGTM') || review.comment.includes('looks good to me'))) {
                             lgtmCount += 1;
-                            continue;
-                        }
-                        if (review_context.payload.pull_request == null) {
-                            getLogger().warning('No pull request found, skipping.');
                             continue;
                         }
                         try {
@@ -90227,18 +91838,60 @@ ${reviewsSkipped.length > 0
 
 </details>
 `;
+        // REVIEW-003 第三道：**阶段四跑完之后**才检查。
+        // 逐文件模型审查是整条流水线最耗时的一段（每个文件一次重量模型调用），
+        // 把门禁设在它之前等于什么都没挡——期间推的新 commit 照样会被旧结果覆盖。
+        const beforePublish = await ensureHeadFresh('line-level review');
+        if (!beforePublish.fresh) {
+            await abortStaleRun(beforePublish);
+            return;
+        }
         // 将最新的 head commit SHA 添加到已审查列表
-        summarizeComment += `\n${commenter.addReviewedCommitId(existingCommitIdsBlock, review_context.payload.pull_request.head.sha)}`;
+        summarizeComment += `\n${commenter.addReviewedCommitId(existingCommitIdsBlock, pr.head.sha)}`;
         // 批量提交所有缓冲的审查评论（严重级别已内嵌在每条评论顶部，不再单独发汇总评论）
-        await commenter.submitReview(review_context.payload.pull_request.number, commits[commits.length - 1].sha, statusMsg, threadStatusMap);
+        // STATE-011/012：批次内每条写入前再确认一次 HEAD。
+        // 上面那道 `ensureHeadFresh('line-level review')` 只挡住「进入发布阶段前就
+        // 已经变了」；一批可能有十几条 discussion，第一条写完 HEAD 就变的情况它挡不住。
+        await commenter.submitReview(pr.number, commits[commits.length - 1].sha, statusMsg, threadStatusMap, async () => (await ensureHeadFresh('line-level write')).fresh);
     }
     // summary-only 等跳过审查阶段的场景：保留既有的已审查 commit 记录，
     // 否则 replace 摘要评论会清空增量审查标记，导致下次自动审查从 base 重审
     if (runOptions.summaryOnly === true && existingCommitIdsBlock !== '') {
         summarizeComment += `\n${existingCommitIdsBlock}`;
     }
+    // REVIEW-006：不完整的审查必须让用户看得见。
+    //
+    // 详细清单原本只挂在 statusMsg 上，而 statusMsg 走 submitReview——那个方法在
+    // **没有行级评论时会直接返回**（GitHub 不接受空审查）。于是最常见的情况下
+    //（模型没挑出问题，或者所有文件都失败了）用户什么提示都收不到：全部失败与
+    // "没发现问题"长得一模一样。
+    //
+    // 摘要评论是唯一一条必定发出的消息，所以提示放这里。
+    const incomplete = [
+        ...degradations,
+        // 摘要失败同样要算进来：token 超限、空响应、模型异常都会落在这里，
+        // 而它原本只进 statusMsg——没有行级评论时那条消息根本不会发布
+        ...(summariesFailed.length > 0 ? [`${summariesFailed.length} 个文件摘要失败`] : []),
+        ...(skippedFiles.length > 0
+            ? [`${skippedFiles.length} 个文件因超出 max_files 限制未处理`]
+            : []),
+        ...(reviewsFailed.length > 0 ? [`${reviewsFailed.length} 个文件审查失败`] : [])
+    ];
+    if (incomplete.length > 0) {
+        summarizeComment +=
+            `\n\n> ⚠️ 本次审查不完整，共 ${incomplete.length} 项未能完成：\n>\n` +
+                incomplete.map(d => `> - ${d}`).join('\n') +
+                '\n>\n> 已发布的部分仍然有效；重新触发审查可以重试失败的环节。\n';
+    }
+    // REVIEW-003 第四道：最终摘要是最后一次写入，且是 replace 语义——
+    // 上一道之后还隔着评论提交与摘要组装，这里再确认一次
+    const beforeSummary = await ensureHeadFresh('final summary');
+    if (!beforeSummary.fresh) {
+        await abortStaleRun(beforeSummary);
+        return;
+    }
     // 发布最终的摘要评论
-    await commenter.comment(`${summarizeComment}`, summarizeTag(), 'replace');
+    await commenter.comment(`${summarizeComment}`, commenter_summarizeTag(), 'replace');
 };
 // ==================== Diff 解析辅助函数 ====================
 // ==================== Analysis Chain 格式化 ====================
@@ -90254,17 +91907,31 @@ function formatShellCommandForDisplay(command) {
  * 生成可折叠的 `<details>` 块，包含每个 shell 命令及其输出、web search 调用等，
  * 展示模型在给出审查意见之前的推理/调查过程。
  */
-function resolveAnalysisRepositoryUrl() {
-    const payload = review_context.payload;
+/**
+ * 推导仓库 Web URL，仅用于 Analysis chain 的展示链接。
+ *
+ * ARCH-005/023：迁移前这里同时读 `payload.repository.html_url`（GitHub）和
+ * `payload.project.web_url`（GitLab）——一个共享核心函数里塞两个平台的 payload
+ * 形状，正是架构约束要防的耦合。改为只用平台中立来源：
+ *
+ *   GitHub Actions → GITHUB_SERVER_URL + 仓库坐标（buildGithubRepositoryUrl）
+ *   GitLab CI      → CI_PROJECT_URL / CI_REPOSITORY_URL
+ *   两者都没有     → git remote origin
+ *
+ * 两个 CI 环境各自保证对应变量存在，因此覆盖面与原先等价；纯展示用途，
+ * 取不到时返回空串，不影响审查本身。
+ */
+function resolveAnalysisRepositoryUrl(allowShell) {
     const candidates = [
-        review_context.payload.repository?.html_url,
-        payload.project?.web_url,
-        payload.project?.homepage,
-        payload.repository?.homepage,
         process.env.CI_PROJECT_URL,
         process.env.CI_REPOSITORY_URL,
         buildGithubRepositoryUrl(),
-        readOriginRemoteUrl()
+        // 最后这档要 fork 一个 git 进程。secret-bearing 执行面强制 enable_shell=false
+        // （LOCAL-001），这里必须跟着关——否则「强制关闭本地命令」就有一个绕过口，
+        // 而且执行的是 PATH 上第一个 git，纯展示用途不值得这个代价。
+        // 两个 CI 环境都保证前几档可用（GitLab 有 CI_PROJECT_URL，GitHub Actions 有
+        // GITHUB_SERVER_URL），关掉不影响实际取值。
+        allowShell ? readOriginRemoteUrl() : undefined
     ];
     return (candidates
         .map(candidate => normalizeRepositoryUrl(candidate))
@@ -90613,6 +92280,9 @@ ${review.comment}`;
 
 
 
+
+
+
 /** 默认的 bot mention 别名（小写匹配，与命令解析器保持一致）。共享自 constants。 */
 
 /**
@@ -90664,15 +92334,78 @@ function issueConvReplyTagVariants(originalCommentId) {
  *
  * @returns true 表示需要 bot 介入回复
  */
+/**
+ * 自然语言追问所需的最低权限（REVIEW-017）。
+ *
+ * 与 `review` 命令同基线：两者触发的是同一个重量模型，成本相当。选 write 而不是
+ * read，是因为「能看见仓库的人都能让 bot 跑模型」在私有仓库/大群组里等于把
+ * 模型预算敞开给所有可见成员。
+ */
+const CONVERSATION_MIN_PERMISSION = 'write';
+/**
+ * 追问者是否有权触发对话（REVIEW-017）。
+ *
+ * 三条规则，与命令路径保持一致：
+ *   1. 权限达标 → 放行；
+ *   2. 未达标但本人是 PR/MR 作者 → 放行（对自己的变更提问是主要场景）；
+ *   3. **权限查询失败 → 拒绝**。不能因为「看起来是作者」就在权限未知时放行，
+ *      那是 fail open——同 CMD-016 的教训。
+ */
+async function canConverse(execCtx, prAuthor) {
+    const { owner, repo } = repoCoordsOf(execCtx);
+    const actor = execCtx.actor.login;
+    const { level, queryFailed } = await getPermissionResult({ owner, repo, username: actor });
+    if (queryFailed) {
+        return { allowed: false, reason: '权限查询失败' };
+    }
+    if (permissionAtLeast(level, CONVERSATION_MIN_PERMISSION)) {
+        return { allowed: true, reason: `权限 ${level}` };
+    }
+    if (actor !== '' && actor === prAuthor) {
+        return { allowed: true, reason: '变更作者豁免' };
+    }
+    return { allowed: false, reason: `权限不足（${level}）` };
+}
+/**
+ * 这条评论是不是 reviewer 自己发的（REVIEW-018）。
+ *
+ * 判定顺序有讲究：
+ *
+ * 1. **构造阶段归一化的 actor.isBot** —— GitHub 认 `user.type === 'Bot'` 与
+ *    `xxx[bot]` 后缀，GitLab 认 access token 账号的权威命名（CMD-006）。
+ * 2. **作者是否等于本 reviewer** —— 权威信号，覆盖「以个人 PAT 身份发言」的
+ *    GitLab 常见形态。
+ * 3. **正文带 bot marker** —— 仅在前两条都判不出时作为兜底。
+ *
+ * 第 3 条单独用是有害的：用户「引用回复」会把 marker 一起复制过去，于是他带着
+ * 引用提问就永远得不到回复（§8.3 留下的尾巴）。所以只有在**身份完全判不出**时
+ * 才退回到它——那种情况下宁可少答一次，也不能让 bot 自问自答绕成死循环。
+ */
+async function isSelfAuthoredComment(execCtx, commentBody) {
+    if (execCtx.actor.isBot)
+        return true;
+    const own = await isOwnAuthor(execCtx.actor.login);
+    if (own === true)
+        return true;
+    // 身份可解析且确认不是自己 → 就是真人，哪怕正文里带着引用来的 marker
+    if (own === false)
+        return false;
+    // 身份判不出：退回 marker 兜底，宁可少答一次也不能形成反馈循环
+    return bodyHasMarker(commentBody, 'comment') || bodyHasMarker(commentBody, 'commentReply');
+}
 function isFollowUpQuestion(opts) {
     const { commentBody, authorIsBot } = opts;
     if (authorIsBot) {
         return false;
     }
     const body = commentBody ?? '';
-    // bot 自动生成的内容带有专属标签，二次保险，避免把 bot 文案当成追问
+    // marker 兜底：默认开启，用于调用方没做作者判定的场景。
+    //
+    // 注意它会误伤「引用回复」——用户引用 bot 的话再提问，正文里就带着 marker。
+    // 生产调用方已在上游用 isSelfAuthoredComment 做过作者判定（REVIEW-018），
+    // 那里才是权威信号，因此显式传 `botCommentTags: []` 关掉这层兜底。
     const botTags = opts.botCommentTags ?? botCommentTagVariants();
-    if (botTags.some(tag => body.includes(tag))) {
+    if (botTags.length > 0 && botTags.some(tag => body.includes(tag))) {
         return false;
     }
     const mentions = (opts.mentions ?? BOT_MENTIONS).map(m => m.toLowerCase());
@@ -90752,47 +92485,57 @@ function truncateConversationChain(chain, maxChars = MAX_CHAIN_CHARS) {
  * @param prompts  - 提示词模板
  */
 const handleConversation = async (execCtx, heavyBot, options, prompts) => {
-    const commenter = new Commenter();
+    const commenter = new commenter_Commenter();
     const inputs = new Inputs();
-    const [repoOwner, repoName] = execCtx.projectPath.split('/');
+    // 按**最后**一个斜杠切：GitLab 子组项目是 group/subgroup/project，
+    // split('/') 取前两段会把 owner/repo 切错（repoCoordsOf 的既有语义）
+    const { owner: repoOwner, repo: repoName } = repoCoordsOf(execCtx);
     const logger = getLogger();
     // ===== 1. 事件与 payload 校验 =====
     if (execCtx.eventKind !== 'review_comment_created') {
         logger.info(`conversation: skip non review_comment event (${execCtx.eventKind})`);
         return;
     }
-    const payload = execCtx.raw;
-    if (!payload || payload.action !== 'created') {
-        logger.info('conversation: skip (missing payload or action != created)');
-        return;
-    }
-    const comment = payload.comment;
-    if (comment == null || typeof comment.body !== 'string') {
+    // REVIEW-015/016：改读归一化字段。原先直接读 GitHub 的 review comment payload
+    // （action / pull_request / repository / diff_hunk），GitLab 的 diff discussion
+    // note 在第一道校验就被拒。
+    //
+    // 「action != created」已在 ExecutionContext 构造阶段判掉。
+    const commentRef = execCtx.comment;
+    if (commentRef == null || typeof commentRef.body !== 'string') {
         logger.warning('conversation: skip (missing comment body)');
         return;
     }
-    if (payload.pull_request == null || payload.repository == null) {
-        logger.warning('conversation: skip (missing pull_request/repository)');
-        return;
-    }
-    // ===== 2. 过滤 bot 自身评论 =====
-    const authorIsBot = comment.user?.type === 'Bot' ||
-        /\[bot\]$/i.test(comment.user?.login ?? '') ||
-        bodyHasMarker(comment.body, 'comment') ||
-        bodyHasMarker(comment.body, 'commentReply');
-    if (authorIsBot) {
+    // ===== 2. 过滤 bot 自身评论（REVIEW-018）=====
+    if (await isSelfAuthoredComment(execCtx, commentRef.body)) {
         logger.info('conversation: skip (comment from bot itself)');
         return;
     }
-    const pullNumber = payload.pull_request.number;
-    // 填充 PR 基本信息
-    inputs.title = payload.pull_request.title;
-    if (payload.pull_request.body) {
-        inputs.description = commenter.getDescription(payload.pull_request.body);
+    const pullNumber = execCtx.changeRequestId;
+    // 对话链查找需要「评论自身」的形状（沿 in_reply_to_id 上溯、按 path/line 匹配），
+    // 由归一化字段重建，不再依赖平台 payload
+    const comment = {
+        id: commentRef.id,
+        body: commentRef.body,
+        path: commentRef.path ?? '',
+        line: commentRef.line,
+        user: { login: execCtx.actor.login }
+    };
+    inputs.comment = `${execCtx.actor.login || 'unknown'}: ${commentRef.body}`;
+    // GitLab 的 note payload 没有 diff_hunk，留空即可——少一段上下文，不影响对话
+    inputs.diff = commentRef.diffHunk ?? '';
+    inputs.filename = commentRef.path ?? '';
+    // PR 基本信息改由 IGitPlatform 现查（payload 形状两个平台不同）
+    try {
+        const cr = await getPlatform().getChangeRequest(repoOwner, repoName, pullNumber);
+        inputs.title = cr.title;
+        if (cr.body) {
+            inputs.description = commenter.getDescription(cr.body);
+        }
     }
-    inputs.comment = `${comment.user.login}: ${comment.body}`;
-    inputs.diff = comment.diff_hunk ?? '';
-    inputs.filename = comment.path ?? '';
+    catch (e) {
+        logger.warning(`conversation: failed to load change request details: ${String(e)}`);
+    }
     // ===== 3. Thread 对话历史收集 =====
     const { chain: rawChain, topLevelComment } = await commenter.getCommentChain(pullNumber, comment);
     if (!topLevelComment) {
@@ -90802,9 +92545,26 @@ const handleConversation = async (execCtx, heavyBot, options, prompts) => {
     // ===== 4. 追问意图识别（必须 @bot） =====
     if (!isFollowUpQuestion({
         commentBody: comment.body,
-        authorIsBot: false
+        // 作者判定已在上游完成（isSelfAuthoredComment），这里关掉 marker 兜底，
+        // 否则用户「引用回复」后提问会被误判成 bot 文案
+        authorIsBot: false,
+        botCommentTags: []
     })) {
         logger.info('conversation: not a follow-up question (no @mention), skip');
+        return;
+    }
+    // ===== 4. 权限校验（REVIEW-017）=====
+    // 放在意图识别之后：无关评论不必为它多查一次权限 API
+    let prAuthor = '';
+    try {
+        prAuthor = (await getPlatform().getChangeRequest(repoOwner, repoName, pullNumber)).author;
+    }
+    catch (e) {
+        logger.warning(`conversation: failed to resolve change request author: ${String(e)}`);
+    }
+    const perm = await canConverse(execCtx, prAuthor);
+    if (!perm.allowed) {
+        logger.info(`conversation: skip (${perm.reason})`);
         return;
     }
     // ===== 5. 对话轮次上限控制 =====
@@ -90819,7 +92579,10 @@ const handleConversation = async (execCtx, heavyBot, options, prompts) => {
     // ===== 7. 关联代码行及扩展上下文（文件完整 diff） =====
     let fileDiff = '';
     try {
-        const diffResult = await getPlatform().compareDiff(repoOwner, repoName, payload.pull_request.base.sha, payload.pull_request.head.sha);
+        // base/head 同样改为现查：评论事件的 payload 在两个平台形状不同，
+        // 而 execCtx 对评论事件本就不带 base/head（构造阶段固定留空）
+        const cr = await getPlatform().getChangeRequest(repoOwner, repoName, pullNumber);
+        const diffResult = await getPlatform().compareDiff(repoOwner, repoName, cr.baseSha, cr.headSha);
         const file = diffResult.files.find(f => f.filename === comment.path);
         if (file?.patch) {
             fileDiff = file.patch;
@@ -90861,7 +92624,7 @@ const handleConversation = async (execCtx, heavyBot, options, prompts) => {
         }
     }
     // 预算允许时补充 PR 精简摘要
-    const summary = await commenter.findCommentWithTag(summarizeTag(), pullNumber);
+    const summary = await commenter.findCommentWithTag(commenter_summarizeTag(), pullNumber);
     if (summary) {
         const shortSummary = commenter.getShortSummary(summary.body);
         const shortSummaryTokens = getTokenCount(shortSummary);
@@ -90928,48 +92691,61 @@ function composeIssueCommentChain(comments, currentCommentId) {
  * @param prompts  - 提示词模板
  */
 const handleIssueConversation = async (execCtx, heavyBot, options, prompts) => {
-    const commenter = new Commenter();
+    const commenter = new commenter_Commenter();
     const inputs = new Inputs();
-    const [repoOwner, repoName] = execCtx.projectPath.split('/');
+    // 按**最后**一个斜杠切：GitLab 子组项目是 group/subgroup/project，
+    // split('/') 取前两段会把 owner/repo 切错（repoCoordsOf 的既有语义）
+    const { owner: repoOwner, repo: repoName } = repoCoordsOf(execCtx);
     const logger = getLogger();
     // ===== 1. 事件与 payload 校验 =====
     if (execCtx.eventKind !== 'comment_created') {
         logger.info(`issue-conversation: skip non issue_comment event (${execCtx.eventKind})`);
         return;
     }
-    const payload = execCtx.raw;
-    if (!payload || payload.action !== 'created') {
-        logger.info('issue-conversation: skip (missing payload or action != created)');
-        return;
-    }
-    // 只处理 PR 上的评论（GitHub 中 PR 复用 issue 模型）
-    if (!payload.issue?.pull_request) {
-        logger.info('issue-conversation: skip (issue_comment on non-PR issue)');
-        return;
-    }
-    const comment = payload.comment;
-    if (comment == null || typeof comment.body !== 'string') {
+    // REVIEW-016：改读归一化字段。原先直接读 GitHub payload（`payload.action`、
+    // `payload.issue.pull_request`），GitLab 的 note 事件在第一道校验就被拒——
+    // 对话功能在 GitLab 上完全不可用。
+    //
+    // 「action != created」和「评论挂在非 PR issue 上」这两条判断已经在
+    // ExecutionContext 构造阶段做掉（抛 ignorable_event），走到这里的一定是新建的
+    // PR/MR 顶层评论，不必重复判断。
+    const commentRef = execCtx.comment;
+    if (commentRef == null || typeof commentRef.body !== 'string') {
         logger.warning('issue-conversation: skip (missing comment body)');
         return;
     }
-    // ===== 2. 过滤 bot 自身评论 =====
-    const authorIsBot = comment.user?.type === 'Bot' ||
-        /\[bot\]$/i.test(comment.user?.login ?? '') ||
-        bodyHasMarker(comment.body, 'comment') ||
-        bodyHasMarker(comment.body, 'commentReply');
-    if (authorIsBot) {
+    // 收窄 body 类型：CommentRef.body 是可选的（GitLab 早期未填充），上面已校验
+    const comment = { id: commentRef.id, body: commentRef.body };
+    // ===== 2. 过滤 bot 自身评论（REVIEW-018）=====
+    if (await isSelfAuthoredComment(execCtx, comment.body)) {
         logger.info('issue-conversation: skip (comment from bot itself)');
         return;
     }
     // ===== 3. 追问意图识别（必须 @bot） =====
     if (!isFollowUpQuestion({
         commentBody: comment.body,
-        authorIsBot: false
+        // 作者判定已在上游完成（isSelfAuthoredComment），这里关掉 marker 兜底，
+        // 否则用户「引用回复」后提问会被误判成 bot 文案
+        authorIsBot: false,
+        botCommentTags: []
     })) {
         logger.info('issue-conversation: not a follow-up question (no @mention), skip');
         return;
     }
-    const pullNumber = payload.issue.number;
+    const pullNumber = execCtx.changeRequestId;
+    // ===== 4. 权限校验（REVIEW-017）=====
+    let prAuthor = '';
+    try {
+        prAuthor = (await getPlatform().getChangeRequest(repoOwner, repoName, pullNumber)).author;
+    }
+    catch (e) {
+        logger.warning(`issue-conversation: failed to resolve change request author: ${String(e)}`);
+    }
+    const issuePerm = await canConverse(execCtx, prAuthor);
+    if (!issuePerm.allowed) {
+        logger.info(`issue-conversation: skip (${issuePerm.reason})`);
+        return;
+    }
     // ===== 4. 幂等去重（连续提问不丢/不重复的关键） =====
     const allComments = await commenter.listComments(pullNumber);
     const replyTagVariants = issueConvReplyTagVariants(comment.id);
@@ -90983,22 +92759,23 @@ const handleIssueConversation = async (execCtx, heavyBot, options, prompts) => {
     const turns = countBotTurns(rawChain);
     if (turns >= MAX_CONVERSATION_TURNS) {
         logger.info(`issue-conversation: turn limit reached (${turns}/${MAX_CONVERSATION_TURNS})`);
-        await postIssueReply(commenter, pullNumber, comment, `本话题的自动对话轮次已达上限（${MAX_CONVERSATION_TURNS} 轮）。如需继续深入，请新开一条评论或联系人工 reviewer。`);
+        await postIssueReply(commenter, pullNumber, comment, execCtx.actor.login, `本话题的自动对话轮次已达上限（${MAX_CONVERSATION_TURNS} 轮）。如需继续深入，请新开一条评论或联系人工 reviewer。`);
         return;
     }
     // ===== 6. 上下文组装（PR 级） =====
-    inputs.title = payload.pull_request?.title ?? payload.issue.title ?? '';
-    const prBody = payload.pull_request?.body ?? payload.issue.body;
-    if (prBody) {
-        inputs.description = commenter.getDescription(prBody);
-    }
-    inputs.comment = `${comment.user?.login ?? 'unknown'}: ${comment.body}`;
+    // 标题/描述改由 IGitPlatform 现查：payload 形状两个平台不同，而下面本来就要
+    // 调 getChangeRequest 拿 diff，顺带取回即可，不多一次 API
+    inputs.comment = `${execCtx.actor.login || 'unknown'}: ${comment.body}`;
     inputs.commentChain = truncateConversationChain(rawChain);
     // ===== 7. 拉取整个 PR 的 diff（可选，受 token 预算约束） =====
     let prDiff = '';
     try {
         const platform = getPlatform();
         const cr = await platform.getChangeRequest(repoOwner, repoName, pullNumber);
+        inputs.title = cr.title;
+        if (cr.body) {
+            inputs.description = commenter.getDescription(cr.body);
+        }
         const diffResult = await platform.compareDiff(repoOwner, repoName, cr.baseSha, cr.headSha);
         prDiff = diffResult.files
             .map(f => (f.patch ? `--- ${f.filename}\n${f.patch}` : ''))
@@ -91016,7 +92793,7 @@ const handleIssueConversation = async (execCtx, heavyBot, options, prompts) => {
         tokens = getTokenCount(prompts.renderCommentIssue(inputs));
     }
     if (tokens > options.heavyTokenLimits.requestTokens) {
-        await postIssueReply(commenter, pullNumber, comment, '无法回复该评论：关联的上下文过大，超出了模型的 token 限制。');
+        await postIssueReply(commenter, pullNumber, comment, execCtx.actor.login, '无法回复该评论：关联的上下文过大，超出了模型的 token 限制。');
         return;
     }
     // 预算允许时补充整个 PR diff
@@ -91030,7 +92807,7 @@ const handleIssueConversation = async (execCtx, heavyBot, options, prompts) => {
         }
     }
     // 预算允许时补充 PR 精简摘要
-    const summary = await commenter.findCommentWithTag(summarizeTag(), pullNumber);
+    const summary = await commenter.findCommentWithTag(commenter_summarizeTag(), pullNumber);
     if (summary) {
         const shortSummary = commenter.getShortSummary(summary.body);
         const shortSummaryTokens = getTokenCount(shortSummary);
@@ -91046,7 +92823,7 @@ const handleIssueConversation = async (execCtx, heavyBot, options, prompts) => {
         return;
     }
     const cleanedReply = reply.replace(/^\s*@user[，,：:\s]*/i, '').trimStart();
-    await postIssueReply(commenter, pullNumber, comment, cleanedReply);
+    await postIssueReply(commenter, pullNumber, comment, execCtx.actor.login, cleanedReply);
     logger.info(`issue-conversation: replied on PR #${pullNumber} main thread`);
 };
 /**
@@ -91055,8 +92832,9 @@ const handleIssueConversation = async (execCtx, heavyBot, options, prompts) => {
  *
  * 幂等标签使回复能稳定对应到触发它的提问（连续提问场景下不丢不重）。
  */
-async function postIssueReply(commenter, pullNumber, comment, body) {
-    const authorLogin = comment.user?.login ?? '';
+async function postIssueReply(commenter, pullNumber, comment, authorLogin, body) {
+    // 作者显式传入而不是从 comment.user 读：顶层对话的评论对象现在来自
+    // ExecutionContext 的归一化字段，那里作者在 execCtx.actor 上（REVIEW-016）
     const mention = authorLogin ? `@${authorLogin} ` : '';
     const quotedQuestion = comment.body
         .split('\n')
@@ -91096,6 +92874,7 @@ ${buildIssueConvReplyTag(comment.id)}
 
 
 
+
 async function handleCommentEvent(deps) {
     bootstrapCommands();
     const triggerReview = async (mode) => {
@@ -91114,6 +92893,9 @@ async function handleCommentEvent(deps) {
     const outcome = await dispatchCommentEvent({
         execCtx: deps.execCtx,
         options: deps.options,
+        // CMD-001/002：文本别名 + 配置的真实账号。此前 deps.botMentions 从未被传，
+        // 两个平台都只吃默认别名，GitLab 上 @ 真实 PAT 账号不会触发。
+        botMentions: resolveBotMentions(deps.options.botLogin),
         triggerReview
     });
     (0,actions_log.info)(`commentEvent dispatcher outcome: ${JSON.stringify(outcome)}`);
@@ -91138,6 +92920,89 @@ async function handleCommentEvent(deps) {
             (0,actions_log.info)(`commentEvent: conversation fallback skipped (unsupported eventKind ${deps.execCtx.eventKind})`);
         }
     }
+}
+
+;// CONCATENATED MODULE: ./lib/review-idempotency.js
+/**
+ * review-idempotency.ts — 自动审查的重复投递判定（STATE-013/014/015）
+ *
+ * 原先这套判定只存在于 `gitlab-mr-idempotency.ts`，且只在 GitLab trigger 入口
+ * 调用。结果是同一条规则只覆盖了一半：
+ *
+ *   GitLab job Retry / webhook 重投  → trigger 入口拦住（EVENT-013，已真实验证）
+ *   GitHub workflow rerun            → **没有任何拦截**
+ *
+ * GitHub rerun 的后果不是「多打一条日志」。`review.ts` 决定 diff 起点时，
+ * 若最高已审 commit 恰好等于当前 HEAD，会走「已是最新」分支回退到 base commit
+ * 重跑**整份** diff——于是一次 rerun 就是一轮完整的模型调用，外加重新发布摘要与
+ * 行级评论。这正是 STATE-013 要防的。
+ *
+ * 所以判定挪到平台无关模块，由**共享分发层**（orchestrator.dispatchEvent）统一
+ * 把关，两个平台走同一条规则（STATE-015）。GitLab trigger 入口保留它自己那道
+ * 前置检查：那道更早，能在构造 bot、进入编排之前就退出，省掉整段初始化，
+ * 且它的日志格式已经过真实环境验证。两处调用的是同一个函数，不存在规则漂移。
+ *
+ * ## 判定依据
+ *
+ * summary comment 里的 reviewed-commit-ids marker——`review.ts` 每次成功审查后
+ * 都会把 `pr.head.sha` 写进去（`commenter.addReviewedCommitId()`），这是两个平台
+ * 共用的既有机制。不新建独立存储：再发明一套只会产生两份可能互相不一致的状态。
+ *
+ * ## 查询失败按「未审查过」处理
+ *
+ * 这层防的是「重复投递浪费一次模型调用」，不是安全边界。查询失败时宁可再审一次
+ * （`review.ts` 自身的增量逻辑仍会尽量减少重复工作），也不能因为这层读取失败就
+ * 让正常审查停摆。
+ *
+ * 注意与 REVIEW-003 的分工：那条防的是「审查跑到一半 HEAD 变了，别写旧结果」
+ * （fail closed）；这条防的是「同一个 HEAD 被投递了两次，别重跑」（fail open）。
+ * 方向相反是有意的——前者错了会写脏数据，后者错了只是多花一次钱。
+ */
+
+
+
+
+/**
+ * 这个 headSha 是否已经被自动审查覆盖过。
+ *
+ * 只用 `getPlatform()` 和 `Commenter` 的纯字符串方法，不依赖 execCtx 就绪——
+ * GitLab trigger 在 `setExecCtx()` 之前就要调它。`getReviewedCommitIds()` 只解析
+ * 传入正文，不 touch `this`/execCtx；而 `findCommentWithTag()` 依赖模块级 repo
+ * 绑定，所以查找 summary comment 这一步直接走 `getPlatform().listComments()`。
+ */
+async function hasHeadBeenReviewed(owner, repo, changeRequestId, headSha) {
+    // 没有基准就无从判断。空 headSha 判为「未审查过」，与查询失败同口径。
+    if (headSha === '')
+        return false;
+    try {
+        const comments = await getPlatform().listComments(owner, repo, changeRequestId);
+        // 只认 reviewer 自己发布的 summary。
+        //
+        // marker 格式和 HEAD SHA 都是公开信息——任何能评论的人都能贴一条带正确
+        // marker 和当前 SHA 的评论。不校验作者的话，这就是一个**任意用户可触发的
+        // 审查静默开关**：伪造一条，共享分发层立刻判定「审过了」并跳过整轮审查，
+        // 而且日志里看起来完全正常。
+        //
+        // 身份确认不了时不采信这条评论（继续审查）。这与本模块整体的 fail open 一致：
+        // 宁可多审一次，也不能被一条来路不明的评论关掉审查。
+        for (const c of comments) {
+            if (!bodyHasMarker(c.body, 'summarize'))
+                continue;
+            if ((await isOwnAuthor(c.author)) !== true)
+                continue;
+            if (new commenter_Commenter().getReviewedCommitIds(c.body ?? '').includes(headSha))
+                return true;
+        }
+        return false;
+    }
+    catch (e) {
+        getLogger().warning(`review-idempotency: failed to check reviewed headSha: ${String(e)}`);
+        return false;
+    }
+}
+/** 幂等键。只用于日志与排查，判定本身不依赖它 */
+function buildReviewIdempotencyKey(platform, projectId, changeRequestId, headSha) {
+    return `${platform}:${projectId}:${changeRequestId}:head:${headSha}`;
 }
 
 ;// CONCATENATED MODULE: ./lib/platform/exec-ctx-error-handler.js
@@ -91760,6 +93625,8 @@ $lint_context
 
 
 
+
+
 // re-export 供已有消费方（tests/main.ts）不需要改 import 路径
 
 /**
@@ -91775,6 +93642,18 @@ async function dispatchEvent(deps) {
     if (execCtx.eventKind === 'pr_opened' ||
         execCtx.eventKind === 'pr_synchronize' ||
         execCtx.eventKind === 'pr_reopened') {
+        // STATE-013/014/015：同一个 HEAD 被投递两次不得重跑。
+        //
+        // 触发场景两个平台各有一套（GitHub workflow rerun、GitLab job Retry /
+        // webhook 重投 / API 超时重试），但规则只有一条，所以放在共享分发层。
+        // 少了它，rerun 会让 review.ts 回退到 base commit 重跑整份 diff——
+        // 一次点击等于一轮完整的模型调用外加重新发布摘要和行级评论。
+        const { owner, repo } = repoCoordsOf(execCtx);
+        if (await hasHeadBeenReviewed(owner, repo, execCtx.changeRequestId, execCtx.headSha)) {
+            logger.info(`Skipped: headSha ${execCtx.headSha} already reviewed (idempotency key ` +
+                `${buildReviewIdempotencyKey(execCtx.platform, execCtx.projectId, execCtx.changeRequestId, execCtx.headSha)}) — duplicate delivery or rerun (STATE-013/014)`);
+            return;
+        }
         const bots = createBots();
         if (bots == null)
             return;
@@ -91805,7 +93684,7 @@ async function runOrchestrator(deps) {
     let options;
     try {
         options = configProvider.getOptions();
-        initBotGreeting(options.botIcon, options.botName);
+        initBotGreeting(options.botIcon, options.botName, options.botLogin);
         configProvider.print((msg) => logger.info(msg));
     }
     catch (e) {
@@ -91829,11 +93708,14 @@ async function runOrchestrator(deps) {
         handleExecCtxError(e, logger, onFailed);
         return;
     }
+    // 共享核心里拿不到 execCtx 参数的位置（Commenter 等）通过模块级上下文读取，
+    // 两个入口都经由本函数，所以在这里登记一次即可覆盖 review 与命令两条路径
+    setExecCtx(execCtx);
     logger.info(`Event: platform=${execCtx.platform} eventKind=${execCtx.eventKind}`);
     // 3. 评论事件 ACK
     if (deps.earlyReaction &&
         (execCtx.eventKind === 'comment_created' || execCtx.eventKind === 'review_comment_created')) {
-        await deps.earlyReaction(execCtx, options.commandAckReaction);
+        await deps.earlyReaction(execCtx, options);
     }
     // 4. 构建提示词
     const promptConfig = configProvider.getPromptConfig();
@@ -91878,26 +93760,6 @@ async function runOrchestrator(deps) {
 
 
 
-
-function createBots(options) {
-    let lightBot = null;
-    try {
-        lightBot = new Bot(options, new OpenAIOptions(options.openaiLightModel, options.lightTokenLimits, false, false));
-    }
-    catch (e) {
-        (0,actions_log.warning)(`Skipped: failed to create summary bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`);
-        return null;
-    }
-    let heavyBot = null;
-    try {
-        heavyBot = new Bot(options, new OpenAIOptions(options.openaiHeavyModel, options.heavyTokenLimits, options.enableWebSearch, options.enableShell));
-    }
-    catch (e) {
-        (0,actions_log.warning)(`Skipped: failed to create review bot, please check your openai_api_key: ${e}, backtrace: ${e.stack}`);
-        return null;
-    }
-    return { lightBot, heavyBot };
-}
 async function run() {
     // 初始化 GitHub Logger（ARCH-013）+ Platform（ARCH-018）
     setLogger(new GitHubLogger());
@@ -91909,7 +93771,7 @@ async function run() {
         createExecCtx: createGitHubExecutionContext,
         logger: new GitHubLogger(),
         onFailed: actions_log.setFailed,
-        createBots,
+        createBots: (options) => createBots(options, actions_log.warning),
         earlyReaction: tryEarlyReaction
     });
 }

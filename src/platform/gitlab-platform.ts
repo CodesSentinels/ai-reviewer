@@ -44,6 +44,8 @@ import {
   type PlatformComment,
   type ReviewComment,
   type ReviewCommentDraft,
+  type SubmitReviewResult,
+  type SubmitReviewHooks,
   type ReviewThreadInfo,
   type TreeResult,
   type PlatformPermission,
@@ -253,18 +255,20 @@ export class GitLabPlatform implements IGitPlatform {
       )
       // GitLab 的 tree 条目 path 本身就是仓库根相对路径，无需拼接
       const entries = trees.map(t => ({type: t.type, path: t.path}))
-      // 目录探查只有一层，不参与整树的截断判定
-      if (scoped) {
-        return {entries, truncated: false}
-      }
       const limit = TREE_PAGINATION_DEFAULTS.perPage * TREE_PAGINATION_DEFAULTS.maxPages
       // 没到上限说明翻页自然结束，一定是完整的
       if (entries.length < limit) {
         return {entries, truncated: false}
       }
+      // 目录探查同样可能被截断——`recursive: false` 只说明"查一层"，不保证
+      // 这一层少于 perPage × maxPages。一个有五万个直接子项的目录照样会在
+      // 分页上限处被截断，此时报 truncated=false 就是谎报完整。
+      //
+      // 这对 DEP-004 的按需回填尤其要命：主树截断后正是靠逐目录回填来补，
+      // 若回填结果也被谎报完整，下游会把"缺失路径"当成"文件不存在"。
       // 正好卡在上限：可能刚好取完，也可能还有下一页。探一页拿事实，
       // 避免「恰好 5 万个文件的仓库」被误报成截断（GLAPI-024 / DEP-004）
-      return {entries, truncated: await this.hasMoreTreePages(projectPath, ref)}
+      return {entries, truncated: await this.hasMoreTreePages(projectPath, ref, path)}
     } catch (e) {
       // 空仓库返回 404 "404 Tree Not Found"，视为合法的空树；
       // 目录探查打到不存在的路径同理（投机查询，不是失败）
@@ -283,12 +287,19 @@ export class GitLabPlatform implements IGitPlatform {
    * 否则页码换算不到同一个位置。探测失败时保守返回 true —— 宁可提示
    * 「可能不完整」，也不能因为一次探测出错就谎报完整。
    */
-  private async hasMoreTreePages(projectPath: string, ref: string): Promise<boolean> {
+  private async hasMoreTreePages(
+    projectPath: string,
+    ref: string,
+    path?: string
+  ): Promise<boolean> {
+    // 探测参数必须与主查询同形（recursive / path 都要带上），否则探的不是同一
+    // 个集合；perPage 也必须一致，否则 page 换算不到上限的下一页。
+    const scoped = path != null && path !== ''
     try {
       const next = await withGitLabRetry('listRepositoryTree(probe)', async () =>
         this.api.Repositories.allRepositoryTrees(projectPath, {
           ref,
-          recursive: true,
+          ...(scoped ? {recursive: false, path} : {recursive: true}),
           page: TREE_PAGINATION_DEFAULTS.maxPages + 1,
           perPage: TREE_PAGINATION_DEFAULTS.perPage,
           maxPages: 1
@@ -435,6 +446,7 @@ export class GitLabPlatform implements IGitPlatform {
     // operationId 每次调用新生成 → marker 只在本次调用的重试之间复用，
     // 不会命中同 MR 里正文相同的历史评论。
     const marker = buildWriteMarker({
+      platform: 'gitlab',
       projectPath,
       changeRequestId,
       op: 'note',
@@ -578,15 +590,33 @@ export class GitLabPlatform implements IGitPlatform {
     changeRequestId: number,
     commitSha: string,
     comments: ReviewCommentDraft[],
-    _reviewBody?: string
-  ): Promise<number> {
-    // GitLab 无 batch review 概念，逐条创建 discussion
-    let submitted = 0
-    for (const comment of comments) {
+    _reviewBody?: string,
+    hooks?: SubmitReviewHooks
+  ): Promise<SubmitReviewResult> {
+    // GitLab 无 batch review 概念，逐条创建 discussion。
+    //
+    // 必须逐条汇报成败：只回一个总数的话，调用方无从知道**哪几条**没发出去，
+    // 于是会把那些位置上被取代的 resolved 旧讨论一并删掉——新发现没发成，
+    // 历史也没了（REVIEW-013）。失败项交回调用方统一做顶层降级（REVIEW-014）。
+    const delivered: ReviewCommentDraft[] = []
+    const failed: ReviewCommentDraft[] = []
+    const staleSkipped: ReviewCommentDraft[] = []
+    for (const [i, comment] of comments.entries()) {
+      // STATE-011/012：**每条** discussion 创建前重读 HEAD。
+      // 只在整批之前检查一次是不够的——一批可能有十几条，第一条写完 HEAD 就变了
+      // 的话，剩下的仍然是基于旧 diff 的结论。
+      if (hooks?.ensureFresh != null && !(await hooks.ensureFresh())) {
+        staleSkipped.push(...comments.slice(i))
+        getLogger().warning(
+          `submitReviewComments: HEAD moved mid-batch — skipping ${staleSkipped.length} ` +
+            'remaining comment(s) rather than publishing stale findings (STATE-011/012)'
+        )
+        break
+      }
       try {
         await this.createReviewComment(owner, repo, changeRequestId, commitSha, comment)
-        submitted++
-      } catch {
+        delivered.push(comment)
+      } catch (lineError) {
         // GLAPI-015: 行级位置无法映射时降级为顶层 note（同样带幂等 marker）
         try {
           await this.createComment(
@@ -595,13 +625,18 @@ export class GitLabPlatform implements IGitPlatform {
             changeRequestId,
             `**${comment.path}** (line ${comment.line})\n\n${comment.body}`
           )
-          submitted++
-        } catch {
-          // 降级也失败，跳过该条
+          delivered.push(comment)
+        } catch (topLevelError) {
+          getLogger().warning(
+            `submitReviewComments: both line-level and top-level delivery failed for ` +
+              `${comment.path}:${comment.line} — line: ${String(lineError)}; ` +
+              `top-level: ${String(topLevelError)}`
+          )
+          failed.push(comment)
         }
       }
     }
-    return submitted
+    return {delivered, failed, staleSkipped}
   }
 
   async createReviewComment(
@@ -615,6 +650,7 @@ export class GitLabPlatform implements IGitPlatform {
     // 文件路径只参与摘要（opDetail），不进 marker 文本：
     // Git 文件名允许 `>` 甚至 `-->`，原样拼接会提前闭合 HTML 注释
     const marker = buildWriteMarker({
+      platform: 'gitlab',
       projectPath,
       changeRequestId,
       op: 'discussion',
@@ -633,6 +669,24 @@ export class GitLabPlatform implements IGitPlatform {
       // 需要 base_sha / head_sha / start_sha 构造 position
       const mr = await this.api.MergeRequests.show(projectPath, changeRequestId)
       const diffRefs = mr.diff_refs as any
+      // 三个锚点 SHA 少一个，position 就是非法的，GitLab 必然回 400。与其把
+      // `startSha: undefined` 发出去换一个注定的失败（还白花一次 API 配额、
+      // 多走一轮重试判定），不如在这里就判死，直接走 GLAPI-015 的顶层降级。
+      // 错误信息带上文件与行号——降级后的顶层 note 是用户唯一能看到的线索，
+      // 日志里若不点名是哪条，排查时对不上号。
+      const missing = ['base_sha', 'head_sha', 'start_sha'].filter(k => diffRefs?.[k] == null)
+      if (missing.length > 0) {
+        const detail = `${comment.path}:${comment.line}`
+        getLogger().warning(
+          `createReviewComment: MR !${changeRequestId} diff_refs incomplete ` +
+            `(missing ${missing.join(', ')}) — cannot build a line position for ${detail}, ` +
+            'falling back to a top-level note'
+        )
+        throw new GitPlatformError(
+          `createReviewComment: incomplete diff_refs (missing ${missing.join(', ')}) for ${detail}`,
+          'unknown'
+        )
+      }
       const discussion = (await this.api.MergeRequestDiscussions.create(
         projectPath,
         changeRequestId,
@@ -685,6 +739,7 @@ export class GitLabPlatform implements IGitPlatform {
     }
     const discussionId = cached.discussionId
     const marker = buildWriteMarker({
+      platform: 'gitlab',
       projectPath,
       changeRequestId,
       op: 'reply',

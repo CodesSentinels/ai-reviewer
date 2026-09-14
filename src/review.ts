@@ -13,14 +13,14 @@
  * 后续运行只审查新增的变更，避免重复审查。
  */
 import {execFileSync} from 'child_process'
-// eslint-disable-next-line camelcase
-import {context as github_context} from '@actions/github'
 import {readFileSync, statSync} from 'fs'
 import pLimit from 'p-limit'
 import {type AnalysisStep, type Bot} from './bot'
 import {
   Commenter,
   bodyHasMarker,
+  isOwnAuthor,
+  stateMarker,
   commentReplyTag,
   commentTag,
   rawSummaryEndTag,
@@ -63,11 +63,10 @@ import {mergeReviewsByTopic, type Review} from './review-dedup'
 import {ensureFixSuggestionHeaders} from './fix-suggestion-header'
 import {getRepoFileTree, type DirectoryLister, type TreeFetcher} from './repo-tree'
 import {getReviewStateFromBody} from './review-state'
+import {isHeadStale} from './head-staleness'
+import {getRepoCoords, repoCoordsOf, setExecCtx} from './platform/run-context'
 import {getTokenCount} from './tokenizer'
 import {fetchThreadStatusMap, type ThreadStatusMap} from './github/review-thread'
-
-// eslint-disable-next-line camelcase
-const context = github_context
 
 /** 平台无关的 TreeFetcher 实现（DEP-005 → ARCH-018） */
 const platformTreeFetcher: TreeFetcher = {
@@ -85,9 +84,13 @@ function makeDirectoryLister(owner: string, repoName: string, ref: string): Dire
   return {
     async listDirectory(dirPath) {
       const result = await getPlatform().listRepositoryTree(owner, repoName, ref, dirPath)
-      return result.entries
-        .filter(item => item.type === 'blob' && item.path != null)
-        .map(item => item.path as string)
+      return {
+        files: result.entries
+          .filter(item => item.type === 'blob' && item.path != null)
+          .map(item => item.path as string),
+        // 截断状态必须带出去：丢掉它等于把「半个目录」当成完整目录
+        truncated: result.truncated
+      }
     }
   }
 }
@@ -101,7 +104,21 @@ const platformContentFetcher: FileContentFetcher = {
 
 /** 跨文件上下文注入的 token 上限 */
 const MAX_CROSS_FILE_CONTEXT_TOKENS = 1500
-const repo = context.repo
+/**
+ * 仓库坐标（ARCH-005）。
+ *
+ * 迁移前是 `const repo = context.repo`——`@actions/github` 的 getter 在没有
+ * GITHUB_REPOSITORY 时直接抛，于是 GitLab 入口一 import 本文件就崩，
+ * run() 根本执行不到。改成属性访问器：调用期才求值，16 个调用点一字不改。
+ */
+const repo = {
+  get owner(): string {
+    return getRepoCoords().owner
+  },
+  get repo(): string {
+    return getRepoCoords().repo
+  }
+}
 
 /** 在 PR 描述中添加此关键词可跳过 AI 审查 */
 const ignoreKeyword = `${PRIMARY_BOT_MENTION}: ignore`
@@ -115,12 +132,9 @@ export interface CodeReviewRunOptions {
 /**
  * 代码审查主函数
  *
- * @param execCtx - 平台无关执行上下文（ARCH-005/ARCH-007 过渡期：本函数内部
- *   仍以模块级 `context`/`repo`（`@actions/github`）为唯一数据源，尚未逐处
- *   替换为 execCtx——40+ 处调用点的完整迁移列入阶段四后续排期，见
- *   docs/tasks/execution-context-design.md 第 6.3 节。当前只接收该参数，
- *   保证 main.ts/command-handler.ts 可以在入口层完成 ExecutionContext 改造，
- *   不阻塞双平台兼容的入口层工作。
+ * @param execCtx - 平台无关执行上下文，本函数唯一的事件坐标来源（ARCH-005 迁移
+ *   完成）。PR/MR 的标题、描述、base/head SHA 一律经 IGitPlatform 现查，
+ *   不再读取任何平台 payload。
  * @param lightBot - 轻量模型 Bot（用于文件摘要和变更分类）
  * @param heavyBot - 重量模型 Bot（用于深度代码审查和最终摘要）
  * @param options - 全局配置选项
@@ -137,7 +151,7 @@ const MAX_LINT_REPORT_BYTES = 8 * 1024 * 1024
 /**
  * 读取并严格校验外部 lint 报告（SEC-002 / SEC-005）。
  *
- * 报告由无密钥 job 产出，内容间接受 PR 作者控制，因此这里把它当敌意数据：
+ * 报告由低权限 lint job 产出，内容间接受 PR 作者控制，因此这里把它当敌意数据：
  * 结构违规整份丢弃、单条目违规逐条丢弃，任何失败都只降级为「没有 lint 结果」，
  * 绝不让审查主流程失败——静态分析是增强项，不是审查的前置条件。
  */
@@ -192,6 +206,21 @@ function loadExternalLintReport(reportPath: string): LintReport | null {
   return parsed.report
 }
 
+/**
+ * 最终摘要生成失败时的可见兜底（REVIEW-006）。
+ *
+ * 逐文件摘要本身是已经算出来的，只是原本只存进 `inputs.rawSummary`——而那份内容
+ * 落在隐藏 marker 区块里，用户在评论正文里一个字也看不到。这里把它渲染成可见的
+ * 简表，让「模型整合失败」退化为「摘要质量下降」，而不是「什么都没有」。
+ */
+function renderPerFileSummaryFallback(summaries: Array<[string, string, boolean]>): string {
+  if (summaries.length === 0) return ''
+  const rows = summaries
+    .map(([filename, summary]) => `- **${filename}**：${summary.trim().replace(/\n+/g, ' ')}`)
+    .join('\n')
+  return `> 整合摘要生成失败，以下是未经整合的逐文件摘要：\n\n${rows}`
+}
+
 export const codeReview = async (
   execCtx: ExecutionContext,
   lightBot: Bot,
@@ -200,6 +229,11 @@ export const codeReview = async (
   prompts: Prompts,
   runOptions: CodeReviewRunOptions = {}
 ): Promise<void> => {
+  // 登记当前上下文：Commenter 在十几处被构造，签名里没有 execCtx，只能读模块级
+  // 上下文。共享核心入口统一登记一次，调用方（main.ts / gitlab-trigger.ts /
+  // 命令 handler）不必各自记得这件事。
+  setExecCtx(execCtx)
+
   const commenter: Commenter = new Commenter()
   const fromCommand = runOptions.source === 'command'
   const reviewMode = runOptions.mode ?? 'incremental'
@@ -209,50 +243,151 @@ export const codeReview = async (
   const githubConcurrencyLimit = pLimit(options.githubConcurrencyLimit)
 
   // ==================== 事件验证 ====================
-  if (
-    context.eventName !== 'pull_request' &&
-    context.eventName !== 'pull_request_target' &&
-    !fromCommand
-  ) {
+  // 归一化事件类型：GitHub 的 pull_request / pull_request_target 与 GitLab 的
+  // MR open/update 在构造阶段已经合流成 pr_* 三种
+  const isPrEvent =
+    execCtx.eventKind === 'pr_opened' ||
+    execCtx.eventKind === 'pr_synchronize' ||
+    execCtx.eventKind === 'pr_reopened'
+  if (!isPrEvent && !fromCommand) {
     getLogger().warning(
-      `Skipped: current event is ${context.eventName}, only support pull_request event`
+      `Skipped: current event is ${execCtx.eventKind}, only support pull request events`
     )
     return
   }
-  if (context.payload.pull_request == null && fromCommand) {
-    const issueNumber = context.payload.issue?.number
-    if (issueNumber != null) {
-      const cr = await getPlatform().getChangeRequest(repo.owner, repo.repo, issueNumber)
-      // 构造与 payload.pull_request 兼容的结构
-      ;(context.payload as any).pull_request = {
-        number: cr.number,
-        title: cr.title,
-        body: cr.body,
-        state: cr.state,
-        base: {sha: cr.baseSha, ref: cr.baseRef},
-        head: {sha: cr.headSha, ref: cr.headRef},
-        user: {login: cr.author}
-      }
-    }
+
+  // PR/MR 详情统一现查（ARCH-005）。
+  //
+  // 迁移前这里分两路：PR 事件直接读 context.payload.pull_request，命令路径才去
+  // 查 API 合成一个同形状的对象。现在统一走 API——payload 里的标题/描述/SHA 是
+  // 事件发生那一刻的快照，命令触发时往往已经过期；而且 GitLab 侧根本没有这个
+  // payload 形状。
+  const {owner: prOwner, repo: prRepo} = repoCoordsOf(execCtx)
+  let pr: {
+    number: number
+    title: string
+    body: string
+    base: {sha: string; ref: string}
+    head: {sha: string; ref: string}
   }
-  if (context.payload.pull_request == null) {
-    getLogger().warning('Skipped: context.payload.pull_request is null')
+  try {
+    const cr = await getPlatform().getChangeRequest(prOwner, prRepo, execCtx.changeRequestId)
+    pr = {
+      number: cr.number,
+      title: cr.title,
+      body: cr.body,
+      base: {sha: cr.baseSha, ref: cr.baseRef},
+      head: {sha: cr.headSha, ref: cr.headRef}
+    }
+  } catch (e) {
+    getLogger().warning(`Skipped: failed to load change request details: ${String(e)}`)
     return
   }
 
-  if (
-    !fromCommand &&
-    getReviewStateFromBody(context.payload.pull_request.body ?? '') === 'paused'
-  ) {
+  if (!fromCommand && getReviewStateFromBody(pr.body ?? '') === 'paused') {
     getLogger().info('Skipped: review automation is paused for this PR')
     return
   }
 
+  // ── REVIEW-003：只发布针对最新 HEAD 的结果 ──────────────────────────────
+  //
+  // 基线用「审查开始时读到的 HEAD」而不是事件里的：评论触发的运行 execCtx.headSha
+  // 固定为空（见 github-execution-context.ts），拿事件值做基线会让 @ai-reviewer
+  // review 永远发不出结果；而且真正要防的是「分析跑了几分钟，期间又推了新 commit」，
+  // 那正是分析基线与当前 HEAD 的差异。
+  const reviewedHeadSha = pr.head.sha
+
+  /**
+   * 写入阶段的准入判断。返回 false 表示本次结果已作废，调用方必须放弃全部写入。
+   *
+   * 拦的是**全部**写入而不只是行级评论：危害最大的恰恰不是行级评论（GitHub 会把
+   * 它标成 Outdated，本就是历史记录），而是 reviewed SHA marker——它记的是现查的
+   * 新 SHA，而分析内容来自旧 SHA，等于宣称「新 HEAD 已审过」，下次增量审查会跳过
+   * 这段，发现被永久吞掉。摘要与 release notes 同理，都是 replace 语义。
+   */
+  interface HeadCheck {
+    fresh: boolean
+    currentHeadSha: string
+    reason: string
+  }
+
+  /**
+   * 写入前的准入判断。返回 fresh=false 表示本次结果已作废，调用方必须放弃写入。
+   *
+   * **查询失败一律判为不新鲜（fail closed）。** 早先这里返回「放行」，理由是
+   * 「一次 API 抖动不该让整轮审查白跑」——那是错的：REVIEW-003 的要求是「旧任务
+   * 不得写摘要或行级评论」，读不到当前 HEAD 就等于无法确认自己是不是旧任务，
+   * 此时继续写入正是它要防的事。整个代码库在权限、幂等、归属判定上都是 fail
+   * closed，唯独这里 fail open 说不通。
+   *
+   * 返回 currentHeadSha 供调用方直接用，避免检测到 stale 后再查一次。
+   */
+  const ensureHeadFresh = async (phase: string): Promise<HeadCheck> => {
+    let currentHeadSha = ''
+    try {
+      const fresh = await getPlatform().getChangeRequest(prOwner, prRepo, execCtx.changeRequestId)
+      currentHeadSha = fresh.headSha
+    } catch (e) {
+      getLogger().warning(
+        `[review-003] cannot confirm current HEAD before ${phase} (${String(e)}) — ` +
+          'discarding results rather than risking a stale write'
+      )
+      return {fresh: false, currentHeadSha: '', reason: '无法确认当前 HEAD'}
+    }
+
+    const check = isHeadStale(reviewedHeadSha, currentHeadSha)
+    if (!check.stale) return {fresh: true, currentHeadSha, reason: ''}
+
+    getLogger().warning(
+      `[review-003] HEAD moved from ${check.eventHeadSha} to ${check.currentHeadSha} — ` +
+        `discarding results before ${phase}`
+    )
+    return {fresh: false, currentHeadSha, reason: 'HEAD 已变化'}
+  }
+
+  /**
+   * 发布「本次结果已作废」提示（幂等）。
+   *
+   * **只写自己的 marker 区块，绝不碰摘要评论。** 早先这里还会去读改写摘要评论
+   * 来清掉进度横幅——那正是 REVIEW-003 要防的事：旧任务读改写共享摘要，可能把
+   * 新任务刚写好的结果覆盖掉。进度横幅的问题改为从源头避免：写它之前就先检查，
+   * 陈旧任务根本不会留下横幅。
+   */
+  const publishInvalidationNotice = async (currentHeadSha: string): Promise<void> => {
+    const body =
+      `> ⚠️ 本次审查的结果已作废：分析基于 \`${reviewedHeadSha.slice(0, 8)}\`，` +
+      `发布前 HEAD 已变为 \`${currentHeadSha.slice(0, 8)}\`。\n>\n` +
+      '> 针对新 HEAD 的审查会自动运行；本条提示会被下一次结果覆盖。\n'
+    const delivered = await commenter.comment(body, stateMarker('reviewInvalidated'), 'replace')
+    if (!delivered) {
+      // comment() 内部会吞异常，只能靠返回值判断（同 REVIEW-014 的教训）
+      getLogger().warning('[review-003] failed to publish invalidation notice')
+    }
+  }
+
+  /**
+   * 放弃本次运行。
+   *
+   * 只有**确认 HEAD 变了**才发作废提示。查询失败时不发：那种情况下没有任何证据
+   * 表明结果真的过期，贸然贴一条「已作废」反而会误导用户（新审查未必会来）。
+   * 此时只记 error 级日志，让运维能查到这轮为什么没有产出。
+   */
+  const abortStaleRun = async (check: HeadCheck): Promise<void> => {
+    if (check.currentHeadSha === '') {
+      getLogger().error(
+        `[review-003] discarded this run: ${check.reason}. No invalidation notice was posted ` +
+          'because there is no evidence the results are actually outdated.'
+      )
+      return
+    }
+    await publishInvalidationNotice(check.currentHeadSha)
+  }
+
   // ==================== 填充 PR 基本信息 ====================
   const inputs: Inputs = new Inputs()
-  inputs.title = context.payload.pull_request.title
-  if (context.payload.pull_request.body != null) {
-    inputs.description = commenter.getDescription(context.payload.pull_request.body)
+  inputs.title = pr.title
+  if (pr.body != null) {
+    inputs.description = commenter.getDescription(pr.body)
   }
 
   // 如果 PR 描述中包含忽略关键词，跳过审查
@@ -266,10 +401,7 @@ export const codeReview = async (
 
   // ==================== 恢复增量审查状态 ====================
   // 从已有的摘要评论中恢复上次审查的状态
-  const existingSummarizeCmt = await commenter.findCommentWithTag(
-    summarizeTag(),
-    context.payload.pull_request.number
-  )
+  const existingSummarizeCmt = await commenter.findCommentWithTag(summarizeTag(), pr.number)
   let existingCommitIdsBlock = ''
   let existingSummarizeCmtBody = ''
   if (existingSummarizeCmt != null) {
@@ -295,21 +427,12 @@ export const codeReview = async (
 
   // 确定 diff 的起始 commit
   if (reviewMode === 'full') {
-    getLogger().info(
-      `Will review full diff from the base commit: ${
-        context.payload.pull_request.base.sha as string
-      }`
-    )
-    highestReviewedCommitId = context.payload.pull_request.base.sha
-  } else if (
-    highestReviewedCommitId === '' ||
-    highestReviewedCommitId === context.payload.pull_request.head.sha
-  ) {
+    getLogger().info(`Will review full diff from the base commit: ${pr.base.sha as string}`)
+    highestReviewedCommitId = pr.base.sha
+  } else if (highestReviewedCommitId === '' || highestReviewedCommitId === pr.head.sha) {
     // 首次审查或已是最新：从 base 分支开始
-    getLogger().info(
-      `Will review from the base commit: ${context.payload.pull_request.base.sha as string}`
-    )
-    highestReviewedCommitId = context.payload.pull_request.base.sha
+    getLogger().info(`Will review from the base commit: ${pr.base.sha as string}`)
+    highestReviewedCommitId = pr.base.sha
   } else {
     // 增量审查：从上次审查的 commit 开始
     getLogger().info(`Will review from commit: ${highestReviewedCommitId}`)
@@ -322,15 +445,15 @@ export const codeReview = async (
     repo.owner,
     repo.repo,
     highestReviewedCommitId,
-    context.payload.pull_request.head.sha
+    pr.head.sha
   )
 
   // 全量 diff：从目标分支的 base 到最新 commit（完整变更视图）
   const targetBranchDiff = await getPlatform().compareDiff(
     repo.owner,
     repo.repo,
-    context.payload.pull_request.base.sha,
-    context.payload.pull_request.head.sha
+    pr.base.sha,
+    pr.head.sha
   )
 
   const incrementalFiles = incrementalDiff.files
@@ -344,7 +467,7 @@ export const codeReview = async (
   // 增量审查：使用 incrementalFiles 的 patch（仅包含新增变更的 hunk）
   // 全量审查（首次或 full mode）：incremental 与 targetBranch 相同，直接使用
   // 关键：必须用 incrementalFiles 的 patch 送入 AI，否则 AI 会看到已审查过的旧变更
-  const isFirstOrFullReview = highestReviewedCommitId === context.payload.pull_request.base.sha
+  const isFirstOrFullReview = highestReviewedCommitId === pr.base.sha
   const files = isFirstOrFullReview
     ? targetBranchFiles.filter(targetBranchFile =>
         incrementalFiles.some(
@@ -395,10 +518,6 @@ export const codeReview = async (
         githubConcurrencyLimit(async () => {
           // 获取文件在基准分支上的原始内容
           let fileContent = ''
-          if (context.payload.pull_request == null) {
-            getLogger().warning('Skipped: context.payload.pull_request is null')
-            return null
-          }
           if (file.status === 'added') {
             getLogger().info(`skip base content fetch for new file: ${file.filename}`)
           } else {
@@ -407,14 +526,18 @@ export const codeReview = async (
                 repo.owner,
                 repo.repo,
                 file.filename,
-                context.payload.pull_request.base.sha
+                pr.base.sha
               )
               if (content != null) {
                 fileContent = content
               }
             } catch (e: any) {
+              // REVIEW-005：新增文件走的是上面的 status === 'added' 分支，根本
+              // 不会到这里。能走到这里说明是真的读不到（权限、超大文件、
+              // 二进制、临时故障），说"这对新文件是正常的"会把真问题盖过去。
               getLogger().warning(
-                `Failed to get file contents: ${e as string}. This is OK if it's a new file.`
+                `Failed to read base content of ${file.filename}: ${String(e)}. ` +
+                  'Continuing with diff only — review quality for this file may be reduced.'
               )
             }
           }
@@ -465,6 +588,14 @@ ${hunks.oldHunk}
     )
 
   // 过滤掉没有有效 patch 的文件
+  // REVIEW-005：已删除的文件在**摘要**里仍有价值（"某某被删掉了"是重要变更），
+  // 但不该进入**行级审查**——删除后的文件没有新行可挂评论，模型给出的行号无处
+  // 落地，提交行级评论时会被平台拒绝。filesAndChanges 元组不带 status，
+  // 这里旁路记一份文件名集合。
+  const deletedFiles = new Set(
+    files.filter(file => file.status === 'removed').map(file => file.filename)
+  )
+
   const filesAndChanges = filteredFiles.filter(file => file !== null) as Array<
     [string, string, string, Array<[number, number, string]>]
   >
@@ -484,9 +615,9 @@ ${hunks.oldHunk}
   // ==================== 阶段零·B：静态分析工具扫描（Linter/SAST） ====================
   //
   // 两条来源，互斥：
-  //   1. lintReportPath 非空 → 读取无密钥 job 产出的报告（SEC-002）。
+  //   1. lintReportPath 非空 → 读取低权限 lint job 产出的报告（SEC-002）。
   //      本 job 持有密钥，绝不能自己 checkout/执行 PR 代码，因此优先走这条。
-  //   2. 否则 enableLintTools=true → 本地跑工具（仅适用于无密钥执行面）。
+  //   2. 否则 enableLintTools=true → 本地跑工具（仅适用于无业务密钥的执行面）。
   let lintReport: LintReport | null = null
   if (options.lintReportPath) {
     lintReport = loadExternalLintReport(options.lintReportPath)
@@ -527,7 +658,7 @@ ${hunks.oldHunk}
       getLogger().info('Phase 0: starting cross-file dependency analysis')
       // 获取仓库文件树（1 次 API 调用，结果缓存）
       const {files: repoFiles, truncated} = await getRepoFileTree(
-        execCtx.headSha || context.payload.pull_request.head.sha,
+        execCtx.headSha || pr.head.sha,
         {
           platform: execCtx.platform,
           owner: repo.owner,
@@ -543,18 +674,14 @@ ${hunks.oldHunk}
         options,
         githubConcurrencyLimit,
         {owner: repo.owner, repo: repo.repo},
-        execCtx.headSha || context.payload.pull_request.head.sha,
+        execCtx.headSha || pr.head.sha,
         platformContentFetcher,
         patchScans,
         // 截断时把解析不到的 import 所在目录按需补回来，而不是只提示降级
         {
           truncated,
           dirLister: truncated
-            ? makeDirectoryLister(
-                repo.owner,
-                repo.repo,
-                execCtx.headSha || context.payload.pull_request.head.sha
-              )
+            ? makeDirectoryLister(repo.owner, repo.repo, execCtx.headSha || pr.head.sha)
             : undefined
         }
       )
@@ -568,7 +695,7 @@ ${hunks.oldHunk}
   let statusMsg = `<details>
 <summary>Commits</summary>
 Files that changed from the base of the PR and between ${highestReviewedCommitId} and ${
-    context.payload.pull_request.head.sha
+    pr.head.sha
   } commits.
 </details>
 ${repoTreeTruncated ? `\n${TREE_TRUNCATED_NOTICE}\n` : ''}
@@ -599,6 +726,14 @@ ${
 }
 `
 
+  // REVIEW-003 第一道：进度横幅本身就是对**共享摘要评论**的一次 replace 写入，
+  // 陈旧任务写它同样会覆盖新任务的结果。所以检查必须在它之前，而不是等到阶段三。
+  const beforeBanner = await ensureHeadFresh('in-progress banner')
+  if (!beforeBanner.fresh) {
+    await abortStaleRun(beforeBanner)
+    return
+  }
+
   // 更新摘要评论为"审查进行中"状态
   const inProgressSummarizeCmt = commenter.addInProgressStatus(existingSummarizeCmtBody, statusMsg)
 
@@ -617,6 +752,32 @@ ${
    *
    * @returns [文件名, 摘要内容, 是否需要审查] 三元组，或 null（失败时）
    */
+  // REVIEW-006：阶段三的模型调用原本是裸调用，任一失败都会抛出 codeReview，
+  // 已经算好的 per-file 摘要与行级审查结果全部丢失，PR 上还留着 in-progress
+  // 状态——用户只看到"审查卡住了"，不知道发生了什么。
+  //
+  // 改为：单个阶段失败 → 降级继续，把失败原因收集起来，最后明确写进摘要评论。
+  const degradations: string[] = []
+
+  /**
+   * 调用模型，失败则降级为 null 并登记。
+   *
+   * 登记进 `degradations` 的文案会**发布到 PR/MR 评论**，因此只放阶段名 +
+   * 一句通用描述。原始 Error.message 来自 OpenAI SDK / 代理，可能带内部
+   * endpoint、响应正文、请求 ID 等不适合公开的内容——那些只写进（已脱敏的）
+   * 运行日志。
+   */
+  const chatOrNull = async (bot: Bot, prompt: string, label: string): Promise<string | null> => {
+    try {
+      const [response] = await bot.chat(prompt, {})
+      return response
+    } catch (e: any) {
+      getLogger().warning(`${label} failed: ${e instanceof Error ? e.message : String(e)}`)
+      degradations.push(`${label}未完成（模型调用失败，详情见运行日志）`)
+      return null
+    }
+  }
+
   const doSummary = async (
     filename: string,
     fileContent: string,
@@ -706,9 +867,14 @@ ${
 ${filename}: ${summary}
 `
       }
-      // 调用重量模型合并摘要
-      const [summarizeResp] = await heavyBot.chat(prompts.renderSummarizeChangesets(inputs), {})
-      if (summarizeResp === '') {
+      // 调用重量模型合并摘要。失败时保留上一轮的 rawSummary 继续——
+      // 少合并一批好过整份摘要都没有
+      const summarizeResp = await chatOrNull(
+        heavyBot,
+        prompts.renderSummarizeChangesets(inputs),
+        '摘要合并'
+      )
+      if (summarizeResp == null || summarizeResp === '') {
         getLogger().warning('summarize: nothing obtained from openai')
       } else {
         inputs.rawSummary = summarizeResp
@@ -718,8 +884,17 @@ ${filename}: ${summary}
 
   // ==================== 阶段三：生成最终摘要和发布说明 ====================
 
-  // 生成最终摘要
-  const [summarizeFinalResponse] = await heavyBot.chat(prompts.renderSummarize(inputs), {})
+  // 生成最终摘要。失败时用逐文件摘要兜底——注意兜底内容必须落在**用户可见**的
+  // 正文里：inputs.rawSummary 只存在隐藏 marker 区块中，光有它等于什么都没发。
+  const summarizeFinalRaw = await chatOrNull(
+    heavyBot,
+    prompts.renderSummarize(inputs),
+    '最终摘要生成'
+  )
+  const summarizeFinalResponse =
+    summarizeFinalRaw != null && summarizeFinalRaw !== ''
+      ? summarizeFinalRaw
+      : renderPerFileSummaryFallback(summaries)
   if (summarizeFinalResponse === '') {
     getLogger().info('summarize: nothing obtained from openai')
   }
@@ -728,17 +903,23 @@ ${filename}: ${summary}
 
   // 生成发布说明并写入 PR 描述
   if (options.disableReleaseNotes === false) {
-    const [releaseNotesResponse] = await heavyBot.chat(
-      prompts.renderSummarizeReleaseNotes(inputs),
-      {}
-    )
+    const releaseNotesResponse =
+      (await chatOrNull(heavyBot, prompts.renderSummarizeReleaseNotes(inputs), '发布说明生成')) ??
+      ''
     if (releaseNotesResponse === '') {
       getLogger().info('release notes: nothing obtained from openai')
     } else {
+      // REVIEW-003 第二道：**紧贴写入**。放在模型调用之前等于没挡——
+      // 生成 release notes 本身就是一次重量模型调用，期间完全可能又推了新 commit。
+      const beforeNotes = await ensureHeadFresh('release notes')
+      if (!beforeNotes.fresh) {
+        await abortStaleRun(beforeNotes)
+        return
+      }
       let message = `### Summary by ${botName}\n\n`
       message += releaseNotesResponse
       try {
-        await commenter.updateDescription(context.payload.pull_request.number, message)
+        await commenter.updateDescription(pr.number, message)
       } catch (e: any) {
         getLogger().warning(`release notes: error from github: ${e.message as string}`)
       }
@@ -746,8 +927,9 @@ ${filename}: ${summary}
   }
 
   // 生成精简摘要（用于后续代码审查时提供上下文）
-  const [summarizeShortResponse] = await heavyBot.chat(prompts.renderSummarizeShort(inputs), {})
-  inputs.shortSummary = summarizeShortResponse
+  // 精简摘要只用于后续审查的上下文，失败不影响本次输出
+  inputs.shortSummary =
+    (await chatOrNull(heavyBot, prompts.renderSummarizeShort(inputs), '精简摘要生成')) ?? ''
 
   // 构建最终的摘要评论内容（包含隐藏的状态数据）
   let summarizeComment = `${summarizeFinalResponse}
@@ -797,6 +979,10 @@ ${
 }
 `
 
+  // 提到函数作用域：最终摘要评论在审查阶段**之后**发布，需要读这份失败清单
+  // 来生成「本次审查不完整」提示（REVIEW-006）
+  const reviewsFailed: string[] = []
+
   // ==================== 阶段四：逐文件代码审查 ====================
   if (!options.disableReview && runOptions.summaryOnly !== true) {
     // 筛选出需要审查的文件（分类为 NEEDS_REVIEW 的文件）
@@ -814,7 +1000,6 @@ ${
       )
       .map(([filename]) => filename)
 
-    const reviewsFailed: string[] = []
     let lgtmCount = 0 // LGTM 评论计数（被过滤掉的）
     let reviewCount = 0 // 收集到的审查发现总数（去重/截断前）
 
@@ -826,12 +1011,12 @@ ${
     // PR 级别的线程状态 map（path:line → isResolved）
     // 一次性拉取，复用于所有文件的评论链注入，让 AI 感知 [OPEN]/[RESOLVED] 状态
     let threadStatusMap: ThreadStatusMap = new Map()
-    if (context.payload.pull_request != null) {
+    {
       try {
         threadStatusMap = await fetchThreadStatusMap({
           owner: repo.owner,
           repo: repo.repo,
-          prNumber: context.payload.pull_request.number
+          prNumber: pr.number
         })
         getLogger().info(`thread-status: fetched ${threadStatusMap.size} thread locations`)
       } catch (e) {
@@ -849,13 +1034,19 @@ ${
       string,
       Array<{startLine: number; endLine: number}>
     > = new Map()
-    if (reviewMode === 'full' && context.payload.pull_request != null) {
+    if (reviewMode === 'full') {
       try {
-        const allReviewComments = await commenter.listReviewComments(
-          context.payload.pull_request.number
-        )
+        const allReviewComments = await commenter.listReviewComments(pr.number)
         for (const c of allReviewComments) {
           if (!bodyHasMarker(c.body, 'comment')) continue
+          // REVIEW-012：用户引用回复也带 marker。把它算成「已有我们的评论」，
+          // 该位置本次的新发现就会被当成重复而丢弃。
+          //
+          // 只有**确认**是自己发的才建立去重范围。false 和 null 都不抑制审查：
+          // 身份查不到时若把 null 当成「是自己的」，任何人只要引用一条带 marker
+          // 的评论，就能让对应 patch 跳过模型审查——那是可被伪造的抑制通道。
+          // 这与 submitReview() 里「身份未知则不去重」的方向也保持一致。
+          if ((await isOwnAuthor(c.user?.login)) !== true) continue
           const key = `${c.path}:${c.line}`
           const isResolved = threadStatusMap.get(key)
           if (isResolved === true) continue
@@ -897,6 +1088,11 @@ ${
       fileContent: string,
       patches: Array<[number, number, string]>
     ): Promise<void> => {
+      if (deletedFiles.has(filename)) {
+        // 摘要阶段已经覆盖过这次删除，这里只是不再为它跑一次深度审查
+        getLogger().info(`skip line-level review for deleted file: ${filename}`)
+        return
+      }
       getLogger().info(`reviewing ${filename}`)
       const ins: Inputs = inputs.clone()
       ins.filename = filename
@@ -952,10 +1148,6 @@ ${
       let patchesPacked = 0
       let patchesSkippedByDedup = 0
       for (const [startLine, endLine, patch] of patches) {
-        if (context.payload.pull_request == null) {
-          getLogger().warning('No pull request found, skipping.')
-          continue
-        }
         // full review 去重：跳过已有未 resolved bot 评论覆盖的 patch
         if (existingBotCommentRanges.has(filename)) {
           const ranges = existingBotCommentRanges.get(filename)!
@@ -984,7 +1176,7 @@ ${
         let commentChain = ''
         try {
           const allChains = await commenter.getCommentChainsWithinRange(
-            context.payload.pull_request.number,
+            pr.number,
             filename,
             startLine,
             endLine,
@@ -1047,7 +1239,10 @@ ${commentChain}
           getLogger().info(
             `[analysis_chain] ${filename}: received ${analysisSteps.length} analysis steps from bot`
           )
-          const analysisChainMd = formatAnalysisChain(analysisSteps, resolveAnalysisRepositoryUrl())
+          const analysisChainMd = formatAnalysisChain(
+            analysisSteps,
+            resolveAnalysisRepositoryUrl(options.enableShell)
+          )
           getLogger().info(
             `[analysis_chain] ${filename}: formatted markdown length=${
               analysisChainMd.length
@@ -1077,10 +1272,6 @@ ${commentChain}
               (review.comment.includes('LGTM') || review.comment.includes('looks good to me'))
             ) {
               lgtmCount += 1
-              continue
-            }
-            if (context.payload.pull_request == null) {
-              getLogger().warning('No pull request found, skipping.')
               continue
             }
 
@@ -1230,18 +1421,28 @@ ${
 
 </details>
 `
+    // REVIEW-003 第三道：**阶段四跑完之后**才检查。
+    // 逐文件模型审查是整条流水线最耗时的一段（每个文件一次重量模型调用），
+    // 把门禁设在它之前等于什么都没挡——期间推的新 commit 照样会被旧结果覆盖。
+    const beforePublish = await ensureHeadFresh('line-level review')
+    if (!beforePublish.fresh) {
+      await abortStaleRun(beforePublish)
+      return
+    }
+
     // 将最新的 head commit SHA 添加到已审查列表
-    summarizeComment += `\n${commenter.addReviewedCommitId(
-      existingCommitIdsBlock,
-      context.payload.pull_request.head.sha
-    )}`
+    summarizeComment += `\n${commenter.addReviewedCommitId(existingCommitIdsBlock, pr.head.sha)}`
 
     // 批量提交所有缓冲的审查评论（严重级别已内嵌在每条评论顶部，不再单独发汇总评论）
+    // STATE-011/012：批次内每条写入前再确认一次 HEAD。
+    // 上面那道 `ensureHeadFresh('line-level review')` 只挡住「进入发布阶段前就
+    // 已经变了」；一批可能有十几条 discussion，第一条写完 HEAD 就变的情况它挡不住。
     await commenter.submitReview(
-      context.payload.pull_request.number,
+      pr.number,
       commits[commits.length - 1].sha,
       statusMsg,
-      threadStatusMap
+      threadStatusMap,
+      async () => (await ensureHeadFresh('line-level write')).fresh
     )
   }
 
@@ -1249,6 +1450,39 @@ ${
   // 否则 replace 摘要评论会清空增量审查标记，导致下次自动审查从 base 重审
   if (runOptions.summaryOnly === true && existingCommitIdsBlock !== '') {
     summarizeComment += `\n${existingCommitIdsBlock}`
+  }
+
+  // REVIEW-006：不完整的审查必须让用户看得见。
+  //
+  // 详细清单原本只挂在 statusMsg 上，而 statusMsg 走 submitReview——那个方法在
+  // **没有行级评论时会直接返回**（GitHub 不接受空审查）。于是最常见的情况下
+  //（模型没挑出问题，或者所有文件都失败了）用户什么提示都收不到：全部失败与
+  // "没发现问题"长得一模一样。
+  //
+  // 摘要评论是唯一一条必定发出的消息，所以提示放这里。
+  const incomplete: string[] = [
+    ...degradations,
+    // 摘要失败同样要算进来：token 超限、空响应、模型异常都会落在这里，
+    // 而它原本只进 statusMsg——没有行级评论时那条消息根本不会发布
+    ...(summariesFailed.length > 0 ? [`${summariesFailed.length} 个文件摘要失败`] : []),
+    ...(skippedFiles.length > 0
+      ? [`${skippedFiles.length} 个文件因超出 max_files 限制未处理`]
+      : []),
+    ...(reviewsFailed.length > 0 ? [`${reviewsFailed.length} 个文件审查失败`] : [])
+  ]
+  if (incomplete.length > 0) {
+    summarizeComment +=
+      `\n\n> ⚠️ 本次审查不完整，共 ${incomplete.length} 项未能完成：\n>\n` +
+      incomplete.map(d => `> - ${d}`).join('\n') +
+      '\n>\n> 已发布的部分仍然有效；重新触发审查可以重试失败的环节。\n'
+  }
+
+  // REVIEW-003 第四道：最终摘要是最后一次写入，且是 replace 语义——
+  // 上一道之后还隔着评论提交与摘要组装，这里再确认一次
+  const beforeSummary = await ensureHeadFresh('final summary')
+  if (!beforeSummary.fresh) {
+    await abortStaleRun(beforeSummary)
+    return
   }
 
   // 发布最终的摘要评论
@@ -1272,17 +1506,31 @@ function formatShellCommandForDisplay(command: string): string {
  * 生成可折叠的 `<details>` 块，包含每个 shell 命令及其输出、web search 调用等，
  * 展示模型在给出审查意见之前的推理/调查过程。
  */
-function resolveAnalysisRepositoryUrl(): string {
-  const payload = context.payload as Record<string, any>
+/**
+ * 推导仓库 Web URL，仅用于 Analysis chain 的展示链接。
+ *
+ * ARCH-005/023：迁移前这里同时读 `payload.repository.html_url`（GitHub）和
+ * `payload.project.web_url`（GitLab）——一个共享核心函数里塞两个平台的 payload
+ * 形状，正是架构约束要防的耦合。改为只用平台中立来源：
+ *
+ *   GitHub Actions → GITHUB_SERVER_URL + 仓库坐标（buildGithubRepositoryUrl）
+ *   GitLab CI      → CI_PROJECT_URL / CI_REPOSITORY_URL
+ *   两者都没有     → git remote origin
+ *
+ * 两个 CI 环境各自保证对应变量存在，因此覆盖面与原先等价；纯展示用途，
+ * 取不到时返回空串，不影响审查本身。
+ */
+function resolveAnalysisRepositoryUrl(allowShell: boolean): string {
   const candidates = [
-    context.payload.repository?.html_url,
-    payload.project?.web_url,
-    payload.project?.homepage,
-    payload.repository?.homepage,
     process.env.CI_PROJECT_URL,
     process.env.CI_REPOSITORY_URL,
     buildGithubRepositoryUrl(),
-    readOriginRemoteUrl()
+    // 最后这档要 fork 一个 git 进程。secret-bearing 执行面强制 enable_shell=false
+    // （LOCAL-001），这里必须跟着关——否则「强制关闭本地命令」就有一个绕过口，
+    // 而且执行的是 PATH 上第一个 git，纯展示用途不值得这个代价。
+    // 两个 CI 环境都保证前几档可用（GitLab 有 CI_PROJECT_URL，GitHub Actions 有
+    // GITHUB_SERVER_URL），关掉不影响实际取值。
+    allowShell ? readOriginRemoteUrl() : undefined
   ]
 
   return (

@@ -13,6 +13,7 @@ import malformed from './fixtures/gitlab-malformed.json'
 import unknownEvent from './fixtures/gitlab-unknown-event.json'
 import noteToplevel from './fixtures/gitlab-note-hook-toplevel.json'
 import noteNonCreate from './fixtures/gitlab-note-hook-non-create.json'
+import noteRealPayload from './fixtures/gitlab-note-hook-real-payload-2026-08-18.json'
 
 describe('validateTriggerPayload()', () => {
   test('非对象 payload → ok:false', () => {
@@ -96,17 +97,27 @@ describe('validateTriggerPayload()', () => {
     })
   })
 
-  test('note 缺少 merge_request.iid → ok:false', () => {
+  test('note 缺少 merge_request.iid（noteable_type=MergeRequest）→ ok:false', () => {
     const payload = {
       object_kind: 'note',
       project: {id: 42},
-      object_attributes: {id: 1},
+      object_attributes: {id: 1, noteable_type: 'MergeRequest'},
       merge_request: {}
     }
     expect(validateTriggerPayload(payload)).toEqual({
       ok: false,
       reason: 'missing merge_request.iid'
     })
+  })
+
+  test('note 挂在 Issue 上（noteable_type=Issue，无 merge_request 字段）→ ok:true（业务判断留给 ECF 层）', () => {
+    const payload = {
+      object_kind: 'note',
+      project: {id: 42},
+      object_attributes: {id: 1, noteable_type: 'Issue', action: 'create'}
+      // 真实 GitLab payload 里不会有 merge_request 字段
+    }
+    expect(validateTriggerPayload(payload)).toEqual({ok: true})
   })
 
   test('note 缺少 project.id → ok:false', () => {
@@ -119,6 +130,88 @@ describe('validateTriggerPayload()', () => {
     expect(validateTriggerPayload(payload)).toEqual({
       ok: false,
       reason: 'missing project.id'
+    })
+  })
+
+  // EVENT-003（GitHub Issue #88 P1 复核）：HEAD SHA 缺失/空值/类型错误必须
+  // fail closed，不能像 gitlab-execution-context.ts 那样静默兜底成空字符串。
+  describe('EVENT-003: HEAD SHA 校验', () => {
+    test('merge_request 缺少 object_attributes.last_commit → ok:false', () => {
+      const payload = {
+        object_kind: 'merge_request',
+        project: {id: 42},
+        object_attributes: {iid: 1, source_project_id: 1, target_project_id: 1}
+      }
+      expect(validateTriggerPayload(payload)).toEqual({
+        ok: false,
+        reason: 'missing or invalid object_attributes.last_commit.id'
+      })
+    })
+
+    test('merge_request 的 last_commit.id 是空字符串 → ok:false', () => {
+      const payload = {
+        object_kind: 'merge_request',
+        project: {id: 42},
+        object_attributes: {
+          iid: 1,
+          source_project_id: 1,
+          target_project_id: 1,
+          last_commit: {id: ''}
+        }
+      }
+      expect(validateTriggerPayload(payload)).toEqual({
+        ok: false,
+        reason: 'missing or invalid object_attributes.last_commit.id'
+      })
+    })
+
+    test('merge_request 的 last_commit.id 类型错误（非字符串）→ ok:false', () => {
+      const payload = {
+        object_kind: 'merge_request',
+        project: {id: 42},
+        object_attributes: {
+          iid: 1,
+          source_project_id: 1,
+          target_project_id: 1,
+          last_commit: {id: 12345}
+        }
+      }
+      expect(validateTriggerPayload(payload)).toEqual({
+        ok: false,
+        reason: 'missing or invalid object_attributes.last_commit.id'
+      })
+    })
+
+    test('note（noteable_type=MergeRequest）缺少 merge_request.last_commit.id → ok:false', () => {
+      const payload = {
+        object_kind: 'note',
+        project: {id: 42},
+        object_attributes: {id: 1, noteable_type: 'MergeRequest', action: 'create'},
+        merge_request: {iid: 7}
+      }
+      expect(validateTriggerPayload(payload)).toEqual({
+        ok: false,
+        reason: 'missing or invalid merge_request.last_commit.id'
+      })
+    })
+
+    test('note（noteable_type=Issue）不要求 last_commit.id 存在 → ok:true（沿用既有 ignorable 分支）', () => {
+      const payload = {
+        object_kind: 'note',
+        project: {id: 42},
+        object_attributes: {id: 1, noteable_type: 'Issue', action: 'create'}
+      }
+      expect(validateTriggerPayload(payload)).toEqual({ok: true})
+    })
+
+    /**
+     * 2026-08-18 真实 GitLab 环境验证（Issue #118）：在真实项目上 @ bot 发了
+     * 一条 `help` 命令评论，第一次触发时被这条校验 fail closed 拒绝——
+     * `merge_request.diff_head_sha` 在真实 payload 里根本不存在。这条 fixture
+     * 是那次真实投递的原始 payload（已脱敏用户邮箱等字段），锁定回归。
+     */
+    test('真实捕获的 payload（Issue #118 事故现场）→ ok:true', () => {
+      expect(validateTriggerPayload(noteRealPayload)).toEqual({ok: true})
     })
   })
 })

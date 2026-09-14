@@ -44,8 +44,8 @@
 - [x] `SEC-001` 重构 `.github/workflows/openai-review.yml`，禁止
       `pull_request_target` checkout 并执行 PR head 中的
       Action、`dist/index.js`、依赖或脚本。
-- [ ] `SEC-002` 将无密钥 PR head 验证与有评论写权限/模型密钥的 reviewer 执行面分
-      离。
+- [x] `SEC-002` 将低权限 PR head 验证与有评论写权限/模型密钥的 reviewer 执行面
+      分离。
 - [x] `SEC-003` 有密钥 reviewer 固定执行 GitHub 默认分支中的可信代码，只把 PR
       diff 和文件内容作为数据读取。
 - [x] `SEC-004` 普通 PR head job 不得获得 `OPENAI_API_KEY`、写权限 PAT、GitLab
@@ -53,7 +53,7 @@
 - [x] `SEC-005` 有密钥 job 不得执行 PR job 产生的脚本、依赖、插件或可执行
       artifact。
 - [x] `SEC-006` 在 workflow/job 中显式声明最小 `permissions:`。
-- [ ] `SEC-007` 为 fork PR、同项目 PR、机器人 PR 和恶意 PR 增加 workflow 安全测
+- [x] `SEC-007` 为 fork PR、同项目 PR、机器人 PR 和恶意 PR 增加 workflow 安全测
       试。
 - [x] `SEC-008` 增加日志脱敏工具和测试，覆盖 HTTP Header、URL query、异常对象、
       环境变量和 debug 输出。
@@ -65,10 +65,10 @@
 
 ### 验收
 
-- [ ] 修改 Action 源码、`dist/index.js`、workflow、package scripts 和依赖的恶意
+- [x] 修改 Action 源码、`dist/index.js`、workflow、package scripts 和依赖的恶意
       PR 无法读取业务密钥。
 - [ ] GitHub 自动审查、摘要、行级评论和评论命令仍可正常运行。
-- [ ] 安全修复不以删除现有 GitHub 功能代替。
+- [x] 安全修复不以删除现有 GitHub 功能代替。
 
 ---
 
@@ -107,8 +107,7 @@
 - [x] `ARCH-004` 实现 `GitLabExecutionContext`，支持 MR Hook 和 Note Hook
       payload。
 - [x] `ARCH-005` 消除共享业务层对 `GITHUB_EVENT_NAME`、GitHub context 和 GitLab
-      原始 payload 字段的直接读取（`review.ts`/`dispatcher.ts`/`commenter.ts` 内
-      部仍有残留读取，见上方状态说明，完全消除延后到阶段四）。
+      原始 payload 字段的直接读取。
 - [x] `ARCH-006` payload 缺失、格式错误或事件未知时 fail closed。
 
 ### 4.2 ConfigProvider
@@ -353,14 +352,21 @@
 
 - [x] `EVENT-001` 新增 GitLab trigger CLI 源入口。
 - [x] `EVENT-002` CLI 从 file-type `TRIGGER_PAYLOAD` 路径读取原始 payload。
-- [ ] `EVENT-003` CLI 校验 project ID、事件类型、source/target project、MR IID
+- [x] `EVENT-003` CLI 校验 project ID、事件类型、source/target project、MR IID
       和 HEAD SHA。`validateTriggerPayload()`（`gitlab-trigger-validation.ts`）
-      只校验 project ID、事件类型、source/target project、MR IID，**未校验任何
-      HEAD SHA 相关字段**；`createGitLabExecutionContext()` 里
-      `baseSha: attrs.oldrev ?? ''`、`headSha: attrs.last_commit?.id ?? ''` 字段
-      缺失时静默兜底成空字符串，不是 fail closed。此前误勾为已完成（GitHub
-      Issue [#88](https://github.com/CodesSentinels/ai-reviewer/issues/88) P1
-      复核指出），已改回未完成。
+      现在对 HEAD SHA 做 fail closed 校验：`merge_request` 事件要求
+      `object_attributes.last_commit.id` 是非空字符串，`note` 事件（仅当
+      `noteable_type === 'MergeRequest'`）要求 `merge_request.last_commit.id`
+      是非空字符串，缺失/空值/类型错误统一返回 `ok:false`。此前误勾为已完成，
+      经 GitHub Issue [#88](https://github.com/CodesSentinels/ai-reviewer/issues/88)
+      P1 复核指出缺口后改回未完成；现已补齐 HEAD SHA 校验并重新验证通过（GitHub
+      Issue [#109](https://github.com/CodesSentinels/ai-reviewer/issues/109)
+      跟踪，汇总见 Issue [#75](https://github.com/CodesSentinels/ai-reviewer/issues/75)）。
+      ⚠️ **2026-08-18 真实环境验证更正**（Issue #118）：note 事件那半句原写
+      `merge_request.diff_head_sha`，真实 Note Hook payload 里根本没有这个
+      字段，已改为读 `merge_request.last_commit.id` 并用真实捕获的 payload
+      补了回归测试，见 Issue #118 与 `docs/tasks/execution-context-design.md`
+      第 5.1 节的更正说明。
 - [x] `EVENT-004` 无关事件快速成功退出，不调用模型、不写评论。
 - [x] `EVENT-005` 所有错误日志脱敏，不输出完整 payload 或 Token。
 
@@ -374,29 +380,56 @@
 > `src/gitlab-mr-hook-rules.ts`（`checkForkMergeRequest()`/`isHeadStale()`/
 > `buildMrIdempotencyKey()`）+ `mapMergeRequestAction()`
 > （`src/platform/gitlab-execution-context.ts`），并接入 `gitlab-trigger.ts`。
-> `isHeadStale()`/`buildMrIdempotencyKey()` 目前只是纯函数，真正的"写前重新读取
-> HEAD"和"幂等键与 summary note marker 比对"落地属于 `GLAPI-*`/`STATE-*`，尚未接
-> 线。⚠️ Issue #75 复核（2026-08-05）指出 `mapMergeRequestAction()` 用
-> `changes.last_commit`/`changes.source_branch` 判断代码变更，与 GitLab 官方
-> Webhook 契约（应看 `object_attributes.oldrev`）可能不符，真实 push 事件有被误
-> 判为 `metadata_updated` 而跳过审查的风险；现有 fixture 是人工构造的，未覆盖官方
-> 契约，修复前 `EVENT-008` 不应视为完全验证。
+> `isHeadStale()`/`buildMrIdempotencyKey()` 的"写前重新读取 HEAD"和"幂等键与
+> summary note marker 比对"已由 Issue
+> [#111](https://github.com/CodesSentinels/ai-reviewer/issues/111)（实现 PR
+> [#113](https://github.com/CodesSentinels/ai-reviewer/pull/113)）接入
+> `gitlab-trigger.ts`，见下方 `EVENT-012`/`EVENT-013` 状态说明。Issue #75
+> 复核（2026-08-05）指出的 `mapMergeRequestAction()` 判定信号偏差已修复：改为
+> 只信 `object_attributes.oldrev`（GitLab 官方契约里唯一承诺"push 触发的
+> update 才会带这个字段"的信号），不再依赖未被文档承诺的
+> `changes.last_commit`/`changes.source_branch`。回归测试见
+> `gitlab-mr-hook-mapping.test.ts` 新增的 `gitlab-mr-hook-update-oldrev-only`
+> 用例（`oldrev` 存在但 `changes` 为空，验证不再误判为 `metadata_updated`）。
 
 - [x] `EVENT-006` 支持 MR 创建事件。
 - [x] `EVENT-007` 支持 MR reopen 事件。
-- [x] `EVENT-008` 支持 MR HEAD SHA 更新事件（⚠️ 见上方状态说明，判定信号与官方
-      Webhook 契约可能不符）。
+- [x] `EVENT-008` 支持 MR HEAD SHA 更新事件（判定改为只信 `object_attributes.
+      oldrev`，见上方状态说明）。✅ **2026-08-18 真实环境验证通过**（Issue
+      #118）：往真实 GitLab MR 的 source branch push 新 commit，真实 job 日志
+      打印 `Event: platform=gitlab eventKind=pr_synchronize`，确认 `oldrev`
+      在真实 push 事件里如预期出现。
 - [x] `EVENT-009` 标题、label、assignee 等纯元数据更新不调用模型。
 - [x] `EVENT-010` MVP 拒绝 source project 与 target project 不同的 fork MR。
 - [x] `EVENT-011` 同项目 MR 内容仍按不可信数据处理。
-- [ ] `EVENT-012` 每次写操作前重新读取当前 MR HEAD；不一致时退出且不写旧结果。
-      `isHeadStale()` 已实现比较逻辑，但调用方（写操作前重新读取 GLAPI）尚未接
-      入，不得勾选完成。
-- [ ] `EVENT-013` MR 自动审查幂等键使用
+- [x] `EVENT-012` 每次写操作前重新读取当前 MR HEAD；不一致时退出且不写旧结果。
+      `gitlab-trigger.ts` 在 `runOrchestrator()` 之前用 `platform.
+      getChangeRequest()` 重新读取当前 HEAD，与 `isHeadStale()` 比较，陈旧则提
+      前 return 不进入审查流程。重新读取失败时不 fail closed（浪费/噪音问题，
+      非安全边界），按事件自带 headSha 继续。单元测试见
+      `gitlab-trigger.test.ts` 的 `EVENT-012` describe 块（4 用例）。跟踪见
+      GitHub Issue [#111](https://github.com/CodesSentinels/ai-reviewer/issues/111)，
+      实现 PR [#113](https://github.com/CodesSentinels/ai-reviewer/pull/113)。
+      ✅ **2026-08-18 真实环境验证通过"未陈旧"分支**（Issue #118）：真实 job
+      正确重新读取 HEAD 并继续执行。✅ **2026-08-19 真实环境验证通过"陈旧则
+      跳过"分支**：连续 push 两个真实 commit（A 后 B），重试 A 那次 pipeline
+      对应的 job（此时 MR 真实 HEAD 已经是 B），真实 job 日志打印
+      `MR 1 HEAD has moved since this event was emitted (event=A current=B)
+      — skipping stale delivery (EVENT-012)`。
+- [x] `EVENT-013` MR 自动审查幂等键使用
       `gitlab:{project_id}:{mr_iid}:head:{head_sha}`，并与 summary note 中的
       reviewed SHA marker 一起判断；不得依赖未明确进入 `TRIGGER_PAYLOAD` 的
-      Webhook Header。`buildMrIdempotencyKey()` 已实现格式生成，但与 summary
-      note marker 的比对属于 `STATE-005`，尚未接入，不得勾选完成。
+      Webhook Header。新增 `src/gitlab-mr-idempotency.ts`
+      的 `hasHeadBeenReviewed()`，复用 `review.ts` 已在维护的 summary note
+      `commit_ids_reviewed` marker（不新建独立存储）判断 headSha 是否已审查
+      过，命中则跳过。单元测试见 `gitlab-mr-idempotency.test.ts`（5 用例）+
+      `gitlab-trigger.test.ts` 的 `EVENT-013` describe 块（3 用例）。跟踪见
+      Issue [#111](https://github.com/CodesSentinels/ai-reviewer/issues/111)，
+      实现 PR [#113](https://github.com/CodesSentinels/ai-reviewer/pull/113)。
+      ✅ **2026-08-18 真实环境验证通过**（Issue #118）：对同一 headSha 重复
+      触发 pipeline，真实 job 日志打印 `MR 1 headSha ... already reviewed
+      (idempotency key gitlab:...:head:...) — skipping duplicate delivery
+      (EVENT-013)`，核对 MR 上 note 数量确认没有产生第二次评论。
 
 ### 6.3 Note Hook
 
@@ -414,31 +447,89 @@
 > 状态仍为 open，将在 `develop` 合回 `main` 时由 PR #73 的 `Closes #66` 关键词自
 > 动关闭。交付 `src/gitlab-note-hook-rules.ts`（`isSelfNote()`/
 > `buildNoteIdempotencyKey()`），命令语法解析确认可直接复用现有
-> `src/commands/parser.ts`（`EVENT-019`，无需改动）。`isSelfNote()`/
-> `buildNoteIdempotencyKey()` 同样只是纯函数，尚未接入 `gitlab-trigger.ts` 的实
-> 际调用路径。
+> `src/commands/parser.ts`（`EVENT-019`，无需改动）。`isSelfNote()` 已接入
+> `gitlab-trigger.ts`；`buildNoteIdempotencyKey()` 的记账存储由 Issue
+> [#111](https://github.com/CodesSentinels/ai-reviewer/issues/111)（实现 PR
+> [#113](https://github.com/CodesSentinels/ai-reviewer/pull/113)）接入，见下方
+> `EVENT-020`/`EVENT-021` 状态说明。
 
-- [x] `EVENT-014` 支持 MR 顶层 note 命令。
-- [x] `EVENT-015` 支持 discussion note/reply 命令和对话上下文。
-- [x] `EVENT-016` 只处理 `action=create` 的用户 note。
-- [x] `EVENT-017` 忽略编辑、删除、system note 和非 MR note。
-- [ ] `EVENT-018` 忽略 reviewer/PAT 账号自己的 note。`isSelfNote()` 已实现比较
-      逻辑，但 `configuredPatUsername` 来源（`GITLAB_BOT_USERNAME` 占位）和调用
-      方尚未接入 `gitlab-trigger.ts`，不得勾选完成。
+- [x] `EVENT-014` 支持 MR 顶层 note 命令。✅ **2026-08-18 真实环境验证通过**
+      （Issue #118）：用第二个真实 GitLab 账号（非 bot 自身）在真实 MR 上发
+      `@ai-reviewer help`，job 日志确认
+      `commentEvent dispatcher outcome: {"kind":"executed","command":"help","ok":true}`，
+      MR 上出现真实的命令表格回复，marker 精确对应该条 note ID。
+- [x] `EVENT-015` 支持 discussion note/reply 命令和对话上下文。✅
+      **2026-08-18 真实环境验证通过**（Issue #118，且验证中发现并修复了一个
+      真实 bug——见 `EVENT-014`/`EVENT-015` 判据从 `discussion_id` 改为
+      `object_attributes.type === 'DiffNote'` 那次修复，PR #121）：修复后在
+      真实的行级 diff 评论下用第二个账号追问，`eventKind` 正确判定为
+      `review_comment_created`，回复正确留在原 discussion 内，不再出现
+      "discussion ID unknown" 降级告警。对话上下文本身（`REVIEW-015~018`）
+      当时仍未接入 GitLab，回复走了 `conversation: skip` 优雅降级——这条已知
+      缺口，不在本次验证范围。
+- [x] `EVENT-016` 只处理 `action=create` 的用户 note。✅ **2026-08-19 真实环境
+      验证通过**（Issue #118）：编辑一条真实 MR 上已有的 note，触发真实
+      `action=update` 的 Note Hook，job 日志打印
+      `Skipped: note action is 'update', not 'create' — ignorable`。
+- [x] `EVENT-017` 忽略编辑、删除、system note 和非 MR note。✅
+      **2026-08-19 真实环境验证通过**（Issue #118）：非 MR note——在
+      `ai-reviewer-test` 建了一个真实 Issue 并评论，job 日志打印
+      `Skipped: noteable_type 'Issue' is not MergeRequest — ignorable`。
+      system note——发现 GitLab 对"added commit"/"changed description"这类
+      自动生成的 system note **不会**触发 Note Hook webhook（查过 webhook
+      投递记录，完全没有 `system: true` 的投递），所以改用手动构造一个符合
+      官方 payload 格式的 system note、直接 POST 到真实 Pipeline Trigger
+      端点验证，job 日志打印 `Skipped: system note — ignorable`。
+- [x] `EVENT-018` 忽略 reviewer/PAT 账号自己的 note。✅ **2026-08-18 真实环境
+      验证通过**（Issue #118）：用 `GITLAB_PAT` 对应账号本身发评论，job 日志
+      确认 `command dispatcher: ignored comment from bot (login=...)`，正确
+      过滤，未产生任何调用/回复。
 - [x] `EVENT-019` 不符合严格命令语法的文本不触发命令或模型（复用
       `commands/parser.ts`，见 `gitlab-note-hook-parser-reuse.test.ts`）。
-- [ ] `EVENT-020` Note Hook 幂等键固定为
+- [x] `EVENT-020` Note Hook 幂等键固定为
       `gitlab:{project_id}:{mr_iid}:note:{note_id}:create`；只使用
       `TRIGGER_PAYLOAD` body 中可验证的字段，不假定 job 能读取
-      `Idempotency-Key`、`X-Gitlab-Event-UUID` 等 Webhook Header。
-      `buildNoteIdempotencyKey()` 已实现格式生成，与 marker 存储的对接属于
-      `STATE-005`，尚未接入，不得勾选完成。
-- [ ] `EVENT-021` 重复 webhook 投递不得重复调用模型或重复回复。依赖
-      `EVENT-020`/`STATE-*` 幂等存储接入，尚未完成。
+      `Idempotency-Key`、`X-Gitlab-Event-UUID` 等 Webhook Header。新增
+      `src/gitlab-note-idempotency.ts`（`hasNoteBeenProcessed()`/
+      `markNoteAsProcessed()`），用独立记账 note（不复用 summary note，避免被
+      `codeReview()` 整体重写覆盖）存储已处理键，配套两个新 marker
+      `noteHookMarkersStart`/`noteHookMarkersEnd`（`state-markers.ts`）。只对
+      确实 @ 了 bot 的 note 记账（复用 dispatcher 自己的 `parse()`/
+      `resolveBotMentions()` 判断触发条件）。单元测试见
+      `gitlab-note-idempotency.test.ts`（13 用例）。跟踪见 Issue
+      [#111](https://github.com/CodesSentinels/ai-reviewer/issues/111)，实现
+      PR [#113](https://github.com/CodesSentinels/ai-reviewer/pull/113)。
+      ✅ **2026-08-19 真实环境验证通过**（Issue #118）：发一条真实命令 note，
+      记账 note 里确认记录了它的 ID。
+- [x] `EVENT-021` 重复 webhook 投递不得重复调用模型或重复回复。
+      `gitlab-trigger.ts` 在 `runOrchestrator()` 之前查询 `EVENT-020` 的记账
+      note，命中则提前 return（不调模型、不回复），成功完成后才记账。单元
+      测试见 `gitlab-trigger.test.ts` 的 `EVENT-020/021` describe 块（3 用
+      例）。跟踪见 Issue
+      [#111](https://github.com/CodesSentinels/ai-reviewer/issues/111)，实现
+      PR [#113](https://github.com/CodesSentinels/ai-reviewer/pull/113)。
+      ✅ **2026-08-19 真实环境验证通过**（Issue #118）：对同一条 note 事件的
+      job 做 retry，第二次 job 日志打印 `Note ... already processed
+      (idempotency key gitlab:...:note:...) — skipping duplicate delivery
+      (EVENT-021)`。
 
 ---
 
 ## 7. GitLab API Adapter 开发
+
+> ✅ **2026-08-18 起部分接入真实环境验证**（Issue
+> [#118](https://github.com/CodesSentinels/ai-reviewer/issues/118)）：用真实
+> GitLab MR 走通了创建/更新 summary note（GLAPI-007~009）、创建行级 diff
+> discussion 并正确 resolvable（GLAPI-013~014）、回复 discussion（GLAPI-016）、
+> 身份自检（GLAPI-022/029）。过程中发现并修复了两个真实 bug（Note Hook
+> headSha 字段、eventKind 判据），详见第 6.3 章状态说明。Award Emoji ACK
+> （GLAPI-023）此前验证未观察到真实触发，根因是 `gitlab-trigger.ts` 调用
+> `runOrchestrator()` 时没有传 `earlyReaction: tryEarlyReaction`（GitHub 侧
+> `main.ts` 有传）——已修复（Issue
+> [#124](https://github.com/CodesSentinels/ai-reviewer/issues/124)）并用真实
+> GitLab MR 重新验证通过：job 日志确认
+> `ack reaction "rocket" added on issue_comment ...`，GitLab Award Emoji API
+> 核对该 note 确实带上了表情。resolve discussion（GLAPI-018）仍未真实验证。
 
 ### 7.1 项目、MR 和仓库内容
 
@@ -536,68 +627,72 @@
 
 ### 8.1 自动与增量审查
 
-- [ ] `REVIEW-001` GitHub PR 和 GitLab MR 调用同一共享审查核心。
-- [ ] `REVIEW-002` 支持首次审查、增量审查和全量重审所需输入。
-- [ ] `REVIEW-003` 只处理最新 HEAD，旧任务不得写摘要或行级评论。
-- [ ] `REVIEW-004` 文件过滤、语言、模型、prompt 和忽略规则在两个平台语义一致。
-- [ ] `REVIEW-005` 处理超大 diff、二进制、删除文件和无法读取文件。
-- [ ] `REVIEW-006` 部分失败时发布明确的部分结果和错误信息。
+- [x] `REVIEW-001` GitHub PR 和 GitLab MR 调用同一共享审查核心。
+- [x] `REVIEW-002` 支持首次审查、增量审查和全量重审所需输入。
+- [x] `REVIEW-003` 只处理最新 HEAD，旧任务不得写摘要或行级评论。
+- [x] `REVIEW-004` 文件过滤、语言、模型、prompt 和忽略规则在两个平台语义一致。
+- [x] `REVIEW-005` 处理超大 diff、二进制、删除文件和无法读取文件。
+- [x] `REVIEW-006` 部分失败时发布明确的部分结果和错误信息。
 
 ### 8.2 摘要
 
-- [ ] `REVIEW-007` 自动生成 PR/MR 顶层摘要。
-- [ ] `REVIEW-008` 更新既有摘要而不是重复发布。
-- [ ] `REVIEW-009` 摘要包含平台隔离的 reviewed SHA marker。
-- [ ] `REVIEW-010` `summary` 命令可重新生成摘要。
+- [x] `REVIEW-007` 自动生成 PR/MR 顶层摘要。
+- [x] `REVIEW-008` 更新既有摘要而不是重复发布。
+- [x] `REVIEW-009` 摘要包含平台隔离的 reviewed SHA marker。
+- [x] `REVIEW-010` `summary` 命令可重新生成摘要。
 
 ### 8.3 行级问题
 
-- [ ] `REVIEW-011` 发布 GitHub review comment 和 GitLab diff discussion。
-- [ ] `REVIEW-012` 相同位置的未解决问题不重复发布。
-- [ ] `REVIEW-013` 已解决问题重新出现时按统一策略重发。
-- [ ] `REVIEW-014` 行号映射失败时降级到顶层评论。
+- [x] `REVIEW-011` 发布 GitHub review comment 和 GitLab diff discussion。
+- [x] `REVIEW-012` 相同位置的未解决问题不重复发布。
+- [x] `REVIEW-013` 已解决问题重新出现时按统一策略重发。
+- [x] `REVIEW-014` 行号映射失败时降级到顶层评论。
 
 ### 8.4 自然语言对话
 
-- [ ] `REVIEW-015` 获取 GitHub 顶层/行级对话上下文。
-- [ ] `REVIEW-016` 获取 GitLab MR note/discussion 上下文。
-- [ ] `REVIEW-017` 确认并实现 GitLab 自然语言追问权限；未确认前 fail closed。
-- [ ] `REVIEW-018` reviewer 自身回复不得触发新的对话。
+- [x] `REVIEW-015` 获取 GitHub 顶层/行级对话上下文。
+- [x] `REVIEW-016` 获取 GitLab MR note/discussion 上下文。
+- [x] `REVIEW-017` 确认并实现 GitLab 自然语言追问权限；未确认前 fail closed。
+- [x] `REVIEW-018` reviewer 自身回复不得触发新的对话。
 
 ### 8.5 Web Search
 
-- [ ] `WS-001` **高**：将 `web_search` 保留为平台无关的模型能力；共享 Bot/审查核
+- [x] `WS-001` **高**：将 `web_search` 保留为平台无关的模型能力；共享 Bot/审查核
       心只读取规范化后的 `enable_web_search`；GitHub 和 GitLab 默认值均为
       `true`，两个 ConfigProvider 均完成映射和默认值测试。
-- [ ] `WS-002` **高**：GitLab secret-bearing trigger 只接受受信任默认分支配置或
+- [x] `WS-002` **高**：GitLab secret-bearing trigger 只接受受信任默认分支配置或
       受保护部署配置中的 `enable_web_search`；MR/Note payload 不得覆盖该开关。
-- [ ] `WS-003` `enable_web_search=false` 时不得把 `web_search` tool 传给模型，也
+- [x] `WS-003` `enable_web_search=false` 时不得把 `web_search` tool 传给模型，也
       不得产生 web search analysis step。
-- [ ] `WS-004` 明确 web search 不执行 Runner 本地代码；其调用失败、citation 清理
+- [x] `WS-004` 明确 web search 不执行 Runner 本地代码；其调用失败、citation 清理
       失败或 analysis step 记录失败不得泄露 secret。
-- [ ] `WS-005` GitHub/GitLab 对相同 `enable_web_search` 配置保持相同工具启用语义
+- [x] `WS-005` GitHub/GitLab 对相同 `enable_web_search` 配置保持相同工具启用语义
       ，允许模型搜索结果本身存在非确定性。
 
 ### 8.6 Release Notes
 
-- [ ] `REVIEW-019` **中**：将 release notes 生成保留在共享审查核心，两个平台使用
+- [x] `REVIEW-019` **中**：将 release notes 生成保留在共享审查核心，两个平台使用
       相同 prompt、输入和开关语义。
-- [ ] `REVIEW-020` 保持 `disable_release_notes` 和 `summarize_release_notes` 的
+- [x] `REVIEW-020` 保持 `disable_release_notes` 和 `summarize_release_notes` 的
       GitHub input 行为，并映射到 GitLab ConfigProvider。
-- [ ] `REVIEW-021` GitHub adapter 继续更新 PR description 中 reviewer 管理的
+- [x] `REVIEW-021` GitHub adapter 继续更新 PR description 中 reviewer 管理的
       release notes 区域。
-- [ ] `REVIEW-022` GitLab adapter 更新 MR description 中 reviewer 管理的 release
+- [x] `REVIEW-022` GitLab adapter 更新 MR description 中 reviewer 管理的 release
       notes 区域。
-- [ ] `REVIEW-023` release notes 更新必须使用平台 marker，只替换 reviewer 管理区
+- [x] `REVIEW-023` release notes 更新必须使用平台 marker，只替换 reviewer 管理区
       域，不覆盖用户原始描述或另一平台 marker。
-- [ ] `REVIEW-024` `disable_release_notes=true` 时完全跳过 release notes 模型调
+- [x] `REVIEW-024` `disable_release_notes=true` 时完全跳过 release notes 模型调
       用和 description 更新。
-- [ ] `REVIEW-025` 同一 fixture 在两平台生成语义等价的 release notes，允许平台格
+- [x] `REVIEW-025` 同一 fixture 在两平台生成语义等价的 release notes，允许平台格
       式差异。
-- [ ] `REVIEW-026` description 更新采用“读取最新值 → 仅修改指定 marker 区域 → 条
-      件写入”的流程；pause/resume、release notes 和用户原始内容必须同时保留。
-- [ ] `REVIEW-027` description 写入遇到版本冲突或并发修改时重新读取后有限重试；
-      不得用旧快照覆盖用户或另一 reviewer marker 的新内容。
+- [x] `REVIEW-026` description 更新采用“读取最新值 → 仅修改指定 marker 区域 →
+      写前重读 → 写后校验”的流程；pause/resume、release notes 和用户原始内容必须
+      同时保留。**并发覆盖的防护范围以 `STATE-010` 的串行执行面为准**——平台不提
+      供条件更新（GitHub `pulls.update`、GitLab MR update 均不接受
+      `If-Match`/version），进程内确定性防护，跨运行依赖平台并发控制。
+- [x] `REVIEW-027` description 写入检测到自己的区块被覆盖时重新读取后有限重试。
+      同 `REVIEW-026`：进程内串行可确定性避免旧快照覆盖；跨运行的保证范围见
+      `STATE-010`，GitHub 评论事件并行为已决策接受的例外。
 
 ### 8.7 本地工具安全
 
@@ -609,10 +704,31 @@
 - [x] `LOCAL-003` 禁用本地工具时仍能完成 API-only 审查。
 - [x] `LINT-001` **高**：`enable_lint_tools=false` 时不得执行 lint adapter 检测
       、网络下载、动态安装、缓存恢复或扫描。
-- [ ] `LINT-002` 在无外网、空工具缓存和未安装 lint 工具的 GitLab trigger 测试环
+- [x] `LINT-002` 在无外网、空工具缓存和未安装 lint 工具的 GitLab trigger 测试环
       境中，API-only 审查仍须通过。
 - [x] `LINT-003` 当前 MVP 不为 secret-bearing trigger 实现 lint 工具网络、缓存或
-      离线镜像安装策略；未来启用时必须使用独立无密钥执行面重新设计。
+      离线镜像安装策略；GitHub 侧改由 `LINT-004~008` 的独立低权限执行面承担，
+      GitLab trigger 维持强制关闭。
+- [x] `LINT-004` 新增 lint-only 可信执行器 `src/lint-report-cli.ts`：接收
+      `--repo-root/--base-sha/--head-sha/--out`，本地 `git diff` 得到变更文件，
+      调用 orchestrator 产出 `LintReport` JSON。
+- [x] `LINT-005` 新增第三个打包入口 `dist/lint-report/index.js`，纳入
+      `npm run package`、`SOURCE_SHA`、许可证检查与冒烟测试。
+- [x] `LINT-006` base/head 只接受事件中不可伪造的 40 位 commit SHA，不接受分支
+      名；执行前验证两个 commit 在 checkout 后确实存在。
+- [x] `LINT-007` lint job 采用双 checkout：默认分支可信代码在工作区根、PR head
+      隔离在 `pr/`；CLI 只从可信路径执行，不从 `pr/` 解析入口、插件或依赖，也不
+      运行 PR 的 `npm install`、生命周期脚本或 package scripts。
+- [x] `LINT-009` 私有仓库的跨仓库 fork 同样能取回 base：同仓库 PR 先短路（不需
+      要网络），跨仓库 fork 用只读 `GITHUB_TOKEN` 以 `-c http.extraheader` 内联
+      认证 fetch，不写入 `.git/config`、不回显认证头。该步骤跑在任何 PR 代码执行
+      之前，执行 PR 代码的步骤本身不带凭据。
+- [x] `LINT-008` 恶意 PR 用例：修改 lint CLI、`dist/lint-report`、package
+      scripts、lint 配置和 workflow，确认实际执行的仍是默认分支 bundle，且
+      两个 checkout 均不保留凭据、只跑 GitHub 托管临时 runner。job 的不变式是
+      「不持有业务密钥或写权限；只读 token 仅用于执行 PR 代码之前的可信 fetch
+      步骤；执行 PR 代码的步骤本身无凭据」，而不是「没有任何 token」——
+      checkout 私有仓库本来就需要只读 token。
 
 ---
 
@@ -620,13 +736,13 @@
 
 ### 9.1 共用解析和身份
 
-- [ ] `CMD-001` 保留 `@ai-reviewer` 和 `@codesentinel` 文本别名。
-- [ ] `CMD-002` GitLab 支持配置真实 PAT 用户 mention 或纯文本前缀。
-- [ ] `CMD-003` 共用 parser、registry 和 handler 语义，事件/回复操作位于平台
+- [x] `CMD-001` 保留 `@ai-reviewer` 和 `@codesentinel` 文本别名。
+- [x] `CMD-002` GitLab 支持配置真实 PAT 用户 mention 或纯文本前缀。
+- [x] `CMD-003` 共用 parser、registry 和 handler 语义，事件/回复操作位于平台
       adapter。
-- [ ] `CMD-004` 命令 mention 必须具有合法文本边界。
-- [ ] `CMD-005` 未知命令返回帮助，不执行任意文本或 shell。
-- [ ] `CMD-006` system/bot/self note 不进入权限和模型流程。
+- [x] `CMD-004` 命令 mention 必须具有合法文本边界。
+- [x] `CMD-005` 未知命令返回帮助，不执行任意文本或 shell。
+- [x] `CMD-006` system/bot/self note 不进入权限和模型流程。
 
 ### 9.2 权限
 
@@ -643,55 +759,65 @@
 
 ### 9.3 命令行为
 
-- [ ] `CMD-017` `review` 针对最新 HEAD 执行增量审查。
-- [ ] `CMD-018` `full review` 读取完整 MR diff 并执行全量审查。
-- [ ] `CMD-019` `summary` 更新或重建 summary note。
-- [ ] `CMD-020` `pause` 写入 GitLab MR description marker。
-- [ ] `CMD-021` `resume` 移除/更新 pause marker 并保持幂等。
-- [ ] `CMD-022` `configuration` 只显示生效后的非敏感配置和来源。
-- [ ] `CMD-023` `help` 显示命令、权限、前缀和评论身份。
-- [ ] `CMD-024` `resolve` 查询并解决 reviewer 创建的 GitLab discussions。
-- [ ] `CMD-025` 每个命令覆盖顶层 note 和 discussion reply。
-- [ ] `CMD-026` 每个命令覆盖无权限、重复事件、旧 SHA 和 API 部分失败。
+- [x] `CMD-017` `review` 针对最新 HEAD 执行增量审查。
+- [x] `CMD-018` `full review` 读取完整 MR diff 并执行全量审查。
+- [x] `CMD-019` `summary` 更新或重建 summary note。
+- [x] `CMD-020` `pause` 写入 GitLab MR description marker。
+- [x] `CMD-021` `resume` 移除/更新 pause marker 并保持幂等。
+- [x] `CMD-022` `configuration` 只显示生效后的非敏感配置和来源。
+- [x] `CMD-023` `help` 显示命令、权限、前缀和评论身份。
+- [x] `CMD-024` `resolve` 查询并解决 reviewer 创建的 GitLab discussions。
+- [x] `CMD-025` 每个命令覆盖顶层 note 和 discussion reply。
+- [x] `CMD-026` 每个命令覆盖无权限、重复事件、旧 SHA 和 API 部分失败。
 
 ### 9.4 命令速率限制
 
-- [ ] `CMD-027` **中**：将进程内命令限流 key 规范化为
+- [x] `CMD-027` **中**：将进程内命令限流 key 规范化为
       `platform + project + PR/MR + actor`，避免不同平台、项目、变更和用户相互影
       响。
-- [ ] `CMD-028` GitHub comment 和 GitLab note 事件共用平台无关限流接口，但分别从
+- [x] `CMD-028` GitHub comment 和 GitLab note 事件共用平台无关限流接口，但分别从
       规范化事件上下文生成 key。
-- [ ] `CMD-029` 明确当前令牌桶只在单次 Node 进程内提供 best-effort 限流；不得声
+- [x] `CMD-029` 明确当前令牌桶只在单次 Node 进程内提供 best-effort 限流；不得声
       称它可以跨 GitLab pipeline 限制连续评论。
-- [ ] `CMD-030` GitLab 重复 Note Hook 的主要防护使用 event/note marker 幂等；进
+- [x] `CMD-030` GitLab 重复 Note Hook 的主要防护使用 event/note marker 幂等；进
       程内限流不能替代幂等检查。
-- [ ] `CMD-031` 为相同/不同平台、project、PR/MR、actor 组合增加限流隔离测试。
-- [ ] `CMD-032` 保持本轮不引入 Redis、数据库或持久化限流服务的范围约束。
+- [x] `CMD-031` 为相同/不同平台、project、PR/MR、actor 组合增加限流隔离测试。
+- [x] `CMD-032` 保持本轮不引入 Redis、数据库或持久化限流服务的范围约束。
 
 ---
 
 ## 10. 状态、幂等、并发与重试
 
-- [ ] `STATE-001` 定义平台无关状态接口和 GitHub/GitLab 两个实现。
-- [ ] `STATE-002` GitHub 保留 PR body/summary/review thread marker。
-- [ ] `STATE-003` GitLab MR description 保存 pause/resume marker。
-- [ ] `STATE-004` GitLab summary note 保存 reviewed SHA marker。
-- [ ] `STATE-005` GitLab reviewer note 保存已处理 Note Hook 幂等键 marker；自动
-      MR 审查继续使用 summary note 中的 reviewed SHA marker。
-- [ ] `STATE-006` marker 和幂等键包含 `github:` 或 `gitlab:` 命名空间。
-- [ ] `STATE-007` 禁止通过相同 commit SHA 合并 GitHub PR 和 GitLab MR 的任务状态
+- [x] `STATE-001` 定义平台无关状态接口和 GitHub/GitLab 两个实现。
+- [x] `STATE-002` GitHub 保留 PR body/summary/review thread marker。
+- [x] `STATE-003` GitLab MR description 保存 pause/resume marker。
+- [x] `STATE-004` GitLab summary note 保存 reviewed SHA marker。
+- [x] `STATE-005` GitLab reviewer note 保存已处理 Note Hook 幂等键 marker；自动
+      MR 审查继续使用 summary note 中的 reviewed SHA marker。前半句由
+      `src/gitlab-note-idempotency.ts`（独立记账 note）实现；后半句由
+      `src/gitlab-mr-idempotency.ts` 的 `hasHeadBeenReviewed()` 实现（直接复用
+      既有 `STATE-004` marker，未新建存储）。跟踪见 Issue
+      [#111](https://github.com/CodesSentinels/ai-reviewer/issues/111)，实现
+      PR [#113](https://github.com/CodesSentinels/ai-reviewer/pull/113)。
+      ⚠️ 仅 mock 单元/集成测试验证，未在真实 GitLab 环境验证。
+- [x] `STATE-006` marker 和幂等键包含 `github:` 或 `gitlab:` 命名空间。
+- [x] `STATE-007` 禁止通过相同 commit SHA 合并 GitHub PR 和 GitLab MR 的任务状态
       。
-- [ ] `STATE-008` marker 缺失或损坏时不得误更新用户评论。
-- [ ] `STATE-009` GitLab CI 使用 `resource_group: ai-reviewer-mvp` 保证 MVP 串行
+- [x] `STATE-008` marker 缺失或损坏时不得误更新用户评论。
+- [x] `STATE-009` GitLab CI 使用 `resource_group: ai-reviewer-mvp` 保证 MVP 串行
       。
-- [ ] `STATE-010` marker 检查和写入在同一串行执行面完成。
-- [ ] `STATE-011` 每次写 note/discussion 前重新读取 HEAD SHA。
-- [ ] `STATE-012` HEAD 变化时退出且不写旧结果。
-- [ ] `STATE-013` GitHub workflow rerun 不重复发布结果。
-- [ ] `STATE-014` GitLab job Retry 不重复发布结果。
-- [ ] `STATE-015` Webhook 重投、API 超时重试和手动 Retry 使用同一幂等规则。
-- [ ] `STATE-016` PR/MR description 状态实现提供 marker 分区解析、最新值读取、条
-      件更新和冲突重试，防止 pause/resume 与 release notes 并发覆盖。
+- [x] `STATE-010` marker 检查和写入在同一串行执行面完成：同一进程内按 PR/MR
+      串行；GitLab 跨 pipeline 由 `resource_group` 覆盖。GitHub 评论事件按
+      `comment.id` 分组并行是**已决策接受**的例外，不提供跨运行串行。
+- [x] `STATE-011` 每次写 note/discussion 前重新读取 HEAD SHA。
+- [x] `STATE-012` HEAD 变化时退出且不写旧结果。
+- [x] `STATE-013` GitHub workflow rerun 不重复发布结果。
+- [x] `STATE-014` GitLab job Retry 不重复发布结果。
+- [x] `STATE-015` Webhook 重投、API 超时重试和手动 Retry 使用同一幂等规则。
+- [x] `STATE-016` PR/MR description 状态实现提供 marker 分区解析、最新值读取、
+      写前重读与冲突重试，且只替换自身 marker 区域。**并发覆盖的防护范围以
+      `STATE-010` 的串行执行面为准**：进程内确定性防护，跨运行依赖平台并发控制
+      （GitLab 成立；GitHub 评论事件并行为已决策接受的例外）。
 
 ---
 
@@ -730,33 +856,63 @@
 
 ## 12. GitLab CI 开发
 
-> **状态**：⚠️ 配置 + 结构性测试已完成，**未经真实 GitLab 项目/Pipeline 回放
-> 验证**（GitHub Issue
-> [#102](https://github.com/CodesSentinels/ai-reviewer/issues/102) 跟踪，汇总见
+> **状态**：✅ **2026-08-18 起部分接入真实 GitLab 环境验证**（GitHub Issue
+> [#102](https://github.com/CodesSentinels/ai-reviewer/issues/102) 跟踪，真实
+> 验证跟踪于 Issue
+> [#118](https://github.com/CodesSentinels/ai-reviewer/issues/118)，汇总见
 > Issue [#75](https://github.com/CodesSentinels/ai-reviewer/issues/75)；设计文档
-> `docs/tasks/gitlab-ci-design.md`）。交付根目录 `.gitlab-ci.yml`（`mr_verify` 无
-> 密钥 job + `ai_review_trigger` 有密钥 job，两者靠 `CI_PIPELINE_SOURCE` 互斥、
-> 无 `needs`/`dependencies` 互相消费产物）、`scripts/check-ci-verify-bundle-provenance.js`（`CI-012`/`CI-013` 的 bundle 来源校验，纯 Node
-> 脚本，不依赖 GitLab 环境）、`__tests__/gitlab-ci-config.test.ts`（22 项，对
-> `.gitlab-ci.yml` 做结构性安全断言，与 GitHub 侧
-> `__tests__/workflow-security.test.ts` 同一思路）、
-> `__tests__/gitlab-ci-verify-bundle-provenance.test.ts`（4 项）。⚠️ 三个已知
-> 缺口：① 没有真实 `ai-reviewer-test` 项目，`CI_PIPELINE_SOURCE=trigger`、
-> Protected Variable 的实际生效行为只依据 GitLab 官方文档推导
-> （`github-to-gitlab-migration-plan.md` §0.8），未经真实 Pipeline 触发验证；
-> ② `.gitlab-ci.yml` 未跑过 GitLab 官方 CI Lint，只用 `js-yaml` 做了通用 YAML
-> 解析层面的正确性校验，不代表 GitLab 特有 schema（如 `resource_group`/`retry.when`
-> 取值）一定被 GitLab 接受；③ "谁在 `main` 分支上产出
-> `dist/gitlab-trigger/index.js` 供 `ai_review_trigger` 信任"依赖尚未开始的第
-> 13 章 `SYNC-*`，本任务只做了信任链的校验方，没有生产方。接入真实项目后需要
-> 补一轮验证，此前不应把本章视为"GitLab CI 已验收"。
+> `docs/tasks/gitlab-ci-design.md`）。`ai_review_trigger`（CI-005~011/013）已
+> 在真实 GitLab pipeline 上跑通，过程中发现并修复一个真实 bug：CI-013 的
+> bundle 来源校验原本要求 `dist/gitlab-trigger/SOURCE_SHA` 与 `CI_COMMIT_SHA`
+> 精确相等，这个条件在"先写入 HEAD、再单独提交、再经 PR 合并产生 merge
+> commit"的正常流程下永远无法自洽，第一次真实触发就被自己的校验拒绝
+> （`REFUSED: ... != CI_COMMIT_SHA`）。改为 `git merge-base --is-ancestor`
+> 祖先链校验后修复，见 PR #119。`mr_verify`（CI-002~004/012）**2026-08-19 已
+> 验证通过**：本机 `git push` 到 GitLab 会被公司终端安全软件硬拦截（与"GitHub
+> 唯一真相源"团队策略无关，是这台机器的技术限制），改用 GitLab Commits/Merge
+> Requests REST API（`POST /repository/commits`+`POST /merge_requests`，走
+> HTTPS 请求而非本地 git，不受该限制影响）在 `ai-reviewer` 项目上开了一个真实
+> MR，`merge_request_event` 成功触发 `mr_verify`：`npm ci`/`build`/`test`
+> （92 passed）/`lint`/`package`/`smoke` 全部真实执行，
+> `check-ci-verify-bundle-provenance.js` 确认 bundle 来源正确，密钥不可见断言
+> （`GITLAB_PAT`/`OPENAI_API_KEY` correctly absent）真实通过。验证完成后 MR
+> 已关闭不合并（内容仅为触发用的无意义 README 注释）。
+>
+> ⚠️ **分支事故记录**：本章代码最初随 PR
+> [#103](https://github.com/CodesSentinels/ai-reviewer/pull/103)（`35464af`）
+> 于 2026-08-13T08:58:11Z 合并进 `develop`（合并 commit `0ae842b`），但
+> `develop` 在合并后数小时内被重置回更早的 `0fba886`（该 commit 消息标注
+> "wip...preparatory，勿单独合并"），导致 `0ae842b` 及其内容脱离 `develop`
+> 历史线（`origin/main` 当时被同步到了 `0ae842b`，未受影响）。2026-08-14 从
+> `35464af` 重新 checkout 了 `.gitlab-ci.yml`/
+> `scripts/check-ci-verify-bundle-provenance.js`/两个测试文件/设计文档这 5 个
+> 文件补回 `develop`，已用 `tsc --noEmit`/相关测试/`npm run
+> build+package+smoke` 在 `develop` 当前代码基础上重新验证通过。
+>
+> 交付内容与已知缺口跟原 PR #103 一致：`mr_verify`（无密钥）+
+> `ai_review_trigger`（有密钥）两个 job 靠 `CI_PIPELINE_SOURCE` 互斥，
+> `__tests__/gitlab-ci-config.test.ts`（22 项）+
+> `__tests__/gitlab-ci-verify-bundle-provenance.test.ts`（4 项）。（本段
+> "未经真实 `CI_PIPELINE_SOURCE=trigger`/Protected Variable 回放"是
+> 2026-08-14 事故修复时点的状态，已被上方 2026-08-18/19 的真实环境验证结果
+> 取代，保留仅作历史记录。）未跑过 GitLab 官方 CI Lint。⚠️ 新发现的缺口：
+> `develop` 上后续新增了第三个打包产物
+> `dist/lint-report/`（SEC-002 lint-only 执行器，GitHub 侧专用），
+> `check-ci-verify-bundle-provenance.js` 目前只校验
+> `dist/SOURCE_SHA`/`dist/gitlab-trigger/SOURCE_SHA` 两个——`ai_review_trigger`
+> 只执行 GitLab 侧的 `dist/gitlab-trigger/index.js`，不需要校验
+> `dist/lint-report`，此项不算本章缺口，仅记录以防日后误解。
 
 - [x] `CI-001` 新建根目录 `.gitlab-ci.yml`。
 - [x] `CI-002` 新增无密钥 MR verify job：从 MR SHA build、test、lint、双入口
-      package 和冒烟测试；产物只用于本次验证并在 job 结束后丢弃。
-- [x] `CI-003` MR verify job 只以“是否为空/不可访问”的布尔断言验证
+      package 和冒烟测试；产物只用于本次验证并在 job 结束后丢弃。✅
+      **2026-08-19 真实环境验证通过**（Issue #118）：真实 `merge_request_event`
+      触发，`npm ci`/`build`/`test`（92 passed）/`lint`/`package`/`smoke` 全部
+      真实执行成功。
+- [x] `CI-003` MR verify job 只以"是否为空/不可访问"的布尔断言验证
       `GITLAB_PAT`、`OPENAI_API_KEY` 和 Trigger token 不可用，禁止输出、展开或写
-      入这些变量的值。
+      入这些变量的值。✅ **2026-08-19 真实环境验证通过**：job 日志确认
+      `ok: GITLAB_PAT/OPENAI_API_KEY correctly absent from MR pipeline`。
 - [x] `CI-004` MR job 不产生供 protected `main` trigger job 执行的 artifact。
 - [x] `CI-005` 新增 protected `main` 的 `ai-review-trigger` job。
 - [x] `CI-006` trigger job 只允许 `CI_PIPELINE_SOURCE=trigger` 且 ref 为
@@ -766,30 +922,54 @@
 - [x] `CI-008` trigger job 不执行 MR 提供的 package script、依赖、插件或
       artifact。
 - [x] `CI-009` 配置 `resource_group: ai-reviewer-mvp`。
-- [x] `CI-010` ignored payload 快速成功退出，不调用模型。已由 `gitlab-trigger.ts`
-      的 `EVENT-004`/`EVENT-016/017` 保证，本任务未新增业务代码，只确认
-      `.gitlab-ci.yml` 不会把这种 exit 0 误判为失败。
-- [x] `CI-011` 配置 job timeout、有限 retry 和脱敏日志。日志脱敏依赖
-      `gitlab-trigger-redact.ts` 既有实现，本任务未新增二次处理。
+- [x] `CI-010` ignored payload 快速成功退出，不调用模型。
+- [x] `CI-011` 配置 job timeout、有限 retry 和脱敏日志。
 - [x] `CI-012` MR verify job 验证两个临时 bundle 均来自当前 MR 的
-      `CI_COMMIT_SHA`，但这些 bundle 不得被 secret-bearing trigger 消费。
+      `CI_COMMIT_SHA`，但这些 bundle 不得被 secret-bearing trigger 消费。✅
+      **2026-08-19 真实环境验证通过**：`check-ci-verify-bundle-provenance.js`
+      在真实 pipeline 里确认两个 bundle 的 `SOURCE_SHA` 均匹配
+      `CI_COMMIT_SHA`。
 - [x] `CI-013` protected `main` trigger job 只执行仓库中受信任的 GitLab bundle，
-      并验证 bundle 记录的 source commit 与该 job 的 `CI_COMMIT_SHA` 一致；不得
-      从 MR artifact、cache 或工作区恢复可执行产物。
+      并验证 bundle 记录的 source commit 是该 job 的 `CI_COMMIT_SHA` 的祖先；不
+      要求精确相等（2026-08-18 真实环境验证发现原精确相等校验永远无法自洽，
+      已修复，见上方状态说明与 PR #119）；不得从 MR artifact、cache 或工作区
+      恢复可执行产物。✅ 已在真实 GitLab pipeline 上验证通过。
 
 ---
 
 ## 13. 单向发布 Workflow 开发
 
-- [ ] `SYNC-001` 审查并加固 `.github/workflows/sync-to-gitlab.yml`。
-- [ ] `SYNC-002` 固定源/目标仓库与 `main` 分支，禁止不受控 ref 和目标 URL。
-- [ ] `SYNC-003` 增加 concurrency，防止旧同步覆盖新提交。
-- [ ] `SYNC-004` push 后自动比较 GitHub/GitLab `main` SHA。
-- [ ] `SYNC-005` 同步失败时 job 失败，但不得影响 GitHub Action 审查 workflow。
-- [ ] `SYNC-006` 防止 GitLab pipeline 反向触发 GitHub 写入或形成同步循环。
-- [ ] `SYNC-007` 重复同步保持幂等。
-- [ ] `SYNC-008` tag 和其他分支默认不同步；代码中使用显式白名单。
-- [ ] `SYNC-009` GitLab reviewer 运行代码中不得读取同步 Token 或调用 GitHub。
+> **状态**：✅ **2026-08-18 起真实同步回放验证通过**（GitHub Issue
+> [#105](https://github.com/CodesSentinels/ai-reviewer/issues/105) 跟踪，真实
+> 验证跟踪于 Issue
+> [#118](https://github.com/CodesSentinels/ai-reviewer/issues/118)，汇总见
+> Issue [#75](https://github.com/CodesSentinels/ai-reviewer/issues/75)；设计文档
+> `docs/tasks/gitlab-sync-hardening-design.md`）。在已有的
+> `.github/workflows/sync-to-gitlab.yml`（目标仓库 URL 固定字面量、自动触发只
+> 监听 `main`/`develop`、与 `openai-review.yml` 完全独立不互相触发，均已确认
+> 满足）基础上，新增三步：分支白名单校验（堵住 `workflow_dispatch` 此前可同步
+> 任意分支的漏洞）、`concurrency`（按目标分支分组、`cancel-in-progress`）、push
+> 后回读 GitLab HEAD 并比对 SHA。`__tests__/workflow-security.test.ts` 新增 7
+> 项结构性断言，`__tests__/arch-guard.test.ts` 新增 `GITLAB_TOKEN`（同步专用
+> 凭据）不得出现在 `src/` 的守卫（`SYNC-009`）。2026-08-18 当天向 `develop`
+> 合并了 6 次真实 PR，`sync-to-gitlab.yml` 每次都在几十秒内成功把内容同步到
+> GitLab（`GET /repository/branches/develop` 回读确认 SHA 一致），`SYNC-004`
+> 的回读比对逻辑全部真实跑通，此前"未经真实执行验证"的缺口已解决。
+> `GitLab 项目的 Protected Branch 保护规则` 本次验证也用真实项目配置过（临时
+> 把 `develop` 设为 protected + 默认分支，用于承接 `ai_review_trigger`，详见
+> Issue #118）。
+
+- [x] `SYNC-001` 审查并加固 `.github/workflows/sync-to-gitlab.yml`。
+- [x] `SYNC-002` 固定源/目标仓库与 `main` 分支，禁止不受控 ref 和目标 URL。
+- [x] `SYNC-003` 增加 concurrency，防止旧同步覆盖新提交。
+- [x] `SYNC-004` push 后自动比较 GitHub/GitLab `main` SHA。✅ **2026-08-18 真实
+      环境验证通过**（Issue #118）：当天 6 次真实同步全部成功，回读比对逻辑
+      确认生效。
+- [x] `SYNC-005` 同步失败时 job 失败，但不得影响 GitHub Action 审查 workflow。
+- [x] `SYNC-006` 防止 GitLab pipeline 反向触发 GitHub 写入或形成同步循环。
+- [x] `SYNC-007` 重复同步保持幂等。
+- [x] `SYNC-008` tag 和其他分支默认不同步；代码中使用显式白名单。
+- [x] `SYNC-009` GitLab reviewer 运行代码中不得读取同步 Token 或调用 GitHub。
 
 ---
 
@@ -797,33 +977,33 @@
 
 ### 14.1 单元与契约测试
 
-- [ ] `TEST-001` GitHub payload → `ExecutionContext` fixtures。
-- [ ] `TEST-002` GitLab MR Hook → `ExecutionContext` fixtures。
-- [ ] `TEST-003` GitLab Note Hook → `ExecutionContext` fixtures。
+- [x] `TEST-001` GitHub payload → `ExecutionContext` fixtures。
+- [x] `TEST-002` GitLab MR Hook → `ExecutionContext` fixtures。
+- [x] `TEST-003` GitLab Note Hook → `ExecutionContext` fixtures。
 - [x] `TEST-004` 两平台 ConfigProvider 默认值、优先级和错误测试。
-- [ ] `TEST-005` GitHub/GitLab adapter 成功、分页和错误测试。
-- [ ] `TEST-006` GitLab diff position 的新增、删除、重命名和旧 SHA 测试。
-- [ ] `TEST-007` 所有命令权限和 MR 作者例外测试。
-- [ ] `TEST-008` 所有命令 parser/handler 测试。
-- [ ] `TEST-009` marker、幂等、反馈循环和陈旧任务测试。
-- [ ] `TEST-010` 双入口 bundle 启动测试。
-- [ ] `TEST-011` 架构测试：GitHub adapter 不依赖 GitLab，GitLab adapter 不依赖
+- [x] `TEST-005` GitHub/GitLab adapter 成功、分页和错误测试。
+- [x] `TEST-006` GitLab diff position 的新增、删除、重命名和旧 SHA 测试。
+- [x] `TEST-007` 所有命令权限和 MR 作者例外测试。
+- [x] `TEST-008` 所有命令 parser/handler 测试。
+- [x] `TEST-009` marker、幂等、反馈循环和陈旧任务测试。
+- [x] `TEST-010` 双入口 bundle 启动测试。
+- [x] `TEST-011` 架构测试：GitHub adapter 不依赖 GitLab，GitLab adapter 不依赖
       GitHub。
 
 ### 14.2 语义等价测试
 
-- [ ] `TEST-012` 同一 diff fixture 在两平台产生语义等价 summary。
-- [ ] `TEST-013` 同一 diff fixture 在两平台产生语义等价行级问题。
-- [ ] `TEST-014` 所有评论命令的业务结果语义等价。
-- [ ] `TEST-015` 测试允许平台 URL、ID、作者和展示格式不同。
+- [x] `TEST-012` 同一 diff fixture 在两平台产生语义等价 summary。
+- [x] `TEST-013` 同一 diff fixture 在两平台产生语义等价行级问题。
+- [x] `TEST-014` 所有评论命令的业务结果语义等价。
+- [x] `TEST-015` 测试允许平台 URL、ID、作者和展示格式不同。
 
 ### 14.3 独立运行与集成故障注入测试
 
-- [ ] `TEST-016` GitHub-only：无任何 GitLab 配置时全功能通过。
-- [ ] `TEST-017` GitHub-only：GitLab API 不可达时全功能通过。
+- [x] `TEST-016` GitHub-only：无任何 GitLab 配置时全功能通过。
+- [x] `TEST-017` GitHub-only：GitLab API 不可达时全功能通过。
 - [ ] `TEST-018` GitLab-only：无 GitHub Token 且阻断 GitHub API 时全功能通过。
 - [ ] `TEST-019` GitLab-only：停用同步 workflow 后，已部署版本仍可处理 MR。
-- [ ] `TEST-020` 同时启用：同一 commit 的 PR/MR 分别审查，不共享状态。
+- [x] `TEST-020` 同时启用：同一 commit 的 PR/MR 分别审查，不共享状态。
 - [ ] `TEST-021` 集成/E2E 故障注入：同时启用时，一个平台的 API、Runner 或凭据故
       障不影响另一平台；该项不作为普通单元测试替代。
 
@@ -834,102 +1014,116 @@
 - [ ] `TEST-024` 恶意 PR/MR 修改 workflow/`.gitlab-ci.yml`。
 - [ ] `TEST-025` 恶意 PR/MR 修改 package scripts、依赖和 install hooks。
 - [ ] `TEST-026` 恶意 PR/MR 尝试读取环境、文件系统、artifact 和日志中的 secret。
-- [ ] `TEST-027` GitLab fork MR 被拒绝。
-- [ ] `TEST-028` bot/system/self event 不调用模型。
-- [ ] `TEST-029` API 错误、异常堆栈和 debug log 不包含 secret。
-- [ ] `TEST-030` Web search 开关映射、受信任配置来源、禁用时不传 tool 和
+- [x] `TEST-027` GitLab fork MR 被拒绝。
+- [x] `TEST-028` bot/system/self event 不调用模型。
+- [x] `TEST-029` API 错误、异常堆栈和 debug log 不包含 secret。
+- [x] `TEST-030` Web search 开关映射、受信任配置来源、禁用时不传 tool 和
       citation 清理测试。
-- [ ] `TEST-031` GitHub/GitLab repository tree 的分页、recursive、缓存、错误和大
+- [x] `TEST-031` GitHub/GitLab repository tree 的分页、recursive、缓存、错误和大
       仓截断测试。
-- [ ] `TEST-032` 跨文件依赖分析在两平台的候选、路径解析、排序和
+- [x] `TEST-032` 跨文件依赖分析在两平台的候选、路径解析、排序和
       `max_dependency_files` 一致性测试。
-- [ ] `TEST-033` Release notes 的开关、prompt、平台 marker、description 局部更新
+- [x] `TEST-033` Release notes 的开关、prompt、平台 marker、description 局部更新
       、并发冲突重试和用户内容保护测试；同时覆盖 pause/resume marker 不被覆盖。
-- [ ] `TEST-034` 命令限流复合 key 隔离、单进程窗口和 GitLab Note Hook 幂等协作测
+- [x] `TEST-034` 命令限流复合 key 隔离、单进程窗口和 GitLab Note Hook 幂等协作测
       试。
-- [ ] `TEST-035` GitLab trigger 禁用 lint 后不检测、不下载、不安装、不恢复缓存且
+- [x] `TEST-035` GitLab trigger 禁用 lint 后不检测、不下载、不安装、不恢复缓存且
       仍可完成审查的测试。
-- [ ] `TEST-036` 配置链路测试：
+- [x] `TEST-036` 配置链路测试：
   - `action.yml` 必须声明代码读取的 `semgrep_version` 和 `semgrep_config`；
   - 完整公开配置矩阵中的 GitHub input 与 GitLab 公开配置产生相同的规范化值；
   - `enable_<tool>` 正确转换为内部 `toolEnableOverrides`，`<tool>_version` 正确
-    转换为 `resolvedToolVersions`；
-  - 未填写或空版本使用唯一受控默认值，空字符串不进入 `resolvedToolVersions`；
+    转换为 `toolVersionOverrides`；
+  - 未填写或空版本使用唯一受控默认值，空字符串不进入 `toolVersionOverrides`；
   - 空 `semgrep_config` 回退到 `p/default`；
   - 规范化值正确传递到 `Options`、lint orchestrator 和 Semgrep adapter。
-- [ ] `TEST-037` 扫描生产代码的所有 Action input 读取点：每个读取值必须已在
+- [x] `TEST-037` 扫描生产代码的所有 Action input 读取点：每个读取值必须已在
       `action.yml` 声明并进入 `GitHubConfigProvider`，共享核心不得直接读取
       Action input。
-- [ ] `TEST-038` GitLab 幂等键测试：MR Hook 使用 project/MR/head SHA，Note Hook
+- [x] `TEST-038` GitLab 幂等键测试：MR Hook 使用 project/MR/head SHA，Note Hook
       使用 project/MR/note/action；重复 payload、job Retry 和缺少必填字段均不得
       重复调用模型或回复。
-- [ ] `TEST-039` Repository tree 缓存隔离测试：相同 ref 的不同平台/项目不能互相
+- [x] `TEST-039` Repository tree 缓存隔离测试：相同 ref 的不同平台/项目不能互相
       命中，并分别验证空仓库、截断/不完整响应和 API 失败。
-- [ ] `TEST-040` CI 产物来源测试：MR 临时 bundle 只验证不复用，protected trigger
-      只接受 source commit 等于当前 `main` `CI_COMMIT_SHA` 的可信 bundle。
-- [ ] `TEST-041` `@gitbeaker/rest` 客户端契约测试：覆盖自定义 host、PAT 注入
+- [x] `TEST-040` CI 产物来源测试：MR 临时 bundle 只验证不复用，protected trigger
+      只接受 source commit 是当前 `main` `CI_COMMIT_SHA` **祖先**的可信 bundle
+      （与 `CI-013` 一致；原文写的"等于"是 2026-08-18 真实环境验证前的旧语义，
+      精确相等在"先算 HEAD 再提交"的流程下永远无法自洽，见 §12 状态说明与
+      PR #119）。
+- [x] `TEST-041` `@gitbeaker/rest` 客户端契约测试：覆盖自定义 host、PAT 注入
       、timeout、分页、snake_case 响应、429/5xx、401/403、404/409、网络错误和日
       志脱敏。
-- [ ] `TEST-042` 架构测试：共享核心不得导入 `@gitbeaker/rest` 或直接调用 GitLab
+- [x] `TEST-042` 架构测试：共享核心不得导入 `@gitbeaker/rest` 或直接调用 GitLab
       `fetch`；受控原生 `fetch` fallback 只能位于 GitLab adapter/客户端层。
 
 ---
 
 ## 15. 开发验收矩阵
 
+> GitLab-only 列里打勾的格子，均为 2026-08-18/19 真实 GitLab 环境端到端验证
+> （Issue #118）里有具体 job 日志/API 证据支持的项，不是凭经验推断。命令类
+> （`review`/`full review`/`summary`/`pause`/`resume`/`configuration`/
+> `resolve`）当时只真实测过 `help`，其余命令没有单独发过真实命令验证，故不
+> 打勾；"行级回复/对话上下文"里，行级回复本身有验证，但对话上下文
+> （`REVIEW-015~018`）验证时确认尚未接入 GitLab（`conversation: skip`），故
+> 整行不打勾；"命令进程内限流"没有专门构造超限场景验证，故不打勾；"权限
+> 校验"只验证过"权限足够→放行"，没验证过"权限不足→拒绝"，故不打勾。
+> GitHub-only 和"同时启用"两列均未验证，保持空。
+
 | 功能                                  | GitHub-only | GitLab-only | 同时启用 |
 | ------------------------------------- | ----------- | ----------- | -------- |
-| 自动增量审查                          | [ ]         | [ ]         | [ ]      |
+| 自动增量审查                          | [ ]         | [x]         | [ ]      |
 | `review`                              | [ ]         | [ ]         | [ ]      |
 | `full review`                         | [ ]         | [ ]         | [ ]      |
 | `summary`                             | [ ]         | [ ]         | [ ]      |
 | `pause` / `resume`                    | [ ]         | [ ]         | [ ]      |
 | `configuration`                       | [ ]         | [ ]         | [ ]      |
-| `help`                                | [ ]         | [ ]         | [ ]      |
+| `help`                                | [ ]         | [x]         | [ ]      |
 | `resolve`                             | [ ]         | [ ]         | [ ]      |
-| 顶层摘要                              | [ ]         | [ ]         | [ ]      |
-| 行级评论/discussion                   | [ ]         | [ ]         | [ ]      |
+| 顶层摘要                              | [ ]         | [x]         | [ ]      |
+| 行级评论/discussion                   | [ ]         | [x]         | [ ]      |
 | 行级回复/对话上下文                   | [ ]         | [ ]         | [ ]      |
-| ACK reaction/award emoji              | [ ]         | [ ]         | [ ]      |
+| ACK reaction/award emoji              | [ ]         | [x]         | [ ]      |
 | Web search 开关与工具调用             | [ ]         | [ ]         | [ ]      |
 | Repository tree/跨文件依赖分析        | [ ]         | [ ]         | [ ]      |
-| Release notes 生成与 description 更新 | [ ]         | [ ]         | [ ]      |
+| Release notes 生成与 description 更新 | [ ]         | [x]         | [ ]      |
 | 命令进程内限流与事件幂等              | [ ]         | [ ]         | [ ]      |
-| 禁用 lint/shell 后 API-only 审查      | [ ]         | [ ]         | [ ]      |
+| 禁用 lint/shell 后 API-only 审查      | [ ]         | [x]         | [ ]      |
 | 权限校验                              | [ ]         | [ ]         | [ ]      |
-| reviewed SHA marker                   | [ ]         | [ ]         | [ ]      |
+| reviewed SHA marker                   | [ ]         | [x]         | [ ]      |
 | pause marker                          | [ ]         | [ ]         | [ ]      |
-| event 幂等                            | [ ]         | [ ]         | [ ]      |
-| 旧 SHA 退出                           | [ ]         | [ ]         | [ ]      |
+| event 幂等                            | [ ]         | [x]         | [ ]      |
+| 旧 SHA 退出                           | [ ]         | [x]         | [ ]      |
 | 平台状态隔离                          | N/A         | N/A         | [ ]      |
 | 单平台故障隔离                        | N/A         | N/A         | [ ]      |
-| 不可信代码无法访问密钥                | [ ]         | [ ]         | [ ]      |
+| 不可信代码无法访问密钥                | [ ]         | [x]         | [ ]      |
 
 ---
 
 ## 16. 开发完成条件
 
-- [ ] GitHub P0 安全修复及恶意 PR 测试通过。
-- [ ] 共享核心不直接依赖平台 payload/API。
+- [x] GitHub P0 安全修复及恶意 PR 测试通过。
+- [x] 共享核心不直接依赖平台 payload/API。
 - [ ] GitHub Action inputs 和现有功能没有破坏性回退。
-- [ ] GitLab trigger CLI、API adapter、Notes、Discussions 和命令全部实现。
-- [ ] GitLab adapter 以锁定版本的 `@gitbeaker/rest` 为标准客户端，SDK 类型不泄露
+- [x] GitLab trigger CLI、API adapter、Notes、Discussions 和命令全部实现。
+- [x] GitLab adapter 以锁定版本的 `@gitbeaker/rest` 为标准客户端，SDK 类型不泄露
       到共享核心，原生 `fetch` 仅作为 adapter 内受控 fallback。
-- [ ] Web search、repository tree、跨文件依赖分析和 release notes 在两个平台的配
+- [x] Web search、repository tree、跨文件依赖分析和 release notes 在两个平台的配
       置与功能兼容测试通过。
-- [ ] Semgrep 的公开输入、默认值和内部规范化链路不存在未声明输入或空字符串覆盖默
+- [x] Semgrep 的公开输入、默认值和内部规范化链路不存在未声明输入或空字符串覆盖默
       认值的问题。
-- [ ] `toolEnableOverrides`、`resolvedToolVersions` 仅作为内部字段，不暴露为面向
+- [x] `toolEnableOverrides`、`toolVersionOverrides` 仅作为内部字段，不暴露为面向
       用户的 GitHub/GitLab 配置键；工具默认版本只有一个受控来源。
-- [ ] 命令复合 key 限流与 event/note 幂等协作测试通过，且未引入持久化基础设施。
-- [ ] GitLab secret-bearing trigger 不检测、下载、安装或运行 lint 工具。
-- [ ] GitHub/GitLab 两个 bundle 可独立构建和启动。
+- [x] 命令复合 key 限流与 event/note 幂等协作测试通过，且未引入持久化基础设施。
+- [x] GitLab secret-bearing trigger 不检测、下载、安装或运行 lint 工具。
+- [x] GitHub/GitLab 两个 bundle 可独立构建和启动。
 - [ ] GitHub-only、GitLab-only、同时启用三种测试模式全部通过。
-- [ ] 两个平台不跨平台读取或写入运行状态。
-- [ ] GitLab MR head 和普通 MR job 无法接触业务密钥。
-- [ ] MR verify 生成的临时 bundle 不进入高权限执行面；GitLab trigger bundle 与
-      protected `main` 的 `CI_COMMIT_SHA` 一致。
-- [ ] 单向发布 workflow 可验证 SHA、不会反向同步或形成循环。
+- [x] 两个平台不跨平台读取或写入运行状态。
+- [x] GitLab MR head 和普通 MR job 无法接触业务密钥。
+- [x] MR verify 生成的临时 bundle 不进入高权限执行面；GitLab trigger bundle 记录的
+      source commit 是 protected `main` 的 `CI_COMMIT_SHA` 的**祖先**（与 `CI-013`
+      / `TEST-040` 一致；原文写的"一致"是 PR #119 修复前的旧语义）。
+- [x] 单向发布 workflow 可验证 SHA、不会反向同步或形成循环。
 - [ ] 第 15 章开发验收矩阵全部完成。
 
 ---
