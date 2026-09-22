@@ -53,8 +53,8 @@ mr_verify:
         fi
       done
       echo "ok: GITLAB_PAT/OPENAI_API_KEY correctly absent from MR pipeline"
-  artifacts:
-    expire_in: 1h
+  # artifacts:
+  #   expire_in: 1h
 
 # CI-005~009/013：有密钥，只在通过 Pipeline Trigger API、针对 protected
 # default branch 发起时运行；只执行仓库里已受信任的 bundle，不 build、
