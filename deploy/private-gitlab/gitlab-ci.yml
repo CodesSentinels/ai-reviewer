@@ -1,0 +1,47 @@
+# ============================================================================
+# 本仓库内容由发布流程整体写入，请勿手动修改。
+# 手动改动会让下面的完整性自检失败（审查暂停），并在下次发布时被发现。
+# ============================================================================
+#
+# 唯一的 job：业务项目 Webhook → Pipeline Trigger API → ai_review_trigger。
+# 本仓库没有源码，也不接受 MR：不存在构建、测试或执行 MR 代码的 job。
+#
+# GITLAB_PAT / OPENAI_API_KEY 必须配置为 Protected + Masked + Hidden，
+# 只对受保护的默认分支可见。
+
+stages: [review]
+
+default:
+  image: node:24
+  # 只由打了 ai-reviewer 标签的 Runner 执行；更换机器时用同一标签注册新 Runner 即可
+  tags: [ai-reviewer]
+
+ai_review_trigger:
+  stage: review
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "trigger" && $CI_COMMIT_REF_NAME == $CI_DEFAULT_BRANCH'
+  # 显式不下载任何 artifact（省略时 GitLab 默认下载此前所有 stage 的 artifact）
+  dependencies: []
+  variables:
+    GIT_STRATEGY: clone
+    GIT_DEPTH: '1'
+  resource_group: ai-reviewer-mvp
+  timeout: 10m
+  retry:
+    max: 1
+    when: [runner_system_failure, stuck_or_timeout_failure]
+  script:
+    # 运行前自检：仓库内容必须与发布时写入的 SHA256SUMS 完全一致——
+    # 既不能有被改过的文件（sha256sum -c），也不能有清单外多出来的文件。
+    # 不一致说明有人绕过发布流程手改了仓库，拒绝用这份代码去碰业务项目。
+    - sha256sum --check --strict --quiet SHA256SUMS
+    - |
+      git ls-files | grep -vxF SHA256SUMS | LC_ALL=C sort > /tmp/tracked-files
+      sed -E 's/^[0-9a-f]{64}  //' SHA256SUMS | LC_ALL=C sort > /tmp/listed-files
+      if ! cmp -s /tmp/tracked-files /tmp/listed-files; then
+        echo "REFUSED: repository files differ from SHA256SUMS (manual change?):" >&2
+        diff /tmp/listed-files /tmp/tracked-files >&2 || true
+        exit 1
+      fi
+      echo "ok: repository matches SHA256SUMS ($(wc -l < /tmp/listed-files) files, $(node -p "require('./VERSION.json').tag"))"
+    - node dist/gitlab-trigger/index.js
