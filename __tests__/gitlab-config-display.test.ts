@@ -6,6 +6,8 @@
  *   评论都在 GitLab 上对用户可见
  */
 import {describe, expect, test, beforeEach, afterEach} from '@jest/globals'
+import * as fs from 'fs'
+import * as path from 'path'
 import {PathFilter} from '../src/options'
 import {GitLabConfigProvider} from '../src/platform/gitlab-config-provider'
 import {buildConfigurationMessage} from '../src/commands/handlers/configuration'
@@ -55,15 +57,20 @@ describe('GitLab 平台 API 并发上限变量', () => {
     expect(new GitLabConfigProvider().getOptions().githubConcurrencyLimit).toBe(3)
   })
 
-  test('新旧同时设置时新名优先', () => {
-    process.env.AI_REVIEWER_GITLAB_CONCURRENCY_LIMIT = '3'
+  test('不读取 GitHub 侧的变量名', () => {
     process.env.AI_REVIEWER_GITHUB_CONCURRENCY_LIMIT = '9'
-    expect(new GitLabConfigProvider().getOptions().githubConcurrencyLimit).toBe(3)
+    expect(new GitLabConfigProvider().getOptions().githubConcurrencyLimit).toBe(4)
   })
 
-  test('只设置旧名时兼容回退', () => {
-    process.env.AI_REVIEWER_GITHUB_CONCURRENCY_LIMIT = '9'
-    expect(new GitLabConfigProvider().getOptions().githubConcurrencyLimit).toBe(9)
+  // 读取的变量名会作为字符串字面量打进交付到 GitLab 的 bundle：不得带 GITHUB
+  test('GitLab 配置源码中读取的变量名都不含 GITHUB', () => {
+    const src = fs.readFileSync(
+      path.resolve(__dirname, '../src/platform/gitlab-config-provider.ts'),
+      'utf8'
+    )
+    const keys = [...src.matchAll(/['"`](AI_REVIEWER_[A-Z0-9_]+)['"`]/g)].map(m => m[1])
+    expect(keys.length).toBeGreaterThan(20)
+    expect(keys.filter(k => k.includes('GITHUB'))).toEqual([])
   })
 })
 

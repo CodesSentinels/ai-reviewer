@@ -132,14 +132,8 @@ export class GitLabConfigProvider implements ConfigProvider {
       envIntStr('AI_REVIEWER_OPENAI_RETRIES', CONFIG_DEFAULTS.openaiRetries),
       envIntStr('AI_REVIEWER_OPENAI_TIMEOUT_MS', CONFIG_DEFAULTS.openaiTimeoutMS),
       envIntStr('AI_REVIEWER_OPENAI_CONCURRENCY_LIMIT', CONFIG_DEFAULTS.openaiConcurrencyLimit),
-      // 平台 API 并发上限。GitLab 侧用自己的变量名；旧名 AI_REVIEWER_GITHUB_CONCURRENCY_LIMIT
-      // 仅作兼容回退（早期 GitLab 部署沿用了 GitHub 侧的键名）
-      envIntStr(
-        envStr('AI_REVIEWER_GITLAB_CONCURRENCY_LIMIT') != null
-          ? 'AI_REVIEWER_GITLAB_CONCURRENCY_LIMIT'
-          : 'AI_REVIEWER_GITHUB_CONCURRENCY_LIMIT',
-        CONFIG_DEFAULTS.githubConcurrencyLimit
-      ),
+      // 平台 API 并发上限：GitLab 侧用本平台的变量名（Options 字段名沿用历史命名）
+      envIntStr('AI_REVIEWER_GITLAB_CONCURRENCY_LIMIT', CONFIG_DEFAULTS.githubConcurrencyLimit),
       envStr('AI_REVIEWER_OPENAI_BASE_URL') ?? CONFIG_DEFAULTS.apiBaseUrl,
       envStr('AI_REVIEWER_LANGUAGE') ?? CONFIG_DEFAULTS.language,
       envBool('AI_REVIEWER_ENABLE_DEPENDENCY_ANALYSIS') ?? CONFIG_DEFAULTS.enableDependencyAnalysis,
