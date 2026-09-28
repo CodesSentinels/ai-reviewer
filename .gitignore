@@ -134,3 +134,6 @@ event.json
 # Visualizer build output
 tools/review-visualizer/dist/
 tools/review-visualizer/node_modules/
+# 私有云发布：中间产物与本地连接配置（含 token），都不进仓库
+.publish/
+.private-gitlab.env
