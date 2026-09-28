@@ -513,7 +513,7 @@ const CONFIG_MATRIX: MatrixEntry[] = [
   {
     field: 'githubConcurrencyLimit',
     input: 'github_concurrency_limit',
-    gitlabEnv: 'AI_REVIEWER_GITHUB_CONCURRENCY_LIMIT',
+    gitlabEnv: 'AI_REVIEWER_GITLAB_CONCURRENCY_LIMIT',
     value: '6',
     expected: 6
   },

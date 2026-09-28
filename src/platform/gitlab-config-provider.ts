@@ -132,7 +132,8 @@ export class GitLabConfigProvider implements ConfigProvider {
       envIntStr('AI_REVIEWER_OPENAI_RETRIES', CONFIG_DEFAULTS.openaiRetries),
       envIntStr('AI_REVIEWER_OPENAI_TIMEOUT_MS', CONFIG_DEFAULTS.openaiTimeoutMS),
       envIntStr('AI_REVIEWER_OPENAI_CONCURRENCY_LIMIT', CONFIG_DEFAULTS.openaiConcurrencyLimit),
-      envIntStr('AI_REVIEWER_GITHUB_CONCURRENCY_LIMIT', CONFIG_DEFAULTS.githubConcurrencyLimit),
+      // 平台 API 并发上限：GitLab 侧用本平台的变量名（Options 字段名沿用历史命名）
+      envIntStr('AI_REVIEWER_GITLAB_CONCURRENCY_LIMIT', CONFIG_DEFAULTS.githubConcurrencyLimit),
       envStr('AI_REVIEWER_OPENAI_BASE_URL') ?? CONFIG_DEFAULTS.apiBaseUrl,
       envStr('AI_REVIEWER_LANGUAGE') ?? CONFIG_DEFAULTS.language,
       envBool('AI_REVIEWER_ENABLE_DEPENDENCY_ANALYSIS') ?? CONFIG_DEFAULTS.enableDependencyAnalysis,
@@ -208,14 +209,17 @@ export class GitLabConfigProvider implements ConfigProvider {
     log(`  review_simple_changes: ${opts.reviewSimpleChanges}`)
     log(`  review_comment_lgtm: ${opts.reviewCommentLGTM}`)
     log(`  path_filters: ${opts.pathFilters}`)
-    log(`  system_message: ${opts.systemMessage}`)
+    // 只标注是否自定义，不打印原文：默认 prompt 面向双平台书写，原文进 job 日志没有排障价值
+    log(
+      `  system_message: ${envStr('AI_REVIEWER_SYSTEM_MESSAGE') != null ? '(custom)' : '(default)'}`
+    )
     log(`  openai_light_model: ${opts.openaiLightModel}`)
     log(`  openai_heavy_model: ${opts.openaiHeavyModel}`)
     log(`  openai_model_temperature: ${opts.openaiModelTemperature}`)
     log(`  openai_retries: ${opts.openaiRetries}`)
     log(`  openai_timeout_ms: ${opts.openaiTimeoutMS}`)
     log(`  openai_concurrency_limit: ${opts.openaiConcurrencyLimit}`)
-    log(`  github_concurrency_limit: ${opts.githubConcurrencyLimit}`)
+    log(`  gitlab_concurrency_limit: ${opts.githubConcurrencyLimit}`)
     log(`  summary_token_limits: ${opts.lightTokenLimits.string()}`)
     log(`  review_token_limits: ${opts.heavyTokenLimits.string()}`)
     log(`  api_base_url: ${opts.apiBaseUrl}`)

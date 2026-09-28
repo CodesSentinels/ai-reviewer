@@ -260,6 +260,12 @@ export class PathFilter {
     // 通过条件：（不存在包含规则 或 匹配了包含规则）且 未被排除
     return (!inclusionRuleExists || included) && !excluded
   }
+
+  /** 日志展示：还原成配置时的写法（排除规则带 `!`），没有规则时显示 `(none)` */
+  toString(): string {
+    if (this.rules.length === 0) return '(none)'
+    return this.rules.map(([rule, exclude]) => (exclude ? `!${rule}` : rule)).join(', ')
+  }
 }
 
 /**
