@@ -37,6 +37,8 @@ interface Row {
   value: (o: Options) => unknown
   /** 该项在某些平台被强制覆盖时的说明 */
   forcedOn?: Partial<Record<Platform, string>>
+  /** 某平台上的配置键与 `key` 不同时的覆盖（例如平台 API 并发上限各用本平台的名字） */
+  keyOn?: Partial<Record<Platform, string>>
 }
 
 const ROWS: Row[] = [
@@ -49,7 +51,11 @@ const ROWS: Row[] = [
   {key: 'openai_light_model', value: o => o.openaiLightModel},
   {key: 'openai_heavy_model', value: o => o.openaiHeavyModel},
   {key: 'openai_concurrency_limit', value: o => o.openaiConcurrencyLimit},
-  {key: 'github_concurrency_limit', value: o => o.githubConcurrencyLimit},
+  {
+    key: 'github_concurrency_limit',
+    value: o => o.githubConcurrencyLimit,
+    keyOn: {gitlab: 'gitlab_concurrency_limit'}
+  },
   {key: 'enable_dependency_analysis', value: o => o.enableDependencyAnalysis},
   {key: 'max_dependency_files', value: o => o.maxDependencyFiles},
   {key: 'enable_web_search', value: o => o.enableWebSearch},
@@ -110,9 +116,10 @@ export function buildConfigurationMessage(
   lines.push(`| 自动审查状态 | \`${reviewState}\` | PR/MR 描述中的 reviewer 区块 |`)
 
   for (const row of ROWS) {
+    const key = row.keyOn?.[platform] ?? row.key
     const forced = row.forcedOn?.[platform]
-    const source = forced ?? describeValueSource(platform, row.key, env)
-    lines.push(`| ${row.key} | \`${String(row.value(options))}\` | ${source} |`)
+    const source = forced ?? describeValueSource(platform, key, env)
+    lines.push(`| ${key} | \`${String(row.value(options))}\` | ${source} |`)
   }
 
   lines.push('')
