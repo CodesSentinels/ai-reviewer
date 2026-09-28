@@ -8,6 +8,7 @@
 //   PRIVATE_GITLAB_PROJECT  项目 ID 或 group/project 路径
 //   PRIVATE_GITLAB_BRANCH   产物仓库默认分支
 //   PRIVATE_GITLAB_TOKEN    api scope，对产物仓库有推送权限（建议只放环境变量）
+//   PRIVATE_GITLAB_COMMIT_TITLE  可选，提交标题模板，须含 {tag}；实例有提交信息 push rule 时使用
 //
 // 步骤：校验工作区 → 测试 → 去注释编译 → 打包审查 bundle → 组装 → 冒烟测试 → 推送。
 // 全部中间产物在 .publish/（已 gitignore），不改动仓库里已跟踪的 dist/。
@@ -61,6 +62,8 @@ for (const key of ['PRIVATE_GITLAB_URL', 'PRIVATE_GITLAB_PROJECT', 'PRIVATE_GITL
   cfg[key] = process.env[key] || fileEnv[key] || ''
   if (cfg[key] === '') die(`${key} is not set (environment or .private-gitlab.env)`)
 }
+const commitTitle = process.env.PRIVATE_GITLAB_COMMIT_TITLE || fileEnv.PRIVATE_GITLAB_COMMIT_TITLE
+if (commitTitle) cfg.PRIVATE_GITLAB_COMMIT_TITLE = commitTitle
 
 // ---- 1. 工作区必须干净，且 HEAD 正是要发布的 tag
 step(`check worktree for ${tag}`)

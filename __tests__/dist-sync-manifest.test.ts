@@ -9,7 +9,9 @@ import * as path from 'path'
 import {
   SUMS_FILE,
   ManifestError,
+  DEFAULT_COMMIT_TITLE_TEMPLATE,
   checkAgainstManifest,
+  formatCommitTitle,
   formatSums,
   hashFiles,
   isClean,
@@ -85,6 +87,28 @@ describe('planSync', () => {
   test('内容完全一致时没有动作', () => {
     const m = new Map([['a', H1]])
     expect(planSync(m, new Map(m))).toEqual([])
+  })
+})
+
+describe('formatCommitTitle', () => {
+  test('默认模板', () => {
+    expect(formatCommitTitle(DEFAULT_COMMIT_TITLE_TEMPLATE, 'v1.2.3')).toBe(
+      'release: ai-reviewer v1.2.3'
+    )
+  })
+
+  test('自定义模板（满足实例 push rule，如带工单号前缀）', () => {
+    expect(formatCommitTitle('TICKET-1 release {tag}', 'v1.2.3')).toBe('TICKET-1 release v1.2.3')
+    expect(formatCommitTitle('chore(release): TICKET-1 {tag} / {tag}', 'v0.1.0')).toBe(
+      'chore(release): TICKET-1 v0.1.0 / v0.1.0'
+    )
+  })
+
+  test.each([
+    ['不含 {tag}', 'release'],
+    ['多行', 'release {tag}\nsecond line']
+  ])('%s → 抛错', (_label, template) => {
+    expect(() => formatCommitTitle(template, 'v1.2.3')).toThrow(ManifestError)
   })
 })
 

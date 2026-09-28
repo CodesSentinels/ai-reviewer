@@ -18,15 +18,18 @@
  *   PUBLISH_SOURCE_DIR       组装目录
  *   PUBLISH_DRY_RUN          true = 只读，打印计划
  *   PUBLISH_ALLOW_OVERWRITE  true = 覆盖产物仓库里的手动改动
+ *   PRIVATE_GITLAB_COMMIT_TITLE  可选，提交标题模板（含 {tag}），用于满足实例的 push rule
  */
 import {execFileSync} from 'child_process'
 import {mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync} from 'fs'
 import {tmpdir} from 'os'
 import {join} from 'path'
 import {
+  DEFAULT_COMMIT_TITLE_TEMPLATE,
   REQUIRED_DIST_FILES,
   SUMS_FILE,
   checkAgainstManifest,
+  formatCommitTitle,
   hashFiles,
   isClean,
   listFsFiles,
@@ -65,6 +68,7 @@ interface PublishConfig {
   sourceDir: string
   dryRun: boolean
   allowOverwrite: boolean
+  commitTitleTemplate: string
 }
 
 function loadConfig(): PublishConfig {
@@ -75,7 +79,9 @@ function loadConfig(): PublishConfig {
     token: requireEnv('PRIVATE_GITLAB_TOKEN'),
     sourceDir: requireEnv('PUBLISH_SOURCE_DIR'),
     dryRun: envFlag('PUBLISH_DRY_RUN'),
-    allowOverwrite: envFlag('PUBLISH_ALLOW_OVERWRITE')
+    allowOverwrite: envFlag('PUBLISH_ALLOW_OVERWRITE'),
+    commitTitleTemplate:
+      (process.env.PRIVATE_GITLAB_COMMIT_TITLE ?? '').trim() || DEFAULT_COMMIT_TITLE_TEMPLATE
   }
 }
 
@@ -201,6 +207,10 @@ async function run(): Promise<void> {
     }
     log(`planned changes (${actions.length}):\n${describeActions(actions)}`)
 
+    // 模板问题在 dry run 阶段就暴露，而不是等到真实提交被 push rule 拒绝
+    const title = formatCommitTitle(cfg.commitTitleTemplate, version.tag)
+    log(`commit title: ${title}`)
+
     if (cfg.dryRun) {
       log('dry run: not committing')
       return
@@ -214,7 +224,7 @@ async function run(): Promise<void> {
 
     // 5. 一次性提交
     const message = [
-      `release: ai-reviewer ${version.tag}`,
+      title,
       '',
       `revision: ${version.revision}`,
       drift.length > 0 ? `overwrote manual changes:\n${drift.join('\n')}` : ''
