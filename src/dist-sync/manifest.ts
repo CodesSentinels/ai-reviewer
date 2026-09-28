@@ -199,6 +199,23 @@ export interface DistVersion {
 
 const TAG_PATTERN = /^v\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?$/
 
+export const DEFAULT_COMMIT_TITLE_TEMPLATE = 'release: ai-reviewer {tag}'
+
+/**
+ * 发布提交的标题。产物仓库所在实例可能有 push rule 约束提交信息格式
+ * （例如要求带工单号），模板由本地配置提供，公开仓库里只保留中性默认值。
+ * 模板必须含 `{tag}`，且只能是单行。
+ */
+export function formatCommitTitle(template: string, tag: string): string {
+  if (!template.includes('{tag}')) {
+    throw new ManifestError('commit title template must contain {tag}')
+  }
+  if (/[\r\n]/.test(template)) {
+    throw new ManifestError('commit title template must be a single line')
+  }
+  return template.split('{tag}').join(tag).trim()
+}
+
 export function parseDistVersion(text: string): DistVersion {
   let raw: unknown
   try {
