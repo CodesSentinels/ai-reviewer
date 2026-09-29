@@ -151,7 +151,11 @@ export async function runOrchestrator(deps: OrchestratorDeps): Promise<void> {
 
   // 4. 构建提示词
   const promptConfig = configProvider.getPromptConfig()
-  const prompts = new Prompts(promptConfig.summarize, promptConfig.summarizeReleaseNotes)
+  // 提示词里的调查步骤按实际可用工具生成（GitLab trigger 强制关闭 shell，CFG-002）
+  const prompts = new Prompts(promptConfig.summarize, promptConfig.summarizeReleaseNotes, {
+    shell: options.enableShell,
+    webSearch: options.enableWebSearch
+  })
 
   // 5. 事件分发
   try {

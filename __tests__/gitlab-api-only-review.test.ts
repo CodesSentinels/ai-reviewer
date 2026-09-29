@@ -302,3 +302,65 @@ describe('LOCAL-003: 本地工具全关时，GitLab 侧仍能完成 API-only 审
     expect(installerState.ensureToolInstalled).toHaveBeenCalled()
   })
 })
+
+/**
+ * 审查质量：严重级别以模型给出的标签为准；shell 不可用时提示词不再要求 shell 调查。
+ */
+describe('审查质量：严重级别标签与按工具生成的提示词', () => {
+  beforeEach(() => {
+    mockMergeRequestDiscussions.create.mockResolvedValue({id: 'd1', notes: [{id: 1}]})
+  })
+
+  function postedLineComments(): string[] {
+    return mockMergeRequestDiscussions.create.mock.calls.map((c: any[]) => String(c[2]))
+  }
+
+  test('模型给出的级别被采用，标签行不出现在评论正文里', async () => {
+    const light = makeBot('[TRIAGE]: NEEDS_REVIEW')
+    // 措辞里没有任何会被关键词推断为「严重」的词，徽标只能来自标签
+    const heavy = makeBot(
+      '3-3:\n[severity: critical]\nThe added line changes the amount unit.\n---'
+    )
+
+    await codeReview(execCtx, light, heavy, apiOnlyOptions(), new Prompts('', ''))
+
+    const posted = postedLineComments().join('\n')
+    expect(posted).toContain('🔴 **严重**')
+    expect(posted).toContain('The added line changes the amount unit.')
+    expect(posted).not.toMatch(/\[severity:/)
+  })
+
+  test('模型漏标时回退到关键词推断', async () => {
+    const light = makeBot('[TRIAGE]: NEEDS_REVIEW')
+    const heavy = makeBot('3-3:\nThis looks like an XSS injection point.\n---')
+
+    await codeReview(execCtx, light, heavy, apiOnlyOptions(), new Prompts('', ''))
+
+    expect(postedLineComments().join('\n')).toContain('🔴 **严重**')
+  })
+
+  test('shell 不可用时，发给模型的提示词不要求 shell 调查', async () => {
+    const light = makeBot('[TRIAGE]: NEEDS_REVIEW')
+    const heavy = makeBot('3-3:\nLGTM!\n---')
+
+    await codeReview(
+      execCtx,
+      light,
+      heavy,
+      apiOnlyOptions(),
+      new Prompts('', '', {shell: false, webSearch: false})
+    )
+
+    // heavy 模型也承担摘要合并，按审查提示词特有的段落挑出那一次调用
+    const prompt = String(
+      (heavy.chat as any).mock.calls
+        .map((c: any[]) => String(c[0]))
+        .find((t: string) => t.includes('Changes made to'))
+    )
+    expect(prompt).toContain('Shell access is not available')
+    expect(prompt).not.toContain('Use shell commands')
+    expect(prompt).toContain('Web search is not available')
+    expect(prompt).toContain('[severity: critical]')
+    expect(prompt).not.toMatch(/GitHub/)
+  })
+})
