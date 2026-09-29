@@ -110,6 +110,46 @@ export function _resetBotIdentity(): void {
 }
 
 /** 行级评论的位置键，用于把「待清理的旧评论」和「这次要发的新评论」对上 */
+/** 已有评论的位置字段（listReviewComments 映射后的形状） */
+interface CommentLocation {
+  line?: number | null
+  // eslint-disable-next-line camelcase
+  start_line?: number | null
+}
+
+/**
+ * 位置完全一致：有起始行的评论要求起止行都相同；只有锚点行的评论要求新评论
+ * 也是同一单行。这是替换（删除）旧评论时使用的严格口径。
+ */
+export function isExactCommentLocation(
+  existing: CommentLocation,
+  startLine: number,
+  endLine: number
+): boolean {
+  if (existing.start_line != null) {
+    return existing.start_line === startLine && existing.line === endLine
+  }
+  return startLine === endLine && existing.line === endLine
+}
+
+/**
+ * 同一位置（去重口径）：在「位置完全一致」之外，只有锚点行的旧评论，锚点落在
+ * 新评论的行范围内也算同一处。
+ *
+ * GitLab 行级评论只保存一个锚点行（不保留起始行），GitHub 单行评论同样没有
+ * 起始行；而模型给出的新评论通常是一个行范围，且两轮审查对同一问题选取的范围
+ * 会略有不同。只认精确匹配时这类评论永远去重不掉——full review 会把整套评论
+ * 再发一遍。
+ */
+export function isSameCommentLocation(
+  existing: CommentLocation,
+  startLine: number,
+  endLine: number
+): boolean {
+  if (existing.start_line != null) return isExactCommentLocation(existing, startLine, endLine)
+  return existing.line != null && existing.line >= startLine && existing.line <= endLine
+}
+
 function commentKey(c: {path: string; startLine: number; endLine: number}): string {
   return `${c.path}:${c.startLine}-${c.endLine}`
 }
@@ -513,10 +553,12 @@ ${statusMsg}
         )
       }
       if (existingBotComments.length > 0) {
-        // 检查该位置是否已 resolved
-        const key = `${comment.path}:${comment.endLine}`
-        const isResolved = threadStatusMap?.get(key)
-        if (isResolved !== true) {
+        // 按每条旧评论**自己的**锚点行查 resolved 状态：旧评论只因锚点落在新范围内
+        // 而匹配时，它的锚点与新评论的结束行并不相同。
+        const unresolved = existingBotComments.filter(
+          c => threadStatusMap?.get(`${c.path}:${c.line}`) !== true
+        )
+        if (unresolved.length > 0) {
           logger.info(
             `[submit-dedup] skipping comment for ${comment.path}:${comment.startLine}-${comment.endLine} — existing unresolved bot comment found`
           )
@@ -527,10 +569,18 @@ ${statusMsg}
         // 真正的发布发生在后面的批量/逐条请求里；先删后发的话，一旦平台拒收新
         // 行号（422），旧讨论已经没了，新发现也发不出去——历史和新内容一起丢。
         // 这里只登记，等确认新评论落地后再清理。
-        pendingDeletions.set(
-          commentKey(comment),
-          existingBotComments.map(c => c.id)
+        //
+        // 只取代**位置完全一致**的旧评论。仅锚点落在新范围内的旧评论可能讨论的是
+        // 同一段代码里的另一个问题，删掉就丢了那段历史——保留它，照常发布新发现。
+        const replaced = existingBotComments.filter(c =>
+          isExactCommentLocation(c, comment.startLine, comment.endLine)
         )
+        if (replaced.length > 0) {
+          pendingDeletions.set(
+            commentKey(comment),
+            replaced.map(c => c.id)
+          )
+        }
       }
       commentsToSubmit.push(comment)
     }
@@ -778,17 +828,14 @@ ${commentReplyTag()}
     )
   }
 
-  /** 获取精确匹配指定行号范围的 review comment */
+  /** 获取与指定行号范围处于同一位置的 review comment（判定见 isSameCommentLocation） */
   async getCommentsAtRange(pullNumber: number, path: string, startLine: number, endLine: number) {
     const comments = await this.listReviewComments(pullNumber)
     return comments.filter(
       (comment: any) =>
         comment.path === path &&
         comment.body !== '' &&
-        ((comment.start_line !== undefined &&
-          comment.start_line === startLine &&
-          comment.line === endLine) ||
-          (startLine === endLine && comment.line === endLine))
+        isSameCommentLocation(comment, startLine, endLine)
     )
   }
 

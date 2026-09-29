@@ -64,9 +64,21 @@ const noteIdempotencyState = {
   markNoteAsProcessed: jest.fn<(...a: any[]) => Promise<void>>()
 }
 jest.mock('../src/gitlab-note-idempotency', () => ({
+  // 纯函数沿用真实实现：完成表情如何避让 ACK 表情是本文件要验证的接线的一部分
+  completionReactionFor: jest.requireActual<typeof import('../src/gitlab-note-idempotency')>(
+    '../src/gitlab-note-idempotency'
+  ).completionReactionFor,
   hasNoteBeenProcessed: (...a: any[]) => noteIdempotencyState.hasNoteBeenProcessed(...a),
   markNoteAsProcessed: (...a: any[]) => noteIdempotencyState.markNoteAsProcessed(...a)
 }))
+
+const NOTE_REF = {
+  owner: 'octo',
+  repo: 'demo',
+  changeRequestId: 7,
+  noteId: 5001,
+  idempotencyKey: 'gitlab:42:7:note:5001:create'
+}
 
 // EVENT-013 幂等判断的读取机制（gitlab-mr-idempotency.ts）已有独立单元测试
 // 覆盖其自身的 marker 解析正确性；这里同样只关心 gitlab-trigger.ts 有没有在
@@ -416,20 +428,34 @@ describe('gitlab-trigger.ts run()', () => {
 
       await runTrigger()
 
+      // 带上 bot 身份（用于只认 bot 自己加的完成表情）与完成表情（默认 ACK 是 🚀，完成用 👍）
       expect(noteIdempotencyState.hasNoteBeenProcessed).toHaveBeenCalledWith(
-        'octo',
-        'demo',
-        7,
-        'gitlab:42:7:note:5001:create'
+        NOTE_REF,
+        expect.any(Array),
+        '+1'
       )
-      // 未失败（onFailed 没被触发）才应该记账
+      // 未失败（onFailed 没被触发）才应该标记
       expect(process.exitCode).not.toBe(1)
-      expect(noteIdempotencyState.markNoteAsProcessed).toHaveBeenCalledWith(
-        'octo',
-        'demo',
-        7,
-        'gitlab:42:7:note:5001:create'
+      expect(noteIdempotencyState.markNoteAsProcessed).toHaveBeenCalledWith(NOTE_REF, '+1')
+    })
+
+    test('ACK 表情配置成 👍 时，完成表情改用 🎉（两者必须可区分）', async () => {
+      process.env.TRIGGER_PAYLOAD = '/tmp/payload.json'
+      process.env.AI_REVIEWER_COMMAND_ACK_REACTION = '+1'
+      fsState.readFileSync.mockReturnValue(JSON.stringify(noteToplevel))
+      noteIdempotencyState.hasNoteBeenProcessed.mockResolvedValue(false)
+      try {
+        await runTrigger()
+      } finally {
+        delete process.env.AI_REVIEWER_COMMAND_ACK_REACTION
+      }
+
+      expect(noteIdempotencyState.hasNoteBeenProcessed).toHaveBeenCalledWith(
+        NOTE_REF,
+        expect.any(Array),
+        'hooray'
       )
+      expect(noteIdempotencyState.markNoteAsProcessed).toHaveBeenCalledWith(NOTE_REF, 'hooray')
     })
 
     test('重复投递（已处理过）→ 直接跳过，不记第二次账', async () => {

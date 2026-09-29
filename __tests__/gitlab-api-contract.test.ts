@@ -38,7 +38,7 @@ const mockMergeRequestDiscussions = {
   removeNote: jest.fn<any>(),
   resolve: jest.fn<any>()
 }
-const mockMergeRequestNoteAwardEmojis = {award: jest.fn<any>()}
+const mockMergeRequestNoteAwardEmojis = {award: jest.fn<any>(), all: jest.fn<any>()}
 const mockProjectMembers = {all: jest.fn<any>()}
 const mockUsers = {all: jest.fn<any>(), showCurrentUser: jest.fn<any>()}
 
@@ -507,6 +507,34 @@ describe('GitLab adapter 稳定性契约', () => {
   })
 
   // ─── GLAPI-028 subgroup / URL 编码 / Unicode / 重命名 ─────────────────────
+
+  describe('listReactions', () => {
+    test('Award Emoji 名映射回 ReactionContent，未知表情为 null，走显式分页', async () => {
+      mockMergeRequestNoteAwardEmojis.all.mockResolvedValue([
+        {name: 'thumbsup', user: {username: 'bot'}},
+        {name: 'rocket', user: {username: 'bot'}},
+        {name: 'smile', user: {username: 'alice'}}
+      ])
+      await expect(platform.listReactions('g', 'r', 5, 100, 'issue_comment')).resolves.toEqual([
+        {content: '+1', userLogin: 'bot'},
+        {content: 'rocket', userLogin: 'bot'},
+        {content: null, userLogin: 'alice'}
+      ])
+      expect(mockMergeRequestNoteAwardEmojis.all).toHaveBeenCalledWith(
+        'g/r',
+        5,
+        100,
+        expect.objectContaining({perPage: 100})
+      )
+    })
+
+    test('错误归一化为 GitPlatformError', async () => {
+      mockMergeRequestNoteAwardEmojis.all.mockRejectedValue(requestError(403))
+      await expect(platform.listReactions('g', 'r', 5, 100, 'issue_comment')).rejects.toThrow(
+        GitPlatformError
+      )
+    })
+  })
 
   describe('GLAPI-028 路径与文件名边界', () => {
     test('subgroup（多层 group）项目路径原样拼接后交给 SDK 编码', async () => {

@@ -16,6 +16,7 @@ import type {CommandHandler, CommandContext, CommandResult} from '../types'
 import {getReviewState} from '../../review-state'
 import {isHeadAlreadyReviewed} from '../../review-commit-ids'
 import {PRIMARY_BOT_MENTION} from '../../constants'
+import {changeRequestNoun} from '../platform-terms'
 import {getLogger} from '../../platform/logger'
 
 /**
@@ -120,6 +121,6 @@ export const summaryHandler: CommandHandler = {
     if (aborted != null) return aborted
 
     await ctx.triggerReview('summary')
-    return {message: 'PR 摘要已重新生成'}
+    return {message: `${changeRequestNoun(ctx.execCtx?.platform)} 摘要已重新生成`}
   }
 }

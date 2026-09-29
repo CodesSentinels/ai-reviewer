@@ -28,6 +28,7 @@
 import type {CommandHandler, CommandContext, CommandResult} from '../types'
 import {getReviewState, setReviewState} from '../../review-state'
 import {PRIMARY_BOT_MENTION} from '../../constants'
+import {changeRequestNoun} from '../platform-terms'
 
 export const pauseHandler: CommandHandler = {
   name: 'pause',
@@ -38,17 +39,18 @@ export const pauseHandler: CommandHandler = {
   async execute(ctx: CommandContext): Promise<CommandResult> {
     // 重复 pause 是幂等的：状态已是 paused 就不再写 description，避免无谓的
     // 读改写把并发窗口拉长（CMD-021 的幂等要求对 pause 同样成立）。
+    const cr = changeRequestNoun(ctx.execCtx?.platform)
     const current = await getReviewState(ctx.owner, ctx.repo, ctx.prNumber)
     if (current === 'paused') {
       return {
-        message: `ℹ️ 当前 PR 的自动审查已处于暂停状态。使用 \`${PRIMARY_BOT_MENTION} resume\` 恢复。`
+        message: `ℹ️ 当前 ${cr} 的自动审查已处于暂停状态。使用 \`${PRIMARY_BOT_MENTION} resume\` 恢复。`
       }
     }
 
     await setReviewState(ctx.owner, ctx.repo, ctx.prNumber, 'paused')
 
     return {
-      message: `已暂停当前 PR 的自动审查。使用 \`${PRIMARY_BOT_MENTION} resume\` 恢复。`
+      message: `已暂停当前 ${cr} 的自动审查。使用 \`${PRIMARY_BOT_MENTION} resume\` 恢复。`
     }
   }
 }
@@ -60,12 +62,13 @@ export const resumeHandler: CommandHandler = {
   needsAck: false,
   minPermission: 'write',
   async execute(ctx: CommandContext): Promise<CommandResult> {
+    const cr = changeRequestNoun(ctx.execCtx?.platform)
     const current = await getReviewState(ctx.owner, ctx.repo, ctx.prNumber)
     if (current === 'active') {
-      return {message: 'ℹ️ 当前 PR 的自动审查已处于启用状态。'}
+      return {message: `ℹ️ 当前 ${cr} 的自动审查已处于启用状态。`}
     }
 
     await setReviewState(ctx.owner, ctx.repo, ctx.prNumber, 'active')
-    return {message: '已恢复当前 PR 的自动审查。'}
+    return {message: `已恢复当前 ${cr} 的自动审查。`}
   }
 }

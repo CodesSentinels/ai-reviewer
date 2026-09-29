@@ -12,6 +12,7 @@
  * - success/error 若收到 ackId 则 updateComment，否则 createComment
  * - error 文案带错误码，便于日志与用户排查
  */
+import type {Platform} from '../platform/execution-context'
 import {getCommentGreeting} from '../commenter'
 import {redactForLog} from '../redact'
 import {getPlatform} from '../platform/git-platform'
@@ -38,6 +39,8 @@ export interface ReplyContext {
   commandName: string
   /** 事件类型：当为 pull_request_review_comment 时回复到 thread */
   eventName?: 'issue_comment' | 'pull_request_review_comment'
+  /** 运行平台：决定错误文案里的权限 / 配置说法（缺省按 GitHub 口径） */
+  platform?: Platform
 }
 
 /** 组装幂等 tag（带平台命名空间，用于写入） */
@@ -61,8 +64,11 @@ export function cmdReplyTagVariants(originalCommentId: number, commandName: stri
 }
 
 /** 错误码 → 用户可读文案 */
-export function formatErrorMessage(code: ErrorCode, detail?: string): string {
-  const base = ERROR_MESSAGES[code] ?? '命令执行出错'
+export function formatErrorMessage(code: ErrorCode, detail?: string, platform?: Platform): string {
+  const base =
+    (platform === 'gitlab' ? GITLAB_ERROR_MESSAGES[code] : undefined) ??
+    ERROR_MESSAGES[code] ??
+    '命令执行出错'
   return detail ? `${base}\n\n详情: ${detail}` : base
 }
 
@@ -84,6 +90,13 @@ const ERROR_MESSAGES: Record<ErrorCode, string> = {
   RATE_LIMITED: '⏱️ **请求过于频繁**。本次运行中检测到过多命令请求，请稍后再试。',
   DUPLICATE: 'ℹ️ **命令已处理**（重复事件已去重）。',
   INTERNAL: '💥 **命令执行失败**。错误已记录，请联系维护者。'
+}
+
+/** GitLab 上说法不同的错误文案（其余沿用 ERROR_MESSAGES） */
+const GITLAB_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = {
+  FORBIDDEN: '🚫 **权限不足**。你在本项目的角色不足以执行该命令。',
+  BOT_FORBIDDEN:
+    '🚫 **Bot 权限不足**。请检查 bot 所用 token 的 scope（需要 `api`）及其在本项目的角色（Developer 及以上）。'
 }
 
 /**
@@ -125,7 +138,9 @@ export class Reply implements IReply {
   }
 
   async error(code: ErrorCode, detail?: string, ackId?: number | null): Promise<void> {
-    const body = this.wrap(`${formatErrorMessage(code, detail)}\n\n\`错误码: ${code}\``)
+    const body = this.wrap(
+      `${formatErrorMessage(code, detail, this.ctx.platform)}\n\n\`错误码: ${code}\``
+    )
     await this.publish(body, ackId)
     getLogger().info(`command error [${code}] ${detail ?? ''}`)
   }
