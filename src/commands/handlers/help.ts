@@ -108,7 +108,7 @@ export function buildHelpMessage(
 
 /**
  * 构造"未知命令"回复消息，列出所有支持的命令。
- * 结构参考 coderabbitai：先指出未识别的命令，再列出支持的命令；文案为中文，
+ * 参考 coderabbitai 格式: @user, I didn't recognize `xxx` as a valid command.
  * 命令描述按平台换成 PR / MR。
  */
 export function buildUnknownCommandMessage(
@@ -118,7 +118,9 @@ export function buildUnknownCommandMessage(
   platform?: Platform
 ): string {
   const lines: string[] = []
-  lines.push(`@${actorLogin} 没有识别出命令 \`${invalidCmd}\`，目前支持的命令如下：`)
+  lines.push(
+    `@${actorLogin} , I didn't recognize \`${invalidCmd}\` as a valid command. Here are the commands I support:`
+  )
   lines.push('')
 
   const ordered = [...commands].sort((a, b) => {
@@ -133,7 +135,7 @@ export function buildUnknownCommandMessage(
   }
 
   lines.push('')
-  lines.push('请选择要执行的命令，也可以直接 @ 我提问。')
+  lines.push(`Let me know which one you'd like to run, or feel free to ask me a question directly!`)
   return lines.join('\n')
 }
 

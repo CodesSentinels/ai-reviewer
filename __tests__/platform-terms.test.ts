@@ -95,10 +95,9 @@ describe('GitLab 上的命令文案不出现 GitHub 术语', () => {
     expect(msg).toContain('| `write` |')
   })
 
-  test('未知命令回复为中文，GitLab 上用 MR', () => {
+  test('未知命令回复：命令描述在 GitLab 上用 MR', () => {
     const msg: string = buildUnknownCommandMessage('foo', 'alice', commands, 'gitlab')
-    expect(msg).toContain('没有识别出命令 `foo`')
-    expect(msg).not.toMatch(/didn't recognize|commands I support|Let me know/)
+    expect(msg).toContain('重新生成 MR 摘要')
     expect(msg).not.toMatch(standalonePR)
   })
 

@@ -95,13 +95,14 @@ export const fullReviewHandler: CommandHandler = {
     if (await isHeadAlreadyReviewed(ctx.prNumber, ctx.headSha)) {
       return {
         message:
-          `✅ 全量审查已完成。\n\n> **说明：** 当前 HEAD ` +
-          `（\`${ctx.headSha.slice(0, 7)}\`）已经审查过，自上次审查以来没有新的变更。`
+          `✅ Full review finished.\n\n> **Note:** The current HEAD ` +
+          `(\`${ctx.headSha.slice(0, 7)}\`) has already been reviewed. ` +
+          `No new changes detected since the last review.`
       }
     }
 
     await ctx.triggerReview('full')
-    return {message: '✅ 全量审查已完成。'}
+    return {message: '✅ Full review finished.'}
   }
 }
 
