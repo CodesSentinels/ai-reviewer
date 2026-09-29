@@ -23,6 +23,7 @@ import {
 import {
   GitPlatformError,
   type ChangeRequestInfo,
+  type CommentReaction,
   type DiffFile,
   type DiffResult,
   type IGitPlatform,
@@ -957,6 +958,39 @@ export class GitHubPlatform implements IGitPlatform {
           content
         })
       }
+    } catch (e) {
+      throw toGitPlatformError(e)
+    }
+  }
+
+  async listReactions(
+    owner: string,
+    repo: string,
+    _changeRequestId: number,
+    commentId: number,
+    commentKind: 'issue_comment' | 'review_comment'
+  ): Promise<CommentReaction[]> {
+    const known = new Set<string>([
+      '+1',
+      '-1',
+      'laugh',
+      'confused',
+      'heart',
+      'hooray',
+      'rocket',
+      'eyes'
+    ])
+    try {
+      // eslint-disable-next-line camelcase
+      const params = {owner, repo, comment_id: commentId, per_page: 100}
+      const {data} =
+        commentKind === 'review_comment'
+          ? await octokit.reactions.listForPullRequestReviewComment(params)
+          : await octokit.reactions.listForIssueComment(params)
+      return data.map(r => ({
+        content: known.has(r.content) ? (r.content as ReactionContent) : null,
+        userLogin: r.user?.login ?? ''
+      }))
     } catch (e) {
       throw toGitPlatformError(e)
     }

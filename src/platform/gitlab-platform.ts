@@ -39,6 +39,7 @@ import {
 import {
   type IGitPlatform,
   type ChangeRequestInfo,
+  type CommentReaction,
   type DiffFile,
   type DiffResult,
   type PlatformComment,
@@ -87,6 +88,10 @@ const REACTION_TO_EMOJI: Record<ReactionContent, string> = {
   rocket: 'rocket',
   eyes: 'eyes'
 }
+
+const EMOJI_TO_REACTION: Record<string, ReactionContent> = Object.fromEntries(
+  Object.entries(REACTION_TO_EMOJI).map(([reaction, emoji]) => [emoji, reaction])
+) as Record<string, ReactionContent>
 
 // ─── GitLab AccessLevel → PlatformPermission 映射 ───────────────────────────
 
@@ -950,6 +955,33 @@ export class GitLabPlatform implements IGitPlatform {
       // 409 文案不一致，故按状态码而非文案判定）。ACK 已经在了，视为达成目标。
       if (err.errorKind !== 'conflict') throw err
       getLogger().debug(`addReaction: ${emojiName} already awarded on note ${commentId}`)
+    }
+  }
+
+  /** 列出 MR note 上的 Award Emoji（映射回 ReactionContent） */
+  async listReactions(
+    owner: string,
+    repo: string,
+    changeRequestId: number,
+    commentId: number,
+    _commentKind: 'issue_comment' | 'review_comment'
+  ): Promise<CommentReaction[]> {
+    const projectPath = `${owner}/${repo}`
+    try {
+      const awards = (await withGitLabRetry('listReactions', async () =>
+        (this.api.MergeRequestNoteAwardEmojis as any).all(
+          projectPath,
+          changeRequestId,
+          commentId,
+          listOptions()
+        )
+      )) as any[]
+      return awards.map(a => ({
+        content: EMOJI_TO_REACTION[String(a?.name ?? '')] ?? null,
+        userLogin: String(a?.user?.username ?? '')
+      }))
+    } catch (e) {
+      throw normalizeGitLabError(e, 'listReactions')
     }
   }
 

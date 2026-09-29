@@ -451,3 +451,71 @@ describe('部分提交失败时的清理与降级（GitLab 逐条提交的形态
     expect(posted).toContain('跨行发现')
   })
 })
+
+/**
+ * full review 再次审查时的同位置去重。
+ *
+ * GitLab 行级评论只保存一个锚点行（startLine 为 null），GitHub 单行评论同样没有
+ * 起始行；模型给出的新评论却通常是一个行范围，且两轮对同一问题选的范围略有不同。
+ * 只认精确匹配时，这类旧评论永远去重不掉——full review 会把整套评论再发一遍。
+ */
+describe('同位置去重：只有锚点行的旧评论', () => {
+  function anchored(id: number, line: number, startLine: number | null = null): any {
+    return {...reviewComment(id, 'src/a.ts', line, `旧发现\n${commentTag()}`), startLine}
+  }
+
+  test('GitLab：未解决的旧评论锚点落在新评论范围内 → 视为重复，不再发布', async () => {
+    useCtx('gitlab')
+    platform.listReviewComments.mockResolvedValue([anchored(50, 33)])
+
+    const commenter = new Commenter()
+    await commenter.bufferReviewComment('src/a.ts', 31, 34, '同一个问题，范围略有不同')
+    await commenter.submitReview(7, 'sha1', 'status', new Map())
+
+    expect(platform.submitReviewComments).not.toHaveBeenCalled()
+    expect(logs.join('\n')).toContain('existing unresolved bot comment found')
+  })
+
+  test('GitHub 单行旧评论同样适用', async () => {
+    platform.listReviewComments.mockResolvedValue([anchored(50, 33)])
+
+    const commenter = new Commenter()
+    await commenter.bufferReviewComment('src/a.ts', 31, 34, '同一个问题')
+    await commenter.submitReview(7, 'sha1', 'status', new Map())
+
+    expect(platform.submitReviewComments).not.toHaveBeenCalled()
+  })
+
+  test('锚点在新范围之外 → 不是同一处，照常发布', async () => {
+    useCtx('gitlab')
+    platform.listReviewComments.mockResolvedValue([anchored(50, 40)])
+
+    const commenter = new Commenter()
+    await commenter.bufferReviewComment('src/a.ts', 31, 34, '另一个问题')
+    await commenter.submitReview(7, 'sha1', 'status', new Map())
+
+    expect(platform.submitReviewComments).toHaveBeenCalled()
+  })
+
+  test('锚点在范围内但旧评论已解决 → 照常发布，且不删除旧评论（位置不完全一致）', async () => {
+    useCtx('gitlab')
+    platform.listReviewComments.mockResolvedValue([anchored(50, 33)])
+
+    const commenter = new Commenter()
+    await commenter.bufferReviewComment('src/a.ts', 31, 34, '新发现')
+    await commenter.submitReview(7, 'sha1', 'status', new Map([['src/a.ts:33', true]]))
+
+    expect(platform.submitReviewComments).toHaveBeenCalled()
+    expect(platform.deleteReviewComment).not.toHaveBeenCalled()
+  })
+
+  test('旧评论有完整行范围时仍要求精确一致', async () => {
+    platform.listReviewComments.mockResolvedValue([anchored(50, 34, 30)])
+
+    const commenter = new Commenter()
+    await commenter.bufferReviewComment('src/a.ts', 31, 34, '范围不同')
+    await commenter.submitReview(7, 'sha1', 'status', new Map())
+
+    expect(platform.submitReviewComments).toHaveBeenCalled()
+  })
+})

@@ -22,6 +22,7 @@
  *   - dispatchCommentEvent(deps): 主入口，被 command-handler.ts 调用
  *   - DispatchOutcome: 用于测试的明确返回值
  */
+import {permissionLabel} from './platform-terms'
 import {isOwnAuthor} from '../commenter'
 import {getPlatform} from '../platform/git-platform'
 import {repoCoordsOf} from '../platform/run-context'
@@ -173,7 +174,8 @@ export async function dispatchCommentEvent(deps: DispatcherDeps): Promise<Dispat
     issueNumber: prNumber,
     originalCommentId: comment.id,
     commandName: cmdNameForReply,
-    eventName
+    eventName,
+    platform: execCtx.platform
   })
 
   // [解析错误] 处理命令解析阶段的错误。
@@ -190,7 +192,7 @@ export async function dispatchCommentEvent(deps: DispatcherDeps): Promise<Dispat
       })
       const cmds = registry.listCommands()
       const invalidCmd = outcome.error.detail ?? 'unknown'
-      const msg = buildUnknownCommandMessage(invalidCmd, actorLogin, cmds)
+      const msg = buildUnknownCommandMessage(invalidCmd, actorLogin, cmds, execCtx.platform)
       await reply.success(msg)
     } else {
       await reply.error(outcome.error.code, outcome.error.detail)
@@ -261,9 +263,13 @@ export async function dispatchCommentEvent(deps: DispatcherDeps): Promise<Dispat
   // 否则 API 故障期间任何 PR 作者都能触发 review/full review/summary（fail open）
   const isPrAuthor = actorLogin === prAuthor && !queryFailed
   if (!canExecute(handler, permission, isPrAuthor)) {
+    const required = permissionLabel(handler.minPermission ?? 'write', execCtx.platform)
     const detail = queryFailed
       ? `无法确认用户 \`${actorLogin}\` 的权限（查询失败），已按最严格策略拒绝`
-      : `用户 \`${actorLogin}\` 当前权限: \`${permission}\``
+      : `需要 \`${required}\` 及以上；用户 \`${actorLogin}\` 当前为 \`${permissionLabel(
+          permission,
+          execCtx.platform
+        )}\``
     await reply.error('FORBIDDEN', detail)
     return {
       kind: 'executed',

@@ -252,7 +252,7 @@ describe('dispatcher — 解析与 fallback', () => {
     expect(platformState.createComment).toHaveBeenCalled()
     const body = platformState.createComment.mock.calls[0][3] // positional: (owner, repo, issueNumber, body)
     expect(body).toContain('invalidcmd')
-    expect(body).toContain('commands I support')
+    expect(body).toContain('目前支持的命令如下')
   })
 
   test('review_comment 线程内回复（无 @bot）→ ignored（对话必须 @bot）', async () => {
@@ -288,7 +288,7 @@ describe('dispatcher — 解析与 fallback', () => {
     expect(platformState.createComment).not.toHaveBeenCalled()
     const body = platformState.replyToReviewComment.mock.calls[0][4] // positional: (owner, repo, prNumber, commentId, body)
     expect(body).toContain('invalidcmd')
-    expect(body).toContain('commands I support')
+    expect(body).toContain('目前支持的命令如下')
   })
 })
 

@@ -342,7 +342,7 @@ describe('CMD-018 full review：全量 diff', () => {
     const r = await run({body: '@ai-reviewer full review'})
 
     expect(r.triggered).toEqual([])
-    expect(r.message).toContain('already been reviewed')
+    expect(r.message).toContain('已经审查过')
   })
 
   test('HEAD 未知 → 中止，不会因为「查不到就当没审过」而重跑全量', async () => {
@@ -466,7 +466,7 @@ describe('CMD-017/020：pause 必须保住增量基线', () => {
     const r = await run({body: '@ai-reviewer full review'})
 
     expect(r.triggered).toEqual([])
-    expect(r.message).toContain('already been reviewed')
+    expect(r.message).toContain('已经审查过')
   })
 })
 

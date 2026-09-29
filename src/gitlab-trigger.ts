@@ -26,7 +26,13 @@ import {redact} from './gitlab-trigger-redact'
 import {checkForkMergeRequest, isHeadStale, buildMrIdempotencyKey} from './gitlab-mr-hook-rules'
 import {hasHeadBeenReviewed} from './gitlab-mr-idempotency'
 import {isSelfNote, buildNoteIdempotencyKey} from './gitlab-note-hook-rules'
-import {hasNoteBeenProcessed, markNoteAsProcessed} from './gitlab-note-idempotency'
+import {
+  completionReactionFor,
+  hasNoteBeenProcessed,
+  markNoteAsProcessed,
+  type NoteRef
+} from './gitlab-note-idempotency'
+import {CONFIG_DEFAULTS} from './platform/config-provider'
 import {parse, resolveBotMentions} from './commands/parser'
 import {tryEarlyReaction} from './commands/early-reaction'
 
@@ -258,18 +264,21 @@ export async function run(): Promise<void> {
   // ─── EVENT-020/021：Note Hook 幂等 ───────────────────────────────────────
   //
   // GitLab webhook 不保证恰好投递一次；CI job 也可能被重试。重复投递同一条
-  // note（相同 note_id）不得重复调模型或重复回复。幂等键的记账位置见
-  // gitlab-note-idempotency.ts 的文件头说明（独立 note，不与 summary note
-  // 混用）。自评论（isBot=true）已经会被下游 dispatcher 过滤掉、不产生任何
+  // note（相同 note_id）不得重复调模型或重复回复。"已处理"标记是 bot 在该
+  // note 上添加的完成表情，见 gitlab-note-idempotency.ts 的文件头说明。自评论（isBot=true）已经会被下游 dispatcher 过滤掉、不产生任何
   // 调用/回复，这里不必再为它多查一次幂等账本。
   //
   // 只对「确实 @ 了 bot」的 note 记账：完全不提 bot 的普通讨论无论被重复投递
   // 多少次，dispatcher 都会走 `{kind: 'ignored', reason: 'no bot mention'}`
-  // 原地跳过，本来就没有副作用可去重——为它写一条记账评论纯属浪费一次 API
-  // 调用，还会在 MR 上留下与内容无关的噪音评论。判断标准复用 dispatcher 自己
+  // 原地跳过，本来就没有副作用可去重——为它查询 / 写入标记纯属浪费 API 调用。判断标准复用 dispatcher 自己
   // 用来识别命令/对话触发的同一个 parse()，避免这里另起一套 mention 规则
   // 和共享核心的判定跑偏。
-  let noteIdempotencyKey: string | null = null
+  let processedRef: NoteRef | null = null
+  // 完成表情按 ACK 表情避让（两者相同会让失败的处理被误认为已完成）
+  const completion = completionReactionFor(
+    (process.env.AI_REVIEWER_COMMAND_ACK_REACTION ?? '').trim() ||
+      CONFIG_DEFAULTS.commandAckReaction
+  )
   if (isCommentEvent && !execCtx.actor.isBot && execCtx.comment != null) {
     const mentions = resolveBotMentions(process.env.AI_REVIEWER_BOT_GITLAB_LOGIN)
     const mentionsBot =
@@ -278,21 +287,21 @@ export async function run(): Promise<void> {
         'none'
 
     if (mentionsBot) {
-      noteIdempotencyKey = buildNoteIdempotencyKey(
-        execCtx.projectId,
-        execCtx.changeRequestId,
-        execCtx.comment.id
-      )
       const {owner, repo} = splitProjectPath(execCtx.projectPath)
-      const alreadyProcessed = await hasNoteBeenProcessed(
+      processedRef = {
         owner,
         repo,
-        execCtx.changeRequestId,
-        noteIdempotencyKey
-      )
-      if (alreadyProcessed) {
+        changeRequestId: execCtx.changeRequestId,
+        noteId: execCtx.comment.id,
+        idempotencyKey: buildNoteIdempotencyKey(
+          execCtx.projectId,
+          execCtx.changeRequestId,
+          execCtx.comment.id
+        )
+      }
+      if (await hasNoteBeenProcessed(processedRef, botLogins, completion)) {
         logger.info(
-          `Note ${execCtx.comment.id} already processed (idempotency key ${noteIdempotencyKey}) — skipping duplicate delivery (EVENT-021)`
+          `Note ${execCtx.comment.id} already processed (idempotency key ${processedRef.idempotencyKey}) — skipping duplicate delivery (EVENT-021)`
         )
         return
       }
@@ -328,11 +337,10 @@ export async function run(): Promise<void> {
     earlyReaction: tryEarlyReaction
   })
 
-  // 只在真正跑成功之后才记账——onFailed 会把 exitCode 设成 1，失败的这次不能
+  // 只在真正跑成功之后才标记——onFailed 会把 exitCode 设成 1，失败的这次不能
   // 被记成"已处理"，否则下次重试会被幂等检查拦住，永远无法真正跑成功。
-  if (noteIdempotencyKey != null && process.exitCode !== 1) {
-    const {owner, repo} = splitProjectPath(execCtx.projectPath)
-    await markNoteAsProcessed(owner, repo, execCtx.changeRequestId, noteIdempotencyKey)
+  if (processedRef != null && process.exitCode !== 1) {
+    await markNoteAsProcessed(processedRef, completion)
   }
 }
 

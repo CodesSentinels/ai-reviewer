@@ -174,6 +174,14 @@ export type ReactionContent =
   | 'rocket'
   | 'eyes'
 
+/** 评论上的一个表情反应 */
+export interface CommentReaction {
+  /** 映射回 ReactionContent；不在该集合里的平台表情为 null */
+  content: ReactionContent | null
+  /** 添加者用户名 */
+  userLogin: string
+}
+
 // ─── 平台接口（ARCH-016）──────────────────────────────────────────────────
 
 /**
@@ -323,6 +331,18 @@ export interface IGitPlatform {
     content: ReactionContent,
     commentKind: 'issue_comment' | 'review_comment'
   ): Promise<void>
+
+  /**
+   * 列出评论上的表情反应（只读）。
+   * changeRequestId: GitLab Award Emoji API 需要 MR IID；GitHub 可忽略。
+   */
+  listReactions(
+    owner: string,
+    repo: string,
+    changeRequestId: number,
+    commentId: number,
+    commentKind: 'issue_comment' | 'review_comment'
+  ): Promise<CommentReaction[]>
 
   // ─── 8. 权限 ──────────────────────────────────────────────────────────────
 
