@@ -383,7 +383,7 @@ Array [
   with similar changes together into a single row to save space.
 
 Avoid additional commentary as this summary will be added as a comment on the
-GitHub pull request. Use the titles \\"Walkthrough\\" and \\"Changes\\" and they must be H2.
+pull/merge request. Use the titles \\"Walkthrough\\" and \\"Changes\\" and they must be H2.
 ",
     "name": "summarize",
     "required": false,
@@ -403,7 +403,7 @@ and emphasize features visible to the end-user while omitting code-level details
     "type": "string",
   },
   Object {
-    "default": "You are \`@ai-reviewer\` (aka \`github-actions[bot]\`), a language model
+    "default": "You are \`@ai-reviewer\`, a language model
 trained by OpenAI. Your purpose is to act as a highly experienced
 software engineer and provide a thorough review of the code hunks
 and suggest code snippets to improve key areas such as:

@@ -49,6 +49,7 @@ import {
 import {parseLintReport} from './lint/report-schema'
 import {
   classifyFindingSeverity,
+  extractSeverityTags,
   prepareFindings,
   severityBadge,
   type Finding
@@ -1277,11 +1278,15 @@ ${commentChain}
 
             try {
               reviewCount += 1
+              // 模型在每条意见首行给出的严重级别标签：取出后从正文删除，不展示给用户
+              const {severity: taggedSeverity, comment: reviewComment} = extractSeverityTags(
+                review.comment
+              )
               // 每个文件只在第一条评论上附加一次 Analysis chain，避免重复刷屏
               const shouldAttachAnalysisChain = analysisChainMd !== '' && !analysisChainAttached
               let commentWithChain = shouldAttachAnalysisChain
-                ? `${review.comment}\n\n${analysisChainMd}`
-                : review.comment
+                ? `${reviewComment}\n\n${analysisChainMd}`
+                : reviewComment
               if (shouldAttachAnalysisChain) {
                 analysisChainAttached = true
               }
@@ -1307,7 +1312,13 @@ ${commentChain}
               )
               // 收集为 Finding，统一在审查完成后做噪音控制再 buffer。
               // 严重级别以警示框徽标的形式直接置于每条行级评论顶部（取代 PR 顶部汇总评论）。
-              const severity = classifyFindingSeverity(review.comment)
+              // 以模型给出的级别为准；漏标或标签无效时回退到关键词推断
+              const severity = taggedSeverity ?? classifyFindingSeverity(reviewComment)
+              if (taggedSeverity == null) {
+                getLogger().info(
+                  `[severity] ${filename}:${review.startLine}-${review.endLine} has no valid severity tag, inferred ${severity}`
+                )
+              }
               findings.push({
                 path: filename,
                 startLine: review.startLine,

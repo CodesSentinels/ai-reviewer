@@ -160,9 +160,41 @@ function firstLine(text: string): string {
 }
 
 /**
+ * 模型在每条审查意见首行输出的严重级别标签：`[severity: major]`。
+ *
+ * 容忍大小写与常见的 markdown 包裹（`**[severity: major]**`、反引号），
+ * 必须独占一行，避免误伤正文里恰好出现的同名文字。
+ */
+const SEVERITY_TAG_LINE = /^[ \t]*[*`_]*\[\s*severity\s*:\s*([a-z]+)\s*\][*`_]*[ \t]*(?:\r?\n|$)/gim
+
+/**
+ * 从审查意见中取出模型给出的严重级别标签，并把标签行从正文中删除。
+ *
+ * - 一条意见可能由多条合并而来（`mergeReviewsByTopic`），会带多个标签：取最高级别
+ * - 标签值不在 FindingSeverity 范围内时忽略该值（标签行照样删除，不展示给用户）
+ * - 没有任何有效标签时 severity 为 null，调用方回退到关键词推断
+ */
+export function extractSeverityTags(comment: string): {
+  severity: FindingSeverity | null
+  comment: string
+} {
+  let severity: FindingSeverity | null = null
+  const stripped = comment.replace(SEVERITY_TAG_LINE, (_line, raw: string) => {
+    const value = raw.toLowerCase()
+    if (value in SEVERITY_RANK) {
+      const s = value as FindingSeverity
+      if (severity == null || SEVERITY_RANK[s] > SEVERITY_RANK[severity]) severity = s
+    }
+    return ''
+  })
+  return {severity, comment: stripped.trim()}
+}
+
+/**
  * 启发式严重级别分类：从一条审查评论的文本推断严重级别。
  *
- * 审查模型当前并不直接输出级别，这里用关键词（中英）做轻量分类，
+ * 首选模型自己给出的级别标签（见 extractSeverityTags）；模型漏标或标签无效时
+ * 才走这里，用关键词（中英）做轻量分类，
  * 用于噪音控制的排序 / 截断 / 折叠。按"高 → 低"顺序匹配，命中即返回。
  * 无明显信号时归为 minor（既不抢占高优先级，也不会被当作纯提示丢弃）。
  */
