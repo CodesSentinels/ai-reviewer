@@ -31,6 +31,8 @@
  * 依赖（@actions/github / octokit / p-limit）一起拉起来。
  */
 
+import {higherSeverity, type FindingSeverity} from './noise-control'
+
 /** 审查评论的结构化表示 */
 export interface Review {
   /** 评论起始行号（基于 PR 新文件的行号） */
@@ -39,6 +41,8 @@ export interface Review {
   endLine: number
   /** 评论内容（markdown） */
   comment: string
+  /** 模型给出的严重级别（合并前由 extractSeverityTags 逐条取出）；null/缺省表示未给出 */
+  severity?: FindingSeverity | null
 }
 
 /**
@@ -98,6 +102,7 @@ interface ClusteredEntry {
  * 合并策略：
  *   - 评论 body 按出现顺序拼接，中间插入 `\n\n---\n\n` 分隔符
  *   - 行号范围扩大到能覆盖 group 内所有 review（GitHub 评论锚点更合理）
+ *   - 严重级别取 group 内最高的一个
  *
  * @param reviews 来自 parseReview 的原始数组
  * @param filename 用于日志（便于排查"为啥又重复了"）
@@ -162,6 +167,7 @@ export function mergeReviewsByTopic(
       merged.comment = `${merged.comment.trimEnd()}\n\n---\n\n${m.comment.trimStart()}`
       merged.startLine = Math.min(merged.startLine, m.startLine)
       merged.endLine = Math.max(merged.endLine, m.endLine)
+      merged.severity = higherSeverity(merged.severity, m.severity)
     }
     return merged
   })

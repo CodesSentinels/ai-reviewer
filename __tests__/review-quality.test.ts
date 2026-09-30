@@ -6,7 +6,8 @@
  * - 提示词平台中性，且调查步骤只要求实际可用的工具
  */
 import {describe, expect, test} from '@jest/globals'
-import {extractSeverityTags} from '../src/noise-control'
+import {extractSeverityTags, higherSeverity} from '../src/noise-control'
+import {mergeReviewsByTopic} from '../src/review-dedup'
 import {Prompts, buildInvestigationSection, buildWebSearchPolicy} from '../src/prompts'
 import {CONFIG_DEFAULTS} from '../src/platform/config-provider'
 
@@ -23,10 +24,40 @@ describe('extractSeverityTags', () => {
     expect(extractSeverityTags('`[severity: nit]`\nx').severity).toBe('nit')
   })
 
-  test('合并后的多条意见带多个标签：取最高级别并全部删除', () => {
-    const r = extractSeverityTags('[severity: minor]\na\n---\n[severity: critical]\nb')
-    expect(r.severity).toBe('critical')
-    expect(r.comment).not.toMatch(/\[severity:/)
+  test('只读首个非空行：正文与代码块里的标签不影响级别，也不被删除', () => {
+    const fence = '```'
+    const body = `The documentation should show:\n\n${fence}text\n[severity: critical]\n${fence}`
+    expect(extractSeverityTags(`\n[severity: minor]\n${body}`)).toEqual({
+      severity: 'minor',
+      comment: body
+    })
+  })
+
+  test('首行不是标签时，后续行的标签不被读取也不被删除', () => {
+    const text = 'Intro\n[severity: critical]\nmore'
+    expect(extractSeverityTags(text)).toEqual({severity: null, comment: text})
+  })
+
+  test('原型链上的名字不是合法级别', () => {
+    for (const v of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+      expect(extractSeverityTags(`[severity: ${v}]\nreal finding`)).toEqual({
+        severity: null,
+        comment: 'real finding'
+      })
+    }
+  })
+
+  test('info 不在模型协议内，视为无效值', () => {
+    expect(extractSeverityTags('[severity: info]\nx')).toEqual({severity: null, comment: 'x'})
+  })
+
+  test('带连字符 / 数字 / 空格的无效值：同样删除标签行', () => {
+    for (const v of ['high-risk', 'p1', 'very high', '']) {
+      expect(extractSeverityTags(`[severity: ${v}]\nA real issue`)).toEqual({
+        severity: null,
+        comment: 'A real issue'
+      })
+    }
   })
 
   test('无效标签值：忽略该值但仍删除标签行', () => {
@@ -43,6 +74,25 @@ describe('extractSeverityTags', () => {
   test('正文中间出现的同名文字不当作标签', () => {
     const text = 'Use the format [severity: major] in docs.'
     expect(extractSeverityTags(text)).toEqual({severity: null, comment: text})
+  })
+})
+
+describe('合并审查意见时的严重级别', () => {
+  test('higherSeverity 取较高级别，null 视为未给出', () => {
+    expect(higherSeverity('minor', 'critical')).toBe('critical')
+    expect(higherSeverity('major', 'nit')).toBe('major')
+    expect(higherSeverity(null, 'nit')).toBe('nit')
+    expect(higherSeverity(undefined, null)).toBeNull()
+  })
+
+  test('合并前逐条取标签，合并后取最高级别且正文不再带标签', () => {
+    const raw = ['[severity: minor]\na', '[severity: critical]\nb'].map(c => {
+      const {severity, comment} = extractSeverityTags(c)
+      return {startLine: 10, endLine: 12, severity, comment}
+    })
+    const [merged] = mergeReviewsByTopic(raw, 'src/x.ts', [])
+    expect(merged.severity).toBe('critical')
+    expect(merged.comment).toBe('a\n\n---\n\nb')
   })
 })
 
