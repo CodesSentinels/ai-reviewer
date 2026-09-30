@@ -159,35 +159,55 @@ function firstLine(text: string): string {
   return (line ?? '').trim()
 }
 
+/** 模型可以给出的严重级别（与提示词里声明的四个值一致，不含 info） */
+const MODEL_SEVERITIES: ReadonlySet<string> = new Set<FindingSeverity>([
+  'critical',
+  'major',
+  'minor',
+  'nit'
+])
+
 /**
  * 模型在每条审查意见首行输出的严重级别标签：`[severity: major]`。
  *
- * 容忍大小写与常见的 markdown 包裹（`**[severity: major]**`、反引号），
- * 必须独占一行，避免误伤正文里恰好出现的同名文字。
+ * 容忍大小写与常见的 markdown 包裹（`**[severity: major]**`、反引号）。
+ * 标签值宽松捕获（`high-risk`、`p 1` 等也能匹配），再按白名单校验，
+ * 保证任何 `[severity: ...]` 形态的标签行都不会展示给用户。
  */
-const SEVERITY_TAG_LINE = /^[ \t]*[*`_]*\[\s*severity\s*:\s*([a-z]+)\s*\][*`_]*[ \t]*(?:\r?\n|$)/gim
+const SEVERITY_TAG_LINE = /^[*`_]*\[\s*severity\s*:([^\]\n]*)\][*`_]*$/i
 
 /**
- * 从审查意见中取出模型给出的严重级别标签，并把标签行从正文中删除。
+ * 从单条审查意见的首个非空行取出模型给出的严重级别标签，并删除该行。
  *
- * - 一条意见可能由多条合并而来（`mergeReviewsByTopic`），会带多个标签：取最高级别
- * - 标签值不在 FindingSeverity 范围内时忽略该值（标签行照样删除，不展示给用户）
- * - 没有任何有效标签时 severity 为 null，调用方回退到关键词推断
+ * - 只看首个非空行：正文、代码块里出现的同名文字一律不动
+ * - 必须在 `mergeReviewsByTopic` 合并**之前**逐条调用；合并后的级别由
+ *   `higherSeverity` 取最高，不再扫描合并后的正文
+ * - 标签值不在 MODEL_SEVERITIES 内时忽略该值（标签行照样删除，不展示给用户）
+ * - 没有有效标签时 severity 为 null，调用方回退到关键词推断
  */
 export function extractSeverityTags(comment: string): {
   severity: FindingSeverity | null
   comment: string
 } {
-  let severity: FindingSeverity | null = null
-  const stripped = comment.replace(SEVERITY_TAG_LINE, (_line, raw: string) => {
-    const value = raw.toLowerCase()
-    if (value in SEVERITY_RANK) {
-      const s = value as FindingSeverity
-      if (severity == null || SEVERITY_RANK[s] > SEVERITY_RANK[severity]) severity = s
-    }
-    return ''
-  })
-  return {severity, comment: stripped.trim()}
+  const lines = comment.split('\n')
+  const idx = lines.findIndex(l => l.trim().length > 0)
+  const match = idx === -1 ? null : SEVERITY_TAG_LINE.exec(lines[idx].trim())
+  if (match == null) return {severity: null, comment}
+
+  const value = match[1].trim().toLowerCase()
+  const severity = MODEL_SEVERITIES.has(value) ? (value as FindingSeverity) : null
+  lines.splice(idx, 1)
+  return {severity, comment: lines.join('\n').trim()}
+}
+
+/** 取两个级别中较高的一个；null 表示"模型未给出有效级别" */
+export function higherSeverity(
+  a: FindingSeverity | null | undefined,
+  b: FindingSeverity | null | undefined
+): FindingSeverity | null {
+  if (a == null) return b ?? null
+  if (b == null) return a
+  return SEVERITY_RANK[b] > SEVERITY_RANK[a] ? b : a
 }
 
 /**

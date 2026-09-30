@@ -1254,7 +1254,12 @@ ${commentChain}
           // 然后做**议题级合并去重**：LLM 经常对同一个 tool finding 写出多条
           // 不同角度的评论（行号还可能不同），按"重叠的 tool finding ruleId 集合"
           // 做 key 合并 — 详见 src/review-dedup.ts。
-          const rawReviews = parseReview(response, patches, options.debug)
+          // 模型在每条意见首行给出的严重级别标签：合并前逐条取出并从正文删除（不展示给用户），
+          // 合并时取最高级别，避免扫描合并后的正文误读代码块里的同名文字
+          const rawReviews = parseReview(response, patches, options.debug).map(r => {
+            const {severity, comment} = extractSeverityTags(r.comment)
+            return {...r, severity, comment}
+          })
           const fileFindings = lintReport?.results.filter(r => r.file === filename) ?? []
           const reviews = mergeReviewsByTopic(
             rawReviews,
@@ -1278,10 +1283,8 @@ ${commentChain}
 
             try {
               reviewCount += 1
-              // 模型在每条意见首行给出的严重级别标签：取出后从正文删除，不展示给用户
-              const {severity: taggedSeverity, comment: reviewComment} = extractSeverityTags(
-                review.comment
-              )
+              const taggedSeverity = review.severity ?? null
+              const reviewComment = review.comment
               // 每个文件只在第一条评论上附加一次 Analysis chain，避免重复刷屏
               const shouldAttachAnalysisChain = analysisChainMd !== '' && !analysisChainAttached
               let commentWithChain = shouldAttachAnalysisChain
