@@ -16,6 +16,8 @@ import {type Inputs} from './inputs'
 export interface ReviewTools {
   shell: boolean
   webSearch: boolean
+  /** 只读代码探查工具（read_file / list_directory / search_code），shell 不可用时提供 */
+  codeTools?: boolean
 }
 
 const INVESTIGATION_WITH_SHELL_HEAD = `## Pre-review investigation (MANDATORY)
@@ -53,6 +55,25 @@ references provided in this prompt.
 - Do NOT claim to have read, searched or run anything that is not shown here.
 - If a finding depends on code you cannot see (for example how a function is used
   elsewhere), state that assumption explicitly instead of presenting it as fact.
+`
+
+const INVESTIGATION_WITH_CODE_TOOLS = `## Pre-review investigation (MANDATORY)
+
+Before writing any review comments, investigate the code with the read-only tools available
+to you (they read the repository through the platform API; nothing is executed):
+
+1. **read_file** — read files referenced by the diff, or the surrounding code of a change
+   (use \`start_line\` / \`end_line\` for large files).
+2. **search_code** — find where a changed function, type or constant is used elsewhere.
+   It searches the default branch, so it does not contain the new code of this change.
+3. **list_directory** — understand the project layout.
+
+Investigate whenever a finding depends on code outside the hunks (callers, types, config),
+instead of guessing. The tool calls are displayed as an "Analysis chain" in the review
+comments.
+
+- Do NOT claim to have read, searched or run anything you did not actually do with these tools.
+- If a finding still depends on code you could not see, state that assumption explicitly.
 `
 
 const INVESTIGATION_WITHOUT_SHELL_WEB_SEARCH = `- Use web search when the code uses external libraries, APIs, or SDKs and you need to
@@ -95,9 +116,9 @@ export function buildInvestigationSection(tools: ReviewTools): string {
       INVESTIGATION_WITH_SHELL_TAIL
     )
   }
-  return (
-    INVESTIGATION_WITHOUT_SHELL + (tools.webSearch ? INVESTIGATION_WITHOUT_SHELL_WEB_SEARCH : '')
-  )
+  const base =
+    tools.codeTools === true ? INVESTIGATION_WITH_CODE_TOOLS : INVESTIGATION_WITHOUT_SHELL
+  return base + (tools.webSearch ? INVESTIGATION_WITHOUT_SHELL_WEB_SEARCH : '')
 }
 
 /** 按可用工具生成 web search 策略段 */
