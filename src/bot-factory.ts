@@ -38,7 +38,10 @@ export function createBots(options: Options, warn: (msg: string) => void): BotPa
         options.openaiHeavyModel,
         options.heavyTokenLimits,
         options.enableWebSearch,
-        options.enableShell
+        options.enableShell,
+        // shell 不可用时（GitLab trigger 强制关闭）改为提供只读的代码探查工具；
+        // shell 可用时模型直接用 shell 探查，不重复提供
+        !options.enableShell
       )
     )
   } catch (e: any) {

@@ -39,6 +39,7 @@ import {
 import {
   type IGitPlatform,
   type ChangeRequestInfo,
+  type CodeSearchHit,
   type CommentReaction,
   type DiffFile,
   type DiffResult,
@@ -238,6 +239,32 @@ export class GitLabPlatform implements IGitPlatform {
    * - API 部分失败 → 抛 GitPlatformError（不静默返回空数组）
    * - 传入 path → 只列举该目录下一层（截断后按需回填），目录不存在返回空树
    */
+  /** 项目内代码搜索（Search API，scope=blobs；搜索默认分支） */
+  async searchCode(
+    owner: string,
+    repo: string,
+    query: string,
+    limit: number
+  ): Promise<CodeSearchHit[]> {
+    const projectPath = `${owner}/${repo}`
+    try {
+      const blobs = (await withGitLabRetry('searchCode', async () =>
+        (this.api.Search as any).all('blobs', query, {
+          projectId: projectPath,
+          perPage: limit,
+          maxPages: 1
+        })
+      )) as any[]
+      return blobs.slice(0, limit).map(b => ({
+        path: String(b?.path ?? b?.filename ?? ''),
+        startLine: typeof b?.startline === 'number' ? b.startline : null,
+        snippet: String(b?.data ?? '')
+      }))
+    } catch (e) {
+      throw normalizeGitLabError(e, 'searchCode')
+    }
+  }
+
   async listRepositoryTree(
     owner: string,
     repo: string,

@@ -279,12 +279,14 @@ export class OpenAIOptions {
   tokenLimits: TokenLimits // 该模型的 token 限制配置
   enableWebSearch: boolean // 是否启用 web search
   enableShell: boolean // 是否启用 shell
+  enableCodeTools: boolean // 是否提供只读代码探查工具（read_file / list_directory / search_code）
 
   constructor(
     model = 'gpt-5.4-nano',
     tokenLimits: TokenLimits | null = null,
     enableWebSearch = false,
-    enableShell = true
+    enableShell = true,
+    enableCodeTools = false
   ) {
     this.model = model
     if (tokenLimits != null) {
@@ -294,5 +296,6 @@ export class OpenAIOptions {
     }
     this.enableWebSearch = enableWebSearch
     this.enableShell = enableShell
+    this.enableCodeTools = enableCodeTools
   }
 }
