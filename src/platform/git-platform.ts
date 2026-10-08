@@ -160,6 +160,16 @@ export interface TreeResult {
   truncated: boolean
 }
 
+/** 代码搜索的一条命中 */
+export interface CodeSearchHit {
+  /** 仓库根相对路径 */
+  path: string
+  /** 片段起始行号（平台不提供时为 null） */
+  startLine: number | null
+  /** 命中片段（平台不提供时为空串） */
+  snippet: string
+}
+
 /** 权限等级 */
 export type PlatformPermission = 'admin' | 'maintain' | 'write' | 'triage' | 'read' | 'none'
 
@@ -369,6 +379,12 @@ export interface IGitPlatform {
    *   目录不存在时返回空 entries，不抛错 —— 这是投机查询，不是失败。
    */
   listRepositoryTree(owner: string, repo: string, ref: string, path?: string): Promise<TreeResult>
+
+  /**
+   * 在仓库中搜索代码（只读，供审查时的代码探查工具使用）。
+   * 搜索范围是平台索引的默认分支，不保证包含本次变更的新代码；最多返回 limit 条。
+   */
+  searchCode(owner: string, repo: string, query: string, limit: number): Promise<CodeSearchHit[]>
 }
 
 // ─── 平台单例（ARCH-018）────────────────────────────────────────────────

@@ -23,6 +23,7 @@ import {
 import {
   GitPlatformError,
   type ChangeRequestInfo,
+  type CodeSearchHit,
   type CommentReaction,
   type DiffFile,
   type DiffResult,
@@ -1027,6 +1028,32 @@ export class GitHubPlatform implements IGitPlatform {
   }
 
   // ─── 10. 仓库文件树（DEP-001 / DEP-003）──────────────────────────────────
+
+  /** 仓库内代码搜索（Search API；GitHub 只索引默认分支） */
+  async searchCode(
+    owner: string,
+    repo: string,
+    query: string,
+    limit: number
+  ): Promise<CodeSearchHit[]> {
+    try {
+      const {data} = await octokit.search.code({
+        q: `${query} repo:${owner}/${repo}`,
+        // eslint-disable-next-line camelcase
+        per_page: limit,
+        headers: {accept: 'application/vnd.github.text-match+json'}
+      })
+      return data.items.slice(0, limit).map(item => ({
+        path: item.path,
+        startLine: null,
+        snippet: ((item as any).text_matches ?? [])
+          .map((m: any) => String(m?.fragment ?? ''))
+          .join('\n…\n')
+      }))
+    } catch (e) {
+      throw toGitPlatformError(e)
+    }
+  }
 
   async listRepositoryTree(
     owner: string,

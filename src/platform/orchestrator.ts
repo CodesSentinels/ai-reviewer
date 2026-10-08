@@ -154,7 +154,9 @@ export async function runOrchestrator(deps: OrchestratorDeps): Promise<void> {
   // 提示词里的调查步骤按实际可用工具生成（GitLab trigger 强制关闭 shell，CFG-002）
   const prompts = new Prompts(promptConfig.summarize, promptConfig.summarizeReleaseNotes, {
     shell: options.enableShell,
-    webSearch: options.enableWebSearch
+    webSearch: options.enableWebSearch,
+    // 与 bot-factory 一致：shell 不可用时审查模型拿到只读代码探查工具
+    codeTools: !options.enableShell
   })
 
   // 5. 事件分发

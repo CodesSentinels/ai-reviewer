@@ -15,6 +15,7 @@ import OpenAI, {APIError} from 'openai'
 import pRetry from 'p-retry'
 import {OpenAIOptions, Options} from './options'
 import {sanitizeModelOutput} from './sanitize-model-output'
+import {executeReviewTool, isReviewToolName, reviewToolDefinitions} from './review-tools'
 
 /**
  * 对话 ID 接口，用于维护多轮对话的上下文关系
@@ -25,11 +26,12 @@ export interface Ids {
 }
 
 /**
- * 分析步骤接口，记录模型在审查过程中执行的工具调用（shell / web_search）
- * 用于生成 CodeRabbit 风格的 Analysis chain，展示审查推理过程
+ * 分析步骤接口，记录模型在审查过程中执行的工具调用
+ * （shell / web_search / 只读代码探查工具），用于生成 CodeRabbit 风格的
+ * Analysis chain，展示审查推理过程
  */
 export interface AnalysisStep {
-  type: 'shell' | 'web_search'
+  type: 'shell' | 'web_search' | 'read_file' | 'list_directory' | 'search_code'
   /** shell 调用 ID */
   callId?: string
   /** shell 命令列表 */
@@ -46,6 +48,79 @@ export interface AnalysisStep {
   timedOut?: boolean
   /** web_search 的状态 */
   status?: string
+  /** web_search 的动作：search / open_page / find_in_page */
+  webAction?: string
+  /** web_search 的搜索词 */
+  queries?: string[]
+  /**
+   * web_search 引用来源的**域名**（去重）。WS-004：搜索结果是外部内容，完整 URL
+   * 不进入分析步骤，评论里只展示不可点击的域名
+   */
+  sourceDomains?: string[]
+  /** web_search open_page / find_in_page 所在页面的域名 */
+  pageDomain?: string
+  /** web_search find_in_page 的查找内容 */
+  pattern?: string
+  /** read_file / list_directory 的路径 */
+  path?: string
+  /** read_file 实际读取的行范围 */
+  startLine?: number
+  endLine?: number
+  /** search_code 的搜索词 */
+  query?: string
+  /** list_directory / search_code 的结果条数 */
+  resultCount?: number
+  /** 代码探查工具失败时的原因（会回传给模型） */
+  error?: string
+}
+
+/** 模型发起的函数调用（只读代码探查工具） */
+interface FunctionCallItem {
+  type: 'function_call'
+  call_id: string
+  name: string
+  arguments: string
+}
+
+/** URL → 域名；只接受 http(s) 与合法主机名字符，其余一律丢弃 */
+function domainOf(url: unknown): string | null {
+  if (typeof url !== 'string') return null
+  try {
+    const u = new URL(url)
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return null
+    const host = u.hostname.toLowerCase()
+    return /^[a-z0-9.-]{1,253}$/.test(host) ? host : null
+  } catch {
+    return null
+  }
+}
+
+/** 从 web_search_call 响应项提取 Analysis chain 需要的信息（不保留完整 URL） */
+export function webSearchStepFrom(item: any): AnalysisStep {
+  const action = item?.action ?? {}
+  const step: AnalysisStep = {type: 'web_search', status: item?.status}
+  if (typeof action.type === 'string') step.webAction = action.type
+  const queries: string[] = Array.isArray(action.queries)
+    ? action.queries.filter((q: unknown): q is string => typeof q === 'string' && q !== '')
+    : []
+  if (queries.length === 0 && typeof action.query === 'string' && action.query !== '') {
+    queries.push(action.query)
+  }
+  if (queries.length > 0) step.queries = queries
+  if (Array.isArray(action.sources)) {
+    const domains = [
+      ...new Set(
+        action.sources
+          .map((s: any) => domainOf(s?.url))
+          .filter((d: string | null): d is string => d != null)
+      )
+    ] as string[]
+    if (domains.length > 0) step.sourceDomains = domains
+  }
+  const pageDomain = domainOf(action.url)
+  if (pageDomain != null) step.pageDomain = pageDomain
+  if (typeof action.pattern === 'string' && action.pattern !== '') step.pattern = action.pattern
+  return step
 }
 
 export interface AnalysisCommandOutput {
@@ -175,6 +250,7 @@ export class Bot {
   private readonly maxOutputTokens: number // 最大输出 token 数
   private readonly enableWebSearch: boolean // 是否启用 web search
   private readonly enableShell: boolean // 是否启用 enableShell
+  private readonly enableCodeTools: boolean // 是否提供只读代码探查工具
 
   private readonly options: Options // 全局配置选项
 
@@ -185,6 +261,7 @@ export class Bot {
     this.maxOutputTokens = openaiOptions.tokenLimits.responseTokens
     this.enableWebSearch = openaiOptions.enableWebSearch
     this.enableShell = openaiOptions.enableShell
+    this.enableCodeTools = openaiOptions.enableCodeTools ?? false
 
     if (process.env.OPENAI_API_KEY) {
       // 构建系统消息：包含自定义系统消息 + 知识截止日期 + 当前日期 + 语言要求
@@ -277,6 +354,7 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
         }
 
         const pendingShellCalls: ShellCallItem[] = []
+        const pendingFunctionCalls: FunctionCallItem[] = []
         const outputTypes = response.output.map((item: any) => item.type)
         info(`[web_search_debug] response output types: ${JSON.stringify(outputTypes)}`)
 
@@ -292,11 +370,15 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
           // web_search_call、或响应协议漂移时，开关为 false 也会记下 web search
           // analysis step——那条 step 会进 PR 评论，等于对外宣称做过搜索。
           if (this.enableWebSearch && item.type === 'web_search_call') {
-            info(`[web_search] executed, id: ${(item as any).id}, status: ${(item as any).status}`)
-            analysisSteps.push({
-              type: 'web_search',
-              status: (item as any).status
-            })
+            const step = webSearchStepFrom(item)
+            info(
+              `[web_search] executed, id: ${(item as any).id}, status: ${step.status}, action: ${
+                step.webAction ?? '-'
+              }, queries: ${JSON.stringify(step.queries ?? [])}, source domains: ${
+                step.sourceDomains?.length ?? 0
+              }`
+            )
+            analysisSteps.push(step)
           }
 
           if (item.type === 'shell_call') {
@@ -308,6 +390,10 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
             )
             this.ensureShellAnalysisStep(analysisSteps, shellItem)
             pendingShellCalls.push(shellItem)
+          }
+
+          if (item.type === 'function_call') {
+            pendingFunctionCalls.push(item as FunctionCallItem)
           }
 
           if (item.type === 'shell_call_output') {
@@ -332,19 +418,20 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
           }
         }
 
-        if (pendingShellCalls.length === 0) {
+        if (pendingShellCalls.length === 0 && pendingFunctionCalls.length === 0) {
           break
         }
 
         if (turn === MAX_LOCAL_SHELL_TURNS - 1) {
-          warning(
-            `Reached local shell turn limit (${MAX_LOCAL_SHELL_TURNS}) for response ${response.id}`
-          )
+          warning(`Reached tool turn limit (${MAX_LOCAL_SHELL_TURNS}) for response ${response.id}`)
           break
         }
 
-        const shellOutputs = await this.executeShellCalls(pendingShellCalls, analysisSteps)
-        response = await this.createResponse(this.buildParams(shellOutputs, response.id, tools))
+        const toolOutputs: OpenAI.Responses.ResponseInputItem[] = [
+          ...(await this.executeShellCalls(pendingShellCalls, analysisSteps)),
+          ...(await this.executeFunctionCalls(pendingFunctionCalls, analysisSteps))
+        ]
+        response = await this.createResponse(this.buildParams(toolOutputs, response.id, tools))
       }
 
       // info(`[analysis_chain] total analysis steps captured: ${analysisSteps.length}`)
@@ -393,7 +480,40 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
     if (this.enableShell) {
       tools.push({type: 'shell', environment: {type: 'local'}})
     }
+    if (this.enableCodeTools) {
+      tools.push(...reviewToolDefinitions())
+    }
     return tools
+  }
+
+  /**
+   * 执行模型发起的只读代码探查调用。工具未启用或名称未知时同样回一条
+   * function_call_output（Responses API 要求每个 function_call 都有对应输出）。
+   */
+  private readonly executeFunctionCalls = async (
+    calls: FunctionCallItem[],
+    analysisSteps: AnalysisStep[]
+  ): Promise<OpenAI.Responses.ResponseInputItem[]> => {
+    const outputs: OpenAI.Responses.ResponseInputItem[] = []
+    for (const call of calls) {
+      let output: string
+      if (this.enableCodeTools && isReviewToolName(call.name)) {
+        const result = await executeReviewTool(call.name, call.arguments)
+        analysisSteps.push(result.step)
+        output = result.output
+        info(
+          `[code_tools] ${call.name} ${call.arguments} → ${
+            result.step.error != null ? `error: ${result.step.error}` : `${output.length} chars`
+          }`
+        )
+      } else {
+        output = `error: tool ${call.name} is not available`
+        warning(`[code_tools] unexpected function call: ${call.name}`)
+      }
+      // eslint-disable-next-line camelcase
+      outputs.push({type: 'function_call_output', call_id: call.call_id, output})
+    }
+    return outputs
   }
 
   private readonly buildParams = (
@@ -408,6 +528,8 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
       temperature: this.temperature,
       max_output_tokens: this.maxOutputTokens,
       ...(tools.length > 0 && {tools}),
+      // web search 的来源默认不返回，要显式请求，Analysis chain 才能列出参考来源
+      ...(this.enableWebSearch && {include: ['web_search_call.action.sources']}),
       ...(previousResponseId && {
         previous_response_id: previousResponseId
       })

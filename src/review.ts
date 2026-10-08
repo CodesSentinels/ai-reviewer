@@ -1609,7 +1609,64 @@ function normalizeRepositoryPath(path: string): string {
     .replace(/\.git$/, '')
 }
 
-function formatAnalysisChain(steps: AnalysisStep[], repositoryUrl: string): string {
+/** Analysis chain 中展示的来源上限 */
+const ANALYSIS_CHAIN_MAX_SOURCES = 5
+
+/** 放进行内代码片段的文本：去掉反引号与换行，避免破坏 markdown */
+function inlineCode(text: string, max = 200): string {
+  const t = text.replace(/[`\r\n]+/g, ' ').trim()
+  return `\`${t.length > max ? `${t.slice(0, max)}…` : t}\``
+}
+
+/**
+ * web search 步骤的展示。WS-004：搜索结果是外部内容，进评论正文就是注入 / 钓鱼链接
+ * 通道——这里只展示模型的搜索词与来源**域名**，都放在行内代码里（不可点击、
+ * 不渲染 markdown / @提及），不展示完整 URL、标题或摘要。
+ */
+function formatWebSearchStep(step: AnalysisStep): string {
+  if (step.webAction === 'open_page' && step.pageDomain != null) {
+    return `🌐 Opened page on ${inlineCode(step.pageDomain)}\n\n---\n\n`
+  }
+  if (step.webAction === 'find_in_page' && step.pattern != null) {
+    const where = step.pageDomain != null ? ` on ${inlineCode(step.pageDomain)}` : ''
+    return `🔎 Searched in page: ${inlineCode(step.pattern)}${where}\n\n---\n\n`
+  }
+  if (step.queries == null || step.queries.length === 0) {
+    return `🔍 Web search executed (status: ${step.status ?? 'unknown'})\n\n---\n\n`
+  }
+  let out = `🔍 Web search: ${step.queries.map(q => inlineCode(q)).join(', ')}\n`
+  const domains = step.sourceDomains ?? []
+  if (domains.length > 0) {
+    const shown = domains.slice(0, ANALYSIS_CHAIN_MAX_SOURCES).map(d => inlineCode(d))
+    const more =
+      domains.length > ANALYSIS_CHAIN_MAX_SOURCES
+        ? ` (+${domains.length - ANALYSIS_CHAIN_MAX_SOURCES})`
+        : ''
+    out += `\nSources: ${shown.join(', ')}${more}\n`
+  }
+  return `${out}\n---\n\n`
+}
+
+function formatCodeToolStep(step: AnalysisStep): string {
+  const failed = step.error != null ? ` — failed: ${step.error}` : ''
+  if (step.type === 'read_file') {
+    const range =
+      step.error == null && step.startLine != null && step.endLine != null
+        ? ` (lines ${step.startLine}-${step.endLine})`
+        : ''
+    return `📄 Read file: ${inlineCode(step.path ?? '')}${range}${failed}\n\n---\n\n`
+  }
+  if (step.type === 'list_directory') {
+    const count = step.error == null ? ` (${step.resultCount ?? 0} entries)` : ''
+    return `📁 Listed directory: ${inlineCode(
+      step.path === '' || step.path == null ? '(root)' : step.path
+    )}${count}${failed}\n\n---\n\n`
+  }
+  const count = step.error == null ? ` (${step.resultCount ?? 0} results)` : ''
+  return `🔎 Searched code: ${inlineCode(step.query ?? '')}${count}${failed}\n\n---\n\n`
+}
+
+export function formatAnalysisChain(steps: AnalysisStep[], repositoryUrl: string): string {
   getLogger().info(`[formatAnalysisChain] called with ${steps.length} steps`)
   if (steps.length === 0) return ''
 
@@ -1633,7 +1690,13 @@ function formatAnalysisChain(steps: AnalysisStep[], repositoryUrl: string): stri
         chain += '---\n\n'
       }
     } else if (step.type === 'web_search') {
-      chain += `🔍 Web search executed (status: ${step.status ?? 'unknown'})\n\n---\n\n`
+      chain += formatWebSearchStep(step)
+    } else if (
+      step.type === 'read_file' ||
+      step.type === 'list_directory' ||
+      step.type === 'search_code'
+    ) {
+      chain += formatCodeToolStep(step)
     }
   }
 
