@@ -40,6 +40,7 @@ jest.mock('./../src/conversation', () => ({
 }))
 
 import {handleCommentEvent} from '../src/command-handler'
+import {setLogger} from '../src/platform/logger'
 
 function makeExecCtx(overrides: Record<string, any> = {}): any {
   return {
@@ -68,6 +69,25 @@ describe('handleCommentEvent()', () => {
     reviewState.codeReview.mockResolvedValue(undefined)
     conversationState.handleConversation.mockResolvedValue(undefined)
     conversationState.handleIssueConversation.mockResolvedValue(undefined)
+  })
+
+  test('调度结果经平台 Logger 输出（GitLab 入口靠它给 pipeline 起名）', async () => {
+    const lines: string[] = []
+    setLogger({
+      info: m => lines.push(m),
+      warning: () => undefined,
+      error: () => undefined,
+      debug: () => undefined
+    })
+    dispatcherState.dispatchCommentEvent.mockResolvedValue({
+      kind: 'executed',
+      command: 'help',
+      ok: true
+    })
+    await handleCommentEvent({execCtx: makeExecCtx(), options: stubOptions, prompts: stubPrompts})
+    expect(lines).toContain(
+      'commentEvent dispatcher outcome: {"kind":"executed","command":"help","ok":true}'
+    )
   })
 
   test('始终调用 bootstrapCommands()', async () => {

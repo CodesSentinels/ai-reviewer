@@ -48,6 +48,7 @@ gitlab-runner register \
 | `AI_REVIEWER_BOT_GITLAB_LOGIN` | — | `GITLAB_PAT` 对应账号的用户名，用于忽略 bot 自己的评论 |
 | `AI_REVIEWER_OPENAI_BASE_URL` | — | 可选，兼容 OpenAI 协议的模型网关地址 |
 | `AI_REVIEWER_OPENAI_LIGHT_MODEL` / `AI_REVIEWER_OPENAI_HEAVY_MODEL` / `AI_REVIEWER_LANGUAGE` | — | 可选 |
+| `AI_REVIEWER_PIPELINE_TOKEN` | Protected + Masked + Hidden | 可选。**本仓库**的 Project Access Token（**Maintainer**、`api` scope；改名接口不接受 Developer，会返回 403），用于给每条 pipeline 改名，标明它在处理哪个 MR、哪次提交、做了什么（如 `MR !15 @0aec0f4 · push → 审查完成，发布 1 条评论`、`MR !15 @0aec0f4 · ↳ bot 发布行级评论 · 已跳过`）。不配置则保持默认名称，不影响审查 |
 
 ### 3. 保护默认分支
 
