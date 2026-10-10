@@ -95,6 +95,8 @@ jest.mock('../src/platform/git-platform', () => {
 })
 
 import {handleCommentEvent} from '../src/command-handler'
+import {setLogger} from '../src/platform/logger'
+import {GitHubLogger} from '../src/platform/github-logger'
 
 // ─── 密钥夹具 ────────────────────────────────────────────────────────────────
 
@@ -153,6 +155,8 @@ describe('密钥不得从任何出口漏出（TEST-029）', () => {
   beforeEach(() => {
     jest.clearAllMocks()
     logLines.length = 0
+    // 与 GitHub 入口（main.ts）一致：日志经 GitHubLogger 写到 @actions/core
+    setLogger(new GitHubLogger())
     for (const k of ['OPENAI_API_KEY', 'GITLAB_PAT']) savedEnv[k] = process.env[k]
     // 按值脱敏那一层读的是真实 env，必须在这里落地
     process.env.OPENAI_API_KEY = ENV_SECRET

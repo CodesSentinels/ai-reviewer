@@ -218,3 +218,28 @@ export function createGitLabClient(config: GitLabClientConfig): GitLabApi {
     ? new Gitlab({host, jobToken: config.credential.value, queryTimeout})
     : new Gitlab({host, token: config.credential.value, queryTimeout})
 }
+
+/**
+ * 修改 pipeline 名字（`PUT /projects/:id/pipelines/:pipeline_id/metadata`）。
+ *
+ * gitbeaker 43 没有封装这个端点，这里用同一个 client 的底层 requester 调用
+ * （GLAPI-031：仍走本文件的 host 校验、认证与超时，不另起原生 HTTP）。
+ * 凭据由调用方给出：改名用的是产物仓库自己的 token，不是审查用的那个。
+ *
+ * 只用于展示性的改名，失败不重试——不值得为它拖长 job。
+ */
+export async function updatePipelineName(
+  config: GitLabClientConfig,
+  target: {projectId: string; pipelineId: string; name: string},
+  createClient: (
+    clientConfig: GitLabClientConfig
+  ) => Pick<GitLabApi, 'Pipelines'> = createGitLabClient
+): Promise<void> {
+  const api = createClient(config)
+  await api.Pipelines.requester.put(
+    `projects/${encodeURIComponent(target.projectId)}/pipelines/${encodeURIComponent(
+      target.pipelineId
+    )}/metadata`,
+    {body: {name: target.name}}
+  )
+}

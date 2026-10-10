@@ -35,8 +35,22 @@ import {
 import {CONFIG_DEFAULTS} from './platform/config-provider'
 import {parse, resolveBotMentions} from './commands/parser'
 import {tryEarlyReaction} from './commands/early-reaction'
+import {
+  RunOutcome,
+  buildPipelineName,
+  describeTrigger,
+  observingLogger,
+  renamePipeline
+} from './platform/gitlab-pipeline-name'
 
-const logger = new GitLabLogger()
+// 本次运行的处理结论：所有日志（含共享核心经 setLogger 打出的）都经它观察，
+// 结束时据此给 pipeline 改名，见 gitlab-pipeline-name.ts
+const outcome = new RunOutcome()
+const logger = observingLogger(new GitLabLogger(), outcome)
+
+// pipeline 改名用：run() 读到的 payload 与确认过的 bot 身份
+let triggerPayload: unknown = null
+let knownBotLogins: string[] = []
 
 /**
  * 从 GitLab 项目路径拆出 owner/repo——subgroup 项目路径可能含多级 namespace
@@ -147,6 +161,7 @@ export async function run(): Promise<void> {
     process.exitCode = 1
     return
   }
+  triggerPayload = parsed
 
   const validation = validateTriggerPayload(parsed)
   if (!validation.ok) {
@@ -184,6 +199,7 @@ export async function run(): Promise<void> {
   // 事件被接受之后才自检：被拒绝的事件（fork MR、无关事件）不该产生无关输出，
   // 也不该为此多打一次 API
   const botLogins = await verifyBotIdentity(platform)
+  knownBotLogins = botLogins
 
   // ─── EVENT-018：自评论过滤 ───────────────────────────────────────────────
   //
@@ -226,6 +242,7 @@ export async function run(): Promise<void> {
             `(event=${staleCheck.eventHeadSha} current=${staleCheck.currentHeadSha}) — ` +
             'skipping stale delivery (EVENT-012)'
         )
+        outcome.skip('HEAD 已变化')
         return
       }
     } catch (e) {
@@ -257,6 +274,7 @@ export async function run(): Promise<void> {
             execCtx.headSha
           )}) — skipping duplicate delivery (EVENT-013)`
       )
+      outcome.skip('已审查过')
       return
     }
   }
@@ -303,6 +321,7 @@ export async function run(): Promise<void> {
         logger.info(
           `Note ${execCtx.comment.id} already processed (idempotency key ${processedRef.idempotencyKey}) — skipping duplicate delivery (EVENT-021)`
         )
+        outcome.skip('重复投递')
         return
       }
     }
@@ -344,6 +363,24 @@ export async function run(): Promise<void> {
   }
 }
 
+/**
+ * 给本次 pipeline 起名（best effort，失败不影响退出码）。
+ *
+ * 在 run() 之后统一做：提前返回的分支很多，放在这里才能覆盖全部出口。bot 身份
+ * 自检只在事件被接受后才跑，被提前拒绝的事件（如 note 编辑）退回配置的 bot
+ * 用户名来判断是不是 bot 自己的操作。
+ */
+async function namePipeline(): Promise<void> {
+  const configuredLogin = (process.env.AI_REVIEWER_BOT_GITLAB_LOGIN ?? '').trim()
+  const botLogins = knownBotLogins.length > 0 ? knownBotLogins : [configuredLogin].filter(Boolean)
+  const trigger = describeTrigger(triggerPayload, botLogins)
+  // bot 自己的操作一律不触发处理，结论固定为「已跳过」，不受下游日志影响
+  const result = trigger.byBot ? '已跳过' : outcome.describe(process.exitCode === 1)
+  const name = buildPipelineName(trigger, result)
+  logger.debug(`pipeline name: ${name}`)
+  await renamePipeline(name, logger)
+}
+
 // 不用顶层 await（同 main.ts 的既有原因）
 void (async (): Promise<void> => {
   try {
@@ -351,5 +388,10 @@ void (async (): Promise<void> => {
   } catch (e) {
     logger.error(`Unhandled error in gitlab-trigger run(): ${redact(String(e))}`)
     process.exitCode = 1
+  }
+  try {
+    await namePipeline()
+  } catch (e) {
+    logger.warning(`pipeline name: ${redact(String(e))}`)
   }
 })()
