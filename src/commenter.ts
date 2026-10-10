@@ -1185,13 +1185,22 @@ ${chain}
   }
 
   /**
-   * 从 commit 列表中找到最近一次已审查的 commit ID
-   * 从后向前遍历，返回第一个匹配的已审查 commit
+   * 找到最近一次审查时的 HEAD，作为增量 diff 的起点
+   *
+   * 已审查列表由 addReviewedCommitId 按审查顺序追加，末尾就是上一次审查的 HEAD。
+   * 从末尾往前找第一个仍在当前 PR/MR 中的 SHA：force push / rebase 改写掉的
+   * 旧 HEAD 会被跳过，退回到更早一次仍有效的审查点；都无效时返回空串（调用方
+   * 退回 base 全量审查）。
+   *
+   * 不能按 commitIds 的顺序找：平台返回的顺序不一致（GitHub 从旧到新，GitLab
+   * 从新到旧），按列表末尾倒推在 GitLab 上会选中**最早**审过的提交，增量范围
+   * 退回到很久以前。
    */
   getHighestReviewedCommitId(commitIds: string[], reviewedCommitIds: string[]): string {
-    for (let i = commitIds.length - 1; i >= 0; i--) {
-      if (reviewedCommitIds.includes(commitIds[i])) {
-        return commitIds[i]
+    const inChangeRequest = new Set(commitIds)
+    for (let i = reviewedCommitIds.length - 1; i >= 0; i--) {
+      if (inChangeRequest.has(reviewedCommitIds[i])) {
+        return reviewedCommitIds[i]
       }
     }
     return ''

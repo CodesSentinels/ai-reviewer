@@ -223,7 +223,12 @@ export interface IGitPlatform {
     body: string
   ): Promise<void>
 
-  /** 获取 PR/MR 的所有 commit SHA */
+  /**
+   * 获取 PR/MR 的所有 commit SHA
+   *
+   * 顺序由平台决定，不做统一：GitHub 从旧到新，GitLab 从新到旧。
+   * 调用方只能把结果当集合用，不要依赖顺序。
+   */
   listChangeRequestCommits(owner: string, repo: string, changeRequestId: number): Promise<string[]>
 
   // ─── 2. Diff ──────────────────────────────────────────────────────────────
