@@ -388,15 +388,37 @@ export async function run(): Promise<void> {
 }
 
 /**
+ * 起名用的 bot 身份。
+ *
+ * bot 身份自检只在事件被接受后才跑。被提前拒绝的事件（如 bot 编辑摘要触发的
+ * note 更新）先退回配置的 bot 用户名；没有配置值时（未配置，或启用映射表后被
+ * 忽略）用事件项目对应的凭据查一次 `GET /user`，否则认不出是 bot 的操作。
+ * 只在确实要改名时才多查这一次；查不到就当不知道，不影响改名本身。
+ */
+async function botLoginsForNaming(): Promise<string[]> {
+  if (knownBotLogins.length > 0) return knownBotLogins
+  const configuredLogin = configuredBotGitLabLogin()
+  if (configuredLogin !== '') return [configuredLogin]
+  if ((process.env.AI_REVIEWER_PIPELINE_TOKEN ?? '').trim() === '') return []
+  const projectPath = (triggerPayload as {project?: {path_with_namespace?: unknown}} | null)
+    ?.project?.path_with_namespace
+  if (typeof projectPath !== 'string' || projectPath === '') return []
+  try {
+    const platform = new GitLabPlatform(prepareGitLabClientConfig()(projectPath))
+    return [await platform.verifyCredential()]
+  } catch (e) {
+    logger.debug(`pipeline name: bot identity lookup failed: ${redact(String(e))}`)
+    return []
+  }
+}
+
+/**
  * 给本次 pipeline 起名（best effort，失败不影响退出码）。
  *
- * 在 run() 之后统一做：提前返回的分支很多，放在这里才能覆盖全部出口。bot 身份
- * 自检只在事件被接受后才跑，被提前拒绝的事件（如 note 编辑）退回配置的 bot
- * 用户名来判断是不是 bot 自己的操作。
+ * 在 run() 之后统一做：提前返回的分支很多，放在这里才能覆盖全部出口。
  */
 async function namePipeline(): Promise<void> {
-  const configuredLogin = configuredBotGitLabLogin()
-  const botLogins = knownBotLogins.length > 0 ? knownBotLogins : [configuredLogin].filter(Boolean)
+  const botLogins = await botLoginsForNaming()
   const trigger = describeTrigger(triggerPayload, botLogins)
   // bot 自己的操作一律不触发处理，结论固定为「已跳过」，不受下游日志影响
   const result = trigger.byBot ? '已跳过' : outcome.describe(process.exitCode === 1)

@@ -51,8 +51,14 @@ const mockUsers = {showCurrentUser: jest.fn<() => Promise<any>>()}
 // 直接抛错，恰好落入「读取失败→放行」分支，掩盖了「读取成功→比较结果」这条
 // 真正要测的路径，所以这里显式给出可控的默认返回值。
 const mockMergeRequests = {show: jest.fn<(...a: any[]) => Promise<any>>()}
+// pipeline 改名（run() 之后）经 Pipelines.requester.put 发出
+const mockPipelinesPut = jest.fn<(...a: any[]) => Promise<any>>()
 jest.mock('@gitbeaker/rest', () => ({
-  Gitlab: jest.fn().mockImplementation(() => ({Users: mockUsers, MergeRequests: mockMergeRequests}))
+  Gitlab: jest.fn().mockImplementation(() => ({
+    Users: mockUsers,
+    MergeRequests: mockMergeRequests,
+    Pipelines: {requester: {put: mockPipelinesPut}}
+  }))
 }))
 
 // EVENT-020/021 幂等账本的存储机制（gitlab-note-idempotency.ts）已有独立单元
@@ -562,6 +568,77 @@ describe('gitlab-trigger.ts run()', () => {
       expect(warned).toContain('CI_JOB_TOKEN')
       expect(warned).toContain('/projects/:id/members')
       expect(warned).toContain('fail closed')
+    })
+  })
+
+  describe('pipeline 改名：提前跳过的事件也能认出 bot', () => {
+    const CI_ENV = {
+      CI_SERVER_URL: 'https://gitlab.example.com',
+      CI_PROJECT_ID: '41',
+      CI_PIPELINE_ID: '1195',
+      AI_REVIEWER_PIPELINE_TOKEN: 'tok-pipeline'
+    }
+
+    beforeEach(() => {
+      Object.assign(process.env, CI_ENV)
+      process.env.TRIGGER_PAYLOAD = '/tmp/payload.json'
+      // bot 编辑自己的评论：入口在身份自检之前就跳过
+      fsState.readFileSync.mockReturnValue(JSON.stringify(noteNonCreate))
+      mockUsers.showCurrentUser.mockResolvedValue({username: 'alice'})
+      mockPipelinesPut.mockResolvedValue({})
+    })
+
+    afterEach(() => {
+      for (const key of Object.keys(CI_ENV)) delete process.env[key]
+    })
+
+    function renamedTo(): string | undefined {
+      return (mockPipelinesPut.mock.calls[0]?.[1] as {body?: {name?: string}} | undefined)?.body
+        ?.name
+    }
+
+    test('没有配置 bot 用户名 → 用凭据查一次身份，按 bot 的操作起名', async () => {
+      await runTrigger()
+
+      expect(mockUsers.showCurrentUser).toHaveBeenCalledTimes(1)
+      expect(renamedTo()).toBe('MR !7 @head-sh · ↳ bot 更新评论 · 已跳过')
+    })
+
+    test('启用映射表（配置值被忽略）→ 用映射到的凭据查身份', async () => {
+      process.env.AI_REVIEWER_GITLAB_TOKEN_MAP = 'octo = GITLAB_PAT'
+      process.env.AI_REVIEWER_BOT_GITLAB_LOGIN = 'someone-else'
+
+      await runTrigger()
+
+      expect(mockUsers.showCurrentUser).toHaveBeenCalledTimes(1)
+      expect(renamedTo()).toContain('↳ bot 更新评论')
+    })
+
+    test('配置了 bot 用户名 → 直接用，不多查', async () => {
+      process.env.AI_REVIEWER_BOT_GITLAB_LOGIN = 'alice'
+
+      await runTrigger()
+
+      expect(mockUsers.showCurrentUser).not.toHaveBeenCalled()
+      expect(renamedTo()).toContain('↳ bot 更新评论')
+    })
+
+    test('身份查询失败 → 按普通用户的操作起名，不影响改名', async () => {
+      mockUsers.showCurrentUser.mockRejectedValue(new Error('401 Unauthorized'))
+
+      await runTrigger()
+
+      expect(renamedTo()).toContain('评论被编辑 → 已跳过')
+      expect(process.exitCode).toBeUndefined()
+    })
+
+    test('没配改名 token → 不改名，也不为起名多查身份', async () => {
+      delete process.env.AI_REVIEWER_PIPELINE_TOKEN
+
+      await runTrigger()
+
+      expect(mockUsers.showCurrentUser).not.toHaveBeenCalled()
+      expect(mockPipelinesPut).not.toHaveBeenCalled()
     })
   })
 
