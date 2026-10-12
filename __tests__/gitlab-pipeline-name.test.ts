@@ -296,4 +296,17 @@ describe('observingLogger', () => {
     ])
     expect(outcome.describe(false)).toBe('已跳过：无可审查文件')
   })
+
+  test('转发日志分段（包了一层之后分段不能丢）', () => {
+    const events: string[] = []
+    const inner = {
+      ...silentLogger(),
+      startSection: (id: string, title: string) => events.push(`start:${id}:${title}`),
+      endSection: (id: string) => events.push(`end:${id}`)
+    }
+    const logger = observingLogger(inner, new RunOutcome())
+    logger.startSection?.('ai_review_review', 'Review files')
+    logger.endSection?.('ai_review_review')
+    expect(events).toEqual(['start:ai_review_review:Review files', 'end:ai_review_review'])
+  })
 })

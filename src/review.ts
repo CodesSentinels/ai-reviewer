@@ -58,6 +58,7 @@ import {Inputs} from './inputs'
 import {type Options} from './options'
 import {getPlatform} from './platform/git-platform'
 import {getLogger} from './platform/logger'
+import {beginLogSection, endLogSection} from './platform/log-section'
 import {type ExecutionContext} from './platform/execution-context'
 import {type Prompts} from './prompts'
 import {mergeReviewsByTopic, type Review} from './review-dedup'
@@ -231,6 +232,22 @@ export const codeReview = async (
   prompts: Prompts,
   runOptions: CodeReviewRunOptions = {}
 ): Promise<void> => {
+  try {
+    await runCodeReview(execCtx, lightBot, heavyBot, options, prompts, runOptions)
+  } finally {
+    // 各阶段用 beginLogSection 切换分段，中途 return / 抛错时在这里收尾
+    endLogSection()
+  }
+}
+
+const runCodeReview = async (
+  execCtx: ExecutionContext,
+  lightBot: Bot,
+  heavyBot: Bot,
+  options: Options,
+  prompts: Prompts,
+  runOptions: CodeReviewRunOptions
+): Promise<void> => {
   // 登记当前上下文：Commenter 在十几处被构造，签名里没有 execCtx，只能读模块级
   // 上下文。共享核心入口统一登记一次，调用方（main.ts / gitlab-trigger.ts /
   // 命令 handler）不必各自记得这件事。
@@ -238,6 +255,10 @@ export const codeReview = async (
 
   const commenter: Commenter = new Commenter()
   const fromCommand = runOptions.source === 'command'
+  // GitLab 上 bot 的每次写入（评论、改 MR 描述）都会经 webhook 再触发一条 pipeline。
+  // 这里把可以省掉的写入省掉：不写「审查中」横幅，发布说明并入摘要评论而不改描述。
+  // GitHub 上写入不会触发新的运行，保持原有体验。
+  const minimizeWrites = options.minimizeBotWrites ?? execCtx.platform === 'gitlab'
   const reviewMode = runOptions.mode ?? 'incremental'
 
   // 初始化并发控制器：分别限制 OpenAI 和 GitHub API 的并发数
@@ -257,6 +278,8 @@ export const codeReview = async (
     )
     return
   }
+
+  beginLogSection('ai_review_prepare', 'Prepare: load changes and context')
 
   // PR/MR 详情统一现查（ARCH-005）。
   //
@@ -765,10 +788,16 @@ ${
     return
   }
 
-  // 更新摘要评论为"审查进行中"状态
-  const inProgressSummarizeCmt = commenter.addInProgressStatus(existingSummarizeCmtBody, statusMsg)
+  // 更新摘要评论为"审查进行中"状态（minimizeWrites 时摘要评论只在结束时写一次）
+  if (!minimizeWrites) {
+    const inProgressSummarizeCmt = commenter.addInProgressStatus(
+      existingSummarizeCmtBody,
+      statusMsg
+    )
+    await commenter.comment(`${inProgressSummarizeCmt}`, summarizeTag(), 'replace')
+  }
 
-  await commenter.comment(`${inProgressSummarizeCmt}`, summarizeTag(), 'replace')
+  beginLogSection('ai_review_summarize', 'Summarize changes')
 
   // ==================== 阶段一：并行文件摘要 ====================
   const summariesFailed: string[] = []
@@ -932,13 +961,16 @@ ${filename}: ${summary}
 
   const botName = options.botName
 
-  // 生成发布说明并写入 PR 描述
+  // 生成发布说明并写入 PR 描述（minimizeWrites 时改为并入摘要评论）
+  let releaseNotesForSummary = ''
   if (options.disableReleaseNotes === false) {
     const releaseNotesResponse =
       (await chatOrNull(heavyBot, prompts.renderSummarizeReleaseNotes(inputs), '发布说明生成')) ??
       ''
     if (releaseNotesResponse === '') {
       getLogger().info('release notes: nothing obtained from openai')
+    } else if (minimizeWrites) {
+      releaseNotesForSummary = releaseNotesResponse
     } else {
       // REVIEW-003 第二道：**紧贴写入**。放在模型调用之前等于没挡——
       // 生成 release notes 本身就是一次重量模型调用，期间完全可能又推了新 commit。
@@ -964,6 +996,7 @@ ${filename}: ${summary}
 
   // 构建最终的摘要评论内容（包含隐藏的状态数据）
   let summarizeComment = `${summarizeFinalResponse}
+${releaseNotesForSummary !== '' ? `\n### Release Notes\n\n${releaseNotesForSummary}\n` : ''}
 ${rawSummaryStartTag()}
 ${inputs.rawSummary}
 ${rawSummaryEndTag()}
@@ -1013,6 +1046,8 @@ ${
   // 提到函数作用域：最终摘要评论在审查阶段**之后**发布，需要读这份失败清单
   // 来生成「本次审查不完整」提示（REVIEW-006）
   const reviewsFailed: string[] = []
+
+  beginLogSection('ai_review_review', 'Review files')
 
   // ==================== 阶段四：逐文件代码审查 ====================
   if (!options.disableReview && runOptions.summaryOnly !== true && !skipLineReviewForInitialPr) {
@@ -1465,6 +1500,8 @@ ${
 
 </details>
 `
+    beginLogSection('ai_review_publish', 'Publish comments and summary')
+
     // REVIEW-003 第三道：**阶段四跑完之后**才检查。
     // 逐文件模型审查是整条流水线最耗时的一段（每个文件一次重量模型调用），
     // 把门禁设在它之前等于什么都没挡——期间推的新 commit 照样会被旧结果覆盖。
@@ -1489,6 +1526,8 @@ ${
       async () => (await ensureHeadFresh('line-level write')).fresh
     )
   }
+
+  beginLogSection('ai_review_publish', 'Publish comments and summary')
 
   // summary-only 等跳过审查阶段的场景：保留既有的已审查 commit 记录，
   // 否则 replace 摘要评论会清空增量审查标记，导致下次自动审查从 base 重审

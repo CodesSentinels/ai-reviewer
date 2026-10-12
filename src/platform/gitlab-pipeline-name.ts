@@ -259,6 +259,9 @@ export function observingLogger(inner: Logger, outcome: RunOutcome): Logger {
       inner.warning(msg)
     },
     error: msg => inner.error(msg),
-    debug: msg => inner.debug(msg)
+    debug: msg => inner.debug(msg),
+    // 可选方法也要转发，否则包了一层之后日志分段就丢了
+    startSection: (id, title) => inner.startSection?.(id, title),
+    endSection: id => inner.endSection?.(id)
   }
 }

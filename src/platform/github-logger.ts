@@ -8,7 +8,7 @@
  * 是因为调用点有几百处，漏一处就等于没做——debug 输出尤其容易被忽略。
  */
 
-import {debug, error, info, warning} from '@actions/core'
+import {debug, endGroup, error, info, startGroup, warning} from '@actions/core'
 import type {Logger} from './logger'
 import {redactForLog} from '../redact'
 
@@ -27,5 +27,13 @@ export class GitHubLogger implements Logger {
 
   debug(msg: string): void {
     debug(redactForLog(msg))
+  }
+
+  startSection(_id: string, title: string): void {
+    startGroup(redactForLog(title))
+  }
+
+  endSection(_id: string): void {
+    endGroup()
   }
 }

@@ -165,6 +165,10 @@ function makeOptions(over: Record<string, any> = {}): any {
     knowledgeCutOff: ''
   }
   return {
+    // GitLab 默认省掉「审查中」横幅与改描述（每次写入都会再触发 pipeline）——这是有意的
+    // 平台差异，单独在 release-notes-dual-platform 里验证。这里比较的是共享核心与
+    // 两个 adapter，所以两侧都按同一种写入方式跑。
+    minimizeBotWrites: false,
     debug: false,
     disableReview: false,
     disableReleaseNotes: false,
