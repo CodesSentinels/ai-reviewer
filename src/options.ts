@@ -79,6 +79,10 @@ export class Options {
    * 而是读取低权限 lint job 产出的 JSON 报告——持业务密钥的执行面不接触 PR 代码。
    */
   lintReportPath: string
+  /** 文件数超过此值时在摘要里提醒（≤ 0 关闭提醒），见 large-pr.ts */
+  warnFiles: number
+  /** 自动审查识别到初始化 PR 时只生成摘要、跳过行级审查，见 large-pr.ts */
+  initialPrSummaryOnly: boolean
 
   constructor(
     debug: boolean,
@@ -112,7 +116,9 @@ export class Options {
     botIcon = '🤖',
     botName = 'AI Reviewer',
     botLogin = '',
-    lintReportPath = ''
+    lintReportPath = '',
+    warnFiles = '50',
+    initialPrSummaryOnly = true
   ) {
     this.debug = debug
     this.disableReview = disableReview
@@ -148,6 +154,8 @@ export class Options {
     this.botName = botName
     this.botLogin = botLogin
     this.lintReportPath = lintReportPath
+    this.warnFiles = parseInt(warnFiles)
+    this.initialPrSummaryOnly = initialPrSummaryOnly
   }
 
   /** 打印所有配置项到日志，方便调试 */
@@ -156,6 +164,8 @@ export class Options {
     info(`disable_review: ${this.disableReview}`)
     info(`disable_release_notes: ${this.disableReleaseNotes}`)
     info(`max_files: ${this.maxFiles}`)
+    info(`warn_files: ${this.warnFiles}`)
+    info(`initial_pr_summary_only: ${this.initialPrSummaryOnly}`)
     info(`review_simple_changes: ${this.reviewSimpleChanges}`)
     info(`review_comment_lgtm: ${this.reviewCommentLGTM}`)
     info(`path_filters: ${this.pathFilters}`)

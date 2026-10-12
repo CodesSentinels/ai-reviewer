@@ -615,3 +615,150 @@ describe('REVIEW-012：full review 的去重范围不得被伪造 marker 抑制'
     expect(await runFullReview()).not.toContain('[full-review-dedup] skipping patch')
   })
 })
+
+describe('Issue #51：大型 PR', () => {
+  /** patch 里带一个唯一标记：摘要提示词不含文件名，只能按 diff 内容判断送进了模型的是哪个文件 */
+  function patchWith(mark: string, extraLines = 0): string {
+    const extra = Array.from({length: extraLines}, (_, i) => `+${mark}_${i}`)
+    return ['@@ -1,2 +1,3 @@', ' a', `+${mark}`, ...extra, ' b'].join('\n')
+  }
+
+  function addedFiles(n: number): any[] {
+    return Array.from({length: n}, (_, i) => ({
+      filename: `src/m${i}.ts`,
+      status: 'added',
+      patch: `@@ -0,0 +1,1 @@\n+mark_${i}_end`
+    }))
+  }
+
+  /** 送进模型的提示词里出现过哪些标记 */
+  function promptedMarks(bot: any, marks: string[]): string[] {
+    const prompts = bot.chat.mock.calls.map((c: any[]) => String(c[0])).join('\n')
+    return marks.filter(m => prompts.includes(m))
+  }
+
+  test('超出 max_files 时按优先级截断：代码优先、变更多的优先，锁文件和文档靠后', async () => {
+    setDiff([
+      {filename: 'package-lock.json', status: 'modified', patch: patchWith('tok_lock', 9)},
+      {filename: 'README.md', status: 'modified', patch: patchWith('tok_readme', 9)},
+      {filename: 'src/small.ts', status: 'modified', patch: patchWith('tok_small')},
+      {filename: 'src/big.ts', status: 'modified', patch: patchWith('tok_big', 4)}
+    ])
+    const light = makeBot()
+    await codeReview(useCtx(), light, makeBot(), makeOptions({maxFiles: 2}), new Prompts('', ''))
+
+    expect(promptedMarks(light, ['tok_lock', 'tok_readme', 'tok_small', 'tok_big']).sort()).toEqual(
+      ['tok_big', 'tok_small']
+    )
+    expect(logs.join('\n')).toContain('processing by priority')
+  })
+
+  test('未超出 max_files 时不排序（保持平台原顺序）', async () => {
+    setDiff([
+      {filename: 'README.md', status: 'modified', patch: patchWith('tok_readme', 5)},
+      {filename: 'src/a.ts', status: 'modified', patch: patchWith('tok_a')}
+    ])
+    await codeReview(
+      useCtx(),
+      makeBot(),
+      makeBot(),
+      makeOptions({maxFiles: 5}),
+      new Prompts('', '')
+    )
+    expect(logs.join('\n')).not.toContain('processing by priority')
+  })
+
+  test('文件数超过 warn_files：摘要里提醒；≤ 0 时不提醒', async () => {
+    const files = ['a.ts', 'b.ts', 'c.ts'].map(filename => ({
+      filename,
+      status: 'modified',
+      patch: patchWith(`tok_${filename}`)
+    }))
+    setDiff(files)
+    await codeReview(
+      useCtx(),
+      makeBot(),
+      makeBot(),
+      makeOptions({warnFiles: 2}),
+      new Prompts('', '')
+    )
+    expect(postedBodies()).toContain('本次变更涉及 3 个文件，超过 `warn_files`（2）')
+
+    jest.clearAllMocks()
+    setDiff(files)
+    await codeReview(
+      useCtx(),
+      makeBot(),
+      makeBot(),
+      makeOptions({warnFiles: 0}),
+      new Prompts('', '')
+    )
+    expect(postedBodies()).not.toContain('warn_files')
+  })
+
+  test('自动审查遇到初始化 PR：只出摘要、跳过行级审查，并把 HEAD 记为已审', async () => {
+    setDiff([
+      ...addedFiles(85),
+      {filename: 'README.md', status: 'modified', patch: patchWith('tok_readme')}
+    ])
+    const light = makeBot()
+    const heavy = makeBot()
+    await codeReview(
+      useCtx(),
+      light,
+      heavy,
+      makeOptions({initialPrSummaryOnly: true}),
+      new Prompts('', '')
+    )
+
+    const body = postedBodies()
+    expect(body).toContain('检测到初始化类变更（新增 85 / 86 个文件）')
+    expect(body).toContain('full review')
+    // 摘要照常覆盖全部文件
+    expect(promptedMarks(light, ['mark_0_end', 'mark_84_end'])).toEqual([
+      'mark_0_end',
+      'mark_84_end'
+    ])
+    // 跳过的是逐文件审查：没有任何一个文件的 diff 送进审查提示词
+    expect(promptedMarks(heavy, ['mark_0_end', 'mark_84_end', 'tok_readme'])).toEqual([])
+    // HEAD 记为已审，后续 push 只审增量
+    expect(body).toContain(`<!-- ${HEAD} -->`)
+  })
+
+  test('用户主动发审查命令时，初始化 PR 照常逐文件审查', async () => {
+    setDiff([
+      ...addedFiles(85),
+      {filename: 'README.md', status: 'modified', patch: patchWith('tok_readme')}
+    ])
+    const heavy = makeBot()
+    await codeReview(
+      useCtx(),
+      makeBot(),
+      heavy,
+      makeOptions({initialPrSummaryOnly: true}),
+      new Prompts('', ''),
+      {mode: 'full', source: 'command'}
+    )
+
+    expect(postedBodies()).not.toContain('检测到初始化类变更')
+    expect(promptedMarks(heavy, ['mark_0_end', 'mark_84_end'])).toEqual([
+      'mark_0_end',
+      'mark_84_end'
+    ])
+  })
+
+  test('initial_pr_summary_only 关闭时，初始化 PR 也照常逐文件审查', async () => {
+    setDiff(addedFiles(85))
+    const heavy = makeBot()
+    await codeReview(
+      useCtx(),
+      makeBot(),
+      heavy,
+      makeOptions({initialPrSummaryOnly: false}),
+      new Prompts('', '')
+    )
+
+    expect(postedBodies()).not.toContain('检测到初始化类变更')
+    expect(promptedMarks(heavy, ['mark_0_end'])).toEqual(['mark_0_end'])
+  })
+})

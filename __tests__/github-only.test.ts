@@ -219,6 +219,8 @@ jest.mock('../src/commands/early-reaction', () => ({
 
 const NUMERIC_INPUTS: Record<string, string> = {
   max_files: '150',
+  warn_files: '50',
+  initial_pr_summary_only: 'true',
   max_review_comments: '20',
   openai_retries: '5',
   openai_timeout_ms: '360000',

@@ -156,7 +156,9 @@ export class GitLabConfigProvider implements ConfigProvider {
       envStr('AI_REVIEWER_BOT_GITLAB_LOGIN') ?? '',
       // SEC-002 的双 job 方案目前只落在 GitHub；GitLab 侧 trigger 强制关闭 lint
       // （CFG-002），没有产出报告的低权限 lint job，因此这里固定为空。
-      ''
+      '',
+      envIntStr('AI_REVIEWER_WARN_FILES', CONFIG_DEFAULTS.warnFiles),
+      envBool('AI_REVIEWER_INITIAL_PR_SUMMARY_ONLY') ?? CONFIG_DEFAULTS.initialPrSummaryOnly
     )
 
     return this.cachedOptions
@@ -206,6 +208,8 @@ export class GitLabConfigProvider implements ConfigProvider {
     log(`  disable_review: ${opts.disableReview}`)
     log(`  disable_release_notes: ${opts.disableReleaseNotes}`)
     log(`  max_files: ${opts.maxFiles}`)
+    log(`  warn_files: ${opts.warnFiles}`)
+    log(`  initial_pr_summary_only: ${opts.initialPrSummaryOnly}`)
     log(`  review_simple_changes: ${opts.reviewSimpleChanges}`)
     log(`  review_comment_lgtm: ${opts.reviewCommentLGTM}`)
     log(`  path_filters: ${opts.pathFilters}`)

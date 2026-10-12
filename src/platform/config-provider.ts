@@ -99,6 +99,8 @@ export const CONFIG_DEFAULTS = {
   disableReview: false,
   disableReleaseNotes: false,
   maxFiles: '150',
+  warnFiles: '50',
+  initialPrSummaryOnly: true,
   reviewSimpleChanges: false,
   reviewCommentLGTM: false,
   /** 对齐 action.yml path_filters 默认值：排除 dist/二进制/生成/图片等 */

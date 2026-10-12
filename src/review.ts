@@ -67,6 +67,7 @@ import {getReviewStateFromBody} from './review-state'
 import {isHeadStale} from './head-staleness'
 import {getRepoCoords, repoCoordsOf, setExecCtx} from './platform/run-context'
 import {getTokenCount} from './tokenizer'
+import {detectInitialPr, initialPrNotice, largePrNotice, prioritizeFiles} from './large-pr'
 import {fetchThreadStatusMap, type ThreadStatusMap} from './github/review-thread'
 
 /** 平台无关的 TreeFetcher 实现（DEP-005 → ARCH-018） */
@@ -597,13 +598,42 @@ ${hunks.oldHunk}
     files.filter(file => file.status === 'removed').map(file => file.filename)
   )
 
-  const filesAndChanges = filteredFiles.filter(file => file !== null) as Array<
+  const validFiles = filteredFiles.filter(file => file !== null) as Array<
     [string, string, string, Array<[number, number, string]>]
   >
 
-  if (filesAndChanges.length === 0) {
+  if (validFiles.length === 0) {
     getLogger().error('Skipped: no files to review')
     return
+  }
+
+  // Issue #51：超出 max_files 时先按优先级排序再截断（代码 > 文档 > 锁文件 /
+  // 快照 / 删除 / 纯改名，同档位变更多的在前），而不是按平台返回的顺序硬截断。
+  // 不截断时保持原顺序，不改变摘要和评论里的文件次序。
+  const statusByFile = new Map(filterSelectedFiles.map(file => [file.filename, file.status]))
+  const filesAndChanges =
+    options.maxFiles > 0 && validFiles.length > options.maxFiles
+      ? prioritizeFiles(validFiles, ([filename, , fileDiff]) => ({
+          filename,
+          status: statusByFile.get(filename),
+          patch: fileDiff
+        }))
+      : validFiles
+  if (filesAndChanges !== validFiles) {
+    getLogger().info(
+      `max_files: ${validFiles.length} files exceed the limit of ${options.maxFiles}, processing by priority`
+    )
+  }
+
+  // Issue #51：初始化类 PR（几乎全是新增文件）在自动审查时只出摘要，跳过行级审查。
+  // 用户主动发的审查命令照常逐文件审查——那表示他就是要看行级意见。
+  const initialPr = detectInitialPr(filterSelectedFiles.map(file => file.status))
+  const skipLineReviewForInitialPr =
+    options.initialPrSummaryOnly && initialPr.isInitial && runOptions.source !== 'command'
+  if (skipLineReviewForInitialPr) {
+    getLogger().info(
+      `initial PR detected (${initialPr.added}/${initialPr.total} files added), summary only`
+    )
   }
 
   // ==================== 共享：单次扫描 unified diff，得到每文件的 PatchScan ====================
@@ -985,7 +1015,7 @@ ${
   const reviewsFailed: string[] = []
 
   // ==================== 阶段四：逐文件代码审查 ====================
-  if (!options.disableReview && runOptions.summaryOnly !== true) {
+  if (!options.disableReview && runOptions.summaryOnly !== true && !skipLineReviewForInitialPr) {
     // 筛选出需要审查的文件（分类为 NEEDS_REVIEW 的文件）
     const filesAndChangesReview = filesAndChanges.filter(([filename]) => {
       const needsReview =
@@ -1464,6 +1494,19 @@ ${
   // 否则 replace 摘要评论会清空增量审查标记，导致下次自动审查从 base 重审
   if (runOptions.summaryOnly === true && existingCommitIdsBlock !== '') {
     summarizeComment += `\n${existingCommitIdsBlock}`
+  } else if (skipLineReviewForInitialPr && runOptions.summaryOnly !== true) {
+    // 初始化 PR 的整体已经由摘要覆盖：把 HEAD 记为已审，之后的 push 只审增量。
+    // 不记的话，下次自动审查仍从 base 起算、再次被判为初始化 PR，后续改动永远得不到行级审查。
+    summarizeComment += `\n${commenter.addReviewedCommitId(existingCommitIdsBlock, pr.head.sha)}`
+  }
+
+  // Issue #51：大型 PR 提醒与初始化 PR 说明，放在必定发布的摘要评论里
+  const notices = [
+    largePrNotice(filesAndChanges.length, options.warnFiles),
+    skipLineReviewForInitialPr ? initialPrNotice(initialPr, PRIMARY_BOT_MENTION) : null
+  ].filter((n): n is string => n != null)
+  if (notices.length > 0) {
+    summarizeComment += `\n\n${notices.map(n => `> ℹ️ ${n}`).join('\n>\n')}\n`
   }
 
   // REVIEW-006：不完整的审查必须让用户看得见。
