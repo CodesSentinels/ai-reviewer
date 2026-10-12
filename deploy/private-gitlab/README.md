@@ -46,6 +46,7 @@ gitlab-runner register \
 | `GITLAB_PAT` | Protected + Masked + Hidden | 读 MR、写评论（`api` scope）。可以是个人 PAT、Project Access Token 或 Group Access Token，见下方「bot 凭据」 |
 | `OPENAI_API_KEY` | Protected + Masked + Hidden | 大模型调用 |
 | `AI_REVIEWER_GITLAB_TOKEN_MAP` | — | 可选，按项目选择 token，见下方「bot 凭据」。设置后不再使用 `GITLAB_PAT`（除非映射表引用它） |
+| `AI_REVIEWER_GITLAB_PREVIOUS_BOT_LOGINS` | — | 可选，以前用过的 bot 用户名（逗号分隔），换 token 导致 bot 账号变化时配置，见下方「更换 token」 |
 | `AI_REVIEWER_BOT_GITLAB_LOGIN` | — | 可选，`GITLAB_PAT` 对应账号的用户名，用于忽略 bot 自己的评论。不配时从 token 自动识别；设置了 `AI_REVIEWER_GITLAB_TOKEN_MAP` 时忽略 |
 | `AI_REVIEWER_OPENAI_BASE_URL` | — | 可选，兼容 OpenAI 协议的模型网关地址 |
 | `AI_REVIEWER_OPENAI_LIGHT_MODEL` / `AI_REVIEWER_OPENAI_HEAVY_MODEL` / `AI_REVIEWER_LANGUAGE` | — | 可选 |
@@ -80,6 +81,14 @@ gitlab-runner register \
 - 映射表本身只写变量名，不写 token，所以不需要 Masked。
 - 各项目的 token 对应不同的 bot 账号，所以启用映射表后 `AI_REVIEWER_BOT_GITLAB_LOGIN` 不再生效，bot 身份一律从 token 识别。
 - 每个 token 对应的账号都要是其项目的 Developer 或以上。
+
+### 更换 token
+
+- **到期或例行更换：用 Rotate。** 在 Access Tokens 页面对现有 token 点 Rotate（或调用 rotate 接口），bot 账号不变，只换 token 值，再把新值填回对应变量即可。
+- **Revoke 后新建（如 token 泄露）、或从项目 token 切换到 Group Access Token：bot 账号会变。** 已有 MR 上的摘要和评论出自旧账号，新 bot 默认认不出，会把这些 MR 当成新 MR 全量重审、重复评论、多发一条摘要。这时把旧账号的用户名填进 `AI_REVIEWER_GITLAB_PREVIOUS_BOT_LOGINS`（在 MR 评论的作者处可以看到，形如 `project_<项目ID>_bot_…`）：
+  - 新 bot 会读取旧账号的状态（增量审查起点、已审提交），并用旧评论去重；
+  - 旧账号的评论只读，不会被修改或删除；每个已有 MR 上会由新 bot 再发一条摘要，之后只更新这一条；
+  - 等已有 MR 都合并或关闭后，可以删掉这个变量。
 
 ### 3. 保护默认分支
 

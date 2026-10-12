@@ -22,6 +22,7 @@ const {
   matchGitLabTokenMap,
   parseGitLabTokenMap,
   prepareGitLabClientConfig,
+  previousBotGitLabLogins,
   GitLabClientConfigError,
   GITLAB_CLIENT_DEFAULTS,
   listOptions,
@@ -248,6 +249,29 @@ describe('AI_REVIEWER_GITLAB_TOKEN_MAP：按项目选择凭据', () => {
   test('启用映射表时忽略 AI_REVIEWER_BOT_GITLAB_LOGIN：各项目的 bot 账号不同', () => {
     expect(configuredBotGitLabLogin({AI_REVIEWER_BOT_GITLAB_LOGIN: ' my-bot '})).toBe('my-bot')
     expect(configuredBotGitLabLogin({AI_REVIEWER_BOT_GITLAB_LOGIN: 'my-bot', ...ENV})).toBe('')
+  })
+})
+
+describe('AI_REVIEWER_GITLAB_PREVIOUS_BOT_LOGINS：以前用过的 bot 账号', () => {
+  test('逗号 / 分号 / 空白分隔，去掉 @ 和空项', () => {
+    expect(
+      previousBotGitLabLogins({
+        AI_REVIEWER_GITLAB_PREVIOUS_BOT_LOGINS: ' @project_1_bot_a, project_2_bot_b;\nold '
+      })
+    ).toEqual(['project_1_bot_a', 'project_2_bot_b', 'old'])
+  })
+
+  test('未配置 → 空列表', () => {
+    expect(previousBotGitLabLogins({})).toEqual([])
+  })
+
+  test('映射表模式下同样生效（不像 AI_REVIEWER_BOT_GITLAB_LOGIN 那样被忽略）', () => {
+    expect(
+      previousBotGitLabLogins({
+        AI_REVIEWER_GITLAB_TOKEN_MAP: '* = GITLAB_PAT',
+        AI_REVIEWER_GITLAB_PREVIOUS_BOT_LOGINS: 'old'
+      })
+    ).toEqual(['old'])
   })
 })
 

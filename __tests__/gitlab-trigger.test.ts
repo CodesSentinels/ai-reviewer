@@ -146,6 +146,7 @@ describe('gitlab-trigger.ts run()', () => {
     delete process.env.AI_REVIEWER_BOT_GITLAB_LOGIN
     delete process.env.AI_REVIEWER_GITLAB_TOKEN_MAP
     delete process.env.GITLAB_PAT_DEMO
+    delete process.env.AI_REVIEWER_GITLAB_PREVIOUS_BOT_LOGINS
     process.exitCode = undefined
   })
 
@@ -568,6 +569,33 @@ describe('gitlab-trigger.ts run()', () => {
       expect(warned).toContain('CI_JOB_TOKEN')
       expect(warned).toContain('/projects/:id/members')
       expect(warned).toContain('fail closed')
+    })
+  })
+
+  describe('AI_REVIEWER_GITLAB_PREVIOUS_BOT_LOGINS：以前用过的 bot 账号', () => {
+    test('配置后打印认领的旧账号', async () => {
+      process.env.TRIGGER_PAYLOAD = '/tmp/payload.json'
+      fsState.readFileSync.mockReturnValue(JSON.stringify(mrOpen))
+      process.env.AI_REVIEWER_GITLAB_PREVIOUS_BOT_LOGINS = '@old-bot'
+
+      await runTrigger()
+
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining("claimed as the reviewer's own (read-only): @old-bot")
+      )
+    })
+
+    test('旧账号发的评论也按自评论处理，不会触发命令', async () => {
+      process.env.TRIGGER_PAYLOAD = '/tmp/payload.json'
+      // 夹具里的作者是 alice：把她当成换号前的 bot
+      fsState.readFileSync.mockReturnValue(JSON.stringify(noteToplevel))
+      process.env.AI_REVIEWER_GITLAB_PREVIOUS_BOT_LOGINS = 'alice'
+
+      await runTrigger()
+
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Note authored by the reviewer itself (@alice)')
+      )
     })
   })
 

@@ -18,9 +18,11 @@ import {
   describeGitLabClientConfig,
   isGitLabTokenMapEnabled,
   prepareGitLabClientConfig,
+  previousBotGitLabLogins,
   type GitLabClientConfig
 } from './platform/gitlab-client'
 import {setPlatform} from './platform/git-platform'
+import {setPreviousBotLogins} from './commenter'
 import {setStateNamespace} from './platform/state-namespace'
 import {setLogger} from './platform/logger'
 import {handleExecCtxError} from './platform/exec-ctx-error-handler'
@@ -222,7 +224,17 @@ export async function run(): Promise<void> {
 
   // 事件被接受之后才自检：被拒绝的事件（fork MR、无关事件）不该产生无关输出，
   // 也不该为此多打一次 API
-  const botLogins = await verifyBotIdentity(platform)
+  // 换过 bot 账号时，旧账号也算自己（只读认领，见 commenter.setPreviousBotLogins）
+  const previousLogins = previousBotGitLabLogins()
+  setPreviousBotLogins(previousLogins)
+  if (previousLogins.length > 0) {
+    logger.info(
+      `Previous bot account(s) claimed as the reviewer's own (read-only): ${previousLogins
+        .map(l => `@${l}`)
+        .join(', ')}`
+    )
+  }
+  const botLogins = [...new Set([...(await verifyBotIdentity(platform)), ...previousLogins])]
   knownBotLogins = botLogins
 
   // ─── EVENT-018：自评论过滤 ───────────────────────────────────────────────
