@@ -156,6 +156,28 @@ describe('1.2.1 — getHighestReviewedCommitId', () => {
     expect(commenter.getHighestReviewedCommitId([], ['c1'])).toBe('')
     expect(commenter.getHighestReviewedCommitId(['c1'], [])).toBe('')
   })
+
+  test('GitLab 从新到旧的 commit 列表：返回上一次审查的 HEAD，而不是最早审过的提交', () => {
+    // c2 → c4 依次被审过，c5 是新 push 的提交
+    const newestFirst = ['c5', 'c4', 'merge', 'c3', 'c2', 'c1']
+    const reviewed = ['c2', 'c4']
+    expect(commenter.getHighestReviewedCommitId(newestFirst, reviewed)).toBe('c4')
+  })
+
+  test('结果与平台返回的 commit 顺序无关', () => {
+    const oldestFirst = ['c1', 'c2', 'c3', 'c4', 'c5']
+    const reviewed = ['c2', 'c4']
+    expect(commenter.getHighestReviewedCommitId(oldestFirst, reviewed)).toBe(
+      commenter.getHighestReviewedCommitId([...oldestFirst].reverse(), reviewed)
+    )
+  })
+
+  test('上次审查的 HEAD 被 force push 改写后，退回到更早一次仍在 PR 中的审查点', () => {
+    // c4 已被改写掉，不在当前 PR 中
+    const allCommits = ['c1', 'c2', 'c3', 'c5']
+    const reviewed = ['c2', 'c4']
+    expect(commenter.getHighestReviewedCommitId(allCommits, reviewed)).toBe('c2')
+  })
 })
 
 // ==================== 增量 diff 起点确定 ====================

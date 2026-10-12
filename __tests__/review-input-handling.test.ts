@@ -201,6 +201,29 @@ describe('REVIEW-002：首次 / 增量 / 全量重审的输入', () => {
     expect(platformState.compareDiff.mock.calls[0][2]).toBe(mid)
   })
 
+  test('commit 列表从新到旧（GitLab 顺序）→ 从上一次审查的 HEAD 起算，而不是最早审过的提交', async () => {
+    const ctx = useCtx()
+    const first = 'a'.repeat(40)
+    const merge = 'b'.repeat(40)
+    const last = 'c'.repeat(40)
+    platformState.listComments.mockResolvedValue([
+      {
+        id: 9,
+        author: 'bot',
+        body:
+          '<!-- ai-reviewer:github:summarize -->\n' +
+          '<!-- ai-reviewer:github:commit-ids-reviewed-start -->\n' +
+          `<!-- ${first} -->\n<!-- ${last} -->\n` +
+          '<!-- ai-reviewer:github:commit-ids-reviewed-end -->'
+      }
+    ])
+    platformState.listChangeRequestCommits.mockResolvedValue([HEAD, last, merge, first])
+
+    await codeReview(ctx, makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
+
+    expect(platformState.compareDiff.mock.calls[0][2]).toBe(last)
+  })
+
   test('全量重审（mode=full）→ 忽略历史 reviewed commit，强制从 base 起算', async () => {
     const ctx = useCtx()
     const mid = 'm'.repeat(40)
