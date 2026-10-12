@@ -265,8 +265,10 @@ describe('恶意 MR：五类篡改各自被哪条机制挡住（TEST-022~026）'
     expect(trigger.dependencies).toEqual([])
   })
 
-  test('读 artifact —— 不可信面的产物有过期时间，且不流向持密钥面', () => {
-    expect(mrVerify.artifacts?.expire_in).toBeDefined()
+  test('读 artifact —— 不可信面的产物不长期保留，且不流向持密钥面', () => {
+    // 不可信面不产生产物最安全；若将来确需产物，必须设置短过期时间
+    const artifacts = mrVerify.artifacts
+    if (artifacts != null) expect(artifacts.expire_in).toBeDefined()
     // 反向：持密钥 job 没有 needs 指向 mr_verify（上一条已断言 needs 不存在），
     // 这里再确认它也没声明 artifacts 供别人取用
     expect(trigger.artifacts).toBeUndefined()
