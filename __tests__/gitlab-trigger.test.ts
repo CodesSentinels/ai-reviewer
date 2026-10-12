@@ -601,7 +601,7 @@ describe('gitlab-trigger.ts run()', () => {
       await runTrigger()
 
       expect(mockUsers.showCurrentUser).toHaveBeenCalledTimes(1)
-      expect(renamedTo()).toBe('MR !7 @head-sh · ↳ bot 更新评论 · 已跳过')
+      expect(renamedTo()).toBe('demo !7 @head-sh · ↳ bot 更新评论 · 已跳过')
     })
 
     test('启用映射表（配置值被忽略）→ 用映射到的凭据查身份', async () => {

@@ -49,6 +49,7 @@ describe('describeTrigger', () => {
     [{action: 'merge'}, 'MR merge']
   ])('MR 事件 %j → %s', (attrs, label) => {
     expect(describeTrigger(mrHook(attrs), [BOT])).toEqual({
+      project: '',
       mrIid: 15,
       headSha: HEAD,
       byBot: false,
@@ -95,6 +96,7 @@ describe('describeTrigger', () => {
 
   test('payload 缺失或不认识的事件', () => {
     expect(describeTrigger(null, [])).toEqual({
+      project: '',
       mrIid: null,
       headSha: '',
       byBot: false,
@@ -193,8 +195,45 @@ describe('buildPipelineName', () => {
     expect(buildPipelineName(describeTrigger(null, []), '失败')).toBe('AI 审查 · 事件 未知 → 失败')
   })
 
+  test('带项目名：多个业务项目共用一个产物仓库时分得清', () => {
+    const payload = {
+      ...(mrHook({action: 'update', oldrev: 'x'}) as object),
+      project: {path_with_namespace: 'group/sub/web-app'}
+    }
+    const t = describeTrigger(payload, [BOT])
+    expect(t.project).toBe('web-app')
+    expect(buildPipelineName(t, '审查完成，发布 1 条评论')).toBe(
+      'web-app !15 @0aec0f4 · push → 审查完成，发布 1 条评论'
+    )
+  })
+
+  test('带项目名的 bot 操作', () => {
+    const payload = {
+      ...(noteHook({type: 'DiffNote'}, BOT) as object),
+      project: {path_with_namespace: 'group/core-lib'}
+    }
+    expect(buildPipelineName(describeTrigger(payload, [BOT]), '已跳过')).toBe(
+      'core-lib !15 @0aec0f4 · ↳ bot 发布行级评论 · 已跳过'
+    )
+  })
+
+  test('有项目名但不是 MR 事件 → 用项目名做前缀', () => {
+    const payload = {object_kind: 'push', project: {path_with_namespace: 'g/app'}}
+    expect(buildPipelineName(describeTrigger(payload, []), '已跳过')).toBe(
+      'app · 事件 push → 已跳过'
+    )
+  })
+
+  test('项目路径含非常规字符 → 不放进名字', () => {
+    const payload = {
+      ...(mrHook({action: 'open'}) as object),
+      project: {path_with_namespace: 'g/<b>x</b>'}
+    }
+    expect(describeTrigger(payload, [BOT]).project).toBe('')
+  })
+
   test('超长时截断到 255 个字符', () => {
-    const t = {mrIid: 1, headSha: '', byBot: false, label: 'x'.repeat(300)}
+    const t = {project: '', mrIid: 1, headSha: '', byBot: false, label: 'x'.repeat(300)}
     const name = buildPipelineName(t, 'ok')
     expect(name.length).toBe(255)
     expect(name.endsWith('…')).toBe(true)

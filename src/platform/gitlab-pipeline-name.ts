@@ -9,11 +9,13 @@
  * 也读不到 file 类型的 TRIGGER_PAYLOAD），所以只能让每条 pipeline 跑完后自己
  * 报名字：
  *
- *   MR !15 @0aec0f4 · push → 审查完成，发布 1 条评论
- *   MR !15 @0aec0f4 · ↳ bot 更新摘要 · 已跳过
- *   MR !15 @0aec0f4 · ↳ bot 发布行级评论 · 已跳过
+ *   core-lib !15 @0aec0f4 · push → 审查完成，发布 1 条评论
+ *   core-lib !15 @0aec0f4 · ↳ bot 更新摘要 · 已跳过
+ *   core-lib !15 @0aec0f4 · ↳ bot 发布行级评论 · 已跳过
  *
- * 名字带 MR 编号 + HEAD 短 SHA，同一次 push 引出的几条在列表里自然排在一起。
+ * 名字带项目名 + MR 编号 + HEAD 短 SHA：多个业务项目共用一个产物仓库，所有
+ * pipeline 都在同一个列表里，MR 编号只在各自项目内唯一，不带项目名就分不清；
+ * 同一次 push 引出的几条在列表里自然排在一起。
  *
  * 全程 best effort：任何一步失败都只记日志，绝不影响审查本身的结果和退出码。
  * 名字只由 payload 的结构化字段和固定文案拼成，不包含评论正文等用户可控文本。
@@ -27,6 +29,8 @@ const MAX_NAME_LENGTH = 255
 
 /** 从 payload 读出的「是什么事件触发了这条 pipeline」 */
 export interface TriggerDescription {
+  /** 业务项目名（路径最后一段，如 `core-lib`）；拿不到时为空串 */
+  project: string
   /** MR 的 iid；payload 不是 MR 相关事件时为 null */
   mrIid: number | null
   /** MR 当前 HEAD 的完整 SHA；拿不到时为空串 */
@@ -48,9 +52,11 @@ export function describeTrigger(payload: unknown, botLogins: string[]): TriggerD
   const attrs = (p.object_attributes ?? {}) as Record<string, any>
   const actor = typeof p.user?.username === 'string' ? (p.user.username as string) : ''
   const byBot = actor !== '' && botLogins.some(login => login.toLowerCase() === actor.toLowerCase())
+  const project = projectName(p.project)
 
   if (p.object_kind === 'merge_request') {
     return {
+      project,
       mrIid: toIid(attrs.iid),
       headSha: stringOr(attrs.last_commit?.id),
       byBot,
@@ -61,6 +67,7 @@ export function describeTrigger(payload: unknown, botLogins: string[]): TriggerD
   if (p.object_kind === 'note') {
     const mr = (p.merge_request ?? {}) as Record<string, any>
     return {
+      project,
       mrIid: toIid(mr.iid),
       headSha: stringOr(mr.last_commit?.id),
       byBot,
@@ -68,7 +75,23 @@ export function describeTrigger(payload: unknown, botLogins: string[]): TriggerD
     }
   }
 
-  return {mrIid: null, headSha: '', byBot, label: `事件 ${stringOr(p.object_kind) || '未知'}`}
+  return {
+    project,
+    mrIid: null,
+    headSha: '',
+    byBot,
+    label: `事件 ${stringOr(p.object_kind) || '未知'}`
+  }
+}
+
+/**
+ * 项目名取路径最后一段：完整路径（group/subgroup/project）太长，挤占结论的位置。
+ * 只接受 GitLab 路径允许的字符，payload 里的其他内容不进名字。
+ */
+function projectName(project: unknown): string {
+  const path = stringOr((project as Record<string, unknown> | null)?.path_with_namespace)
+  const last = path.substring(path.lastIndexOf('/') + 1)
+  return /^[A-Za-z0-9_.-]+$/.test(last) ? last : ''
 }
 
 function mergeRequestLabel(attrs: Record<string, any>, byBot: boolean): string {
@@ -200,9 +223,12 @@ function skipReasonOf(reason: string): string {
 
 /** 拼出 pipeline 名字 */
 export function buildPipelineName(trigger: TriggerDescription, outcome: string): string {
+  const sha = trigger.headSha !== '' ? ` @${trigger.headSha.slice(0, 7)}` : ''
   const where =
     trigger.mrIid != null
-      ? `MR !${trigger.mrIid}${trigger.headSha !== '' ? ` @${trigger.headSha.slice(0, 7)}` : ''}`
+      ? `${trigger.project !== '' ? trigger.project : 'MR'} !${trigger.mrIid}${sha}`
+      : trigger.project !== ''
+      ? trigger.project
       : 'AI 审查'
   // bot 自己的操作缩进一格，和引出它的那次用户操作区分开
   const what = trigger.byBot ? `↳ ${trigger.label}` : trigger.label
