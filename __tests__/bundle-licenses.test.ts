@@ -19,7 +19,14 @@ const LOCK = JSON.parse(fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'u
 const STATS = path.join(ROOT, 'node_modules/.gitlab-bundle-stats.json')
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const {collectSubtree, collectBundledPackages} = require('../scripts/check-bundle-licenses.js')
+const {
+  collectSubtree,
+  collectBundledPackages,
+  collectBundledPackageDirs,
+  packagesInPath,
+  readLicenseText,
+  readSpdx
+} = require('../scripts/check-bundle-licenses.js')
 
 function listedPackages(licensePath: string): Set<string> {
   const content = fs.readFileSync(licensePath, 'utf8')
@@ -99,6 +106,74 @@ describe('BUILD-005: collectBundledPackages（webpack stats 准绳）', () => {
       expect(collectBundledPackages(statsFile)).toEqual(['@gitbeaker/rest', 'qs', 'side-channel'])
     } finally {
       fs.rmSync(statsFile, {force: true})
+    }
+  })
+})
+
+/**
+ * pnpm 布局：模块路径形如 `node_modules/.pnpm/<pkg>@<ver>/node_modules/<pkg>/...`。
+ * `.pnpm` 是存储目录而不是包；传递依赖只存在于 `.pnpm` 下，顶层没有
+ * `node_modules/<name>`，许可证必须按模块路径解析出的目录去读。
+ */
+describe('BUILD-005: pnpm node_modules 布局', () => {
+  const PNPM_PATH =
+    './node_modules/.pnpm/@gitbeaker+rest@43.8.0/node_modules/@gitbeaker/rest/dist/index.mjs'
+
+  test('`.pnpm` 不被当成包，包目录指向存储目录', () => {
+    expect(packagesInPath(PNPM_PATH)).toEqual([
+      {
+        name: '@gitbeaker/rest',
+        dir: './node_modules/.pnpm/@gitbeaker+rest@43.8.0/node_modules/@gitbeaker/rest'
+      }
+    ])
+  })
+
+  test('npm 嵌套依赖仍解析出各层包，目录取到各自包名为止', () => {
+    expect(packagesInPath('./node_modules/qs/node_modules/side-channel/index.js')).toEqual([
+      {name: 'qs', dir: './node_modules/qs'},
+      {name: 'side-channel', dir: './node_modules/qs/node_modules/side-channel'}
+    ])
+  })
+
+  test('stats 中的 pnpm 路径：包名与目录', () => {
+    const statsFile = path.join(os.tmpdir(), `stats-pnpm-${Date.now()}.json`)
+    fs.writeFileSync(
+      statsFile,
+      JSON.stringify({
+        modules: [
+          {name: PNPM_PATH},
+          {name: './node_modules/.pnpm/qs@6.13.0/node_modules/qs/lib/index.js'},
+          {name: './lib/gitlab-trigger.js'}
+        ]
+      })
+    )
+    try {
+      expect(collectBundledPackages(statsFile)).toEqual(['@gitbeaker/rest', 'qs'])
+      expect(collectBundledPackageDirs(statsFile).get('qs')).toBe(
+        './node_modules/.pnpm/qs@6.13.0/node_modules/qs'
+      )
+    } finally {
+      fs.rmSync(statsFile, {force: true})
+    }
+  })
+
+  test('只存在于 .pnpm 存储里的传递依赖：按解析出的目录读到许可证与 SPDX', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pnpm-layout-'))
+    try {
+      const dir = path.join(root, 'node_modules/.pnpm/side-channel@1.0.6/node_modules/side-channel')
+      fs.mkdirSync(dir, {recursive: true})
+      fs.writeFileSync(path.join(dir, 'LICENSE'), 'MIT License\n\nCopyright (c) test')
+      fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({license: 'MIT'}))
+
+      expect(readLicenseText('side-channel', dir)).toContain('MIT License')
+      // lock 里没有该包的顶层条目时，退回读解析出的目录里的 package.json
+      expect(readSpdx('side-channel', {packages: {}}, dir)).toBe('MIT')
+      // 对照：按 npm 布局去顶层 node_modules/<name> 找，在 pnpm 下找不到
+      expect(
+        readLicenseText('side-channel', path.join(root, 'node_modules/side-channel'))
+      ).toBeNull()
+    } finally {
+      fs.rmSync(root, {recursive: true, force: true})
     }
   })
 })

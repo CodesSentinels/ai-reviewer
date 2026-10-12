@@ -231,8 +231,10 @@ describe('MR 临时 bundle 只验证不复用（TEST-040 前半句）', () => {
     expect(doc[MR_VERIFY].needs).toBeUndefined()
   })
 
-  test('mr_verify 的 artifact 有过期时间（只服务本次验证）', () => {
-    expect(doc[MR_VERIFY].artifacts?.expire_in).toBeDefined()
+  test('mr_verify 不长期保留产物（不声明 artifacts，或声明时设过期时间）', () => {
+    // 不可信面不产生产物最安全；若将来确需产物，必须设置短过期时间
+    const artifacts = doc[MR_VERIFY].artifacts
+    if (artifacts != null) expect(artifacts.expire_in).toBeDefined()
   })
 
   test('trigger job 不产生 artifact（没有可供下游消费的产物）', () => {
