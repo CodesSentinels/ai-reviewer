@@ -50,7 +50,7 @@ gitlab-runner register \
 | `AI_REVIEWER_OPENAI_BASE_URL` | — | 可选，兼容 OpenAI 协议的模型网关地址 |
 | `AI_REVIEWER_OPENAI_LIGHT_MODEL` / `AI_REVIEWER_OPENAI_HEAVY_MODEL` / `AI_REVIEWER_LANGUAGE` | — | 可选 |
 | `AI_REVIEWER_MAX_FILES` / `AI_REVIEWER_WARN_FILES` / `AI_REVIEWER_INITIAL_PR_SUMMARY_ONLY` | — | 可选，大型 MR 的处理：最多处理的文件数（默认 150，超出时按优先级处理）、超过多少个文件在摘要里提醒（默认 50）、初始化类 MR 自动审查时是否只出摘要（默认 `true`） |
-| `AI_REVIEWER_PIPELINE_TOKEN` | Protected + Masked + Hidden | 可选。**本仓库**的 Project Access Token（**Maintainer**、`api` scope；改名接口不接受 Developer，会返回 403），用于给每条 pipeline 改名，标明它在处理哪个 MR、哪次提交、做了什么（如 `MR !15 @0aec0f4 · push → 审查完成，发布 1 条评论`、`MR !15 @0aec0f4 · ↳ bot 发布行级评论 · 已跳过`）。不配置则保持默认名称，不影响审查 |
+| `AI_REVIEWER_PIPELINE_TOKEN` | Protected + Masked + Hidden | 可选。**本仓库**的 Project Access Token（**Maintainer**、`api` scope；改名接口不接受 Developer，会返回 403），用于给每条 pipeline 改名，标明它在处理哪个项目的哪个 MR、哪次提交、做了什么（如 `web-app !15 @0aec0f4 · push → 审查完成，发布 1 条评论`、`web-app !15 @0aec0f4 · ↳ bot 发布行级评论 · 已跳过`）。不配置则保持默认名称，不影响审查 |
 
 ### bot 凭据：单个 token 或按项目映射
 
