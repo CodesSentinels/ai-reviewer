@@ -623,7 +623,8 @@ const INTENTIONALLY_DIVERGENT: Record<string, string> = {
   botLogin: '平台专有身份：GitHub App 名 vs GitLab PAT 用户名，语义上就不该相同',
   lintReportPath: 'SEC-002：只在 GitHub 低权限 lint job 链路上有值',
   lightTokenLimits: '由模型名推导，不是独立配置项',
-  heavyTokenLimits: '同上'
+  heavyTokenLimits: '同上',
+  minimizeBotWrites: '不是配置项：未设置时 review.ts 按平台决定（GitLab 省掉可省的写入）'
 }
 
 /**

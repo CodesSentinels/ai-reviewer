@@ -49,7 +49,7 @@ jest.mock('../src/platform/logger', () => ({
 }))
 
 import {codeReview} from '../src/review'
-import {Commenter, _resetBotIdentity, initBotGreeting} from '../src/commenter'
+import {Commenter, _resetBotIdentity, initBotGreeting, summarizeTag} from '../src/commenter'
 import {_resetWriteQueues} from '../src/description-state'
 import {setExecCtx} from '../src/platform/run-context'
 import {setStateNamespace} from '../src/platform/state-namespace'
@@ -88,6 +88,9 @@ function makeOptions(over: Record<string, any> = {}): any {
     knowledgeCutOff: ''
   }
   return {
+    // 本文件主要验证「写进 description」这条路径，两个平台都显式走它。
+    // GitLab 默认省掉这次写入（并入摘要评论），见文件末尾「GitLab 默认省掉的写入」
+    minimizeBotWrites: false,
     debug: false,
     disableReview: false,
     disableReleaseNotes: false,
@@ -592,5 +595,48 @@ describe('REVIEW-020：两侧配置映射', () => {
     const actionYml: string = fs.readFileSync(path.resolve(__dirname, '../action.yml'), 'utf8')
     expect(actionYml).toContain('disable_release_notes')
     expect(actionYml).toContain('summarize_release_notes')
+  })
+})
+
+/**
+ * GitLab 上 bot 的每次写入都会经 webhook 再触发一条 pipeline（虽然会被识别为 bot
+ * 自身事件而跳过，但每条都要占 Runner、刷屏 pipeline 列表）。默认省掉两次可省的写入：
+ * 「审查中」横幅、改 MR 描述。GitHub 上写入不触发新运行，保持原样。
+ */
+describe('GitLab 默认省掉的写入（minimizeBotWrites 未设置）', () => {
+  function defaults(): any {
+    const o = makeOptions()
+    delete o.minimizeBotWrites
+    return o
+  }
+  const summaryWrites = (): string[] =>
+    [...platformState.createComment.mock.calls, ...platformState.updateComment.mock.calls]
+      .map((c: any[]) => c.find((a: any) => typeof a === 'string' && a.includes(summarizeTag())))
+      .filter((b: any): b is string => b != null)
+
+  test('gitlab：不改 MR 描述，发布说明并入摘要评论；摘要评论只写一次', async () => {
+    const ctx = useCtx('gitlab')
+    const store = statefulDescription('用户自己写的描述')
+
+    await codeReview(ctx, makeBot(), makeBot(), defaults(), taggedPrompts)
+
+    expect(platformState.updateChangeRequestBody).not.toHaveBeenCalled()
+    expect(store.get()).toBe('用户自己写的描述')
+    const writes = summaryWrites()
+    expect(writes).toHaveLength(1)
+    expect(writes[0]).toContain('### Release Notes')
+    expect(writes[0]).toContain('新增了 X 功能')
+  })
+
+  test('github：照旧写描述，并先发「审查中」横幅（摘要评论写两次）', async () => {
+    const ctx = useCtx('github')
+    const store = statefulDescription('用户自己写的描述')
+
+    await codeReview(ctx, makeBot(), makeBot(), defaults(), taggedPrompts)
+
+    expect(store.get()).toContain('新增了 X 功能')
+    const writes = summaryWrites()
+    expect(writes).toHaveLength(2)
+    expect(writes[1]).not.toContain('### Release Notes')
   })
 })

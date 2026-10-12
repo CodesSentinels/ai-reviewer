@@ -83,6 +83,11 @@ export class Options {
   warnFiles: number
   /** 自动审查识别到初始化 PR 时只生成摘要、跳过行级审查，见 large-pr.ts */
   initialPrSummaryOnly: boolean
+  /**
+   * 是否省掉可省的 bot 写入（「审查中」横幅、改 PR 描述）。不对外暴露为配置：
+   * 未设置时由 review.ts 按平台决定（GitLab 开，因为每次写入都会再触发一条 pipeline）。
+   */
+  minimizeBotWrites?: boolean
 
   constructor(
     debug: boolean,
