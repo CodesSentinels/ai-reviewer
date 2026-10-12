@@ -64,6 +64,9 @@ import {
   Commenter,
   STATE_MARKERS,
   _resetBotIdentity,
+  isCurrentAuthor,
+  isOwnAuthor,
+  setPreviousBotLogins,
   commentTag,
   commentReplyTag,
   summarizeTag
@@ -525,5 +528,108 @@ describe('GH-008: review comment 回复', () => {
     expect(logs.warning).toHaveBeenCalledWith(
       expect.stringContaining('Failed to update the top-level comment')
     )
+  })
+})
+
+describe('旧 bot 账号只读认领（换 token 后 bot 账号变了）', () => {
+  // 当前身份是 ai-reviewer（见 platform.getAuthenticatedLogin 桩），old-bot 是换号前的账号
+  const by = (author: string, c: any): any => ({...c, author})
+
+  beforeEach(() => {
+    setPreviousBotLogins(['Old-Bot'])
+  })
+
+  test('isOwnAuthor 认领旧账号（不区分大小写），isCurrentAuthor 不认', async () => {
+    expect(await isOwnAuthor('old-bot')).toBe(true)
+    expect(await isCurrentAuthor('old-bot')).toBe(false)
+    expect(await isOwnAuthor('ai-reviewer')).toBe(true)
+    expect(await isCurrentAuthor('ai-reviewer')).toBe(true)
+    expect(await isOwnAuthor('alice')).toBe(false)
+  })
+
+  test('没配置时旧账号不算自己（行为不变）', async () => {
+    setPreviousBotLogins([])
+    expect(await isOwnAuthor('old-bot')).toBe(false)
+  })
+
+  test('findCommentWithTag：只有旧账号的摘要 → 读它恢复状态（增量审查起点不丢）', async () => {
+    platform.listComments.mockResolvedValue([
+      by('old-bot', issueComment(4, `old\n\n${summarizeTag()}`))
+    ])
+    expect((await new Commenter().findCommentWithTag(summarizeTag(), 7))?.id).toBe(4)
+  })
+
+  test('findCommentWithTag：新旧摘要并存 → 当前身份的优先，即使旧的排在前面', async () => {
+    platform.listComments.mockResolvedValue([
+      by('old-bot', issueComment(4, `old\n\n${summarizeTag()}`)),
+      issueComment(9, `new\n\n${summarizeTag()}`)
+    ])
+    expect((await new Commenter().findCommentWithTag(summarizeTag(), 7))?.id).toBe(9)
+  })
+
+  test('findCommentWithTag：用户引用回复里的 marker 仍不认领', async () => {
+    platform.listComments.mockResolvedValue([
+      by('alice', issueComment(3, `> quoted\n\n${summarizeTag()}`))
+    ])
+    expect(await new Commenter().findCommentWithTag(summarizeTag(), 7)).toBeNull()
+  })
+
+  test('replace：只有旧账号的摘要 → 新发一条，不更新也不删除旧的', async () => {
+    platform.listComments.mockResolvedValue([
+      by('old-bot', issueComment(4, `old\n\n${summarizeTag()}`))
+    ])
+
+    await new Commenter().comment('new summary', summarizeTag(), 'replace')
+
+    expect(platform.createComment).toHaveBeenCalledTimes(1)
+    expect(platform.updateComment).not.toHaveBeenCalled()
+    expect(platform.deleteComment).not.toHaveBeenCalled()
+    expect(logs.info).toHaveBeenCalledWith(
+      expect.stringContaining('from a previous bot account untouched')
+    )
+  })
+
+  test('replace：新旧摘要并存 → 只更新当前身份的那条，旧的保留', async () => {
+    platform.listComments.mockResolvedValue([
+      by('old-bot', issueComment(4, `old\n\n${summarizeTag()}`)),
+      issueComment(9, `new\n\n${summarizeTag()}`)
+    ])
+
+    await new Commenter().comment('newer summary', summarizeTag(), 'replace')
+
+    expect(platform.updateComment).toHaveBeenCalledTimes(1)
+    expect((platform.updateComment.mock.calls[0] as any[])[2]).toBe(9)
+    expect(platform.deleteComment).not.toHaveBeenCalled()
+  })
+
+  test('submitReview：同位置有旧账号的未 resolved 评论 → 视为已覆盖，不重复发布', async () => {
+    platform.listReviewComments.mockResolvedValue([
+      by('old-bot', reviewComment(50, 'src/a.ts', 10, `old finding\n\n${commentTag()}`))
+    ])
+    const commenter = new Commenter()
+    await commenter.bufferReviewComment('src/a.ts', 10, 10, 'same spot')
+
+    await commenter.submitReview(7, 'sha1', 'status')
+
+    expect(platform.submitReviewComments).not.toHaveBeenCalled()
+  })
+
+  test('submitReview：旧账号的评论已 resolved → 发布新发现，但不删除旧评论', async () => {
+    platform.listReviewComments.mockResolvedValue([
+      by('old-bot', reviewComment(50, 'src/a.ts', 10, `old finding\n\n${commentTag()}`))
+    ])
+    const commenter = new Commenter()
+    await commenter.bufferReviewComment('src/a.ts', 10, 10, 'fresh finding')
+
+    await commenter.submitReview(7, 'sha1', 'status', new Map([['src/a.ts:10', true]]))
+
+    expect(platform.submitReviewComments).toHaveBeenCalledTimes(1)
+    expect(platform.deleteReviewComment).not.toHaveBeenCalled()
+  })
+
+  test('initBotGreeting 不会清掉已设置的旧账号', async () => {
+    const {initBotGreeting} = await import('../src/commenter')
+    initBotGreeting('🦉', 'CodeSentinel', '')
+    expect(await isOwnAuthor('old-bot')).toBe(true)
   })
 })

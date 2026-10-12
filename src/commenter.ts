@@ -103,10 +103,33 @@ async function resolveBotLogin(): Promise<string | null> {
   return _resolvedBotLogin
 }
 
+/**
+ * 本 reviewer 以前用过的 bot 账号（换过 token、bot 账号随之变化时配置）。
+ *
+ * Project / Group Access Token 每新建一个就对应一个新的 bot 账号。换号后，已有
+ * MR 上的摘要和行级评论都出自旧账号；只认当前账号的话，新 bot 认不出这些状态：
+ * 增量审查起点丢失（退化成全量审查）、已有问题被重复评论、摘要多出一条。
+ *
+ * 旧账号只做**只读认领**：读取它留下的状态、用它去重、把它当作「自己」不回复，
+ * 但不更新、不删除它的评论——新身份改不了别人的评论，也不该去删。写操作只认
+ * 当前身份，见 isCurrentAuthor。
+ */
+let _previousBotLogins: string[] = []
+
+/** 设置以前用过的 bot 账号（由入口在运行前调用；不受 initBotGreeting 重置） */
+export function setPreviousBotLogins(logins: string[]): void {
+  _previousBotLogins = logins.map(l => l.trim().toLowerCase()).filter(l => l !== '')
+}
+
+function isPreviousBotLogin(author: string): boolean {
+  return _previousBotLogins.includes(author.toLowerCase())
+}
+
 /** 仅供测试重置身份缓存 */
 export function _resetBotIdentity(): void {
   _configuredBotLogin = ''
   _resolvedBotLogin = undefined
+  _previousBotLogins = []
 }
 
 /** 行级评论的位置键，用于把「待清理的旧评论」和「这次要发的新评论」对上 */
@@ -176,7 +199,10 @@ export interface ReviewCommentBuffer {
   message: string
 }
 
-/** 这条评论是不是我们自己发的（身份未知时返回 null，表示无法判断） */
+/**
+ * 这条评论是不是**当前身份**发的（身份未知时返回 null，表示无法判断）。
+ * 写操作（更新、删除）只能以它为准。
+ */
 function isOwnComment(comment: {user?: {login?: string}}, botLogin: string | null): boolean | null {
   if (botLogin == null) return null
   const author = (comment.user?.login ?? '').trim()
@@ -184,13 +210,30 @@ function isOwnComment(comment: {user?: {login?: string}}, botLogin: string | nul
   return author.toLowerCase() === botLogin.toLowerCase()
 }
 
+/** 这条评论是不是本 reviewer 发的：当前身份，或以前用过的 bot 账号 */
+function isClaimedComment(
+  comment: {user?: {login?: string}},
+  botLogin: string | null
+): boolean | null {
+  const author = (comment.user?.login ?? '').trim()
+  if (author !== '' && isPreviousBotLogin(author)) return true
+  return isOwnComment(comment, botLogin)
+}
+
 /**
- * 按作者判断某条评论是否出自本 reviewer（REVIEW-012/013）。
+ * 按作者判断某条评论是否出自本 reviewer（REVIEW-012/013），以前用过的 bot 账号
+ * 也算（只读认领，见 setPreviousBotLogins）。
  *
- * 供 commenter 之外的去重逻辑复用（如 review.ts 的 full review 覆盖范围计算）。
+ * 供读取状态、去重、自评论过滤使用。要更新或删除评论时用 isCurrentAuthor。
  * 返回 null 表示「判断不了」——调用方必须自己决定保守方向，不要当成 false。
  */
 export async function isOwnAuthor(author: string | undefined | null): Promise<boolean | null> {
+  const botLogin = await resolveBotLogin()
+  return isClaimedComment({user: {login: author ?? undefined}}, botLogin)
+}
+
+/** 某条评论是否出自**当前**身份（可以更新、删除的评论）。null 表示判断不了 */
+export async function isCurrentAuthor(author: string | undefined | null): Promise<boolean | null> {
   const botLogin = await resolveBotLogin()
   return isOwnComment({user: {login: author ?? undefined}}, botLogin)
 }
@@ -572,8 +615,12 @@ ${statusMsg}
         //
         // 只取代**位置完全一致**的旧评论。仅锚点落在新范围内的旧评论可能讨论的是
         // 同一段代码里的另一个问题，删掉就丢了那段历史——保留它，照常发布新发现。
-        const replaced = existingBotComments.filter(c =>
-          isExactCommentLocation(c, comment.startLine, comment.endLine)
+        // 以前的 bot 账号发的评论只读认领：用来去重，但不删除
+        const replaceable = await Promise.all(
+          existingBotComments.map(async c => (await isCurrentAuthor(c.user?.login)) === true)
+        )
+        const replaced = existingBotComments.filter(
+          (c, i) => replaceable[i] && isExactCommentLocation(c, comment.startLine, comment.endLine)
         )
         if (replaced.length > 0) {
           pendingDeletions.set(
@@ -1046,7 +1093,16 @@ ${chain}
       }
 
       const ownComments = taggedComments.filter((cmt: any) => isOwnComment(cmt, botLogin) === true)
-      const foreignCount = taggedComments.length - ownComments.length
+      // 以前的 bot 账号留下的同类评论改不了，保留原样，由当前身份新发一条
+      const previousCount = taggedComments.filter(
+        (cmt: any) => isOwnComment(cmt, botLogin) !== true && isClaimedComment(cmt, botLogin)
+      ).length
+      if (previousCount > 0) {
+        logger.info(
+          `Leaving ${previousCount} comment(s) with tag ${tag} from a previous bot account untouched`
+        )
+      }
+      const foreignCount = taggedComments.length - ownComments.length - previousCount
       if (foreignCount > 0) {
         logger.info(
           `Ignoring ${foreignCount} comment(s) carrying tag ${tag} but authored by someone else ` +
@@ -1092,13 +1148,13 @@ ${chain}
         )
         return null
       }
-      for (const cmt of comments) {
-        if (!cmt.body || !variants.some(v => cmt.body.includes(v))) continue
-        if (isOwnComment(cmt, botLogin) !== true) continue
-        return cmt
-      }
-
-      return null
+      const tagged = comments.filter(
+        (cmt: any) => cmt.body && variants.some(v => cmt.body.includes(v))
+      )
+      // 当前身份的优先：换号后新旧摘要并存，旧摘要里的状态已经过时
+      const current = tagged.find((cmt: any) => isOwnComment(cmt, botLogin) === true)
+      if (current != null) return current
+      return tagged.find((cmt: any) => isClaimedComment(cmt, botLogin) === true) ?? null
     } catch (e: unknown) {
       getLogger().warning(`Failed to find comment with tag: ${e}`)
       return null

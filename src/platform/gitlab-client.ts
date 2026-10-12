@@ -267,6 +267,27 @@ export function configuredBotGitLabLogin(
   return (env.AI_REVIEWER_BOT_GITLAB_LOGIN ?? '').trim()
 }
 
+/** 以前用过的 bot 账号（只读认领）的变量名 */
+export const PREVIOUS_BOT_LOGINS_ENV = 'AI_REVIEWER_GITLAB_PREVIOUS_BOT_LOGINS'
+
+/**
+ * 以前用过的 bot 用户名（`AI_REVIEWER_GITLAB_PREVIOUS_BOT_LOGINS`），用逗号、
+ * 分号或空白分隔，可带 `@`。
+ *
+ * 换 token 后 bot 账号随之变化（Project / Group Access Token 每新建一个就是一个
+ * 新账号）时配置，让新 bot 认领旧账号留在已有 MR 上的摘要和评论。与
+ * `AI_REVIEWER_BOT_GITLAB_LOGIN` 不同，它在映射表模式下同样生效：用户名全局唯一，
+ * 列出多个项目的旧 bot 不会互相干扰。
+ */
+export function previousBotGitLabLogins(
+  env: Record<string, string | undefined> = process.env
+): string[] {
+  return (env[PREVIOUS_BOT_LOGINS_ENV] ?? '')
+    .split(/[\s,;]+/)
+    .map(l => l.replace(/^@/, '').trim())
+    .filter(l => l !== '')
+}
+
 /**
  * 从受信任配置（CI 环境变量）准备 client 配置（GLAPI-029），分两步：
  * 这里先校验与项目无关的部分，返回的函数在拿到事件里的项目路径后选出凭据。
