@@ -38,8 +38,28 @@ inputs:
     required: false
     description:
       'Max files to summarize and review. Less than or equal to 0 means no
-      limit.'
+      limit — not recommended: a very large PR (e.g. an initial import of a whole
+      project) then sends one model request per file, which is slow, costly and
+      may hit the model provider''s rate limits. When the limit is exceeded,
+      files are processed by priority (source code before docs, larger diffs
+      first; lock files, snapshots, deleted and rename-only files last) and the
+      rest are listed in the summary.'
     default: '150'
+  warn_files:
+    required: false
+    description:
+      'Add a notice to the summary when a PR touches more files than this, since
+      review time and model cost grow with the number of files. Less than or
+      equal to 0 disables the notice.'
+    default: '50'
+  initial_pr_summary_only:
+    required: false
+    description:
+      'When an automatic review detects an initial-import style PR (at least 80
+      added files and more than 90% of all files added), only post the summary
+      and skip line-level review. Commenting a review command still runs a full
+      line-level review.'
+    default: 'true'
   max_review_comments:
     required: false
     description:

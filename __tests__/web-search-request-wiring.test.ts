@@ -268,6 +268,8 @@ describe('Web search 开关到请求体的接线（TEST-030）', () => {
       disable_review: 'false',
       disable_release_notes: 'false',
       max_files: '150',
+      warn_files: '50',
+      initial_pr_summary_only: 'true',
       review_simple_changes: 'false',
       review_comment_lgtm: 'false',
       path_filters: '!dist/**',

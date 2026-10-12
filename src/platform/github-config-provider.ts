@@ -84,7 +84,9 @@ export class GitHubConfigProvider implements ConfigProvider {
       getInput('bot_icon') || '🤖',
       getInput('bot_name') || 'AI Reviewer',
       getInput('bot_github_login'),
-      getInput('lint_report_path')
+      getInput('lint_report_path'),
+      validateIntStr(getInput('warn_files'), P, 'warn_files'),
+      getBooleanInput('initial_pr_summary_only')
     )
 
     return this.cachedOptions
@@ -128,6 +130,8 @@ export class GitHubConfigProvider implements ConfigProvider {
     log(`  disable_review: ${opts.disableReview}`)
     log(`  disable_release_notes: ${opts.disableReleaseNotes}`)
     log(`  max_files: ${opts.maxFiles}`)
+    log(`  warn_files: ${opts.warnFiles}`)
+    log(`  initial_pr_summary_only: ${opts.initialPrSummaryOnly}`)
     log(`  review_simple_changes: ${opts.reviewSimpleChanges}`)
     log(`  review_comment_lgtm: ${opts.reviewCommentLGTM}`)
     log(`  path_filters: ${opts.pathFilters}`)

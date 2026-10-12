@@ -1,6 +1,6 @@
 // Jest Snapshot v1, https://goo.gl/fbAQLP
 
-exports[`GH-002: Action input 快照与不变量 input 数量与快照一致（新增/删除必须显式更新快照） 1`] = `42`;
+exports[`GH-002: Action input 快照与不变量 input 数量与快照一致（新增/删除必须显式更新快照） 1`] = `44`;
 
 exports[`GH-002: Action input 快照与不变量 全部 input 的名称、必填、默认值、解析类型快照 1`] = `
 Array [
@@ -143,6 +143,13 @@ Array [
     "required": false,
     "sensitive": false,
     "type": "int",
+  },
+  Object {
+    "default": "true",
+    "name": "initial_pr_summary_only",
+    "required": false,
+    "sensitive": false,
+    "type": "boolean",
   },
   Object {
     "default": "zh-CN",
@@ -435,6 +442,13 @@ disregarding minor issues.
     "required": false,
     "sensitive": false,
     "type": "string",
+  },
+  Object {
+    "default": "50",
+    "name": "warn_files",
+    "required": false,
+    "sensitive": false,
+    "type": "int",
   },
 ]
 `;

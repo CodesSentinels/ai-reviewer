@@ -439,6 +439,20 @@ const CONFIG_MATRIX: MatrixEntry[] = [
     expected: 77
   },
   {
+    field: 'warnFiles',
+    input: 'warn_files',
+    gitlabEnv: 'AI_REVIEWER_WARN_FILES',
+    value: '33',
+    expected: 33
+  },
+  {
+    field: 'initialPrSummaryOnly',
+    input: 'initial_pr_summary_only',
+    gitlabEnv: 'AI_REVIEWER_INITIAL_PR_SUMMARY_ONLY',
+    value: 'false',
+    expected: false
+  },
+  {
     field: 'reviewSimpleChanges',
     input: 'review_simple_changes',
     gitlabEnv: 'AI_REVIEWER_REVIEW_SIMPLE_CHANGES',
