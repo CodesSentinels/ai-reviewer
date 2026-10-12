@@ -1931,9 +1931,10 @@ const parsePatch = (patch: string): {oldHunk: string; newHunk: string} | null =>
  *
  * 解析后将每条评论映射到实际的 patch 行号范围：
  * - 如果评论的行号完全在某个 patch 内，直接使用
- * - 如果不在任何 patch 内，映射到重叠最大的 patch（并添加说明）
+ * - 如果与 patch 部分重叠，映射到重叠最大的 patch（并添加说明）
+ * - 如果与任何 patch 都不重叠，丢弃该评论（行号不属于本次 diff，挂到哪里都是错的）
  */
-function parseReview(
+export function parseReview(
   response: string,
   patches: Array<[number, number, string]>,
   debug = false
@@ -1993,11 +1994,13 @@ ${review.comment}`
           review.startLine = bestPatchStartLine
           review.endLine = bestPatchEndLine
         } else {
-          review.comment = `> Note: This review was outside of the patch, but no patch was found that overlapped with it. Original lines [${review.startLine}-${review.endLine}]
-
-${review.comment}`
-          review.startLine = patches[0][0]
-          review.endLine = patches[0][1]
+          // 与当前文件任何 patch 都不重叠：多半是模型对 diff 之外的代码（跨文件上下文里的
+          // 其他文件、本文件未改动的部分）提的意见，行号属于别的位置。硬挂到当前文件会
+          // 落在错误的文件和行上，也让按位置去重失效，所以直接丢弃，只在日志里留痕
+          getLogger().info(
+            `Dropped comment for line range ${review.startLine}-${review.endLine}: no overlapping patch in this file`
+          )
+          return
         }
       }
 

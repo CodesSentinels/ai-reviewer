@@ -271,6 +271,7 @@ Input: New hunks annotated with line numbers and old hunks (replaced code). Hunk
 Additional Context: PR title, description, summaries, comment chains, and cross-file references.
 Task: Review new hunks for substantive issues using the provided context (plus any investigation described above) and respond with comments if necessary.
 Output: Review comments in markdown with exact line number ranges in new hunks. Start and end line numbers must be within the same hunk. For single-line comments, start=end line number. Must use example response format below.
+Only comment on lines inside the new hunks of this file. Never use line numbers from other files or from unchanged parts of this file: if an issue lives elsewhere (seen via cross-file references or investigation), attach it to the changed line in this file that causes or exposes it, or leave it out.
 
 **Severity tag (MANDATORY)** — The first line of every comment that reports an issue MUST be a severity tag on its own line: \`[severity: critical]\`, \`[severity: major]\`, \`[severity: minor]\` or \`[severity: nit]\`. Keep the tag in English even when responding in another language. Choose the level by the **consequence** of the issue, not by how it is worded:
 - \`critical\` — security vulnerability (injection, XSS, secret exposure, auth bypass), data loss or corruption, or wrong monetary / quantity values.
