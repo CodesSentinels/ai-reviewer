@@ -22,6 +22,7 @@ import type {BotConfig, ConfigProvider, PromptConfig} from './config-provider'
 import {CONFIG_DEFAULTS, ConfigError, validateFloatStr, validateIntStr} from './config-provider'
 import type {Platform} from './execution-context'
 import {Options} from '../options'
+import {configuredBotGitLabLogin} from './gitlab-client'
 
 /** 从环境变量读取字符串，未设置或空则返回 undefined */
 function envStr(key: string): string | undefined {
@@ -153,7 +154,7 @@ export class GitLabConfigProvider implements ConfigProvider {
       ),
       envStr('AI_REVIEWER_BOT_ICON') ?? CONFIG_DEFAULTS.botIcon,
       envStr('AI_REVIEWER_BOT_NAME') ?? CONFIG_DEFAULTS.botName,
-      envStr('AI_REVIEWER_BOT_GITLAB_LOGIN') ?? '',
+      configuredBotGitLabLogin(),
       // SEC-002 的双 job 方案目前只落在 GitHub；GitLab 侧 trigger 强制关闭 lint
       // （CFG-002），没有产出报告的低权限 lint job，因此这里固定为空。
       '',
@@ -182,7 +183,7 @@ export class GitLabConfigProvider implements ConfigProvider {
     this.cachedBotConfig = {
       icon: envStr('AI_REVIEWER_BOT_ICON') ?? CONFIG_DEFAULTS.botIcon,
       name: envStr('AI_REVIEWER_BOT_NAME') ?? CONFIG_DEFAULTS.botName,
-      platformLogin: envStr('AI_REVIEWER_BOT_GITLAB_LOGIN') ?? ''
+      platformLogin: configuredBotGitLabLogin()
     }
 
     return this.cachedBotConfig

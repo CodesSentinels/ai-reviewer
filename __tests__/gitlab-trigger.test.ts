@@ -138,6 +138,8 @@ describe('gitlab-trigger.ts run()', () => {
     delete process.env.GITLAB_PAT
     delete process.env.CI_JOB_TOKEN
     delete process.env.AI_REVIEWER_BOT_GITLAB_LOGIN
+    delete process.env.AI_REVIEWER_GITLAB_TOKEN_MAP
+    delete process.env.GITLAB_PAT_DEMO
     process.exitCode = undefined
   })
 
@@ -560,6 +562,66 @@ describe('gitlab-trigger.ts run()', () => {
       expect(warned).toContain('CI_JOB_TOKEN')
       expect(warned).toContain('/projects/:id/members')
       expect(warned).toContain('fail closed')
+    })
+  })
+
+  describe('AI_REVIEWER_GITLAB_TOKEN_MAP：按项目选择凭据', () => {
+    beforeEach(() => {
+      process.env.TRIGGER_PAYLOAD = '/tmp/payload.json'
+      fsState.readFileSync.mockReturnValue(JSON.stringify(mrOpen))
+      process.env.GITLAB_PAT_DEMO = 'tok-demo'
+    })
+
+    function tokensUsed(): unknown[] {
+      const {Gitlab} = jest.requireMock<{Gitlab: jest.Mock}>('@gitbeaker/rest')
+      return Gitlab.mock.calls.map(c => (c[0] as {token?: string}).token)
+    }
+
+    test('事件项目在映射表里 → 用映射到的 token，而不是 GITLAB_PAT', async () => {
+      process.env.AI_REVIEWER_GITLAB_TOKEN_MAP = 'octo = GITLAB_PAT_DEMO'
+
+      await runTrigger()
+
+      expect(tokensUsed()).toContain('tok-demo')
+      expect(tokensUsed()).not.toContain('glpat-test-token')
+      expect(errorSpy).not.toHaveBeenCalled()
+      expect(process.exitCode).toBeUndefined()
+    })
+
+    test('事件项目不在映射表里 → 报错退出，不创建 client、不做身份自检', async () => {
+      process.env.AI_REVIEWER_GITLAB_TOKEN_MAP = 'other/group = GITLAB_PAT_DEMO'
+
+      await runTrigger()
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('project "octo/demo" is not listed in AI_REVIEWER_GITLAB_TOKEN_MAP')
+      )
+      expect(tokensUsed()).toEqual([])
+      expect(mockUsers.showCurrentUser).not.toHaveBeenCalled()
+      expect(process.exitCode).toBe(1)
+    })
+
+    test('映射表语法错误 → 读事件之前就报错退出', async () => {
+      process.env.AI_REVIEWER_GITLAB_TOKEN_MAP = 'octo = OPENAI_API_KEY'
+
+      await runTrigger()
+
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('is not allowed'))
+      expect(fsState.readFileSync).not.toHaveBeenCalled()
+      expect(process.exitCode).toBe(1)
+    })
+
+    test('配了 AI_REVIEWER_BOT_GITLAB_LOGIN → 告知已忽略，身份以凭据为准', async () => {
+      process.env.AI_REVIEWER_GITLAB_TOKEN_MAP = '* = GITLAB_PAT_DEMO'
+      process.env.AI_REVIEWER_BOT_GITLAB_LOGIN = 'project_1_bot'
+
+      await runTrigger()
+
+      const warned = warnSpy.mock.calls.map(c => String(c[0])).join('\n')
+      expect(warned).toContain('AI_REVIEWER_BOT_GITLAB_LOGIN is ignored')
+      // 被忽略的配置值不参与比较，不会再报「与凭据身份不一致」
+      expect(warned).not.toContain('project_1_bot')
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('acting as @ai-reviewer-bot'))
     })
   })
 

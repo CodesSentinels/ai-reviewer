@@ -13,7 +13,13 @@ import {createGitLabExecutionContext} from './platform/gitlab-execution-context'
 import type {ExecutionContext} from './platform/execution-context'
 import {GitLabLogger} from './platform/gitlab-logger'
 import {GitLabPlatform} from './platform/gitlab-platform'
-import {describeGitLabClientConfig, resolveGitLabClientConfig} from './platform/gitlab-client'
+import {
+  configuredBotGitLabLogin,
+  describeGitLabClientConfig,
+  isGitLabTokenMapEnabled,
+  prepareGitLabClientConfig,
+  type GitLabClientConfig
+} from './platform/gitlab-client'
 import {setPlatform} from './platform/git-platform'
 import {setStateNamespace} from './platform/state-namespace'
 import {setLogger} from './platform/logger'
@@ -78,7 +84,14 @@ function splitProjectPath(projectPath: string): {owner: string; repo: string} {
  * 自检失败不中止运行：CI_JOB_TOKEN 是文档里支持的认证方式，只是能力受限。
  */
 async function verifyBotIdentity(platform: GitLabPlatform): Promise<string[]> {
-  const configuredLogin = (process.env.AI_REVIEWER_BOT_GITLAB_LOGIN ?? '').trim()
+  const configuredLogin = configuredBotGitLabLogin()
+  if (isGitLabTokenMapEnabled() && (process.env.AI_REVIEWER_BOT_GITLAB_LOGIN ?? '').trim() !== '') {
+    // 各项目的 token 对应不同 bot 账号，单个配置值对不上，见 configuredBotGitLabLogin
+    logger.warning(
+      'AI_REVIEWER_BOT_GITLAB_LOGIN is ignored when AI_REVIEWER_GITLAB_TOKEN_MAP is set — ' +
+        'the bot identity comes from the selected credential.'
+    )
+  }
   try {
     const login = await platform.verifyCredential()
     logger.info(`GitLab bot identity resolved: acting as @${login}`)
@@ -120,20 +133,17 @@ export async function run(): Promise<void> {
   // 初始化 GitLab Logger（ARCH-014）+ Platform（ARCH-018/020）
   setLogger(logger)
 
-  // GLAPI-029：host / 凭据 / timeout 统一从受信任配置解析并校验，非法即 fail closed
-  let clientConfig
+  // GLAPI-029：host / 凭据 / timeout 统一从受信任配置解析并校验，非法即 fail closed。
+  // 与项目无关的部分在这里就校验；按项目选凭据（映射表）要等事件里的项目路径，
+  // 在 ExecutionContext 构造之后完成
+  let resolveClientConfig: (projectPath?: string) => GitLabClientConfig
   try {
-    clientConfig = resolveGitLabClientConfig()
+    resolveClientConfig = prepareGitLabClientConfig()
   } catch (e) {
     logger.error(redact(e instanceof Error ? e.message : String(e)))
     process.exitCode = 1
     return
   }
-  // 摘要只含 host/凭据类型/timeout，不含 token（GLAPI-029）；
-  // 走 debug 级别，避免在事件被拒绝（如 fork MR）前产生无关输出
-  logger.debug(`GitLab client: ${describeGitLabClientConfig(clientConfig)}`)
-  const platform = new GitLabPlatform(clientConfig)
-  setPlatform(platform)
   // GH-014 / STATE-006：本次运行写入的 marker / 幂等键带 gitlab: 命名空间
   setStateNamespace('gitlab')
 
@@ -195,6 +205,20 @@ export async function run(): Promise<void> {
   logger.info(
     `GitLab event validated: platform=${execCtx.platform} eventKind=${execCtx.eventKind} project=${execCtx.projectPath} mr=${execCtx.changeRequestId}`
   )
+
+  let clientConfig: GitLabClientConfig
+  try {
+    clientConfig = resolveClientConfig(execCtx.projectPath)
+  } catch (e) {
+    // 映射表里没有这个项目也走这里：映射表同时是项目白名单
+    logger.error(redact(e instanceof Error ? e.message : String(e)))
+    process.exitCode = 1
+    return
+  }
+  // 摘要只含 host/凭据类型/来源变量名/timeout，不含 token（GLAPI-029）
+  logger.debug(`GitLab client: ${describeGitLabClientConfig(clientConfig)}`)
+  const platform = new GitLabPlatform(clientConfig)
+  setPlatform(platform)
 
   // 事件被接受之后才自检：被拒绝的事件（fork MR、无关事件）不该产生无关输出，
   // 也不该为此多打一次 API
@@ -298,7 +322,7 @@ export async function run(): Promise<void> {
       CONFIG_DEFAULTS.commandAckReaction
   )
   if (isCommentEvent && !execCtx.actor.isBot && execCtx.comment != null) {
-    const mentions = resolveBotMentions(process.env.AI_REVIEWER_BOT_GITLAB_LOGIN)
+    const mentions = resolveBotMentions(configuredBotGitLabLogin())
     const mentionsBot =
       typeof execCtx.comment.body === 'string' &&
       parse(execCtx.comment.body, {registeredCommands: new Set(), botMentions: mentions}).kind !==
@@ -371,7 +395,7 @@ export async function run(): Promise<void> {
  * 用户名来判断是不是 bot 自己的操作。
  */
 async function namePipeline(): Promise<void> {
-  const configuredLogin = (process.env.AI_REVIEWER_BOT_GITLAB_LOGIN ?? '').trim()
+  const configuredLogin = configuredBotGitLabLogin()
   const botLogins = knownBotLogins.length > 0 ? knownBotLogins : [configuredLogin].filter(Boolean)
   const trigger = describeTrigger(triggerPayload, botLogins)
   // bot 自己的操作一律不触发处理，结论固定为「已跳过」，不受下游日志影响

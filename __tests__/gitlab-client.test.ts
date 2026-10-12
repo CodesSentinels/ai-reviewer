@@ -16,8 +16,12 @@ jest.mock('@gitbeaker/rest', () => ({
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const {
+  configuredBotGitLabLogin,
   createGitLabClient,
   describeGitLabClientConfig,
+  matchGitLabTokenMap,
+  parseGitLabTokenMap,
+  prepareGitLabClientConfig,
   GitLabClientConfigError,
   GITLAB_CLIENT_DEFAULTS,
   listOptions,
@@ -144,6 +148,106 @@ describe('validateGitLabTimeoutMS', () => {
     expect(() => validateGitLabTimeoutMS('-1')).toThrow(GitLabClientConfigError)
     expect(() => validateGitLabTimeoutMS('1.5')).toThrow(GitLabClientConfigError)
     expect(() => validateGitLabTimeoutMS('30s')).toThrow(GitLabClientConfigError)
+  })
+})
+
+describe('AI_REVIEWER_GITLAB_TOKEN_MAP：按项目选择凭据', () => {
+  const MAP = [
+    '# 注释行',
+    'group/web = GITLAB_PAT_WEB',
+    'group/web/app = GITLAB_PAT_APP',
+    'other/lib=GITLAB_PAT_LIB'
+  ].join('\n')
+  const ENV = {
+    AI_REVIEWER_GITLAB_TOKEN_MAP: MAP,
+    GITLAB_PAT_WEB: 'tok-web',
+    GITLAB_PAT_APP: 'tok-app',
+    GITLAB_PAT_LIB: 'tok-lib',
+    GITLAB_PAT: 'tok-default'
+  }
+
+  test('解析：支持换行 / ; / , 分隔，忽略注释与首尾斜杠，路径转小写', () => {
+    expect(parseGitLabTokenMap('/Group/Web/ = GITLAB_A; b = GITLAB_B, * = GITLAB_C\n# x')).toEqual([
+      {prefix: 'group/web', variable: 'GITLAB_A'},
+      {prefix: 'b', variable: 'GITLAB_B'},
+      {prefix: '*', variable: 'GITLAB_C'}
+    ])
+  })
+
+  test.each([
+    ['group/web', '缺少 = 号', 'expected "path = VARIABLE"'],
+    [' = GITLAB_A', '空路径', 'empty project path'],
+    ['a = OPENAI_API_KEY', '不是 GITLAB_ 开头的变量', 'not allowed'],
+    ['a = gitlab_lower', '小写变量名', 'not allowed'],
+    ['a = GITLAB_A\nA/ = GITLAB_B', '前缀重复（忽略大小写和斜杠）', 'duplicate entry'],
+    ['# 只有注释', '没有条目', 'contains no entries']
+  ])('解析：%j（%s）→ fail closed', (raw, _why, message) => {
+    expect(() => parseGitLabTokenMap(raw)).toThrow(GitLabClientConfigError)
+    expect(() => parseGitLabTokenMap(raw)).toThrow(message)
+  })
+
+  test('匹配：按路径段匹配，最长前缀优先，* 兜底，不区分大小写', () => {
+    const entries = parseGitLabTokenMap(`${MAP}\n* = GITLAB_PAT`)
+    const pick = (path: string): string | undefined => matchGitLabTokenMap(entries, path)?.variable
+    expect(pick('group/web/app')).toBe('GITLAB_PAT_APP')
+    expect(pick('group/web/app/sub')).toBe('GITLAB_PAT_APP')
+    expect(pick('Group/Web/Other')).toBe('GITLAB_PAT_WEB')
+    expect(pick('group/web')).toBe('GITLAB_PAT_WEB')
+    // 不能按字符串前缀匹配：group/webapp 不属于 group/web
+    expect(pick('group/webapp')).toBe('GITLAB_PAT')
+    expect(pick('unrelated/x')).toBe('GITLAB_PAT')
+  })
+
+  test('匹配：没有 * 时，表外项目没有条目', () => {
+    expect(matchGitLabTokenMap(parseGitLabTokenMap(MAP), 'group/webapp')).toBeNull()
+  })
+
+  test('选中映射表里的 token，优先于 GITLAB_PAT', () => {
+    const config = resolveGitLabClientConfig(ENV, 'group/web/app')
+    expect(config.credential).toEqual({type: 'pat', value: 'tok-app'})
+    expect(resolveGitLabClientConfig(ENV, 'other/lib').credential.value).toBe('tok-lib')
+  })
+
+  test('映射表即白名单：表外项目拒绝，不回退到 GITLAB_PAT', () => {
+    expect(() => resolveGitLabClientConfig(ENV, 'group/webapp')).toThrow(
+      'project "group/webapp" is not listed in AI_REVIEWER_GITLAB_TOKEN_MAP'
+    )
+  })
+
+  test('映射到的变量为空 → 报出变量名，不报 token', () => {
+    expect(() => resolveGitLabClientConfig({...ENV, GITLAB_PAT_APP: ' '}, 'group/web/app')).toThrow(
+      'GITLAB_PAT_APP (mapped for "group/web/app" in AI_REVIEWER_GITLAB_TOKEN_MAP) is not set'
+    )
+  })
+
+  test('启用映射表但没给项目路径 → 拒绝', () => {
+    expect(() => resolveGitLabClientConfig(ENV)).toThrow('needs the project path')
+  })
+
+  test('语法错误在拿到项目路径之前就暴露', () => {
+    expect(() => prepareGitLabClientConfig({AI_REVIEWER_GITLAB_TOKEN_MAP: 'oops'})).toThrow(
+      GitLabClientConfigError
+    )
+  })
+
+  test('配置摘要带上命中的条目（只有变量名），不含 token', () => {
+    const summary = describeGitLabClientConfig(resolveGitLabClientConfig(ENV, 'group/web/app'))
+    expect(summary).toBe(
+      'host=https://gitlab.com credential=pat ' +
+        '(AI_REVIEWER_GITLAB_TOKEN_MAP: group/web/app → GITLAB_PAT_APP) timeout=30000ms'
+    )
+    expect(summary).not.toContain('tok-')
+  })
+
+  test('未启用映射表时行为不变：GITLAB_PAT（可以是 PAT / Project / Group Access Token）', () => {
+    expect(
+      resolveGitLabClientConfig({GITLAB_PAT: 'tok-default'}, 'any/project').credential
+    ).toEqual({type: 'pat', value: 'tok-default'})
+  })
+
+  test('启用映射表时忽略 AI_REVIEWER_BOT_GITLAB_LOGIN：各项目的 bot 账号不同', () => {
+    expect(configuredBotGitLabLogin({AI_REVIEWER_BOT_GITLAB_LOGIN: ' my-bot '})).toBe('my-bot')
+    expect(configuredBotGitLabLogin({AI_REVIEWER_BOT_GITLAB_LOGIN: 'my-bot', ...ENV})).toBe('')
   })
 })
 

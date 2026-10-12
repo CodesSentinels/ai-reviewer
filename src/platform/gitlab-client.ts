@@ -27,6 +27,8 @@ export interface GitLabClientConfig {
   host: string
   credential: GitLabCredential
   timeoutMS: number
+  /** 凭据从哪里选出来的（映射表条目），只含变量名，可安全打印 */
+  credentialSource?: string
 }
 
 /** gitbeaker 实例类型别名（只在 adapter 层内部使用，不进入 IGitPlatform） */
@@ -157,20 +159,165 @@ export function validateGitLabTimeoutMS(raw: string): number {
   return ms
 }
 
+/** 按项目选择凭据的映射表变量名 */
+export const TOKEN_MAP_ENV = 'AI_REVIEWER_GITLAB_TOKEN_MAP'
+
+/** 映射表里「匹配任意项目」的条目，优先级最低 */
+const TOKEN_MAP_WILDCARD = '*'
+
 /**
- * 从受信任配置（CI 环境变量）解析 client 配置（GLAPI-029）。
+ * 映射表只能引用 `GITLAB_` 开头的变量：值会作为 token 发给 GitLab，
+ * 写错成 `OPENAI_API_KEY` 之类时要在配置期拒绝，而不是把别的密钥发出去。
+ */
+const TOKEN_MAP_VARIABLE_RE = /^GITLAB_[A-Z0-9_]+$/
+
+/** 映射表的一条：项目路径前缀（或 `*`）→ 存放 token 的 CI 变量名 */
+export interface GitLabTokenMapEntry {
+  prefix: string
+  variable: string
+}
+
+/**
+ * 解析 `AI_REVIEWER_GITLAB_TOKEN_MAP`。
+ *
+ * 每条形如 `group/subgroup = GITLAB_PAT_X`，条目之间用换行、`;` 或 `,` 分隔，
+ * `#` 开头的行是注释。映射表本身只含变量名、不含 token：token 各自放在
+ * 独立的 CI 变量里，才能逐个设成 Masked + Hidden（多行 / JSON 的值无法 mask）。
+ *
+ * 语法错误、变量名不合规、前缀重复都抛 GitLabClientConfigError（fail closed）。
+ */
+export function parseGitLabTokenMap(raw: string): GitLabTokenMapEntry[] {
+  const entries: GitLabTokenMapEntry[] = []
+  const seen = new Set<string>()
+  for (const line of raw.split(/[\n;,]/)) {
+    const item = line.trim()
+    if (item === '' || item.startsWith('#')) continue
+    const eq = item.indexOf('=')
+    if (eq < 0) {
+      throw new GitLabClientConfigError(
+        `${TOKEN_MAP_ENV}: expected "path = VARIABLE", got "${item}"`
+      )
+    }
+    const rawPrefix = item.substring(0, eq).trim()
+    const variable = item.substring(eq + 1).trim()
+    const prefix =
+      rawPrefix === TOKEN_MAP_WILDCARD
+        ? rawPrefix
+        : rawPrefix.replace(/^\/+|\/+$/g, '').toLowerCase()
+    if (prefix === '') {
+      throw new GitLabClientConfigError(`${TOKEN_MAP_ENV}: empty project path in "${item}"`)
+    }
+    if (!TOKEN_MAP_VARIABLE_RE.test(variable)) {
+      throw new GitLabClientConfigError(
+        `${TOKEN_MAP_ENV}: "${variable}" is not allowed — token variables must match GITLAB_[A-Z0-9_]+`
+      )
+    }
+    if (seen.has(prefix)) {
+      throw new GitLabClientConfigError(`${TOKEN_MAP_ENV}: duplicate entry for "${prefix}"`)
+    }
+    seen.add(prefix)
+    entries.push({prefix, variable})
+  }
+  if (entries.length === 0) {
+    throw new GitLabClientConfigError(`${TOKEN_MAP_ENV} is set but contains no entries`)
+  }
+  return entries
+}
+
+/**
+ * 在映射表里为项目找条目：按路径段匹配前缀（`group/web` 覆盖 `group/web/app`，
+ * 不覆盖 `group/webapp`），最长的前缀优先，`*` 兜底。GitLab 路径不区分大小写。
+ */
+export function matchGitLabTokenMap(
+  entries: GitLabTokenMapEntry[],
+  projectPath: string
+): GitLabTokenMapEntry | null {
+  const path = projectPath.trim().toLowerCase()
+  let best: GitLabTokenMapEntry | null = null
+  for (const entry of entries) {
+    if (entry.prefix === TOKEN_MAP_WILDCARD) continue
+    const covers = path === entry.prefix || path.startsWith(`${entry.prefix}/`)
+    if (covers && (best == null || entry.prefix.length > best.prefix.length)) best = entry
+  }
+  return best ?? entries.find(e => e.prefix === TOKEN_MAP_WILDCARD) ?? null
+}
+
+/**
+ * 是否启用了按项目选择凭据。启用时各项目的 bot 账号不同，
+ * 单个的 `AI_REVIEWER_BOT_GITLAB_LOGIN` 无法同时对应，见 configuredBotGitLabLogin。
+ */
+export function isGitLabTokenMapEnabled(
+  env: Record<string, string | undefined> = process.env
+): boolean {
+  return (env[TOKEN_MAP_ENV] ?? '').trim() !== ''
+}
+
+/**
+ * 配置的 bot 用户名（`AI_REVIEWER_BOT_GITLAB_LOGIN`）。
+ *
+ * 启用映射表时恒为空：每个项目的 token 对应不同的 bot 账号，配置值只可能
+ * 对得上其中一个；而共享核心里「配置值优先于凭据真实身份」，配置值会让其他
+ * 项目认不出 bot 自己的评论（摘要重复创建、自评论触发命令）。这时 bot 身份
+ * 一律来自当前凭据的 `GET /user`。
+ */
+export function configuredBotGitLabLogin(
+  env: Record<string, string | undefined> = process.env
+): string {
+  if (isGitLabTokenMapEnabled(env)) return ''
+  return (env.AI_REVIEWER_BOT_GITLAB_LOGIN ?? '').trim()
+}
+
+/**
+ * 从受信任配置（CI 环境变量）准备 client 配置（GLAPI-029），分两步：
+ * 这里先校验与项目无关的部分，返回的函数在拿到事件里的项目路径后选出凭据。
+ * 这样配置错误在读事件之前就暴露，而按项目选择又能拿到项目路径。
  *
  * - host：`CI_SERVER_URL`，默认 https://gitlab.com
- * - 凭据：`GITLAB_PAT` 优先，为空时 fallback `CI_JOB_TOKEN`
+ * - 凭据：
+ *   - 设置了 `AI_REVIEWER_GITLAB_TOKEN_MAP`：按项目路径从映射表选出变量名，
+ *     读取该变量作为 token；项目不在表里或变量为空时抛错——映射表同时是
+ *     项目白名单，不回退到 `GITLAB_PAT`
+ *   - 否则 `GITLAB_PAT` 优先，为空时 fallback `CI_JOB_TOKEN`。这里填的可以是
+ *     个人 PAT、Project Access Token 或 Group Access Token，调用方式相同
  * - timeout：`AI_REVIEWER_GITLAB_TIMEOUT_MS`，默认 30s
  *
- * 凭据缺失或配置非法时抛 GitLabClientConfigError（fail closed）。
+ * 配置非法时抛 GitLabClientConfigError（fail closed）。
  * 选中 job token 时会打一条能力降级 warning——见 JOB_TOKEN_LIMITATION_WARNING。
  */
-export function resolveGitLabClientConfig(
+export function prepareGitLabClientConfig(
   env: Record<string, string | undefined> = process.env
-): GitLabClientConfig {
+): (projectPath?: string) => GitLabClientConfig {
   const host = validateGitLabHost(env.CI_SERVER_URL ?? GITLAB_CLIENT_DEFAULTS.host)
+  const timeoutMS = validateGitLabTimeoutMS(
+    env.AI_REVIEWER_GITLAB_TIMEOUT_MS ?? String(GITLAB_CLIENT_DEFAULTS.timeoutMS)
+  )
+
+  if (isGitLabTokenMapEnabled(env)) {
+    const entries = parseGitLabTokenMap(env[TOKEN_MAP_ENV] ?? '')
+    return projectPath => {
+      if (projectPath == null || projectPath.trim() === '') {
+        throw new GitLabClientConfigError(`${TOKEN_MAP_ENV} needs the project path to pick a token`)
+      }
+      const entry = matchGitLabTokenMap(entries, projectPath)
+      if (entry == null) {
+        throw new GitLabClientConfigError(
+          `project "${projectPath}" is not listed in ${TOKEN_MAP_ENV}; add an entry for it (or "*")`
+        )
+      }
+      const value = (env[entry.variable] ?? '').trim()
+      if (value === '') {
+        throw new GitLabClientConfigError(
+          `${entry.variable} (mapped for "${entry.prefix}" in ${TOKEN_MAP_ENV}) is not set`
+        )
+      }
+      return {
+        host,
+        credential: {type: 'pat', value},
+        timeoutMS,
+        credentialSource: `${TOKEN_MAP_ENV}: ${entry.prefix} → ${entry.variable}`
+      }
+    }
+  }
 
   const pat = (env.GITLAB_PAT ?? '').trim()
   const jobToken = (env.CI_JOB_TOKEN ?? '').trim()
@@ -189,19 +336,28 @@ export function resolveGitLabClientConfig(
     getLogger().warning(JOB_TOKEN_LIMITATION_WARNING)
   }
 
-  const timeoutMS = validateGitLabTimeoutMS(
-    env.AI_REVIEWER_GITLAB_TIMEOUT_MS ?? String(GITLAB_CLIENT_DEFAULTS.timeoutMS)
-  )
+  return () => ({host, credential, timeoutMS})
+}
 
-  return {host, credential, timeoutMS}
+/**
+ * 一步解析 client 配置：prepareGitLabClientConfig 的简写。
+ * 启用映射表时必须给出项目路径。
+ */
+export function resolveGitLabClientConfig(
+  env: Record<string, string | undefined> = process.env,
+  projectPath?: string
+): GitLabClientConfig {
+  return prepareGitLabClientConfig(env)(projectPath)
 }
 
 /**
  * 生成可安全打印的配置摘要（GLAPI-029：绝不输出 token 或带 token 的 URL）。
- * 只输出 host、凭据类型和 timeout，不输出凭据值，也不输出其长度前缀等可推断信息。
+ * 只输出 host、凭据类型、凭据来源（映射表条目，只含变量名）和 timeout，
+ * 不输出凭据值，也不输出其长度前缀等可推断信息。
  */
 export function describeGitLabClientConfig(config: GitLabClientConfig): string {
-  return `host=${config.host} credential=${config.credential.type} timeout=${config.timeoutMS}ms`
+  const source = config.credentialSource != null ? ` (${config.credentialSource})` : ''
+  return `host=${config.host} credential=${config.credential.type}${source} timeout=${config.timeoutMS}ms`
 }
 
 /**
