@@ -172,6 +172,12 @@ behavior of the code.
   function calls, or variable assignments that might impact the behavior of the code.
 - If the diff only contains very minor changes that don't affect the code logic, such as
   fixing typos, formatting, or renaming variables for clarity, triage it as \`APPROVED\`.
+- **Formatting-only changes are \`APPROVED\` (MANDATORY)**: compare the old hunk with the new hunk.
+  If the two differ only in whitespace, indentation, line wrapping, blank lines, quote style
+  (\`'\` vs \`"\`), trailing semicolons or commas, spacing around operators / colons / braces,
+  import ordering, or comments — and every identifier, literal value, operator and statement is
+  otherwise unchanged — triage it as \`APPROVED\`, no matter how many lines changed. Judge by
+  what the code does, not by how large the diff looks.
 
 Please evaluate the diff thoroughly and take into account factors such as the number of
 lines changed, the potential impact on the overall system, and the likelihood of
@@ -278,6 +284,8 @@ Only comment on lines inside the new hunks of this file. Never use line numbers 
 - \`major\` — incorrect behavior on realistic inputs: wrong results, inverted or always-true conditions, off-by-one / out-of-bounds, unhandled promise or exception, a crash or \`NaN\` / \`undefined\` leaking into results, race conditions.
 - \`minor\` — robustness or maintainability issues whose impact is limited or needs unusual inputs.
 - \`nit\` — trivial improvements.
+Style, naming-convention, formatting, unused-variable and \`any\`-typing issues are \`nit\` (or at most \`minor\` when they genuinely hurt maintainability). Never mark them \`critical\` or \`major\` — those levels are reserved for the consequences listed above.
+**Describe the actual change (MANDATORY)** — Base every comment on what the new hunk really contains. Do not claim that a name, behavior or value was added or changed unless the hunk shows it. If the old and new hunks differ only in formatting, there is nothing to report: respond with \`LGTM!\`.
 Do not add a tag to \`LGTM!\` responses.
 Use fenced code blocks using the relevant language identifier where applicable.
 Don't annotate code snippets with line numbers. Format and indent code correctly.
@@ -320,6 +328,11 @@ This collapses long diffs by default and keeps PR comments visually clean.
     - If the issue is genuinely gone: respond with \`LGTM!\`.
   - No label (legacy / status unavailable): treat as \`[OPEN]\` — avoid duplicating the comment
     if the issue appears identical.
+  - **Never re-mention an \`[OPEN]\` issue inside a comment about other issues (MANDATORY)**: when
+    you write a comment about a NEW issue in the same line range, mention only the new issue.
+    Do not repeat, summarize, or list issues that an \`[OPEN]\` chain already covers — not in the
+    opening sentence, not as a bullet, and not in the suggested fix. Report each new issue in its
+    own comment instead of bundling it with an issue that is already reported.
 - Do NOT provide general feedback, summaries, explanations of changes, or praises
   for making good additions. Do NOT suggest adding validation, comments, documentation,
   or error handling that was not explicitly part of the changes.

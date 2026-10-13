@@ -556,6 +556,38 @@ describe('GitHubPlatform', () => {
       expect(perm).toBe('write')
     })
 
+    // 回归：GitHub 旧字段 permission 只有 admin/write/read/none，triage 会被折叠成 read、
+    // maintain 会被折叠成 write；必须读 role_name，否则 triage 用户拿不到 `configuration`。
+    test('triage：旧字段 permission=read，role_name=triage → triage', async () => {
+      mockOctokit.repos.getCollaboratorPermissionLevel.mockResolvedValue({
+        data: {permission: 'read', role_name: 'triage'}
+      })
+      expect(await platform.getCollaboratorPermission('o', 'r', 'user')).toBe('triage')
+    })
+
+    test('maintain：旧字段 permission=write，role_name=maintain → maintain', async () => {
+      mockOctokit.repos.getCollaboratorPermissionLevel.mockResolvedValue({
+        data: {permission: 'write', role_name: 'maintain'}
+      })
+      expect(await platform.getCollaboratorPermission('o', 'r', 'user')).toBe('maintain')
+    })
+
+    test('自定义角色（role_name 不在内置角色里）回退到旧字段 permission', async () => {
+      mockOctokit.repos.getCollaboratorPermissionLevel.mockResolvedValue({
+        data: {permission: 'write', role_name: 'release-manager'}
+      })
+      expect(await platform.getCollaboratorPermission('o', 'r', 'user')).toBe('write')
+    })
+
+    test('没有 role_name 时沿用 permission；两者都没有 → none', async () => {
+      mockOctokit.repos.getCollaboratorPermissionLevel.mockResolvedValue({
+        data: {permission: 'admin'}
+      })
+      expect(await platform.getCollaboratorPermission('o', 'r', 'user')).toBe('admin')
+      mockOctokit.repos.getCollaboratorPermissionLevel.mockResolvedValue({data: {}})
+      expect(await platform.getCollaboratorPermission('o', 'r', 'user')).toBe('none')
+    })
+
     test('API 403 → GitPlatformError forbidden', async () => {
       const err: any = new Error('Forbidden')
       err.status = 403

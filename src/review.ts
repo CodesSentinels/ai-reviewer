@@ -69,6 +69,7 @@ import {isHeadStale} from './head-staleness'
 import {getRepoCoords, repoCoordsOf, setExecCtx} from './platform/run-context'
 import {getTokenCount} from './tokenizer'
 import {detectInitialPr, initialPrNotice, largePrNotice, prioritizeFiles} from './large-pr'
+import {COMPARE_FILES_CAP, selectFilesToReview} from './diff-files'
 import {fetchThreadStatusMap, type ThreadStatusMap} from './github/review-thread'
 
 /** 平台无关的 TreeFetcher 实现（DEP-005 → ARCH-018） */
@@ -493,17 +494,17 @@ const runCodeReview = async (
   // 全量审查（首次或 full mode）：incremental 与 targetBranch 相同，直接使用
   // 关键：必须用 incrementalFiles 的 patch 送入 AI，否则 AI 会看到已审查过的旧变更
   const isFirstOrFullReview = highestReviewedCommitId === pr.base.sha
-  const files = isFirstOrFullReview
-    ? targetBranchFiles.filter(targetBranchFile =>
-        incrementalFiles.some(
-          incrementalFile => incrementalFile.filename === targetBranchFile.filename
-        )
-      )
-    : incrementalFiles.filter(incrementalFile =>
-        targetBranchFiles.some(
-          targetBranchFile => targetBranchFile.filename === incrementalFile.filename
-        )
-      )
+  const {files, targetTruncated} = selectFilesToReview({
+    isFirstOrFullReview,
+    incrementalFiles,
+    targetBranchFiles
+  })
+  if (targetTruncated) {
+    getLogger().warning(
+      `compare returned ${targetBranchFiles.length} files (API limit ${COMPARE_FILES_CAP}); ` +
+        'the base...head list may be truncated, so incremental files are not intersected with it'
+    )
+  }
 
   if (files.length === 0) {
     getLogger().warning('Skipped: files is null')

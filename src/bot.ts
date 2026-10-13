@@ -15,6 +15,7 @@ import OpenAI, {APIError} from 'openai'
 import pRetry from 'p-retry'
 import {OpenAIOptions, Options} from './options'
 import {sanitizeModelOutput} from './sanitize-model-output'
+import {isSecretEnvName, redactString} from './redact'
 import {executeReviewTool, isReviewToolName, reviewToolDefinitions} from './review-tools'
 
 /**
@@ -676,7 +677,13 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
         remainingOutputBudget > 0
           ? Math.max(1, Math.floor(remainingOutputBudget / commandsRemaining))
           : 0
-      const truncatedOutput = truncateShellStreams(result.stdout, result.stderr, commandBudget)
+      // 先脱敏再截断：凭据可能出现在文件内容或命令输出里（不一定来自环境变量），
+      // 原样回传会进入模型上下文，甚至被写进评论。先截断的话，被切开的半截凭据脱不掉。
+      const truncatedOutput = truncateShellStreams(
+        redactString(result.stdout),
+        redactString(result.stderr),
+        commandBudget
+      )
       remainingOutputBudget = Math.max(
         0,
         remainingOutputBudget - truncatedOutput.stdout.length - truncatedOutput.stderr.length
@@ -716,6 +723,10 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
     const sanitizedEnv = {...process.env}
     for (const key of LOCAL_SHELL_SENSITIVE_ENV_KEYS) {
       delete sanitizedEnv[key]
+    }
+    // 固定名单只覆盖 4 个键；其余看起来像密钥的变量（*_TOKEN / *_KEY / *_SECRET 等）也不下发
+    for (const key of Object.keys(sanitizedEnv)) {
+      if (isSecretEnvName(key)) delete sanitizedEnv[key]
     }
 
     try {

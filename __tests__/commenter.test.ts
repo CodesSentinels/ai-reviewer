@@ -422,6 +422,102 @@ describe('GH-007: 行级 review comment 的缓冲、定位与提交', () => {
     expect(platform.deleteReviewComment).not.toHaveBeenCalled()
   })
 
+  // 回归（FT-055 / FT-092）：位置不同（旧 5-10、新 1-17）但讲的是同一个问题，不能重复发布。
+  test('行范围不同但内容是同一问题（已有未解决评论）→ 整条跳过', async () => {
+    platform.listReviewComments.mockResolvedValue([
+      reviewComment(
+        50,
+        'src/a.ts',
+        10,
+        `\`loadAll\` 返回 \`Promise<unknown>[]\`，应使用 \`Promise.all\`。\n\n${commentTag()}`,
+        5
+      )
+    ])
+    const commenter = new Commenter()
+    await commenter.bufferReviewComment(
+      'src/a.ts',
+      1,
+      17,
+      '🦉 CodeSentinel\n\n`loadAll` 没有等待请求，应当用 `Promise.all` 汇总。'
+    )
+
+    await commenter.submitReview(7, 'sha1', 'status')
+
+    expect(platform.submitReviewComments).not.toHaveBeenCalled()
+  })
+
+  test('合并评论里只有一部分是已报告过的 → 去掉那一部分，其余照常发布', async () => {
+    platform.listReviewComments.mockResolvedValue([
+      reviewComment(
+        50,
+        'src/a.ts',
+        10,
+        `\`loadAll\` 返回 \`Promise<unknown>[]\`，应使用 \`Promise.all\`。\n\n${commentTag()}`,
+        5
+      )
+    ])
+    const commenter = new Commenter()
+    await commenter.bufferReviewComment(
+      'src/a.ts',
+      1,
+      17,
+      '🦉 CodeSentinel\n\n`loadAll` 应当用 `Promise.all`。\n\n---\n\n`findUser` 直接拼接 SQL，存在注入风险。'
+    )
+
+    await commenter.submitReview(7, 'sha1', 'status')
+
+    const drafts = (platform.submitReviewComments.mock.calls[0] as any[])[4]
+    expect(drafts).toHaveLength(1)
+    expect(drafts[0].body).toContain('findUser')
+    expect(drafts[0].body).not.toContain('loadAll')
+  })
+
+  test('同文件但内容是另一个问题 → 照常发布', async () => {
+    platform.listReviewComments.mockResolvedValue([
+      reviewComment(
+        50,
+        'src/a.ts',
+        10,
+        `\`loadAll\` 应使用 \`Promise.all\`。\n\n${commentTag()}`,
+        5
+      )
+    ])
+    const commenter = new Commenter()
+    await commenter.bufferReviewComment(
+      'src/a.ts',
+      1,
+      17,
+      '`findUser` 直接拼接 SQL，存在注入风险。'
+    )
+
+    await commenter.submitReview(7, 'sha1', 'status')
+
+    expect(platform.submitReviewComments).toHaveBeenCalledTimes(1)
+  })
+
+  test('已有的是 resolved 的评论 → 不据此去重', async () => {
+    platform.listReviewComments.mockResolvedValue([
+      reviewComment(
+        50,
+        'src/a.ts',
+        10,
+        `\`loadAll\` 应使用 \`Promise.all\`。\n\n${commentTag()}`,
+        5
+      )
+    ])
+    const commenter = new Commenter()
+    await commenter.bufferReviewComment(
+      'src/a.ts',
+      1,
+      17,
+      '`loadAll` 又出现了，仍应用 `Promise.all`。'
+    )
+
+    await commenter.submitReview(7, 'sha1', 'status', new Map([['src/a.ts:10', true]]))
+
+    expect(platform.submitReviewComments).toHaveBeenCalledTimes(1)
+  })
+
   test('同位置旧评论已 resolved → 删除后重新发布', async () => {
     platform.listReviewComments.mockResolvedValue([
       reviewComment(50, 'src/a.ts', 10, `old finding\n\n${commentTag()}`)

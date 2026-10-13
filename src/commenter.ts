@@ -13,6 +13,7 @@
  * 实现评论的幂等性操作（查找并替换已有评论，而非重复创建）
  */
 import {getPlatform} from './platform/git-platform'
+import {dedupeAgainstExisting} from './comment-dedupe'
 import {getLogger} from './platform/logger'
 import {buildStateMarker} from './platform/state-namespace'
 import {getExecCtx, getRepoCoords} from './platform/run-context'
@@ -629,6 +630,37 @@ ${statusMsg}
           )
         }
       }
+
+      // 内容层去重：位置层只认行范围，同一个问题换个范围（旧 5-10、新 1-17）就认不出来，
+      // 会被重复发布。再对照同文件附近未解决的 bot 评论，去掉新评论里已经报告过的部分。
+      const nearby = await this.getUnresolvedBotCommentsNear(
+        pullNumber,
+        comment.path,
+        comment.startLine,
+        comment.endLine,
+        threadStatusMap
+      )
+      if (nearby.length > 0) {
+        const deduped = dedupeAgainstExisting(
+          comment.message,
+          nearby.map(c => c.body as string)
+        )
+        if (deduped.droppedSections + deduped.droppedBullets > 0) {
+          if (deduped.message === '') {
+            logger.info(
+              `[submit-dedup] skipping comment for ${comment.path}:${comment.startLine}-${comment.endLine} — ` +
+                'the same issue is already reported by an unresolved bot comment (content match)'
+            )
+            continue
+          }
+          logger.info(
+            `[submit-dedup] ${comment.path}:${comment.startLine}-${comment.endLine}: removed ` +
+              `${deduped.droppedSections} section(s) and ${deduped.droppedBullets} bullet(s) already reported ` +
+              'by an unresolved bot comment (content match)'
+          )
+          comment.message = deduped.message
+        }
+      }
       commentsToSubmit.push(comment)
     }
 
@@ -873,6 +905,35 @@ ${commentReplyTag()}
           comment.line <= endLine) ||
           (startLine === endLine && comment.line === endLine))
     )
+  }
+
+  /**
+   * 同文件、行范围附近的未解决 bot 评论（只认确认是自己发的）。
+   * 范围放宽到前后各 NEARBY_LINES 行：同一问题两轮审查选取的范围常常对不上，
+   * 真正判定“是不是同一问题”靠内容（见 comment-dedupe.ts），这里只负责缩小候选。
+   */
+  async getUnresolvedBotCommentsNear(
+    pullNumber: number,
+    path: string,
+    startLine: number,
+    endLine: number,
+    threadStatusMap?: Map<string, boolean>
+  ) {
+    const NEARBY_LINES = 20
+    const all = await this.listReviewComments(pullNumber)
+    const candidates = all.filter((c: any) => {
+      if (c.path !== path || !c.body || !bodyHasMarker(c.body, 'comment')) return false
+      if (c.in_reply_to_id) return false
+      if (threadStatusMap?.get(`${c.path}:${c.line}`) === true) return false
+      const cEnd = c.line ?? c.original_line
+      if (cEnd == null) return false
+      const cStart = c.start_line ?? cEnd
+      return cEnd >= startLine - NEARBY_LINES && cStart <= endLine + NEARBY_LINES
+    })
+    const own = await Promise.all(
+      candidates.map(async (c: any) => await isOwnAuthor(c.user?.login))
+    )
+    return candidates.filter((_c: any, i: number) => own[i] === true)
   }
 
   /** 获取与指定行号范围处于同一位置的 review comment（判定见 isSameCommentLocation） */

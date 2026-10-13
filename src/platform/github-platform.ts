@@ -173,6 +173,31 @@ function toPlatformComment(data: any): PlatformComment {
   }
 }
 
+const GITHUB_ROLE_NAMES = new Set<PlatformPermission>([
+  'admin',
+  'maintain',
+  'write',
+  'triage',
+  'read'
+])
+
+/**
+ * 把 `GET /repos/{owner}/{repo}/collaborators/{username}/permission` 的返回换算成权限等级。
+ *
+ * 旧字段 `permission` 只有 admin / write / read / none 四档：triage 被折叠成 read，
+ * maintain 被折叠成 write。只看它会把 triage 用户当成 read，导致 `configuration`
+ * （要求 triage）被误拒。新字段 `role_name` 保留了完整角色名，优先使用；
+ * 自定义角色（不在内置角色里）仍回退到旧字段。
+ */
+export function resolveGithubPermission(data: {
+  permission?: string | null
+  role_name?: string | null
+}): PlatformPermission {
+  const role = (data?.role_name ?? '').toLowerCase() as PlatformPermission
+  if (GITHUB_ROLE_NAMES.has(role)) return role
+  return (data?.permission ?? 'none') as PlatformPermission
+}
+
 export class GitHubPlatform implements IGitPlatform {
   // ─── 1. PR 信息 ───────────────────────────────────────────────────────────
 
@@ -1010,7 +1035,7 @@ export class GitHubPlatform implements IGitPlatform {
         repo,
         username
       })
-      return (data?.permission ?? 'none') as PlatformPermission
+      return resolveGithubPermission(data)
     } catch (e) {
       throw toGitPlatformError(e)
     }

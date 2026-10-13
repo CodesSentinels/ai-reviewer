@@ -31,7 +31,7 @@ import type {Options} from '../options'
 import {getRegistry} from './registry'
 import {parse, type ParserOptions, DEFAULT_BOT_MENTIONS} from './parser'
 import {getPermissionResult, canExecute} from './permission'
-import {checkRateLimit} from './rate-limit'
+import {checkRateLimit, checkBurstFromComments} from './rate-limit'
 import {hasBeenProcessed, Reply} from './reply'
 import {addAckReaction} from './reaction'
 import {buildUnknownCommandMessage} from './handlers/help'
@@ -230,6 +230,37 @@ export async function dispatchCommentEvent(deps: DispatcherDeps): Promise<Dispat
     changeRequestId: prNumber,
     actor: actorLogin
   })
+  // 进程内的桶在 Actions / GitLab CI（一条事件一个进程）里永远是空的，限不住连发。
+  // 再按平台上保存的评论记录判断一次：该用户 60 秒内 @ 了 bot 的评论超过上限就拒绝。
+  // 读取评论失败时放行（限流不能因为 API 抖动把正常命令挡掉）。
+  let burst = rl
+  if (rl.allowed) {
+    try {
+      const platform = getPlatform()
+      const top = await platform.listComments(owner, repoName, prNumber)
+      const lineComments =
+        execCtx.eventKind === 'review_comment_created'
+          ? await platform.listReviewComments(owner, repoName, prNumber)
+          : []
+      burst = checkBurstFromComments({
+        comments: [...top, ...lineComments],
+        actor: actorLogin,
+        commentId: comment.id,
+        botMentions: deps.botMentions ?? DEFAULT_BOT_MENTIONS
+      })
+    } catch (e) {
+      logger.warning(`command dispatcher: rate-limit lookup failed, allowing: ${String(e)}`)
+    }
+  }
+  if (!burst.allowed) {
+    await reply.error('RATE_LIMITED', `请 ${Math.ceil((burst.retryAfterMs ?? 0) / 1000)} 秒后再试`)
+    return {
+      kind: 'executed',
+      command: parsed.name,
+      ok: false,
+      error: 'RATE_LIMITED'
+    }
+  }
   if (!rl.allowed) {
     await reply.error('RATE_LIMITED', `请 ${Math.ceil((rl.retryAfterMs ?? 0) / 1000)} 秒后再试`)
     return {
