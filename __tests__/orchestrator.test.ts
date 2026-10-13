@@ -165,6 +165,36 @@ describe('dispatchEvent（ARCH-027）', () => {
     })
     expect(codeReview).not.toHaveBeenCalled()
   })
+
+  // 回归：缺少 OPENAI_API_KEY 时此前只打一条 warning 就以成功退出（绿色 ✓），
+  // maintainer 看不出这次根本没有审查。
+  test('createBots 返回 null → 调用 onFailed，让 job 以明确的错误失败', async () => {
+    const onFailed = jest.fn()
+    await dispatchEvent({
+      execCtx: mockExecCtx('pr_opened'),
+      options: {} as any,
+      prompts: {} as any,
+      logger: mockLogger(),
+      createBots: () => null,
+      onFailed
+    })
+    expect(codeReview).not.toHaveBeenCalled()
+    expect(onFailed).toHaveBeenCalledTimes(1)
+    expect(onFailed.mock.calls[0][0]).toContain('OPENAI_API_KEY')
+  })
+
+  test('createBots 成功 → 不调用 onFailed', async () => {
+    const onFailed = jest.fn()
+    await dispatchEvent({
+      execCtx: mockExecCtx('pr_opened'),
+      options: {} as any,
+      prompts: {} as any,
+      logger: mockLogger(),
+      createBots: () => ({lightBot: {} as any, heavyBot: {} as any}),
+      onFailed
+    })
+    expect(onFailed).not.toHaveBeenCalled()
+  })
 })
 
 describe('runOrchestrator（ARCH-025）', () => {
