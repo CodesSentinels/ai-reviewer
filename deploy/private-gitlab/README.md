@@ -48,8 +48,9 @@ gitlab-runner register \
 | `AI_REVIEWER_GITLAB_TOKEN_MAP` | — | 可选，按项目选择 token，见下方「bot 凭据」。设置后不再使用 `GITLAB_PAT`（除非映射表引用它） |
 | `AI_REVIEWER_GITLAB_PREVIOUS_BOT_LOGINS` | — | 可选，以前用过的 bot 用户名（逗号分隔），换 token 导致 bot 账号变化时配置，见下方「更换 token」 |
 | `AI_REVIEWER_BOT_GITLAB_LOGIN` | — | 可选，`GITLAB_PAT` 对应账号的用户名，用于忽略 bot 自己的评论。不配时从 token 自动识别；设置了 `AI_REVIEWER_GITLAB_TOKEN_MAP` 时忽略 |
-| `AI_REVIEWER_OPENAI_BASE_URL` | — | 可选，兼容 OpenAI 协议的模型网关地址 |
-| `AI_REVIEWER_OPENAI_LIGHT_MODEL` / `AI_REVIEWER_OPENAI_HEAVY_MODEL` / `AI_REVIEWER_LANGUAGE` | — | 可选 |
+| `AI_REVIEWER_LLM_PROFILES` / `AI_REVIEWER_LLM_PROFILE` | — | 可选，推荐。模型档案：一组档案定义接口地址、key 所在变量、模型名，再选中其中一个。见下方「模型接口」 |
+| `AI_REVIEWER_OPENAI_BASE_URL` / `AI_REVIEWER_OPENAI_LIGHT_MODEL` / `AI_REVIEWER_OPENAI_HEAVY_MODEL` / `AI_REVIEWER_ENABLE_WEB_SEARCH` | — | 可选，不用档案时逐项配置；**选中档案后不能再设置**，否则启动报错 |
+| `AI_REVIEWER_LANGUAGE` | — | 可选 |
 | `AI_REVIEWER_MAX_FILES` / `AI_REVIEWER_WARN_FILES` / `AI_REVIEWER_INITIAL_PR_SUMMARY_ONLY` | — | 可选，大型 MR 的处理：最多处理的文件数（默认 150，超出时按优先级处理）、超过多少个文件在摘要里提醒（默认 50）、初始化类 MR 自动审查时是否只出摘要（默认 `true`） |
 | `AI_REVIEWER_PIPELINE_TOKEN` | Protected + Masked + Hidden | 可选。**本仓库**的 Project Access Token（**Maintainer**、`api` scope；改名接口不接受 Developer，会返回 403），用于给每条 pipeline 改名，标明它在处理哪个项目的哪个 MR、哪次提交、做了什么（如 `web-app !15 @0aec0f4 · push → 审查完成，发布 1 条评论`、`web-app !15 @0aec0f4 · ↳ bot 发布行级评论 · 已跳过`）。不配置则保持默认名称，不影响审查 |
 
@@ -89,6 +90,40 @@ gitlab-runner register \
   - 新 bot 会读取旧账号的状态（增量审查起点、已审提交），并用旧评论去重；
   - 旧账号的评论只读，不会被修改或删除；每个已有 MR 上会由新 bot 再发一条摘要，之后只更新这一条；
   - 等已有 MR 都合并或关闭后，可以删掉这个变量。
+
+### 模型接口：模型档案
+
+不配档案时，用 `OPENAI_API_KEY` 直连 OpenAI，可用上表的散变量调整地址和模型。需要在几个接口之间切换（例如 OpenAI 与公司内部的兼容网关）时，用模型档案，切换和回退只改一个变量：
+
+1. 每个接口的 key 单独建一个 CI 变量，设为 Protected + Masked + Hidden。变量名只能是 `OPENAI_API_KEY` 或 `LLM_API_KEY_<名字>`。
+2. `AI_REVIEWER_LLM_PROFILES` 写档案表，`[名字]` 开始一个档案，`#` 开头为注释：
+
+   ```
+   [openai]
+   base_url    = https://api.openai.com/v1
+   api_key_var = OPENAI_API_KEY
+   heavy_model = gpt-5.4-mini
+   light_model = gpt-5.4-nano
+
+   [gateway]
+   base_url    = https://llm-gateway.example.com/v1
+   api_key_var = LLM_API_KEY_GATEWAY
+   heavy_model = gpt-oss-120b
+   light_model = gpt-oss-20b
+   ```
+
+3. `AI_REVIEWER_LLM_PROFILE` 写要用的档案名，如 `gateway`。回退时改回 `openai`。
+
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| `base_url` | 是 | 兼容 OpenAI Responses API 的接口地址，不能内嵌账号密码 |
+| `api_key_var` | 是 | 存放 key 的变量**名**，不是 key 本身 |
+| `heavy_model` / `light_model` | 否 | 审查 / 摘要用的模型，不写取默认值 |
+| `web_search` | 否 | 是否允许模型联网搜索。不写时只有 `api.openai.com` 开启，其他地址关闭（兼容网关通常不执行该工具） |
+
+- 档案表只写变量名，不写 key，所以不需要 Masked。
+- 档案表里任何一处写错（未知字段、重复、缺必填项）、选中的档案不存在、或选中档案后仍设置了散变量，job 都会在启动时失败并指出原因，不会带着错误配置调用模型。
+- 当前生效的档案、接口域名和 key 变量名会出现在 job 日志开头和 `@ai-reviewer configuration` 的回复里，key 的值不会显示。
 
 ### 3. 保护默认分支
 

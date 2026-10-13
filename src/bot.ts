@@ -264,7 +264,10 @@ export class Bot {
     this.enableShell = openaiOptions.enableShell
     this.enableCodeTools = openaiOptions.enableCodeTools ?? false
 
-    if (process.env.OPENAI_API_KEY) {
+    // 未使用模型档案时就是 OPENAI_API_KEY；档案可指向 LLM_API_KEY_* 等其他变量
+    const apiKeyEnv = options.apiKeyEnv ?? 'OPENAI_API_KEY'
+    const apiKey = process.env[apiKeyEnv]
+    if (apiKey) {
       // 构建系统消息：包含自定义系统消息 + 知识截止日期 + 当前日期 + 语言要求
       const currentDate = new Date().toISOString().split('T')[0]
       this.systemMessage = `${options.systemMessage}
@@ -276,15 +279,14 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
 
       // 初始化 OpenAI API 客户端
       this.client = new OpenAI({
-        apiKey: process.env.OPENAI_API_KEY,
+        apiKey,
         organization: process.env.OPENAI_API_ORG ?? undefined,
         baseURL: options.apiBaseUrl,
         timeout: options.openaiTimeoutMS,
         maxRetries: 0 // 使用 pRetry 自行管理重试
       })
     } else {
-      const err =
-        "Unable to initialize the OpenAI API, both 'OPENAI_API_KEY' environment variable are not available"
+      const err = `Unable to initialize the OpenAI API: environment variable '${apiKeyEnv}' is not available`
       throw new Error(err)
     }
   }

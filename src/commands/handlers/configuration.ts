@@ -39,6 +39,8 @@ interface Row {
   forcedOn?: Partial<Record<Platform, string>>
   /** 某平台上的配置键与 `key` 不同时的覆盖（例如平台 API 并发上限各用本平台的名字） */
   keyOn?: Partial<Record<Platform, string>>
+  /** 选中模型档案（GitLab）时由档案决定，来源显示为档案而不是 CI 变量 */
+  fromLlmProfile?: boolean
 }
 
 const ROWS: Row[] = [
@@ -50,8 +52,8 @@ const ROWS: Row[] = [
   {key: 'review_simple_changes', value: o => o.reviewSimpleChanges},
   {key: 'review_comment_lgtm', value: o => o.reviewCommentLGTM},
   {key: 'max_review_comments', value: o => o.maxReviewComments},
-  {key: 'openai_light_model', value: o => o.openaiLightModel},
-  {key: 'openai_heavy_model', value: o => o.openaiHeavyModel},
+  {key: 'openai_light_model', value: o => o.openaiLightModel, fromLlmProfile: true},
+  {key: 'openai_heavy_model', value: o => o.openaiHeavyModel, fromLlmProfile: true},
   {key: 'openai_concurrency_limit', value: o => o.openaiConcurrencyLimit},
   {
     key: 'github_concurrency_limit',
@@ -60,7 +62,7 @@ const ROWS: Row[] = [
   },
   {key: 'enable_dependency_analysis', value: o => o.enableDependencyAnalysis},
   {key: 'max_dependency_files', value: o => o.maxDependencyFiles},
-  {key: 'enable_web_search', value: o => o.enableWebSearch},
+  {key: 'enable_web_search', value: o => o.enableWebSearch, fromLlmProfile: true},
   {
     key: 'enable_shell',
     value: o => o.enableShell,
@@ -102,6 +104,21 @@ export function describeValueSource(platform: Platform, key: string, env = proce
   return raw != null && raw.trim() !== '' ? source : `默认值（未设置 ${source}）`
 }
 
+/** 模型接口一行：只显示域名和 key 所在的变量名，不显示路径参数或 key 本身 */
+export function describeModelEndpoint(options: Options): string {
+  let host: string
+  try {
+    host = new URL(options.apiBaseUrl).host
+  } catch {
+    host = '(invalid)'
+  }
+  const profile =
+    options.llmProfile !== ''
+      ? `模型档案 \`${options.llmProfile}\`（\`AI_REVIEWER_LLM_PROFILE\`）`
+      : '未使用模型档案'
+  return `模型接口：\`${host}\`，key 取自变量 \`${options.apiKeyEnv}\`；${profile}`
+}
+
 export function buildConfigurationMessage(
   platform: Platform,
   options: Options,
@@ -113,6 +130,8 @@ export function buildConfigurationMessage(
   lines.push('')
   lines.push(`平台：\`${platform}\``)
   lines.push('')
+  lines.push(describeModelEndpoint(options))
+  lines.push('')
   lines.push('| 配置 | 生效值 | 来源 |')
   lines.push('| :--- | :--- | :--- |')
   lines.push(`| 自动审查状态 | \`${reviewState}\` | PR/MR 描述中的 reviewer 区块 |`)
@@ -120,7 +139,11 @@ export function buildConfigurationMessage(
   for (const row of ROWS) {
     const key = row.keyOn?.[platform] ?? row.key
     const forced = row.forcedOn?.[platform]
-    const source = forced ?? describeValueSource(platform, key, env)
+    const profileSource =
+      row.fromLlmProfile === true && options.llmProfile !== ''
+        ? `模型档案 \`${options.llmProfile}\``
+        : undefined
+    const source = forced ?? profileSource ?? describeValueSource(platform, key, env)
     lines.push(`| ${key} | \`${String(row.value(options))}\` | ${source} |`)
   }
 

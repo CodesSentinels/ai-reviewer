@@ -78,7 +78,9 @@ export async function dispatchEvent(deps: {
       // 根本不知道这次根本没审查。必须让 job 失败，错误信息要能直接指出该查什么。
       onFailed?.(
         'Review not performed: cannot create the OpenAI clients. ' +
-          'Check that the OPENAI_API_KEY secret is configured and not empty ' +
+          `Check that the ${
+            options.apiKeyEnv || 'OPENAI_API_KEY'
+          } secret is configured and not empty ` +
           '(for pull_request events from forks, secrets are not available).'
       )
       return

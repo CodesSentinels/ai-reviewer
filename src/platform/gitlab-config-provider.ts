@@ -23,6 +23,7 @@ import {CONFIG_DEFAULTS, ConfigError, validateFloatStr, validateIntStr} from './
 import type {Platform} from './execution-context'
 import {Options} from '../options'
 import {configuredBotGitLabLogin} from './gitlab-client'
+import {resolveLlmProfile} from './llm-profile'
 
 /** 从环境变量读取字符串，未设置或空则返回 undefined */
 function envStr(key: string): string | undefined {
@@ -118,6 +119,10 @@ export class GitLabConfigProvider implements ConfigProvider {
       semgrep: false
     }
 
+    // 模型档案：选中时接口地址、key 变量、模型名、web_search 都取自档案，
+    // 与散变量混用会在 resolveLlmProfile 里报错（见 llm-profile.ts）
+    const profile = resolveLlmProfile()
+
     this.cachedOptions = new Options(
       envBool('AI_REVIEWER_DEBUG') ?? CONFIG_DEFAULTS.debug,
       envBool('AI_REVIEWER_DISABLE_REVIEW') ?? CONFIG_DEFAULTS.disableReview,
@@ -127,19 +132,25 @@ export class GitLabConfigProvider implements ConfigProvider {
       envBool('AI_REVIEWER_REVIEW_COMMENT_LGTM') ?? CONFIG_DEFAULTS.reviewCommentLGTM,
       envMultiline('AI_REVIEWER_PATH_FILTERS') ?? [...CONFIG_DEFAULTS.pathFilters],
       envStr('AI_REVIEWER_SYSTEM_MESSAGE') ?? CONFIG_DEFAULTS.systemMessage,
-      envStr('AI_REVIEWER_OPENAI_LIGHT_MODEL') ?? CONFIG_DEFAULTS.openaiLightModel,
-      envStr('AI_REVIEWER_OPENAI_HEAVY_MODEL') ?? CONFIG_DEFAULTS.openaiHeavyModel,
+      profile?.lightModel ??
+        envStr('AI_REVIEWER_OPENAI_LIGHT_MODEL') ??
+        CONFIG_DEFAULTS.openaiLightModel,
+      profile?.heavyModel ??
+        envStr('AI_REVIEWER_OPENAI_HEAVY_MODEL') ??
+        CONFIG_DEFAULTS.openaiHeavyModel,
       envFloatStr('AI_REVIEWER_OPENAI_MODEL_TEMPERATURE', CONFIG_DEFAULTS.openaiModelTemperature),
       envIntStr('AI_REVIEWER_OPENAI_RETRIES', CONFIG_DEFAULTS.openaiRetries),
       envIntStr('AI_REVIEWER_OPENAI_TIMEOUT_MS', CONFIG_DEFAULTS.openaiTimeoutMS),
       envIntStr('AI_REVIEWER_OPENAI_CONCURRENCY_LIMIT', CONFIG_DEFAULTS.openaiConcurrencyLimit),
       // 平台 API 并发上限：GitLab 侧用本平台的变量名（Options 字段名沿用历史命名）
       envIntStr('AI_REVIEWER_GITLAB_CONCURRENCY_LIMIT', CONFIG_DEFAULTS.githubConcurrencyLimit),
-      envStr('AI_REVIEWER_OPENAI_BASE_URL') ?? CONFIG_DEFAULTS.apiBaseUrl,
+      profile?.baseUrl ?? envStr('AI_REVIEWER_OPENAI_BASE_URL') ?? CONFIG_DEFAULTS.apiBaseUrl,
       envStr('AI_REVIEWER_LANGUAGE') ?? CONFIG_DEFAULTS.language,
       envBool('AI_REVIEWER_ENABLE_DEPENDENCY_ANALYSIS') ?? CONFIG_DEFAULTS.enableDependencyAnalysis,
       envIntStr('AI_REVIEWER_MAX_DEPENDENCY_FILES', CONFIG_DEFAULTS.maxDependencyFiles),
-      envBool('AI_REVIEWER_ENABLE_WEB_SEARCH') ?? CONFIG_DEFAULTS.enableWebSearch,
+      profile?.enableWebSearch ??
+        envBool('AI_REVIEWER_ENABLE_WEB_SEARCH') ??
+        CONFIG_DEFAULTS.enableWebSearch,
       // CFG-002: 安全强制覆盖 — 不可被任何配置来源重新开启
       false, // enableShell
       false, // enableLintTools
@@ -161,6 +172,10 @@ export class GitLabConfigProvider implements ConfigProvider {
       envIntStr('AI_REVIEWER_WARN_FILES', CONFIG_DEFAULTS.warnFiles),
       envBool('AI_REVIEWER_INITIAL_PR_SUMMARY_ONLY') ?? CONFIG_DEFAULTS.initialPrSummaryOnly
     )
+    if (profile != null) {
+      this.cachedOptions.apiKeyEnv = profile.apiKeyVar
+      this.cachedOptions.llmProfile = profile.name
+    }
 
     return this.cachedOptions
   }
@@ -227,6 +242,7 @@ export class GitLabConfigProvider implements ConfigProvider {
     log(`  gitlab_concurrency_limit: ${opts.githubConcurrencyLimit}`)
     log(`  summary_token_limits: ${opts.lightTokenLimits.string()}`)
     log(`  review_token_limits: ${opts.heavyTokenLimits.string()}`)
+    log(`  llm_profile: ${opts.llmProfile !== '' ? opts.llmProfile : '(none)'}`)
     log(`  api_base_url: ${opts.apiBaseUrl}`)
     log(`  language: ${opts.language}`)
     log(`  enable_dependency_analysis: ${opts.enableDependencyAnalysis}`)

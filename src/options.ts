@@ -35,6 +35,8 @@ export class Options {
   lightTokenLimits: TokenLimits // 轻量模型的 token 限制
   heavyTokenLimits: TokenLimits // 重量模型的 token 限制
   apiBaseUrl: string // OpenAI API 基础 URL
+  apiKeyEnv = 'OPENAI_API_KEY' // 存放 API key 的环境变量名（GitLab 模型档案的 api_key_var）
+  llmProfile = '' // 当前模型档案名，空表示未使用档案
   language: string // 响应语言（ISO 语言代码）
   enableDependencyAnalysis: boolean // 是否启用跨文件依赖分析
   maxDependencyFiles: number // 依赖分析最大扫描文件数

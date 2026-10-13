@@ -84,7 +84,8 @@ describe('deploy/private-gitlab 双向不泄露', () => {
     path.resolve(__dirname, '../scripts/assemble-gitlab-dist.mjs'),
     path.resolve(__dirname, '../src/private-gitlab-publish.ts')
   ]
-  const ALLOWED_HOSTS = new Set(['gitlab.example.com'])
+  // 示例域名，加上公开的 OpenAI 官方地址（模型档案示例里的默认接口）
+  const ALLOWED_HOSTS = new Set(['gitlab.example.com', 'llm-gateway.example.com', 'api.openai.com'])
 
   test.each(PUBLIC_FILES.map(f => [path.relative(path.resolve(__dirname, '..'), f), f]))(
     '%s 只出现示例域名，不含内网地址',
