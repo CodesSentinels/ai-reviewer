@@ -209,8 +209,11 @@ describe('Bot 工具循环', () => {
       'list_directory',
       'search_code'
     ])
-    expect(calls[1].previous_response_id).toBe('r1')
+    // 后续轮次自带完整历史，不依赖服务端保存的上一轮（部分兼容网关不保存响应）
+    expect(calls[1].previous_response_id).toBeUndefined()
     expect(calls[1].input).toEqual([
+      {role: 'user', content: 'review'},
+      {type: 'function_call', call_id: 'c1', name: 'read_file', arguments: '{"path":"a.ts"}'},
       {type: 'function_call_output', call_id: 'c1', output: 'a.ts (lines 1-1 of 1)\n1: x'}
     ])
     expect(steps).toEqual([{type: 'read_file', path: 'a.ts', startLine: 1, endLine: 1}])
@@ -232,7 +235,44 @@ describe('Bot 工具循环', () => {
 
     expect(calls[0].tools).toBeUndefined()
     expect(platform.getFileContent).not.toHaveBeenCalled()
-    expect(calls[1].input[0].output).toMatch(/^error: tool read_file is not available/)
+    expect(calls[1].input.at(-1).output).toMatch(/^error: tool read_file is not available/)
+  })
+
+  test('多轮工具调用：每轮带上此前全部输出项（含 reasoning）与工具结果，顺序不乱', async () => {
+    platform.getFileContent.mockResolvedValue('x')
+    const reasoning = {type: 'reasoning', id: 'rs1', summary: []}
+    const call1 = {
+      type: 'function_call',
+      call_id: 'c1',
+      name: 'read_file',
+      arguments: '{"path":"a.ts"}'
+    }
+    const call2 = {
+      type: 'function_call',
+      call_id: 'c2',
+      name: 'read_file',
+      arguments: '{"path":"b.ts"}'
+    }
+    const {bot, calls} = botWith(true, [
+      {id: 'r1', output: [reasoning, call1]},
+      {id: 'r2', output: [call2]},
+      finalMessage
+    ])
+    const [text] = await bot.chat('review', {})
+
+    expect(calls).toHaveLength(3)
+    expect(calls.map(c => c.previous_response_id)).toEqual([undefined, undefined, undefined])
+    expect(calls[2].input.map((i: any) => i.type ?? i.role)).toEqual([
+      'user',
+      'reasoning',
+      'function_call',
+      'function_call_output',
+      'function_call',
+      'function_call_output'
+    ])
+    expect(calls[2].input[3].call_id).toBe('c1')
+    expect(calls[2].input[5].call_id).toBe('c2')
+    expect(text).toBe('done')
   })
 })
 

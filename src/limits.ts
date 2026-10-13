@@ -16,6 +16,7 @@
  * - gpt-4o: 旧模型，128K 上下文，16K 输出
  * - gpt-4o-mini: 上一代轻量模型，128K 上下文，16K 输出
  * - gpt-4-turbo: 128K 上下文的 GPT-4 增强版
+ * - gpt-oss-120b / gpt-oss-20b（含网关前缀别名）：128K 上下文，16K 输出
  * - 旧模型（gpt-4, gpt-4-32k, gpt-3.5-turbo 等）：保留向后兼容
  */
 export class TokenLimits {
@@ -93,6 +94,12 @@ export class TokenLimits {
       this.knowledgeCutOff = '2021-09-01'
       this.maxTokens = 4000
       this.responseTokens = 1000
+    } else if (model.includes('gpt-oss')) {
+      // gpt-oss-120b / 20b：128K 上下文。网关上常带前缀别名（如 gw-gpt-oss-120b），
+      // 按包含匹配；若落到下面的默认值（1M），大 diff 会超出上下文被拒
+      this.knowledgeCutOff = '2024-06-01'
+      this.maxTokens = 131072
+      this.responseTokens = 16384
     } else {
       // 未知模型：使用保守的默认值（与 gpt-5.4-mini 相同）
       this.knowledgeCutOff = '2025-03-01'

@@ -340,6 +340,11 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
 
       let responseText = ''
       const analysisSteps: AnalysisStep[] = []
+      // 工具循环的后续轮次自己带上本次对话的完整历史，不依赖 previous_response_id 去
+      // 服务端取回上一轮：部分 OpenAI 兼容网关（如 LiteLLM 转 Bedrock）不保存响应，只带 id 和工具
+      // 结果会被拒（Expected toolResult blocks）。OpenAI 用 previous_response_id 时同样
+      // 按整段历史计费，自己带历史不增加费用。
+      const history: OpenAI.Responses.ResponseInputItem[] = [{role: 'user', content: message}]
       let response = await this.createResponse(
         this.buildParams(message, ids.previousResponseId, tools)
       )
@@ -432,7 +437,13 @@ IMPORTANT: Entire response must be in the language with ISO code: ${options.lang
           ...(await this.executeShellCalls(pendingShellCalls, analysisSteps)),
           ...(await this.executeFunctionCalls(pendingFunctionCalls, analysisSteps))
         ]
-        response = await this.createResponse(this.buildParams(toolOutputs, response.id, tools))
+        history.push(
+          ...(response.output as unknown as OpenAI.Responses.ResponseInputItem[]),
+          ...toolOutputs
+        )
+        response = await this.createResponse(
+          this.buildParams(history, ids.previousResponseId, tools)
+        )
       }
 
       // info(`[analysis_chain] total analysis steps captured: ${analysisSteps.length}`)
