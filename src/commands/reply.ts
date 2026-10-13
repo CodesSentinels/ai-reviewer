@@ -75,7 +75,9 @@ export function formatErrorMessage(code: ErrorCode, detail?: string, platform?: 
 const ERROR_MESSAGES: Record<ErrorCode, string> = {
   UNKNOWN_COMMAND: '❓ **未知命令**。发送 `@ai-reviewer help` 查看支持的命令列表。',
   INVALID_ARGS: '⚠️ **参数不合法**。命令参数仅接受字母、数字以及 `._-/:=` 字符。',
-  FORBIDDEN: '🚫 **权限不足**。执行该命令需要仓库 `write` 及以上权限。',
+  // 不写死具体等级：各命令的最低权限不同（help=read、configuration=triage、其余=write），
+  // 具体要求由调用方放进 detail。
+  FORBIDDEN: '🚫 **权限不足**。你的仓库权限不足以执行该命令。',
   BOT_FORBIDDEN:
     '🚫 **Bot 权限不足**。请检查 workflow `permissions` 配置（pull-requests: write / contents: read）。',
   NOT_IMPLEMENTED: '🚧 **命令暂未实现**。该命令已在路线图中，等待实现。',

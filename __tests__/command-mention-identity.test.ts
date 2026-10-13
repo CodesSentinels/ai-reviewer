@@ -66,6 +66,21 @@ describe('CMD-002: GitLab 可用真实 PAT 账号 mention，也可用纯文本�
     }
   )
 
+  // 回归：GitHub App 的登录名带 `[bot]` 后缀，评论里能 @ 到的只有不带后缀的 handle。
+  test('GitHub App 登录名带 [bot] 后缀 → mention 不带后缀，@handle 能触发命令', () => {
+    const mentions = resolveBotMentions('codesentinel-review-bot[bot]')
+    expect(mentions).toContain('@codesentinel-review-bot')
+    expect(mentions.some(m => m.includes('['))).toBe(false)
+
+    const r: any = parse('@codesentinel-review-bot help', opts(mentions))
+    expect(r.kind).toBe('command')
+    expect(r.command.name).toBe('help')
+  })
+
+  test('[bot] 后缀大小写不敏感', () => {
+    expect(resolveBotMentions('Some-App[BOT]')).toContain('@some-app')
+  })
+
   test('配置值恰好等于内置别名 → 不产生重复项', () => {
     expect(resolveBotMentions('ai-reviewer')).toEqual(DEFAULT_BOT_MENTIONS)
   })
