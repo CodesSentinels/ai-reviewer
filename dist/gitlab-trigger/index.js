@@ -49990,6 +49990,207 @@ class GitLabPlatform {
     }
 }
 
+;// CONCATENATED MODULE: ./lib/comment-dedupe.js
+/**
+ * comment-dedupe.ts — 按“同一问题”给新评论去重（内容层）
+ *
+ * 位置层的去重（commenter.ts 的 isSameCommentLocation）只认行范围：旧评论 5-10、
+ * 新评论 1-17 就认不出来，同一个问题被换个行范围重新发布。回归测试里两处都踩到了：
+ *   - FT-055：full review 对已有未解决评论的同一函数、同一缺陷重复发布；
+ *   - FT-092：截断后再审，已发布过的 `loadAll` 被再次发布。
+ *
+ * 这里补一层内容判断：评论正文里反引号包起来的代码标识符（函数名、变量名、表达式）
+ * 基本就是“哪个缺陷”的指纹。新评论的某一段（或某一条要点）的指纹绝大部分已经出现在
+ * 同文件的未解决 bot 评论里，就当作同一问题，不再发布。
+ *
+ * 保守原则：宁可多发，不能漏发。没有可识别的标识符、或只有少数标识符重合时一律保留。
+ */
+/** 太泛的标识符：它们出现在几乎所有评论里，不能当指纹 */
+const GENERIC_KEYS = new Set([
+    'undefined',
+    'null',
+    'true',
+    'false',
+    'nan',
+    'string',
+    'number',
+    'boolean',
+    'object',
+    'array',
+    'any',
+    'unknown',
+    'void',
+    'never',
+    'promise',
+    'async',
+    'await',
+    'return',
+    'const',
+    'let',
+    'var',
+    'function',
+    'class',
+    'type',
+    'interface',
+    'typeof',
+    'error',
+    'json',
+    'fetch',
+    'response',
+    'map',
+    'set',
+    'diff'
+]);
+/** 一段评论算“已报告过”所需的指纹覆盖率 */
+const SECTION_COVERAGE = 0.7;
+/** 一条要点算“已报告过”所需的指纹覆盖率 */
+const BULLET_COVERAGE = 0.8;
+// 不直接写 `<!--` 字面量：arch-guard 会把它当成未登记的状态 marker（见 GH-015）
+const MARKER_COMMENT = /<!-{2}[\s\S]*?-{2}>/g;
+const DETAILS_BLOCK = /<details[\s\S]*?<\/details>/gi;
+const FENCED_CODE = /```[\s\S]*?```/g;
+/** 去掉标记、折叠块（修复建议 / 分析链）和代码围栏，只留正文 */
+function stripToProse(text) {
+    return (text ?? '')
+        .replace(MARKER_COMMENT, '')
+        .replace(DETAILS_BLOCK, '')
+        .replace(FENCED_CODE, '');
+}
+/** 提取正文里反引号包起来的标识符，作为这段评论的指纹 */
+function extractIssueKeys(text) {
+    const keys = new Set();
+    const prose = stripToProse(text);
+    const re = /`([^`\n]{3,80})`/g;
+    let m;
+    while ((m = re.exec(prose)) != null) {
+        const key = m[1].trim().replace(/\(\)$/, '').toLowerCase();
+        if (key.length < 3 || /\s/.test(key) || GENERIC_KEYS.has(key))
+            continue;
+        keys.add(key);
+    }
+    return keys;
+}
+/**
+ * 把合并后的评论拆成各段（合并时用单独一行的 `---` 分隔）。
+ * 围栏代码块和 `<details>` 里的 `---` 不是分隔符。
+ */
+function splitReviewSections(message) {
+    const sections = [];
+    let current = [];
+    let inFence = false;
+    let detailsDepth = 0;
+    for (const line of (message ?? '').split('\n')) {
+        if (/^\s*```/.test(line))
+            inFence = !inFence;
+        if (!inFence) {
+            const opens = (line.match(/<details[\s>]/gi) ?? []).length;
+            const closes = (line.match(/<\/details>/gi) ?? []).length;
+            detailsDepth = Math.max(0, detailsDepth + opens - closes);
+        }
+        if (!inFence && detailsDepth === 0 && /^\s*---\s*$/.test(line)) {
+            sections.push(current.join('\n'));
+            current = [];
+            continue;
+        }
+        current.push(line);
+    }
+    sections.push(current.join('\n'));
+    return sections;
+}
+function coverage(keys, existing) {
+    if (keys.size === 0)
+        return 0;
+    let hit = 0;
+    for (const k of keys)
+        if (existing.has(k))
+            hit += 1;
+    return hit / keys.size;
+}
+/** 去掉一段里已被覆盖的要点（列表项）；段落其余部分原样保留 */
+function dropCoveredBullets(section, existing) {
+    const lines = section.split('\n');
+    const out = [];
+    let dropped = 0;
+    let inFence = false;
+    let detailsDepth = 0;
+    for (const line of lines) {
+        if (/^\s*```/.test(line))
+            inFence = !inFence;
+        if (!inFence) {
+            detailsDepth = Math.max(0, detailsDepth +
+                (line.match(/<details[\s>]/gi) ?? []).length -
+                (line.match(/<\/details>/gi) ?? []).length);
+        }
+        const isBullet = !inFence && detailsDepth === 0 && /^\s*(?:[-*]|\d+\.)\s+/.test(line);
+        if (isBullet) {
+            const keys = extractIssueKeys(line);
+            if (keys.size > 0 && coverage(keys, existing) >= BULLET_COVERAGE) {
+                dropped += 1;
+                continue;
+            }
+        }
+        out.push(line);
+    }
+    return { text: out.join('\n'), dropped };
+}
+/**
+ * 对照同文件已有的未解决 bot 评论正文，去掉新评论里已经报告过的部分。
+ *
+ * - 整段的指纹覆盖率 ≥ 0.7 → 整段丢弃；
+ * - 否则逐条检查要点，覆盖率 ≥ 0.8 的要点丢弃；
+ * - 其余原样保留。
+ */
+function dedupeAgainstExisting(message, existingBodies) {
+    const existing = new Set();
+    for (const body of existingBodies)
+        for (const k of extractIssueKeys(body))
+            existing.add(k);
+    if (existing.size === 0)
+        return { message, droppedSections: 0, droppedBullets: 0 };
+    const sections = splitReviewSections(message);
+    const kept = [];
+    let droppedSections = 0;
+    let droppedBullets = 0;
+    // 评论开头的机器人署名与严重级别提示只出现在第一段；第一段被丢弃时要把它们留给后面的段
+    let orphanHeader = '';
+    sections.forEach((section, index) => {
+        const { header, body } = index === 0 ? splitHeader(section) : { header: '', body: section };
+        const keys = extractIssueKeys(body);
+        if (keys.size > 0 && coverage(keys, existing) >= SECTION_COVERAGE) {
+            droppedSections += 1;
+            if (index === 0)
+                orphanHeader = header;
+            return;
+        }
+        const { text, dropped } = dropCoveredBullets(body, existing);
+        droppedBullets += dropped;
+        kept.push(header !== '' ? `${header}\n${text}` : text);
+    });
+    // 什么都没去掉：原样返回，不做任何规整（空白、换行都保持原样）
+    if (droppedSections === 0 && droppedBullets === 0)
+        return { message, droppedSections, droppedBullets };
+    if (kept.length === 0)
+        return { message: '', droppedSections, droppedBullets };
+    if (orphanHeader !== '')
+        kept[0] = `${orphanHeader}\n${kept[0]}`;
+    const result = kept
+        .map(s => s.trim())
+        .filter(s => s !== '')
+        .join('\n\n---\n\n');
+    return { message: result, droppedSections, droppedBullets };
+}
+/**
+ * 第一段开头的署名行与引用块（`> [!CAUTION]` 之类）归为 header，不参与指纹计算。
+ * header 是开头连续的“第一行 / 空行 / 以 > 开头的行”。
+ */
+function splitHeader(section) {
+    const lines = section.split('\n');
+    let i = 0;
+    while (i < lines.length && (i === 0 || lines[i].trim() === '' || lines[i].startsWith('>')))
+        i += 1;
+    return { header: lines.slice(0, i).join('\n').trimEnd(), body: lines.slice(i).join('\n') };
+}
+
 ;// CONCATENATED MODULE: ./lib/platform/run-context.js
 /**
  * platform/run-context.ts — 当前运行的执行上下文（ARCH-005 context 迁移）
@@ -50599,6 +50800,7 @@ async function updateDescriptionSectionUnlocked(opts) {
 
 
 
+
 /**
  * 仓库坐标（ARCH-005）。
  *
@@ -51076,6 +51278,23 @@ ${statusMsg}
                     pendingDeletions.set(commentKey(comment), replaced.map(c => c.id));
                 }
             }
+            // 内容层去重：位置层只认行范围，同一个问题换个范围（旧 5-10、新 1-17）就认不出来，
+            // 会被重复发布。再对照同文件附近未解决的 bot 评论，去掉新评论里已经报告过的部分。
+            const nearby = await this.getUnresolvedBotCommentsNear(pullNumber, comment.path, comment.startLine, comment.endLine, threadStatusMap);
+            if (nearby.length > 0) {
+                const deduped = dedupeAgainstExisting(comment.message, nearby.map(c => c.body));
+                if (deduped.droppedSections + deduped.droppedBullets > 0) {
+                    if (deduped.message === '') {
+                        logger.info(`[submit-dedup] skipping comment for ${comment.path}:${comment.startLine}-${comment.endLine} — ` +
+                            'the same issue is already reported by an unresolved bot comment (content match)');
+                        continue;
+                    }
+                    logger.info(`[submit-dedup] ${comment.path}:${comment.startLine}-${comment.endLine}: removed ` +
+                        `${deduped.droppedSections} section(s) and ${deduped.droppedBullets} bullet(s) already reported ` +
+                        'by an unresolved bot comment (content match)');
+                    comment.message = deduped.message;
+                }
+            }
             commentsToSubmit.push(comment);
         }
         if (commentsToSubmit.length === 0) {
@@ -51252,6 +51471,30 @@ ${commentReplyTag()}
                 comment.start_line >= startLine &&
                 comment.line <= endLine) ||
                 (startLine === endLine && comment.line === endLine)));
+    }
+    /**
+     * 同文件、行范围附近的未解决 bot 评论（只认确认是自己发的）。
+     * 范围放宽到前后各 NEARBY_LINES 行：同一问题两轮审查选取的范围常常对不上，
+     * 真正判定“是不是同一问题”靠内容（见 comment-dedupe.ts），这里只负责缩小候选。
+     */
+    async getUnresolvedBotCommentsNear(pullNumber, path, startLine, endLine, threadStatusMap) {
+        const NEARBY_LINES = 20;
+        const all = await this.listReviewComments(pullNumber);
+        const candidates = all.filter((c) => {
+            if (c.path !== path || !c.body || !bodyHasMarker(c.body, 'comment'))
+                return false;
+            if (c.in_reply_to_id)
+                return false;
+            if (threadStatusMap?.get(`${c.path}:${c.line}`) === true)
+                return false;
+            const cEnd = c.line ?? c.original_line;
+            if (cEnd == null)
+                return false;
+            const cStart = c.start_line ?? cEnd;
+            return cEnd >= startLine - NEARBY_LINES && cStart <= endLine + NEARBY_LINES;
+        });
+        const own = await Promise.all(candidates.map(async (c) => await isOwnAuthor(c.user?.login)));
+        return candidates.filter((_c, i) => own[i] === true);
     }
     /** 获取与指定行号范围处于同一位置的 review comment（判定见 isSameCommentLocation） */
     async getCommentsAtRange(pullNumber, path, startLine, endLine) {
@@ -55853,6 +56096,55 @@ function checkRateLimit(scope, now = Date.now()) {
     bucket.timestamps.push(now);
     return { allowed: true };
 }
+// ─── 跨进程限流：以平台上的评论记录为准 ───────────────────────────────────
+//
+// 上面的进程内令牌桶在 GitHub / GitLab 上形同虚设（一条事件一个进程，桶永远是空的）。
+// 用户连发 12 条命令，12 条全部被执行（回归测试 FT-128）。
+//
+// 这里改用**平台自己保存的评论**当计数器，不引入任何外部存储：
+//   处理第 N 条命令时，数一数该用户在 WINDOW_MS 内、**不晚于这条命令**的、@ 了 bot 的
+//   评论有几条（含这条）。超过 MAX_PER_WINDOW 就拒绝。
+//
+// 只数「不晚于这条」的评论是关键：各条命令在各自的进程里并发处理，每个进程看到的评论
+// 列表可能多也可能少，但第 11、12 条命令总能看到前面至少 10 条，所以结果是确定的——
+// 前 10 条放行，后面的被拒，而不依赖谁先抢到什么。
+/** 正文里是否 @ 了 bot（两侧要有边界，避开 `foo@ai-reviewer.example` 这类邮箱） */
+function mentionsBot(body, botMentions) {
+    const text = body ?? '';
+    return botMentions.some(m => {
+        const esc = m.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return new RegExp(`(^|[\\s,.;:，。；：])${esc}(?![A-Za-z0-9_-])`, 'i').test(text);
+    });
+}
+/**
+ * 以平台评论为准判断这条命令是否超出限流。
+ *
+ * @returns allowed=false 时 retryAfterMs 为窗口内最早一条滑出窗口还需要的时间
+ */
+function checkBurstFromComments(input) {
+    const { comments, actor, commentId, botMentions } = input;
+    const now = input.now ?? Date.now();
+    const self = comments.find(c => c.id === commentId);
+    const ref = self?.createdAt != null ? Date.parse(self.createdAt) : now;
+    if (Number.isNaN(ref))
+        return { allowed: true };
+    const mine = comments.filter(c => (c.author ?? '').toLowerCase() === actor.toLowerCase() &&
+        c.createdAt != null &&
+        mentionsBot(c.body, botMentions));
+    const inWindow = mine
+        .map(c => ({ id: c.id, t: Date.parse(c.createdAt) }))
+        .filter(c => !Number.isNaN(c.t))
+        // 不晚于当前这条：时间更早，或同一秒内 id 不更大
+        .filter(c => c.t < ref || (c.t === ref && c.id <= commentId))
+        .filter(c => c.t > ref - WINDOW_MS)
+        .sort((a, b) => a.t - b.t || a.id - b.id);
+    // 当前这条评论如果没出现在列表里（读写延迟），补上它自己
+    const rank = inWindow.some(c => c.id === commentId) ? inWindow.length : inWindow.length + 1;
+    if (rank <= MAX_PER_WINDOW)
+        return { allowed: true };
+    const earliest = inWindow.length > 0 ? inWindow[0].t : ref;
+    return { allowed: false, retryAfterMs: Math.max(0, earliest + WINDOW_MS - ref) };
+}
 /** 仅供测试 */
 function _resetRateLimit() {
     buckets.clear();
@@ -55903,15 +56195,8 @@ const ERROR_MESSAGES = {
     FORBIDDEN: '🚫 **权限不足**。你的仓库权限不足以执行该命令。',
     BOT_FORBIDDEN: '🚫 **Bot 权限不足**。请检查 workflow `permissions` 配置（pull-requests: write / contents: read）。',
     NOT_IMPLEMENTED: '🚧 **命令暂未实现**。该命令已在路线图中，等待实现。',
-    // CMD-029：不能给出「N 条 / M 秒」这种配额承诺。
-    //
-    // 桶只活在单个 Node 进程里，而 GitHub comment 与 GitLab note 通常是一条事件一
-    // 个新进程——用户连发 10 条评论会起 10 个进程，每个桶都是空的，谁也限不住。
-    // 说成「同一用户 60 秒内最多 10 条」，用户照着数就会发现根本对不上。
-    //
-    // 它也不负责重复投递——那在 dispatcher 里先被幂等检查拦下了（CMD-030）。
-    // 所以文案只说作用范围，不说场景，也不给数字。
-    RATE_LIMITED: '⏱️ **请求过于频繁**。本次运行中检测到过多命令请求，请稍后再试。',
+    // 限流按平台上的评论记录判断（同一用户 60 秒内 @ bot 的评论最多 10 条，超出的被拒）。
+    RATE_LIMITED: '⏱️ **请求过于频繁**。同一用户 60 秒内最多发送 10 条命令，请稍后再试。',
     DUPLICATE: 'ℹ️ **命令已处理**（重复事件已去重）。',
     INTERNAL: '💥 **命令执行失败**。错误已记录，请联系维护者。'
 };
@@ -56283,6 +56568,37 @@ async function dispatchCommentEvent(deps) {
         changeRequestId: prNumber,
         actor: actorLogin
     });
+    // 进程内的桶在 Actions / GitLab CI（一条事件一个进程）里永远是空的，限不住连发。
+    // 再按平台上保存的评论记录判断一次：该用户 60 秒内 @ 了 bot 的评论超过上限就拒绝。
+    // 读取评论失败时放行（限流不能因为 API 抖动把正常命令挡掉）。
+    let burst = rl;
+    if (rl.allowed) {
+        try {
+            const platform = getPlatform();
+            const top = await platform.listComments(owner, repoName, prNumber);
+            const lineComments = execCtx.eventKind === 'review_comment_created'
+                ? await platform.listReviewComments(owner, repoName, prNumber)
+                : [];
+            burst = checkBurstFromComments({
+                comments: [...top, ...lineComments],
+                actor: actorLogin,
+                commentId: comment.id,
+                botMentions: deps.botMentions ?? DEFAULT_BOT_MENTIONS
+            });
+        }
+        catch (e) {
+            logger.warning(`command dispatcher: rate-limit lookup failed, allowing: ${String(e)}`);
+        }
+    }
+    if (!burst.allowed) {
+        await reply.error('RATE_LIMITED', `请 ${Math.ceil((burst.retryAfterMs ?? 0) / 1000)} 秒后再试`);
+        return {
+            kind: 'executed',
+            command: parsed.name,
+            ok: false,
+            error: 'RATE_LIMITED'
+        };
+    }
     if (!rl.allowed) {
         await reply.error('RATE_LIMITED', `请 ${Math.ceil((rl.retryAfterMs ?? 0) / 1000)} 秒后再试`);
         return {
@@ -63996,6 +64312,12 @@ behavior of the code.
   function calls, or variable assignments that might impact the behavior of the code.
 - If the diff only contains very minor changes that don't affect the code logic, such as
   fixing typos, formatting, or renaming variables for clarity, triage it as \`APPROVED\`.
+- **Formatting-only changes are \`APPROVED\` (MANDATORY)**: compare the old hunk with the new hunk.
+  If the two differ only in whitespace, indentation, line wrapping, blank lines, quote style
+  (\`'\` vs \`"\`), trailing semicolons or commas, spacing around operators / colons / braces,
+  import ordering, or comments — and every identifier, literal value, operator and statement is
+  otherwise unchanged — triage it as \`APPROVED\`, no matter how many lines changed. Judge by
+  what the code does, not by how large the diff looks.
 
 Please evaluate the diff thoroughly and take into account factors such as the number of
 lines changed, the potential impact on the overall system, and the likelihood of
@@ -64098,6 +64420,8 @@ Output: Review comments in markdown with exact line number ranges in new hunks. 
 - \`major\` — incorrect behavior on realistic inputs: wrong results, inverted or always-true conditions, off-by-one / out-of-bounds, unhandled promise or exception, a crash or \`NaN\` / \`undefined\` leaking into results, race conditions.
 - \`minor\` — robustness or maintainability issues whose impact is limited or needs unusual inputs.
 - \`nit\` — trivial improvements.
+Style, naming-convention, formatting, unused-variable and \`any\`-typing issues are \`nit\` (or at most \`minor\` when they genuinely hurt maintainability). Never mark them \`critical\` or \`major\` — those levels are reserved for the consequences listed above.
+**Describe the actual change (MANDATORY)** — Base every comment on what the new hunk really contains. Do not claim that a name, behavior or value was added or changed unless the hunk shows it. If the old and new hunks differ only in formatting, there is nothing to report: respond with \`LGTM!\`.
 Do not add a tag to \`LGTM!\` responses.
 Use fenced code blocks using the relevant language identifier where applicable.
 Don't annotate code snippets with line numbers. Format and indent code correctly.
@@ -64140,6 +64464,11 @@ This collapses long diffs by default and keeps PR comments visually clean.
     - If the issue is genuinely gone: respond with \`LGTM!\`.
   - No label (legacy / status unavailable): treat as \`[OPEN]\` — avoid duplicating the comment
     if the issue appears identical.
+  - **Never re-mention an \`[OPEN]\` issue inside a comment about other issues (MANDATORY)**: when
+    you write a comment about a NEW issue in the same line range, mention only the new issue.
+    Do not repeat, summarize, or list issues that an \`[OPEN]\` chain already covers — not in the
+    opening sentence, not as a bullet, and not in the suggested fix. Report each new issue in its
+    own comment instead of bundling it with an issue that is already reported.
 - Do NOT provide general feedback, summaries, explanations of changes, or praises
   for making good additions. Do NOT suggest adding validation, comments, documentation,
   or error handling that was not explicitly part of the changes.
@@ -64526,7 +64855,7 @@ $lint_context
  * - 其余 → skip
  */
 async function dispatchEvent(deps) {
-    const { execCtx, options, prompts, logger, createBots } = deps;
+    const { execCtx, options, prompts, logger, createBots, onFailed } = deps;
     if (execCtx.eventKind === 'pr_opened' ||
         execCtx.eventKind === 'pr_synchronize' ||
         execCtx.eventKind === 'pr_reopened') {
@@ -64543,8 +64872,15 @@ async function dispatchEvent(deps) {
             return;
         }
         const bots = createBots();
-        if (bots == null)
+        if (bots == null) {
+            // 模型客户端建不起来（最常见的原因：OPENAI_API_KEY 没配置或为空）。
+            // 此前只在日志里写一条 warning 就以成功退出，maintainer 在 PR 页面看到绿色 ✓，
+            // 根本不知道这次根本没审查。必须让 job 失败，错误信息要能直接指出该查什么。
+            onFailed?.('Review not performed: cannot create the OpenAI clients. ' +
+                'Check that the OPENAI_API_KEY secret is configured and not empty ' +
+                '(for pull_request events from forks, secrets are not available).');
             return;
+        }
         await codeReview(execCtx, bots.lightBot, bots.heavyBot, options, prompts);
     }
     else if (execCtx.eventKind === 'comment_created' ||
@@ -64621,7 +64957,8 @@ async function runOrchestrator(deps) {
             options,
             prompts,
             logger,
-            createBots: () => createBots(options)
+            createBots: () => createBots(options),
+            onFailed
         });
     }
     catch (e) {
