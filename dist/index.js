@@ -93370,7 +93370,8 @@ const parsePatch = (patch) => {
  *
  * 解析后将每条评论映射到实际的 patch 行号范围：
  * - 如果评论的行号完全在某个 patch 内，直接使用
- * - 如果不在任何 patch 内，映射到重叠最大的 patch（并添加说明）
+ * - 如果与 patch 部分重叠，映射到重叠最大的 patch（并添加说明）
+ * - 如果与任何 patch 都不重叠，丢弃该评论（行号不属于本次 diff，挂到哪里都是错的）
  */
 function parseReview(response, patches, debug = false) {
     const reviews = [];
@@ -93421,11 +93422,11 @@ ${review.comment}`;
                     review.endLine = bestPatchEndLine;
                 }
                 else {
-                    review.comment = `> Note: This review was outside of the patch, but no patch was found that overlapped with it. Original lines [${review.startLine}-${review.endLine}]
-
-${review.comment}`;
-                    review.startLine = patches[0][0];
-                    review.endLine = patches[0][1];
+                    // 与当前文件任何 patch 都不重叠：多半是模型对 diff 之外的代码（跨文件上下文里的
+                    // 其他文件、本文件未改动的部分）提的意见，行号属于别的位置。硬挂到当前文件会
+                    // 落在错误的文件和行上，也让按位置去重失效，所以直接丢弃，只在日志里留痕
+                    getLogger().info(`Dropped comment for line range ${review.startLine}-${review.endLine}: no overlapping patch in this file`);
+                    return;
                 }
             }
             reviews.push(review);
@@ -94504,6 +94505,7 @@ Input: New hunks annotated with line numbers and old hunks (replaced code). Hunk
 Additional Context: PR title, description, summaries, comment chains, and cross-file references.
 Task: Review new hunks for substantive issues using the provided context (plus any investigation described above) and respond with comments if necessary.
 Output: Review comments in markdown with exact line number ranges in new hunks. Start and end line numbers must be within the same hunk. For single-line comments, start=end line number. Must use example response format below.
+Only comment on lines inside the new hunks of this file. Never use line numbers from other files or from unchanged parts of this file: if an issue lives elsewhere (seen via cross-file references or investigation), attach it to the changed line in this file that causes or exposes it, or leave it out.
 
 **Severity tag (MANDATORY)** — The first line of every comment that reports an issue MUST be a severity tag on its own line: \`[severity: critical]\`, \`[severity: major]\`, \`[severity: minor]\` or \`[severity: nit]\`. Keep the tag in English even when responding in another language. Choose the level by the **consequence** of the issue, not by how it is worded:
 - \`critical\` — security vulnerability (injection, XSS, secret exposure, auth bypass), data loss or corruption, or wrong monetary / quantity values.
