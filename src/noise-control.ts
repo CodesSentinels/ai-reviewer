@@ -15,6 +15,9 @@
  * 注：早期的「低优先级折叠 / PR 顶部汇总评论」（formatComments / buildSummaryBody /
  * postSummaryComment）已随「级别分散到各评论」改造移除——级别现以徽标形式直接置于
  * 每条行级评论顶部。
+ *
+ * 另：`mergeSimilarFindings` 把同一文件里正文几乎相同的多处发现合并成一条（保留所有位置），
+ * 防止同一类问题的多个位置各发一条相同的评论、占满评论额度（回归测试 FT-093/094）。
  */
 
 /** 审查发现的严重级别（由高到低） */
@@ -120,6 +123,95 @@ export function dedupeFindings(findings: Finding[]): Finding[] {
       return {...finding, title: `${base}（合并 ${count} 处同类问题）`}
     }
     return finding
+  })
+}
+
+/** 两条评论正文的词集相似度达到该值，就认为是同一类问题 */
+const SIMILAR_THRESHOLD = 0.9
+
+/** 去掉标记、折叠块、代码围栏与严重级别徽标（引用块），只留正文文字 */
+function proseForSimilarity(body: string): string {
+  const prose = (body ?? '')
+    .replace(/<!-{2}[\s\S]*?-{2}>/g, '')
+    .replace(/<details[\s\S]*?<\/details>/gi, '')
+    .replace(/```[\s\S]*?```/g, '')
+  const lines = prose.split('\n').filter(l => l.trim() !== '' && !l.trimStart().startsWith('>'))
+  return lines.join(' ')
+}
+
+/**
+ * 字符 3-gram 集合：对中文和英文都适用（中文没有空格，按词切分会得到整句整句的大块，
+ * 差一个字就整句不同）。先去掉空白与标点，只留字母数字和部分代码符号。
+ */
+function wordSet(text: string): Set<string> {
+  const compact = text.toLowerCase().replace(/[^\p{L}\p{N}_$.[\]()]+/gu, '')
+  const grams = new Set<string>()
+  for (let i = 0; i + 3 <= compact.length; i++) grams.add(compact.slice(i, i + 3))
+  return grams
+}
+
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 && b.size === 0) return 1
+  let inter = 0
+  for (const w of a) if (b.has(w)) inter += 1
+  return inter / (a.size + b.size - inter)
+}
+
+function formatLocation(f: Finding): string {
+  return f.startLine === f.endLine ? `L${f.startLine}` : `L${f.startLine}-${f.endLine}`
+}
+
+/**
+ * 把**同一文件**里正文几乎相同的多处发现合并成一条。
+ *
+ * 为什么需要：行级评论按位置保留（prepareFindings 以 dedupe:false 调用，避免把不同代码行的
+ * 问题合并后丢掉位置）。但同一类问题在一个文件里出现很多次时，模型会给每个位置各发一条
+ * **逐字相同**的评论：既刷屏，又会占满评论上限，把同一文件里其他类别的问题挤掉
+ * （实测：一个文件的 10 处 `eval` 发了 10 条相同评论，另外 20 处缺陷一条都没发出来）。
+ *
+ * 做法：保留第一处作为评论锚点，在正文末尾列出其余位置；严重级别取最高；原有顺序不变。
+ * 不同文件、正文不相似的发现不受影响。
+ */
+export function mergeSimilarFindings(findings: Finding[]): Finding[] {
+  const groups: Array<{
+    head: Finding
+    words: Set<string>
+    others: Finding[]
+    severity: FindingSeverity
+  }> = []
+  const byPath = new Map<string, number[]>()
+
+  for (const f of findings) {
+    const words = wordSet(proseForSimilarity(f.body))
+    const candidates = byPath.get(f.path) ?? []
+    let target = -1
+    // 正文几乎没有可比较的文字时不合并（保守：宁可多发，不能把不同的问题并在一起）
+    if (words.size >= 10) {
+      for (const idx of candidates) {
+        if (jaccard(groups[idx].words, words) >= SIMILAR_THRESHOLD) {
+          target = idx
+          break
+        }
+      }
+    }
+    if (target >= 0) {
+      const g = groups[target]
+      g.others.push(f)
+      if (SEVERITY_RANK[f.severity] > SEVERITY_RANK[g.severity]) g.severity = f.severity
+    } else {
+      groups.push({head: f, words, others: [], severity: f.severity})
+      byPath.set(f.path, [...candidates, groups.length - 1])
+    }
+  }
+
+  return groups.map(g => {
+    if (g.others.length === 0) return g.head
+    const locations = g.others.map(formatLocation).join('、')
+    return {
+      ...g.head,
+      severity: g.severity,
+      body: `${g.head.body}\n\n> 同一文件另有 ${g.others.length} 处同类问题：${locations}`
+    }
   })
 }
 
