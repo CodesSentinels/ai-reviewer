@@ -51,6 +51,7 @@ import {
   classifyFindingSeverity,
   extractSeverityTags,
   prepareFindings,
+  mergeSimilarFindings,
   severityBadge,
   type Finding
 } from './noise-control'
@@ -1431,13 +1432,21 @@ ${commentChain}
     // 噪音控制（成员 D · §2.5）：按严重级别排序 + 截断到上限（默认 20）。
     // 行级评论保留每个位置（dedupe:false），避免把不同代码行的同类问题合并导致丢失位置；
     // 同类合并仅用于下方 PR 顶部汇总评论的概览统计。
-    const {kept: keptFindings, truncated: truncatedFindings} = prepareFindings(findings, {
+    // 同一文件里正文几乎相同的多处发现先合并成一条（保留所有位置），否则同一类问题的每个位置
+    // 各发一条相同评论，会占满评论上限、挤掉同一文件里其他类别的问题。
+    const similarMerged = mergeSimilarFindings(findings)
+    if (similarMerged.length !== findings.length) {
+      getLogger().info(
+        `similar-merge: ${findings.length} findings → ${similarMerged.length} (merged same-file near-identical comments)`
+      )
+    }
+    const {kept: keptFindings, truncated: truncatedFindings} = prepareFindings(similarMerged, {
       dedupe: false,
       maxComments: options.maxReviewComments
     })
     if (truncatedFindings > 0) {
       getLogger().info(
-        `noise-control: ${findings.length} findings → posting ${keptFindings.length}, truncated ${truncatedFindings} low-priority`
+        `noise-control: ${similarMerged.length} findings → posting ${keptFindings.length}, truncated ${truncatedFindings} low-priority`
       )
     }
     for (const f of keptFindings) {
