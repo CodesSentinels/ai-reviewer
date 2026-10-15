@@ -116,3 +116,57 @@ describe('isWhitespaceOnlyChange：有实质改动一律不跳过', () => {
     expect(isWhitespaceOnlyChange('a.ts', patch as string | null | undefined)).toBe(false)
   })
 })
+
+describe('isWhitespaceOnlyChange：逐个 hunk 带上下文比较', () => {
+  test('同一个 hunk 里语句被挪到上下文行之后 → 是真实改动，不跳过', () => {
+    const patch = hunk('-charge(user)', ' audit(user)', '+charge(user)', ' done()')
+    expect(isWhitespaceOnlyChange('a.ts', patch)).toBe(false)
+  })
+
+  test('语句从一个 hunk 删掉、在另一个 hunk 原样新增（被搬到别处）→ 不跳过', () => {
+    const patch = [
+      '@@ -1,2 +1,1 @@',
+      ' a()',
+      '-charge(user)',
+      '@@ -50,1 +49,2 @@',
+      ' b()',
+      '+charge(user)'
+    ].join('\n')
+    expect(isWhitespaceOnlyChange('a.ts', patch)).toBe(false)
+  })
+
+  test('多个 hunk 都只是换行重排 → 跳过', () => {
+    const patch = [
+      '@@ -1,3 +1,2 @@',
+      ' a()',
+      '-f(',
+      '-  1)',
+      '+f(1)',
+      '@@ -40,2 +39,3 @@',
+      ' b()',
+      '-g(2)',
+      '+g(',
+      '+  2)'
+    ].join('\n')
+    expect(isWhitespaceOnlyChange('a.ts', patch)).toBe(true)
+  })
+
+  test('一个 hunk 只是重排、另一个 hunk 有实质改动 → 整个文件不跳过', () => {
+    const patch = [
+      '@@ -1,3 +1,2 @@',
+      ' a()',
+      '-f(',
+      '-  1)',
+      '+f(1)',
+      '@@ -40,2 +39,2 @@',
+      ' b()',
+      '-g(2)',
+      '+g(3)'
+    ].join('\n')
+    expect(isWhitespaceOnlyChange('a.ts', patch)).toBe(false)
+  })
+
+  test('只有上下文行、没有任何增删 → 不跳过', () => {
+    expect(isWhitespaceOnlyChange('a.ts', hunk(' a()', ' b()'))).toBe(false)
+  })
+})

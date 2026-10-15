@@ -5,8 +5,13 @@
  * 判成 NEEDS_REVIEW 时，会白白花一次深度审查，还会把上一轮已经评论过的同一个
  * 问题换个行号再发一遍（按位置去重认不出来）。
  *
- * 这里在文件进入摘要与审查之前做确定性判断：把 diff 里删除的行和新增的行各自
- * 去掉空白后比较，完全一致就说明只动了空白。
+ * 这里在文件进入摘要与审查之前做确定性判断：把每个 hunk 还原成「旧版本的块」
+ * （上下文行 + 删除行）和「新版本的块」（上下文行 + 新增行），各自去掉空白后比较，
+ * 每个 hunk 两边都一致才说明只动了空白。
+ *
+ * 必须带上下文行、逐个 hunk 比：只拿被改的行去比，会把「语句被挪到另一行之后」
+ * 「语句从一处删掉又在另一处原样加上」都当成只改了空白——它们是真实的语义改动。
+ * 上下文行把位置锚住，挪动之后两边的块就不再相等。
  *
  * 保守原则：宁可多审，不能漏审。以下情况一律不当作「只改空白」：
  * - 空白可能有语义的语言（Python、YAML、Makefile、模板类文件等）——只对白名单内的语言生效
@@ -82,16 +87,45 @@ function stripWhitespaceOutsideQuotes(text: string): string | null {
   return quote === '' ? out : null
 }
 
-/** 取出统一 diff 里被删除、被新增的行（去掉前导的 -/+），忽略 hunk 头和上下文 */
-function collectChangedLines(patch: string): {removed: string[]; added: string[]} {
-  const removed: string[] = []
-  const added: string[] = []
+/** 一个 hunk 还原出的两边（已含上下文行），以及是否真的有增删行 */
+interface HunkSides {
+  oldSide: string[]
+  newSide: string[]
+  changed: boolean
+}
+
+/**
+ * 把统一 diff 拆成 hunk，每个 hunk 还原旧、新两边。
+ * `\ No newline at end of file` 之类的提示行忽略；空行当作两边都有的空上下文行。
+ */
+function splitHunkSides(patch: string): HunkSides[] {
+  const hunks: HunkSides[] = []
+  let current: HunkSides | null = null
   for (const line of patch.split('\n')) {
-    if (line.startsWith('@@') || line.startsWith('\\')) continue
-    if (line.startsWith('-')) removed.push(line.slice(1))
-    else if (line.startsWith('+')) added.push(line.slice(1))
+    if (line.startsWith('@@')) {
+      current = {oldSide: [], newSide: [], changed: false}
+      hunks.push(current)
+      continue
+    }
+    if (line.startsWith('\\')) continue
+    // 没见到 hunk 头就开始的内容（平台只给了片段）也按一个 hunk 处理
+    if (current == null) {
+      current = {oldSide: [], newSide: [], changed: false}
+      hunks.push(current)
+    }
+    if (line.startsWith('-')) {
+      current.oldSide.push(line.slice(1))
+      current.changed = true
+    } else if (line.startsWith('+')) {
+      current.newSide.push(line.slice(1))
+      current.changed = true
+    } else {
+      const context = line.startsWith(' ') ? line.slice(1) : line
+      current.oldSide.push(context)
+      current.newSide.push(context)
+    }
   }
-  return {removed, added}
+  return hunks
 }
 
 /**
@@ -107,11 +141,13 @@ export function isWhitespaceOnlyChange(
   if (patch == null || patch === '') return false
   if (!WHITESPACE_INSENSITIVE_EXTENSIONS.has(extensionOf(filename))) return false
 
-  const {removed, added} = collectChangedLines(patch)
-  if (removed.length === 0 && added.length === 0) return false
+  const hunks = splitHunkSides(patch)
+  if (!hunks.some(h => h.changed)) return false
 
-  const before = stripWhitespaceOutsideQuotes(removed.join('\n'))
-  const after = stripWhitespaceOutsideQuotes(added.join('\n'))
-  if (before == null || after == null) return false
-  return before === after
+  for (const hunk of hunks) {
+    const before = stripWhitespaceOutsideQuotes(hunk.oldSide.join('\n'))
+    const after = stripWhitespaceOutsideQuotes(hunk.newSide.join('\n'))
+    if (before == null || after == null || before !== after) return false
+  }
+  return true
 }
