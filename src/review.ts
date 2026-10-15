@@ -72,6 +72,7 @@ import {getTokenCount} from './tokenizer'
 import {detectInitialPr, initialPrNotice, largePrNotice, prioritizeFiles} from './large-pr'
 import {COMPARE_FILES_CAP, selectFilesToReview} from './diff-files'
 import {fetchThreadStatusMap, type ThreadStatusMap} from './github/review-thread'
+import {isWhitespaceOnlyChange} from './whitespace-only-change'
 
 /** 平台无关的 TreeFetcher 实现（DEP-005 → ARCH-018） */
 const platformTreeFetcher: TreeFetcher = {
@@ -543,6 +544,13 @@ const runCodeReview = async (
     await Promise.all(
       filterSelectedFiles.map(file =>
         githubConcurrencyLimit(async () => {
+          // 只调整了缩进或换行的文件不值得审查：确定性判断，不依赖摘要阶段的模型分类，
+          // 也省掉读取基准内容的请求。判断很保守，见 whitespace-only-change.ts。
+          if (isWhitespaceOnlyChange(file.filename, file.patch)) {
+            getLogger().info(`skip whitespace-only change: ${file.filename}`)
+            return null
+          }
+
           // 获取文件在基准分支上的原始内容
           let fileContent = ''
           if (file.status === 'added') {
