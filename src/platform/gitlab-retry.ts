@@ -8,7 +8,7 @@
  *   上一次是否其实已写入成功，避免超时重试产生重复内容。
  *
  * 注意 gitbeaker 自身对 429/502 也有内部重试（最多 10 次），本层是在其之上的
- * 兜底：因此 maxAttempts 保持小值，避免两层重试相乘放大等待时间。
+ * 兜底：因此 maxAttempts 保持小值（4），避免两层重试相乘放大等待时间。
  */
 
 import {getLogger} from './logger'
@@ -31,9 +31,9 @@ export interface GitLabRetryPolicy {
 }
 
 export const GITLAB_RETRY_DEFAULTS: GitLabRetryPolicy = {
-  maxAttempts: 3,
-  baseDelayMS: 500,
-  maxDelayMS: 5_000,
+  maxAttempts: 4,
+  baseDelayMS: 1_000,
+  maxDelayMS: 8_000,
   maxRetryAfterMS: 30_000
 }
 
@@ -58,8 +58,12 @@ export function resetGitLabRetryPolicy(): void {
 /**
  * 计算第 attempt 次失败后的退避时长（attempt 从 1 开始）。
  *
- * 指数退避 + 全抖动（full jitter）：delay = random() * min(base * 2^(attempt-1), maxDelay)。
- * 全抖动可以避免多个并发请求在同一时刻重试造成二次冲击。
+ * 指数退避 + 半抖动（equal jitter）：delay = capped/2 + random() * capped/2，
+ * 其中 capped = min(base * 2^(attempt-1), maxDelay)。
+ * 抖动用来避免多个并发请求在同一时刻重试造成二次冲击；保留一半作为下限，
+ * 是因为全抖动（random() * capped）可能抽到接近 0 的值，第一次重试几乎不等待，
+ * 对超时、限流这类需要时间恢复的故障等于没有退避（实测批量文件审查时多个文件
+ * 在几百毫秒内连续重试仍然超时，最终被判为失败）。
  */
 export function computeBackoffMS(
   attempt: number,
@@ -68,7 +72,7 @@ export function computeBackoffMS(
   const random = policy.random ?? Math.random
   const exponential = policy.baseDelayMS * 2 ** Math.max(0, attempt - 1)
   const capped = Math.min(exponential, policy.maxDelayMS)
-  return Math.round(random() * capped)
+  return Math.round(capped / 2 + (random() * capped) / 2)
 }
 
 /**

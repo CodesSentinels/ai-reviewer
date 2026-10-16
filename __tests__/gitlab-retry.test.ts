@@ -161,18 +161,20 @@ describe('computeBackoffMS（GLAPI-025 有上限退避）', () => {
   const policy = {...GITLAB_RETRY_DEFAULTS, random: () => 1}
 
   test('指数增长', () => {
-    expect(computeBackoffMS(1, policy)).toBe(500)
-    expect(computeBackoffMS(2, policy)).toBe(1000)
-    expect(computeBackoffMS(3, policy)).toBe(2000)
+    expect(computeBackoffMS(1, policy)).toBe(1000)
+    expect(computeBackoffMS(2, policy)).toBe(2000)
+    expect(computeBackoffMS(3, policy)).toBe(4000)
   })
 
   test('不超过 maxDelayMS 上限', () => {
     expect(computeBackoffMS(20, policy)).toBe(policy.maxDelayMS)
   })
 
-  test('全抖动：random 越小等待越短', () => {
-    expect(computeBackoffMS(3, {...policy, random: () => 0})).toBe(0)
-    expect(computeBackoffMS(3, {...policy, random: () => 0.5})).toBe(1000)
+  test('半抖动：random 再小也保留一半作为下限，不会几乎不等待', () => {
+    expect(computeBackoffMS(3, {...policy, random: () => 0})).toBe(2000)
+    expect(computeBackoffMS(3, {...policy, random: () => 0.5})).toBe(3000)
+    // 第一次重试同样有下限：此前 random() 抽到接近 0 时只等几十毫秒
+    expect(computeBackoffMS(1, {...policy, random: () => 0})).toBe(500)
   })
 })
 
@@ -216,7 +218,7 @@ describe('withGitLabRetry（GLAPI-025/026/027）', () => {
       .mockResolvedValue('recovered')
     await expect(withGitLabRetry('op', fn)).resolves.toBe('recovered')
     expect(fn).toHaveBeenCalledTimes(2)
-    expect(sleeps).toEqual([500])
+    expect(sleeps).toEqual([1000])
   })
 
   test('5xx 与超时同样重试，次数有上限', async () => {
@@ -226,7 +228,7 @@ describe('withGitLabRetry（GLAPI-025/026/027）', () => {
       await expect(withGitLabRetry('op', fn)).rejects.toThrow(GitPlatformError)
       expect(fn).toHaveBeenCalledTimes(GITLAB_RETRY_DEFAULTS.maxAttempts)
       // 最后一次失败后不再等待
-      expect(sleeps).toEqual([500, 1000])
+      expect(sleeps).toEqual([1000, 2000, 4000])
     }
   })
 
