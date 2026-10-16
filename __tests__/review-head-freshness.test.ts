@@ -517,12 +517,22 @@ describe('STATE-011/012：两个平台共用同一道写前 HEAD 门禁', () => 
  * 复用本文件的夹具：它已经验证过「正常路径会走到行级评论提交」，
  * 下面的 not.toThrow / 记不记 SHA 的断言因此不会是恒真的。
  */
-describe('失败路径：全部模型失败 → 失败退出；偶发失败 → 不记为已审查', () => {
-  /** 摘要阶段与审查阶段按提示词区分；fail 决定哪些调用抛错 */
+/**
+ * 两种失败表现都要覆盖：真实的 Bot.chat() 自己吞掉接口错误、返回空串而不抛异常
+ * （这是私有部署复测时暴露出来的；只测「抛异常」会漏掉线上实际发生的那种）。
+ */
+describe.each<[string, 'empty' | 'throw']>([
+  ['返回空串（真实 Bot.chat 的行为）', 'empty'],
+  ['抛异常', 'throw']
+])('失败路径（失败表现：%s）：全部模型失败 → 失败退出；偶发失败 → 不记为已审查', (_label, mode) => {
+  /** 摘要阶段与审查阶段按提示词区分；fail 决定哪些调用失败 */
   function botFailing(fail: (prompt: string) => boolean): any {
     return {
       chat: jest.fn<any>(async (prompt: string) => {
-        if (fail(String(prompt))) throw new Error('Connection error.')
+        if (fail(String(prompt))) {
+          if (mode === 'throw') throw new Error('Connection error.')
+          return ['', {}, []]
+        }
         const isReview = String(prompt).includes('---new_hunk---')
         return [
           isReview ? '2-2:\n这里有个问题需要修改\n' : '[TRIAGE]: NEEDS_REVIEW\nsummary',
