@@ -51847,7 +51847,7 @@ const CONFIG_DEFAULTS = {
     reviewCommentLGTM: false,
     /** 对齐 action.yml path_filters 默认值：排除 dist/二进制/生成/图片等 */
     pathFilters: [
-        '!dist/**',
+        '!**/dist/**',
         '!**/*.app',
         '!**/*.bin',
         '!**/*.bz2',
