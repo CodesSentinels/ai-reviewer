@@ -62,7 +62,11 @@ const {GitLabPlatform} = require('../src/platform/gitlab-platform')
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const {PAGINATION_DEFAULTS, TREE_PAGINATION_DEFAULTS} = require('../src/platform/gitlab-client')
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const {configureGitLabRetry, resetGitLabRetryPolicy} = require('../src/platform/gitlab-retry')
+const {
+  configureGitLabRetry,
+  resetGitLabRetryPolicy,
+  GITLAB_RETRY_DEFAULTS
+} = require('../src/platform/gitlab-retry')
 
 const TEST_CLIENT_CONFIG = {
   host: 'https://gitlab.example.com',
@@ -504,7 +508,9 @@ describe('GitLab adapter 稳定性契约', () => {
       await expect(platform.addReaction('g', 'r', 5, 100, '+1', 'issue_comment')).rejects.toThrow(
         GitPlatformError
       )
-      expect(mockMergeRequestNoteAwardEmojis.award).toHaveBeenCalledTimes(3)
+      expect(mockMergeRequestNoteAwardEmojis.award).toHaveBeenCalledTimes(
+        GITLAB_RETRY_DEFAULTS.maxAttempts
+      )
     })
   })
 

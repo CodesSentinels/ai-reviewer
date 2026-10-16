@@ -187,10 +187,12 @@ describe('codeReview() — 改造前控制流行为基线', () => {
     expect(commenterState.comment).not.toHaveBeenCalled()
   })
 
-  test('PR 详情取不到（getChangeRequest 抛错）→ 跳过，不调用后续 platform API', async () => {
+  test('PR 详情取不到（getChangeRequest 抛错）→ 抛错让 job 失败，不调用后续 platform API', async () => {
     platformState.getChangeRequest.mockRejectedValue(new Error('not found'))
 
-    await codeReview(makeExecCtx(), makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
+    await expect(
+      codeReview(makeExecCtx(), makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
+    ).rejects.toThrow('failed to load change request details')
 
     expect(platformState.compareDiff).not.toHaveBeenCalled()
     expect(commenterState.comment).not.toHaveBeenCalled()

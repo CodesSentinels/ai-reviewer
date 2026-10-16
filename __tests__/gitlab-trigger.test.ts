@@ -44,6 +44,13 @@ jest.mock('../src/bot-factory', () => ({
 // 打包产物不受影响：dist/gitlab-trigger/ 已随构建复制 tiktoken_bg.wasm。
 jest.mock('../src/tokenizer', () => ({getTokenCount: () => 0}))
 
+// 本文件只验证入口编排，不验证审查核心。过去这里靠「下游 codeReview 因 mock 不全而失败、
+// 失败又被静默吞掉」来保持 exitCode 不变——那恰恰是失败路径不诚实的表现：现在读不到
+// MR 详情会让 job 失败，所以把审查核心换成空实现。核心自身的行为由 review-* 用例覆盖。
+jest.mock('../src/review', () => ({
+  codeReview: jest.fn<(...a: any[]) => Promise<void>>().mockResolvedValue(undefined)
+}))
+
 // 凭据自检会真的调 Users.showCurrentUser()，必须 mock 掉，
 // 否则测试会朝 gitlab.com 发真实请求
 const mockUsers = {showCurrentUser: jest.fn<() => Promise<any>>()}

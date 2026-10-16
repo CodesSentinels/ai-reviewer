@@ -308,8 +308,9 @@ const runCodeReview = async (
       head: {sha: cr.headSha, ref: cr.headRef}
     }
   } catch (e) {
-    getLogger().warning(`Skipped: failed to load change request details: ${String(e)}`)
-    return
+    // 读不到 MR 详情是「没能干活」而不是「无需审查」：必须让 job 失败，
+    // 否则网络故障时 CI 是绿的、MR 上什么都没有
+    throw new Error(`failed to load change request details: ${String(e)}`)
   }
 
   if (!fromCommand && getReviewStateFromBody(pr.body ?? '') === 'paused') {
@@ -406,7 +407,8 @@ const runCodeReview = async (
         `[review-003] discarded this run: ${check.reason}. No invalidation notice was posted ` +
           'because there is no evidence the results are actually outdated.'
       )
-      return
+      // 结果被丢弃且没有任何对外提示：job 必须失败，不能让这次静默的空跑显示为成功
+      throw new Error(`review results discarded: ${check.reason}`)
     }
     await publishInvalidationNotice(check.currentHeadSha)
   }
@@ -812,6 +814,13 @@ ${
   // ==================== 阶段一：并行文件摘要 ====================
   const summariesFailed: string[] = []
 
+  // 模型调用的成败统计：全部失败时 job 要以失败退出（否则 CI 是绿的而 MR 上什么都没审）
+  let modelCallsOk = 0
+  let modelCallsFailed = 0
+  // 因偶发错误（模型/网络）没审成的文件：有它就不能把本次 HEAD 记为已审查，
+  // 否则增量审查永远不会再碰这些文件
+  const retryableFailures: string[] = []
+
   /**
    * 对单个文件生成摘要
    *
@@ -840,8 +849,10 @@ ${
   const chatOrNull = async (bot: Bot, prompt: string, label: string): Promise<string | null> => {
     try {
       const [response] = await bot.chat(prompt, {})
+      modelCallsOk += 1
       return response
     } catch (e: any) {
+      modelCallsFailed += 1
       getLogger().warning(`${label} failed: ${e instanceof Error ? e.message : String(e)}`)
       degradations.push(`${label}未完成（模型调用失败，详情见运行日志）`)
       return null
@@ -878,6 +889,7 @@ ${
     // 调用轻量模型生成摘要
     try {
       const [summarizeResp] = await lightBot.chat(summarizePrompt, {})
+      modelCallsOk += 1
 
       if (summarizeResp === '') {
         getLogger().info('summarize: nothing obtained from openai')
@@ -904,6 +916,8 @@ ${
       }
     } catch (e: any) {
       getLogger().warning(`summarize: error from openai: ${e as string}`)
+      modelCallsFailed += 1
+      retryableFailures.push(filename)
       summariesFailed.push(`${filename} (error from openai: ${e as string})})`)
       return null
     }
@@ -1299,17 +1313,22 @@ ${commentChain}
 
       // 如果成功打包了至少一个 patch，执行审查
       if (patchesPacked > 0) {
+        let chatReturned = false
         try {
           // 调用重量模型执行代码审查
           const [response, , analysisSteps] = await heavyBot.chat(
             prompts.renderReviewFileDiff(ins),
             {}
           )
+          chatReturned = true
           if (response === '') {
             getLogger().info('review: nothing obtained from openai')
+            modelCallsFailed += 1
+            retryableFailures.push(filename)
             reviewsFailed.push(`${filename} (no response)`)
             return
           }
+          modelCallsOk += 1
 
           // 格式化 Analysis chain（模型执行的 shell / web_search 步骤）
           getLogger().info(
@@ -1405,6 +1424,7 @@ ${commentChain}
                 body: `${severityBadge(severity)}\n\n${commentWithChain}`
               })
             } catch (e: any) {
+              retryableFailures.push(filename)
               reviewsFailed.push(`${filename} comment failed (${e as string})`)
             }
           }
@@ -1412,6 +1432,8 @@ ${commentChain}
           getLogger().warning(
             `Failed to review: ${e as string}, skipping. backtrace: ${e.stack as string}`
           )
+          if (!chatReturned) modelCallsFailed += 1
+          retryableFailures.push(filename)
           reviewsFailed.push(`${filename} (${e as string})`)
         }
       } else if (patchesSkippedByDedup > 0 && patchesPacked === 0) {
@@ -1529,8 +1551,18 @@ ${
       return
     }
 
-    // 将最新的 head commit SHA 添加到已审查列表
-    summarizeComment += `\n${commenter.addReviewedCommitId(existingCommitIdsBlock, pr.head.sha)}`
+    // 将最新的 head commit SHA 添加到已审查列表。
+    // 有文件因偶发错误没审成时不记：记了下一次增量审查就从这个 HEAD 起算，
+    // 失败的文件再也不会被碰；不记则下次触发会从上一个完整审查过的提交起重新覆盖。
+    if (retryableFailures.length > 0) {
+      getLogger().warning(
+        `${new Set(retryableFailures).size} file(s) failed transiently; not recording ` +
+          `${pr.head.sha} as reviewed so the next run retries them`
+      )
+      summarizeComment += `\n${existingCommitIdsBlock}`
+    } else {
+      summarizeComment += `\n${commenter.addReviewedCommitId(existingCommitIdsBlock, pr.head.sha)}`
+    }
 
     // 批量提交所有缓冲的审查评论（严重级别已内嵌在每条评论顶部，不再单独发汇总评论）
     // STATE-011/012：批次内每条写入前再确认一次 HEAD。
@@ -1600,7 +1632,18 @@ ${
   }
 
   // 发布最终的摘要评论
-  await commenter.comment(`${summarizeComment}`, summarizeTag(), 'replace')
+  const summaryDelivered = await commenter.comment(`${summarizeComment}`, summarizeTag(), 'replace')
+  // comment() 内部吞异常，只能看返回值：摘要没发出去就是失败，不能以成功退出
+  if (summaryDelivered === false) {
+    throw new Error('failed to publish the final summary comment')
+  }
+
+  // 一次模型调用都没成功：摘要里已有「审查不完整」提示，但 CI 还得是红的
+  if (modelCallsOk === 0 && modelCallsFailed > 0) {
+    throw new Error(
+      `all ${modelCallsFailed} model call(s) failed — nothing was reviewed (see earlier warnings)`
+    )
+  }
 }
 
 // ==================== Diff 解析辅助函数 ====================

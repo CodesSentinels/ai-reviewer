@@ -331,7 +331,10 @@ describe('REVIEW-003：读不到当前 HEAD 时 fail closed', () => {
       return cr(OLD_HEAD)
     })
 
-    await codeReview(ctx, makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
+    // 结果被丢弃且没有任何对外提示：job 必须失败，不能显示为成功
+    await expect(
+      codeReview(ctx, makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
+    ).rejects.toThrow('review results discarded')
 
     // 早先这里返回「放行」，理由是「一次 API 抖动不该让整轮白跑」——那是 fail
     // open：读不到当前 HEAD 就无法确认自己是不是旧任务，此时继续写入正是
@@ -440,7 +443,9 @@ describe('REVIEW-003：查询失败不发作废提示', () => {
       return cr(OLD_HEAD)
     })
 
-    await codeReview(ctx, makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
+    await expect(
+      codeReview(ctx, makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
+    ).rejects.toThrow('review results discarded')
 
     expect(platformState.updateChangeRequestBody).not.toHaveBeenCalled()
     expect(postedText()).not.toContain(stateMarker('reviewInvalidated'))
@@ -504,4 +509,81 @@ describe('STATE-011/012：两个平台共用同一道写前 HEAD 门禁', () => 
       expect(postedText()).toContain(stateMarker('commitIdsStart'))
     }
   )
+})
+
+/**
+ * 失败路径要诚实（审查失败时 job 的退出状态与「是否记为已审查」）。
+ *
+ * 复用本文件的夹具：它已经验证过「正常路径会走到行级评论提交」，
+ * 下面的 not.toThrow / 记不记 SHA 的断言因此不会是恒真的。
+ */
+describe('失败路径：全部模型失败 → 失败退出；偶发失败 → 不记为已审查', () => {
+  /** 摘要阶段与审查阶段按提示词区分；fail 决定哪些调用抛错 */
+  function botFailing(fail: (prompt: string) => boolean): any {
+    return {
+      chat: jest.fn<any>(async (prompt: string) => {
+        if (fail(String(prompt))) throw new Error('Connection error.')
+        const isReview = String(prompt).includes('---new_hunk---')
+        return [
+          isReview ? '2-2:\n这里有个问题需要修改\n' : '[TRIAGE]: NEEDS_REVIEW\nsummary',
+          {},
+          []
+        ]
+      })
+    }
+  }
+
+  test('所有模型调用都失败 → 摘要照常发布「审查不完整」，但抛错让 job 失败', async () => {
+    const ctx = ctxWith(OLD_HEAD)
+    const light = botFailing(() => true)
+    const heavy = botFailing(() => true)
+
+    await expect(codeReview(ctx, light, heavy, makeOptions(), taggedPrompts)).rejects.toThrow(
+      /all \d+ model call\(s\) failed/
+    )
+
+    // 抛错发生在摘要发布之后：用户仍能在 MR 上看到失败说明
+    expect(postedText()).toContain('本次审查不完整')
+  })
+
+  test('只有部分模型调用失败 → 不抛错（摘要里提示即可）', async () => {
+    const ctx = ctxWith(OLD_HEAD)
+    // 摘要合并失败，其余成功
+    const heavy = botFailing(p => p === 'PROMPT_MERGE')
+
+    await expect(
+      codeReview(ctx, makeBot(), heavy, makeOptions(), taggedPrompts)
+    ).resolves.toBeUndefined()
+
+    expect(postedText()).toContain('本次审查不完整')
+  })
+
+  test('某个文件审查因偶发错误失败 → 不把本次 HEAD 记为已审查，下次触发会重新覆盖', async () => {
+    const ctx = ctxWith(OLD_HEAD)
+    const heavy = botFailing(p => p.includes('---new_hunk---'))
+
+    // 摘要等调用成功，所以不抛错；但文件没审成
+    await codeReview(ctx, makeBot(), heavy, makeOptions(), taggedPrompts)
+
+    expect(postedText()).toContain('1 个文件审查失败')
+    expect(postedText()).not.toContain(stateMarker('commitIdsStart'))
+    expect(logs.join('\n')).toContain('not recording')
+  })
+
+  test('对照：全部成功 → 记录已审查 HEAD', async () => {
+    const ctx = ctxWith(OLD_HEAD)
+
+    await codeReview(ctx, makeBot(), makeBot(), makeOptions(), taggedPrompts)
+
+    expect(postedText()).toContain(stateMarker('commitIdsStart'))
+  })
+
+  test('最终摘要发布失败 → 抛错（不能以成功退出）', async () => {
+    const ctx = ctxWith(OLD_HEAD)
+    platformState.createComment.mockRejectedValue(new Error('network down'))
+
+    await expect(
+      codeReview(ctx, makeBot(), makeBot(), makeOptions(), taggedPrompts)
+    ).rejects.toThrow('failed to publish the final summary comment')
+  })
 })
