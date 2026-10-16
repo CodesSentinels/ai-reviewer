@@ -78,13 +78,13 @@ inputs:
   path_filters:
     required: false
     description: |
-      The path filters, e.g., "src/**.py", "!dist/**", each line will be considered as one pattern.
+      The path filters, e.g., "src/**.py", "!**/dist/**", each line will be considered as one pattern.
       See also
 
       - https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#onpushpull_requestpull_request_targetpathspaths-ignore
       - https://github.com/isaacs/minimatch
     default: |
-      !dist/**
+      !**/dist/**
       !**/*.app
       !**/*.bin
       !**/*.bz2

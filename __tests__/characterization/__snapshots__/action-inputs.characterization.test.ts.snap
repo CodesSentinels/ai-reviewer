@@ -236,7 +236,7 @@ Array [
     "type": "int",
   },
   Object {
-    "default": "!dist/**
+    "default": "!**/dist/**
 !**/*.app
 !**/*.bin
 !**/*.bz2
