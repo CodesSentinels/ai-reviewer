@@ -62531,7 +62531,14 @@ ${filterIgnoredFiles.length > 0
     const chatOrNull = async (bot, prompt, label) => {
         try {
             const [response] = await bot.chat(prompt, {});
-            modelCallsOk += 1;
+            // Bot.chat() 自己吞掉接口错误、返回空串而不抛异常：空响应与抛异常一样是失败
+            if (response == null || response === '') {
+                modelCallsFailed += 1;
+                degradations.push(`${label}未完成（模型没有返回内容，详情见运行日志）`);
+            }
+            else {
+                modelCallsOk += 1;
+            }
             return response;
         }
         catch (e) {
@@ -62563,13 +62570,16 @@ ${filterIgnoredFiles.length > 0
         // 调用轻量模型生成摘要
         try {
             const [summarizeResp] = await lightBot.chat(summarizePrompt, {});
-            modelCallsOk += 1;
             if (summarizeResp === '') {
+                // Bot.chat() 吞掉接口错误后返回空串：算失败，且属于偶发（不记已审查 HEAD）
+                modelCallsFailed += 1;
+                retryableFailures.push(filename);
                 getLogger().info('summarize: nothing obtained from openai');
                 summariesFailed.push(`${filename} (nothing obtained from openai)`);
                 return null;
             }
             else {
+                modelCallsOk += 1;
                 if (options.reviewSimpleChanges === false) {
                     // 解析 AI 响应中的分类标签：[TRIAGE]: NEEDS_REVIEW 或 APPROVED
                     const triageRegex = /\[TRIAGE\]:\s*(NEEDS_REVIEW|APPROVED)/;
