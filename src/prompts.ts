@@ -265,8 +265,7 @@ $short_summary
 
 $cross_file_context
 
-$path_instructions_section
-$lint_section
+$path_instructions_section$lint_section
 ## Analysis chain (pre-review reasoning)
 
 $analysis_chain
