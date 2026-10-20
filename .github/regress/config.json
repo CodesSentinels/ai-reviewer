@@ -1,0 +1,1 @@
+{"inputs": {"path_filters": "!**/*.json\n!**/generated/**\n!**/dist/**\n!.github/**", "warn_files": "50"}}
