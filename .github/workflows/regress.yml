@@ -27,3 +27,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node .github/regress/run.cjs
+      - name: stub requests
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json,os
+          p=os.environ['RUNNER_TEMP']+'/requests.jsonl'
+          for l in open(p):
+              d=json.loads(l); print('STUBREQ', d['kind'], '| input chars:', len(d['input']), '| has [OPEN]:', '[OPEN]' in d['input'])
+          PY
