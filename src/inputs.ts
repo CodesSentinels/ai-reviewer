@@ -22,6 +22,7 @@ export class Inputs {
   crossFileContext: string // 跨文件引用上下文（依赖分析生成，注入到审查提示词）
   analysisChain: string // 分析链（逐步推理过程，由轻量模型生成，注入到审查提示词）
   lintContext: string // 静态分析工具结果上下文（Linter/SAST 适配器生成，注入到审查提示词）
+  pathInstructions: string // 命中当前文件路径的额外审查指令（path_instructions 配置，已拼成列表文本）
 
   constructor(
     systemMessage = '',
@@ -38,7 +39,8 @@ export class Inputs {
     comment = 'no comment provided',
     crossFileContext = '',
     analysisChain = '',
-    lintContext = ''
+    lintContext = '',
+    pathInstructions = ''
   ) {
     this.systemMessage = systemMessage
     this.title = title
@@ -55,6 +57,7 @@ export class Inputs {
     this.crossFileContext = crossFileContext
     this.analysisChain = analysisChain
     this.lintContext = lintContext
+    this.pathInstructions = pathInstructions
   }
 
   /**
@@ -77,7 +80,8 @@ export class Inputs {
       this.comment,
       this.crossFileContext,
       this.analysisChain,
-      this.lintContext
+      this.lintContext,
+      this.pathInstructions
     )
   }
 

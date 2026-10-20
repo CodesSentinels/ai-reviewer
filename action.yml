@@ -188,6 +188,14 @@ inputs:
       !**/*.min.js.css
       !**/*.tfstate
       !**/*.tfstate.backup
+  path_instructions:
+    required: false
+    description: |
+      Extra review instructions per path, one rule per line in the form
+      "<glob>: <instruction>", e.g. "src/api/**: validate every request parameter and check auth".
+      A file that matches several rules gets all of them. Lines starting with "#" are comments.
+      Matching uses minimatch, the same as path_filters.
+    default: ''
   disable_review:
     required: false
     description: 'Only provide the summary and skip the code review.'

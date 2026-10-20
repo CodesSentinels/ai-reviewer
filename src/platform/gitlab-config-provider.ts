@@ -159,7 +159,8 @@ export class GitLabConfigProvider implements ConfigProvider {
       // （CFG-002），没有产出报告的低权限 lint job，因此这里固定为空。
       '',
       envIntStr('AI_REVIEWER_WARN_FILES', CONFIG_DEFAULTS.warnFiles),
-      envBool('AI_REVIEWER_INITIAL_PR_SUMMARY_ONLY') ?? CONFIG_DEFAULTS.initialPrSummaryOnly
+      envBool('AI_REVIEWER_INITIAL_PR_SUMMARY_ONLY') ?? CONFIG_DEFAULTS.initialPrSummaryOnly,
+      envMultiline('AI_REVIEWER_PATH_INSTRUCTIONS') ?? []
     )
 
     return this.cachedOptions
@@ -214,6 +215,7 @@ export class GitLabConfigProvider implements ConfigProvider {
     log(`  review_simple_changes: ${opts.reviewSimpleChanges}`)
     log(`  review_comment_lgtm: ${opts.reviewCommentLGTM}`)
     log(`  path_filters: ${opts.pathFilters}`)
+    log(`  path_instructions: ${opts.pathInstructions}`)
     // 只标注是否自定义，不打印原文：默认 prompt 面向双平台书写，原文进 job 日志没有排障价值
     log(
       `  system_message: ${envStr('AI_REVIEWER_SYSTEM_MESSAGE') != null ? '(custom)' : '(default)'}`
