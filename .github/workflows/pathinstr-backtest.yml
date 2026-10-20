@@ -1,0 +1,42 @@
+# 临时回测：用假 OpenAI 服务验证 path_instructions 在 GitHub 运行时的真实行为。测完即删，勿合入。
+name: pathinstr backtest
+on:
+  pull_request:
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26 # v3
+      - name: start stub
+        run: |
+          node .github/backtest/openai-stub.cjs "$RUNNER_TEMP/requests.jsonl" &
+          sleep 2
+      - uses: ./
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: stub-key
+        with:
+          debug: true
+          openai_base_url: http://127.0.0.1:18080/v1
+          enable_shell: false
+          enable_web_search: false
+          enable_lint_tools: false
+          disable_release_notes: true
+          review_simple_changes: true
+          path_filters: |
+            pathinstr-probe/**
+            other-probe/**
+          path_instructions: |
+            **/pathinstr-probe/**: PATHINSTR-PROBE-OK
+      - name: verify
+        run: |
+          f="$RUNNER_TEMP/requests.jsonl"
+          echo "requests captured: $(wc -l < "$f")"
+          hit=$(grep -c 'Changes made to `pathinstr-probe/average.js`' "$f" || true)
+          bad=$(grep 'Changes made to `other-probe/total.js`' "$f" | grep -c 'PATHINSTR-PROBE-OK' || true)
+          good=$(grep 'Changes made to `pathinstr-probe/average.js`' "$f" | grep -c 'PATHINSTR-PROBE-OK' || true)
+          echo "review requests for matching file: $hit, with instruction: $good; non-matching file with instruction: $bad"
+          [ "$hit" -ge 1 ] && [ "$good" -eq "$hit" ] && [ "$bad" -eq 0 ] && echo "BACKTEST PASS" || { echo "BACKTEST FAIL"; exit 1; }
