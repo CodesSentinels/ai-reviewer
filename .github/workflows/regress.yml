@@ -1,0 +1,29 @@
+# 整体回测（临时）：假 OpenAI 服务 + 真实 GitHub 运行时。回测结束即删，勿合入。
+name: regress
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+concurrency:
+  group: regress-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+jobs:
+  regress:
+    runs-on: ubuntu-latest
+    if: github.event.action != 'labeled' || startsWith(github.event.label.name, 'replay-')
+    steps:
+      - uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26 # v3
+        with:
+          fetch-depth: 0
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: start stub
+        run: |
+          node .github/regress/stub.cjs "$RUNNER_TEMP/requests.jsonl" .github/regress/bugs.json &
+          sleep 1
+      - name: run
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node .github/regress/run.cjs
