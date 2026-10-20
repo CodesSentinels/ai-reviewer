@@ -26,7 +26,10 @@ http
       } else if (m) {
         kind = 'review'
         const file = m[1]
-        const open = /\[OPEN\]/.test(input)
+        // 提示词的固定说明里也出现 [OPEN]，只看真正的评论链段（取最后一个 ---comment_chains---）
+        const ci = input.lastIndexOf('---comment_chains---')
+        const chain = ci >= 0 ? input.slice(ci).split('---end_change_section---')[0] : ''
+        const open = /\[OPEN\]/.test(chain)
         if (bugs[file] && !open) {
           const [s, e] = bugs[file]
           text = `${s}-${e}:\n[severity: major]\nSTUB-BUG in ${file}\n---`
