@@ -85,6 +85,22 @@ describe('renderReviewFileDiff 的 path_instructions 段', () => {
     expect(out).not.toContain('$path_instructions_section')
   })
 
+  test('没有指令时输出与引入该功能之前逐字相同（不多出空行）', () => {
+    const out = prompts.renderReviewFileDiff(base())
+    // 引入 path_instructions 之前的形态：跨文件引用段与 Analysis chain 段之间隔两个空行
+    expect(out).toContain('No cross-file references detected.\n\n\n## Analysis chain')
+  })
+
+  test('有指令时指令段插在跨文件引用段之后，其后的段落间距与没有指令时一致', () => {
+    const ins = base()
+    ins.pathInstructions = '- a'
+    const out = prompts.renderReviewFileDiff(ins)
+    expect(out).toContain(
+      'No cross-file references detected.\n\n## Project-specific review instructions for this file\n'
+    )
+    expect(out).toContain('- a\n\n\n## Analysis chain')
+  })
+
   test('指令里的 $& 等字符按字面输出', () => {
     const ins = base()
     ins.pathInstructions = "- 价格用 `$&` 和 $' 表示"
