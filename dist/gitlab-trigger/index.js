@@ -54118,6 +54118,7 @@ class TokenLimits {
  * 包含三个核心类：
  * - Options: 全局配置类，读取并存储所有 GitHub Action 输入参数
  * - PathFilter: 文件路径过滤器，根据 glob 规则决定哪些文件需要审查
+ * - PathInstructions: 按路径追加审查指令，让不同目录的文件带上各自的审查要求
  * - OpenAIOptions: OpenAI 模型配置，关联模型名称与其 token 限制
  */
 
@@ -54137,6 +54138,7 @@ class Options {
     reviewSimpleChanges; // 是否审查简单变更（false 时启用分类筛选）
     reviewCommentLGTM; // 是否保留 LGTM 评论
     pathFilters; // 文件路径过滤规则
+    pathInstructions; // 按路径追加的审查指令
     systemMessage; // AI 系统消息（定义角色和行为）
     openaiLightModel; // 轻量模型名称（用于摘要）
     openaiHeavyModel; // 重量模型名称（用于代码审查）
@@ -54201,7 +54203,7 @@ class Options {
      * 未设置时由 review.ts 按平台决定（GitLab 开，因为每次写入都会再触发一条 pipeline）。
      */
     minimizeBotWrites;
-    constructor(debug, disableReview, disableReleaseNotes, maxFiles = '0', reviewSimpleChanges = false, reviewCommentLGTM = false, pathFilters = null, systemMessage = '', openaiLightModel = 'gpt-5.4-nano', openaiHeavyModel = 'gpt-5.4-mini', openaiModelTemperature = '0.0', openaiRetries = '3', openaiTimeoutMS = '120000', openaiConcurrencyLimit = '6', githubConcurrencyLimit = '6', apiBaseUrl = 'https://api.openai.com/v1', language = 'en-US', enableDependencyAnalysis = true, maxDependencyFiles = '50', enableWebSearch = true, enableShell = true, enableLintTools = true, toolEnableOverrides = {}, toolVersionOverrides = {}, semgrepConfig = 'p/default', commandAckReaction = 'eyes', maxReviewComments = '20', debugResolveInjectFailures = '0', botIcon = '🤖', botName = 'AI Reviewer', botLogin = '', lintReportPath = '', warnFiles = '50', initialPrSummaryOnly = true) {
+    constructor(debug, disableReview, disableReleaseNotes, maxFiles = '0', reviewSimpleChanges = false, reviewCommentLGTM = false, pathFilters = null, systemMessage = '', openaiLightModel = 'gpt-5.4-nano', openaiHeavyModel = 'gpt-5.4-mini', openaiModelTemperature = '0.0', openaiRetries = '3', openaiTimeoutMS = '120000', openaiConcurrencyLimit = '6', githubConcurrencyLimit = '6', apiBaseUrl = 'https://api.openai.com/v1', language = 'en-US', enableDependencyAnalysis = true, maxDependencyFiles = '50', enableWebSearch = true, enableShell = true, enableLintTools = true, toolEnableOverrides = {}, toolVersionOverrides = {}, semgrepConfig = 'p/default', commandAckReaction = 'eyes', maxReviewComments = '20', debugResolveInjectFailures = '0', botIcon = '🤖', botName = 'AI Reviewer', botLogin = '', lintReportPath = '', warnFiles = '50', initialPrSummaryOnly = true, pathInstructions = null) {
         this.debug = debug;
         this.disableReview = disableReview;
         this.disableReleaseNotes = disableReleaseNotes;
@@ -54209,6 +54211,7 @@ class Options {
         this.reviewSimpleChanges = reviewSimpleChanges;
         this.reviewCommentLGTM = reviewCommentLGTM;
         this.pathFilters = new PathFilter(pathFilters);
+        this.pathInstructions = new PathInstructions(pathInstructions);
         this.systemMessage = systemMessage;
         this.openaiLightModel = openaiLightModel;
         this.openaiHeavyModel = openaiHeavyModel;
@@ -54250,6 +54253,7 @@ class Options {
         (0,actions_log.info)(`review_simple_changes: ${this.reviewSimpleChanges}`);
         (0,actions_log.info)(`review_comment_lgtm: ${this.reviewCommentLGTM}`);
         (0,actions_log.info)(`path_filters: ${this.pathFilters}`);
+        (0,actions_log.info)(`path_instructions: ${this.pathInstructions}`);
         (0,actions_log.info)(`system_message: ${this.systemMessage}`);
         (0,actions_log.info)(`openai_light_model: ${this.openaiLightModel}`);
         (0,actions_log.info)(`openai_heavy_model: ${this.openaiHeavyModel}`);
@@ -54351,6 +54355,59 @@ class PathFilter {
         if (this.rules.length === 0)
             return '(none)';
         return this.rules.map(([rule, exclude]) => (exclude ? `!${rule}` : rule)).join(', ');
+    }
+}
+/**
+ * PathInstructions 类 - 按路径追加审查指令
+ *
+ * 规则格式（每行一条）：`<glob>: <指令>`，例如
+ *   `src/api/**: 所有接口必须校验入参，并检查鉴权`
+ *   `__tests__/**: 只关注断言是否真的覆盖了被测行为`
+ * - 以第一个 ": "（冒号加空格）切分 glob 与指令，指令里可以再出现冒号
+ * - 以 "#" 开头的行是注释，空行忽略
+ * - 格式不对的行丢弃并给 warning，不让一行写错拖垮整次审查
+ * - 一个文件命中多条规则时，按配置顺序全部生效
+ */
+class PathInstructions {
+    /** 单个文件最多注入的指令字符数，防止配置过长挤占 diff 的 token 预算 */
+    static MAX_CHARS_PER_FILE = 4000;
+    rules = [];
+    constructor(lines = null) {
+        for (const raw of lines ?? []) {
+            const line = raw?.trim();
+            if (!line || line.startsWith('#'))
+                continue;
+            const sep = line.indexOf(': ');
+            const glob = sep > 0 ? line.substring(0, sep).trim() : '';
+            const text = sep > 0 ? line.substring(sep + 2).trim() : '';
+            if (!glob || !text) {
+                (0,actions_log.warning)(`path_instructions: ignored malformed line (expected "<glob>: <instruction>"): ${line}`);
+                continue;
+            }
+            this.rules.push([glob, text]);
+        }
+    }
+    /** 返回命中该路径的全部指令（按配置顺序），总长度超过上限时截断 */
+    match(path) {
+        const matched = [];
+        let used = 0;
+        for (const [glob, text] of this.rules) {
+            if (!minimatch(path, glob))
+                continue;
+            if (used + text.length > PathInstructions.MAX_CHARS_PER_FILE) {
+                (0,actions_log.warning)(`path_instructions: instructions for ${path} exceed ${PathInstructions.MAX_CHARS_PER_FILE} chars, rest dropped`);
+                break;
+            }
+            matched.push(text);
+            used += text.length;
+        }
+        return matched;
+    }
+    /** 日志展示：只列出 glob 和规则条数，避免把整段指令刷进日志 */
+    toString() {
+        if (this.rules.length === 0)
+            return '(none)';
+        return `${this.rules.length} rule(s): ${this.rules.map(([glob]) => glob).join(', ')}`;
     }
 }
 /**
@@ -54492,7 +54549,7 @@ class GitLabConfigProvider {
         toolEnableOverrides, toolVersionOverrides, envStr('AI_REVIEWER_SEMGREP_CONFIG') ?? CONFIG_DEFAULTS.semgrepConfig, envStr('AI_REVIEWER_COMMAND_ACK_REACTION') ?? CONFIG_DEFAULTS.commandAckReaction, envIntStr('AI_REVIEWER_MAX_REVIEW_COMMENTS', CONFIG_DEFAULTS.maxReviewComments), envIntStr('AI_REVIEWER_DEBUG_RESOLVE_INJECT_FAILURES', CONFIG_DEFAULTS.debugResolveInjectFailures), envStr('AI_REVIEWER_BOT_ICON') ?? CONFIG_DEFAULTS.botIcon, envStr('AI_REVIEWER_BOT_NAME') ?? CONFIG_DEFAULTS.botName, configuredBotGitLabLogin(), 
         // SEC-002 的双 job 方案目前只落在 GitHub；GitLab 侧 trigger 强制关闭 lint
         // （CFG-002），没有产出报告的低权限 lint job，因此这里固定为空。
-        '', envIntStr('AI_REVIEWER_WARN_FILES', CONFIG_DEFAULTS.warnFiles), envBool('AI_REVIEWER_INITIAL_PR_SUMMARY_ONLY') ?? CONFIG_DEFAULTS.initialPrSummaryOnly);
+        '', envIntStr('AI_REVIEWER_WARN_FILES', CONFIG_DEFAULTS.warnFiles), envBool('AI_REVIEWER_INITIAL_PR_SUMMARY_ONLY') ?? CONFIG_DEFAULTS.initialPrSummaryOnly, envMultiline('AI_REVIEWER_PATH_INSTRUCTIONS') ?? []);
         return this.cachedOptions;
     }
     getPromptConfig() {
@@ -54536,6 +54593,7 @@ class GitLabConfigProvider {
         log(`  review_simple_changes: ${opts.reviewSimpleChanges}`);
         log(`  review_comment_lgtm: ${opts.reviewCommentLGTM}`);
         log(`  path_filters: ${opts.pathFilters}`);
+        log(`  path_instructions: ${opts.pathInstructions}`);
         // 只标注是否自定义，不打印原文：默认 prompt 面向双平台书写，原文进 job 日志没有排障价值
         log(`  system_message: ${envStr('AI_REVIEWER_SYSTEM_MESSAGE') != null ? '(custom)' : '(default)'}`);
         log(`  openai_light_model: ${opts.openaiLightModel}`);
@@ -61147,7 +61205,8 @@ class Inputs {
     crossFileContext; // 跨文件引用上下文（依赖分析生成，注入到审查提示词）
     analysisChain; // 分析链（逐步推理过程，由轻量模型生成，注入到审查提示词）
     lintContext; // 静态分析工具结果上下文（Linter/SAST 适配器生成，注入到审查提示词）
-    constructor(systemMessage = '', title = 'no title provided', description = 'no description provided', rawSummary = '', shortSummary = '', filename = '', fileContent = 'file contents cannot be provided', fileDiff = 'file diff cannot be provided', patches = '', diff = 'no diff', commentChain = 'no other comments on this patch', comment = 'no comment provided', crossFileContext = '', analysisChain = '', lintContext = '') {
+    pathInstructions; // 命中当前文件路径的额外审查指令（path_instructions 配置，已拼成列表文本）
+    constructor(systemMessage = '', title = 'no title provided', description = 'no description provided', rawSummary = '', shortSummary = '', filename = '', fileContent = 'file contents cannot be provided', fileDiff = 'file diff cannot be provided', patches = '', diff = 'no diff', commentChain = 'no other comments on this patch', comment = 'no comment provided', crossFileContext = '', analysisChain = '', lintContext = '', pathInstructions = '') {
         this.systemMessage = systemMessage;
         this.title = title;
         this.description = description;
@@ -61163,13 +61222,14 @@ class Inputs {
         this.crossFileContext = crossFileContext;
         this.analysisChain = analysisChain;
         this.lintContext = lintContext;
+        this.pathInstructions = pathInstructions;
     }
     /**
      * 创建当前对象的深拷贝
      * 用于并行处理多个文件时，每个任务持有独立的 Inputs 副本
      */
     clone() {
-        return new Inputs(this.systemMessage, this.title, this.description, this.rawSummary, this.shortSummary, this.filename, this.fileContent, this.fileDiff, this.patches, this.diff, this.commentChain, this.comment, this.crossFileContext, this.analysisChain, this.lintContext);
+        return new Inputs(this.systemMessage, this.title, this.description, this.rawSummary, this.shortSummary, this.filename, this.fileContent, this.fileDiff, this.patches, this.diff, this.commentChain, this.comment, this.crossFileContext, this.analysisChain, this.lintContext, this.pathInstructions);
     }
     /**
      * 渲染提示词模板：将模板中的 $variable 占位符替换为实际值
@@ -62820,6 +62880,12 @@ ${summariesFailed.length > 0
             getLogger().info(`reviewing ${filename}`);
             const ins = inputs.clone();
             ins.filename = filename;
+            // 注入按路径配置的额外审查指令
+            const pathRules = options.pathInstructions.match(filename);
+            if (pathRules.length > 0) {
+                ins.pathInstructions = pathRules.map(r => `- ${r}`).join('\n');
+                getLogger().info(`injected ${pathRules.length} path instruction(s) for ${filename}`);
+            }
             // 注入静态分析工具结果（仅当前文件相关的 finding）
             if (lintReport != null) {
                 const lintCtx = formatLintContextForFile(filename, lintReport);
@@ -64588,6 +64654,7 @@ $short_summary
 
 $cross_file_context
 
+$path_instructions_section
 $lint_section
 ## Analysis chain (pre-review reasoning)
 
@@ -64998,6 +65065,17 @@ $lint_context
         let prompt = this.reviewFileDiff
             .replace('$investigation_section', buildInvestigationSection(this.tools))
             .replace('$web_search_policy', buildWebSearchPolicy(this.tools));
+        // 用函数式替换，避免指令文本里的 `$&` 之类被 String.replace 当作特殊替换串
+        const pathInstructions = inputs.pathInstructions.trim();
+        prompt = prompt.replace('$path_instructions_section', () => pathInstructions.length > 0
+            ? `## Project-specific review instructions for this file
+
+The repository owner configured the following instructions for files matching this path. Apply them in addition to the general review rules above; they never override the severity rules or the output format.
+
+${pathInstructions}
+
+`
+            : '');
         if (hasLintFindings) {
             prompt = prompt.replace('$lint_section', this.lintSection);
             prompt = prompt.replace('$lint_mandatory_instruction', this.lintMandatoryInstruction);
