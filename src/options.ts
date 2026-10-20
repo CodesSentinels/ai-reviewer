@@ -4,9 +4,10 @@
  * 包含三个核心类：
  * - Options: 全局配置类，读取并存储所有 GitHub Action 输入参数
  * - PathFilter: 文件路径过滤器，根据 glob 规则决定哪些文件需要审查
+ * - PathInstructions: 按路径追加审查指令，让不同目录的文件带上各自的审查要求
  * - OpenAIOptions: OpenAI 模型配置，关联模型名称与其 token 限制
  */
-import {info} from './actions-log'
+import {info, warning} from './actions-log'
 import {minimatch} from 'minimatch'
 import {TokenLimits} from './limits'
 
@@ -24,6 +25,7 @@ export class Options {
   reviewSimpleChanges: boolean // 是否审查简单变更（false 时启用分类筛选）
   reviewCommentLGTM: boolean // 是否保留 LGTM 评论
   pathFilters: PathFilter // 文件路径过滤规则
+  pathInstructions: PathInstructions // 按路径追加的审查指令
   systemMessage: string // AI 系统消息（定义角色和行为）
   openaiLightModel: string // 轻量模型名称（用于摘要）
   openaiHeavyModel: string // 重量模型名称（用于代码审查）
@@ -123,7 +125,8 @@ export class Options {
     botLogin = '',
     lintReportPath = '',
     warnFiles = '50',
-    initialPrSummaryOnly = true
+    initialPrSummaryOnly = true,
+    pathInstructions: string[] | null = null
   ) {
     this.debug = debug
     this.disableReview = disableReview
@@ -132,6 +135,7 @@ export class Options {
     this.reviewSimpleChanges = reviewSimpleChanges
     this.reviewCommentLGTM = reviewCommentLGTM
     this.pathFilters = new PathFilter(pathFilters)
+    this.pathInstructions = new PathInstructions(pathInstructions)
     this.systemMessage = systemMessage
     this.openaiLightModel = openaiLightModel
     this.openaiHeavyModel = openaiHeavyModel
@@ -174,6 +178,7 @@ export class Options {
     info(`review_simple_changes: ${this.reviewSimpleChanges}`)
     info(`review_comment_lgtm: ${this.reviewCommentLGTM}`)
     info(`path_filters: ${this.pathFilters}`)
+    info(`path_instructions: ${this.pathInstructions}`)
     info(`system_message: ${this.systemMessage}`)
     info(`openai_light_model: ${this.openaiLightModel}`)
     info(`openai_heavy_model: ${this.openaiHeavyModel}`)
@@ -280,6 +285,65 @@ export class PathFilter {
   toString(): string {
     if (this.rules.length === 0) return '(none)'
     return this.rules.map(([rule, exclude]) => (exclude ? `!${rule}` : rule)).join(', ')
+  }
+}
+
+/**
+ * PathInstructions 类 - 按路径追加审查指令
+ *
+ * 规则格式（每行一条）：`<glob>: <指令>`，例如
+ *   `src/api/**: 所有接口必须校验入参，并检查鉴权`
+ *   `__tests__/**: 只关注断言是否真的覆盖了被测行为`
+ * - 以第一个 ": "（冒号加空格）切分 glob 与指令，指令里可以再出现冒号
+ * - 以 "#" 开头的行是注释，空行忽略
+ * - 格式不对的行丢弃并给 warning，不让一行写错拖垮整次审查
+ * - 一个文件命中多条规则时，按配置顺序全部生效
+ */
+export class PathInstructions {
+  /** 单个文件最多注入的指令字符数，防止配置过长挤占 diff 的 token 预算 */
+  static readonly MAX_CHARS_PER_FILE = 4000
+
+  private readonly rules: Array<[string /* glob */, string /* 指令 */]> = []
+
+  constructor(lines: string[] | null = null) {
+    for (const raw of lines ?? []) {
+      const line = raw?.trim()
+      if (!line || line.startsWith('#')) continue
+      const sep = line.indexOf(': ')
+      const glob = sep > 0 ? line.substring(0, sep).trim() : ''
+      const text = sep > 0 ? line.substring(sep + 2).trim() : ''
+      if (!glob || !text) {
+        warning(
+          `path_instructions: ignored malformed line (expected "<glob>: <instruction>"): ${line}`
+        )
+        continue
+      }
+      this.rules.push([glob, text])
+    }
+  }
+
+  /** 返回命中该路径的全部指令（按配置顺序），总长度超过上限时截断 */
+  match(path: string): string[] {
+    const matched: string[] = []
+    let used = 0
+    for (const [glob, text] of this.rules) {
+      if (!minimatch(path, glob)) continue
+      if (used + text.length > PathInstructions.MAX_CHARS_PER_FILE) {
+        warning(
+          `path_instructions: instructions for ${path} exceed ${PathInstructions.MAX_CHARS_PER_FILE} chars, rest dropped`
+        )
+        break
+      }
+      matched.push(text)
+      used += text.length
+    }
+    return matched
+  }
+
+  /** 日志展示：只列出 glob 和规则条数，避免把整段指令刷进日志 */
+  toString(): string {
+    if (this.rules.length === 0) return '(none)'
+    return `${this.rules.length} rule(s): ${this.rules.map(([glob]) => glob).join(', ')}`
   }
 }
 

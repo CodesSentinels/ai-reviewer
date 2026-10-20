@@ -86,7 +86,8 @@ export class GitHubConfigProvider implements ConfigProvider {
       getInput('bot_github_login'),
       getInput('lint_report_path'),
       validateIntStr(getInput('warn_files'), P, 'warn_files'),
-      getBooleanInput('initial_pr_summary_only')
+      getBooleanInput('initial_pr_summary_only'),
+      getMultilineInput('path_instructions')
     )
 
     return this.cachedOptions
@@ -135,6 +136,7 @@ export class GitHubConfigProvider implements ConfigProvider {
     log(`  review_simple_changes: ${opts.reviewSimpleChanges}`)
     log(`  review_comment_lgtm: ${opts.reviewCommentLGTM}`)
     log(`  path_filters: ${opts.pathFilters}`)
+    log(`  path_instructions: ${opts.pathInstructions}`)
     log(`  system_message: ${opts.systemMessage}`)
     log(`  openai_light_model: ${opts.openaiLightModel}`)
     log(`  openai_heavy_model: ${opts.openaiHeavyModel}`)

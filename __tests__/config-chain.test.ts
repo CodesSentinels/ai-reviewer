@@ -476,6 +476,15 @@ const CONFIG_MATRIX: MatrixEntry[] = [
     expected: false
   },
   {
+    field: 'pathInstructions',
+    input: 'path_instructions',
+    gitlabEnv: 'AI_REVIEWER_PATH_INSTRUCTIONS',
+    value: 'src/api/**: 校验入参',
+    // PathInstructions 是对象，比较它对同一路径命中的指令
+    read: o => o.pathInstructions.match('src/api/user.ts'),
+    expected: ['校验入参']
+  },
+  {
     field: 'systemMessage',
     input: 'system_message',
     gitlabEnv: 'AI_REVIEWER_SYSTEM_MESSAGE',

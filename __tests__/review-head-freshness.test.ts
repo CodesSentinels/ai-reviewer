@@ -106,6 +106,7 @@ function makeOptions(over: Record<string, any> = {}): any {
     reviewSimpleChanges: true,
     reviewCommentLGTM: false,
     pathFilters: {check: () => true},
+    pathInstructions: {match: () => []},
     checkPath: () => true,
     systemMessage: '',
     openaiLightModel: 'l',

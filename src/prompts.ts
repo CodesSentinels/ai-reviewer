@@ -265,6 +265,7 @@ $short_summary
 
 $cross_file_context
 
+$path_instructions_section
 $lint_section
 ## Analysis chain (pre-review reasoning)
 
@@ -694,6 +695,19 @@ $lint_context
     let prompt = this.reviewFileDiff
       .replace('$investigation_section', buildInvestigationSection(this.tools))
       .replace('$web_search_policy', buildWebSearchPolicy(this.tools))
+    // 用函数式替换，避免指令文本里的 `$&` 之类被 String.replace 当作特殊替换串
+    const pathInstructions = inputs.pathInstructions.trim()
+    prompt = prompt.replace('$path_instructions_section', () =>
+      pathInstructions.length > 0
+        ? `## Project-specific review instructions for this file
+
+The repository owner configured the following instructions for files matching this path. Apply them in addition to the general review rules above; they never override the severity rules or the output format.
+
+${pathInstructions}
+
+`
+        : ''
+    )
     if (hasLintFindings) {
       prompt = prompt.replace('$lint_section', this.lintSection)
       prompt = prompt.replace('$lint_mandatory_instruction', this.lintMandatoryInstruction)

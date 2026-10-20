@@ -1196,6 +1196,13 @@ ${
       const ins: Inputs = inputs.clone()
       ins.filename = filename
 
+      // 注入按路径配置的额外审查指令
+      const pathRules = options.pathInstructions.match(filename)
+      if (pathRules.length > 0) {
+        ins.pathInstructions = pathRules.map(r => `- ${r}`).join('\n')
+        getLogger().info(`injected ${pathRules.length} path instruction(s) for ${filename}`)
+      }
+
       // 注入静态分析工具结果（仅当前文件相关的 finding）
       if (lintReport != null) {
         const lintCtx = formatLintContextForFile(filename, lintReport)
