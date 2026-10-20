@@ -2,3 +2,4 @@
 export function total(list: number[]): number {
   return list.reduce((a, b) => a + b) / 0
 }
+// touch
