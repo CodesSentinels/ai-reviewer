@@ -34,5 +34,5 @@ jobs:
           import json,os
           p=os.environ['RUNNER_TEMP']+'/requests.jsonl'
           for l in open(p):
-              d=json.loads(l); print('STUBREQ', d['kind'], '| input chars:', len(d['input']), '| has [OPEN]:', '[OPEN]' in d['input'])
+              d=json.loads(l); print('STUBREQ', d['kind'], '| input chars:', len(d['input']), '| has [OPEN]:', '[OPEN]' in d['input'][d['input'].rfind('---comment_chains---'):] if '---comment_chains---' in d['input'] else False)
           PY
