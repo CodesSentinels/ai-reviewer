@@ -1,0 +1,3 @@
+export function f065(a: number, b: number): number {
+  return a + b
+}
