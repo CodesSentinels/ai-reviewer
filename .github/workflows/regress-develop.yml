@@ -1,0 +1,32 @@
+# 回测专用：用同仓库 pull_request 事件运行 PR 里（即 develop）的 Action 代码。
+# 仅限本仓库分支上的 PR；不合入。
+name: regress-develop
+on:
+  pull_request:
+    types: [opened, synchronize]
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  review:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26 # v3
+        with:
+          persist-credentials: false
+      - run: echo "action SOURCE_SHA=$(cat dist/SOURCE_SHA)"
+      - uses: ./
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        with:
+          debug: true
+          bot_github_login: github-actions[bot]
+          review_comment_lgtm: false
+          openai_heavy_model: gpt-5.4-mini
+          enable_shell: false
+          enable_lint_tools: false
+          path_filters: |
+            !dist/**
+            !**/*.lock
