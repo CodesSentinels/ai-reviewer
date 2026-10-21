@@ -253,3 +253,9 @@ jobs:
           path_filters: |
             !dist/**
             !**/*.lock
+
+  # A 模块回测探针：如果这个 job 出现在运行里，说明 PR head 的 workflow 被执行了
+  a-module-probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo A-MODULE-PROBE-HEAD-WORKFLOW-EXECUTED
