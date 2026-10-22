@@ -633,7 +633,7 @@ const INTENTIONALLY_DIVERGENT: Record<string, string> = {
   lintReportPath: 'SEC-002：只在 GitHub 低权限 lint job 链路上有值',
   lightTokenLimits: '由模型名推导，不是独立配置项',
   heavyTokenLimits: '同上',
-  minimizeBotWrites: '不是配置项：未设置时 review.ts 按平台决定（GitLab 省掉可省的写入）'
+  minimizeBotWrites: '不是配置项：未设置时两个平台都不省写入；只有调用方显式传 true 才省'
 }
 
 /**

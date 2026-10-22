@@ -258,10 +258,10 @@ const runCodeReview = async (
 
   const commenter: Commenter = new Commenter()
   const fromCommand = runOptions.source === 'command'
-  // GitLab 上 bot 的每次写入（评论、改 MR 描述）都会经 webhook 再触发一条 pipeline。
-  // 这里把可以省掉的写入省掉：不写「审查中」横幅，发布说明并入摘要评论而不改描述。
-  // GitHub 上写入不会触发新的运行，保持原有体验。
-  const minimizeWrites = options.minimizeBotWrites ?? execCtx.platform === 'gitlab'
+  // 默认两个平台行为一致：先发「审查中」摘要（所以摘要总排在行级评论之前），
+  // 发布说明写进 PR/MR 描述。GitLab 上 bot 的每次写入都会经 webhook 再触发一条
+  // pipeline，想省掉这两次写入的调用方显式传 minimizeBotWrites: true。
+  const minimizeWrites = options.minimizeBotWrites === true
   const reviewMode = runOptions.mode ?? 'incremental'
 
   // 初始化并发控制器：分别限制 OpenAI 和 GitHub API 的并发数
