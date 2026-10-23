@@ -493,6 +493,20 @@ describe('publish-gitlab-com.yml：develop 以产物方式发布到 gitlab.com',
     }
   })
 
+  test('测试单独成步、不带环境变量，且排在发布之前；发布步骤用 --skip-tests', () => {
+    const steps = stepsOf(jobsOf(wf.doc)[0][1])
+    const testIdx = steps.findIndex((s: any) => /npm test/.test(String(s.run ?? '')))
+    const publishIdx = steps.findIndex((s: any) =>
+      /publish-private-gitlab\.mjs/.test(String(s.run ?? ''))
+    )
+    expect(testIdx).toBeGreaterThanOrEqual(0)
+    expect(testIdx).toBeLessThan(publishIdx)
+    // 发布目标主机名（gitlab.com）出现在 PRIVATE_GITLAB_URL 里时，private-gitlab-ci-config
+    // 会要求它不出现在公开文件里；测试步骤不能继承这个变量
+    expect(steps[testIdx].env).toBeUndefined()
+    expect(String(steps[publishIdx].run)).toContain('--skip-tests')
+  })
+
   test('发布之后回读 VERSION.json，比对记录的 revision 与本次提交', () => {
     const steps = stepsOf(jobsOf(wf.doc)[0][1])
     const publishIdx = steps.findIndex((s: any) =>
