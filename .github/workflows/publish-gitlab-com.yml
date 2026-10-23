@@ -51,13 +51,19 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # 测试单独跑，不带任何 PRIVATE_GITLAB_* 环境变量，也在拿到 token 的步骤之前：
+      # private-gitlab-ci-config 有一条测试在 PRIVATE_GITLAB_URL 存在时，要求该主机名不出现在公开文件里，
+      # 而发布步骤的目标恰好是 gitlab.com（第一次发布因此失败，见 #218）。
+      - name: Test
+        run: npm test -- --silent
+
       - name: Build and publish
         env:
           PRIVATE_GITLAB_URL: https://gitlab.com
           PRIVATE_GITLAB_PROJECT: CodesSentinels/ai-reviewer
           PRIVATE_GITLAB_BRANCH: develop
           PRIVATE_GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
-        run: node scripts/publish-private-gitlab.mjs --profile gitlab-com
+        run: node scripts/publish-private-gitlab.mjs --profile gitlab-com --skip-tests
 
       # 发布器的提交成功不等于目标分支上的内容就是这次的：回读 VERSION.json，
       # 确认记录的源码 revision 等于本次触发的提交。
