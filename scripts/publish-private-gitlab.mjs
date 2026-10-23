@@ -2,6 +2,11 @@
 // 发布 GitLab 审查 bundle 到私有云产物仓库。在能同时访问源码和私有云的内网机器上运行。
 //
 //   npm run publish:private-gitlab -- --tag v1.2.3 [--dry-run] [--allow-overwrite] [--skip-tests]
+//   npm run publish:private-gitlab -- --profile gitlab-com [--dry-run] [--allow-overwrite] [--skip-tests]
+//
+// --profile gitlab-com 给 GitHub Actions 的「每次 push develop 同步到 gitlab.com」用：
+// 不要求 tag，版本号取 v0.0.0-develop.<短 SHA>，CI 模板与 README 用 deploy/gitlab-com/，
+// 且不做源码标识的泄露门禁。其余步骤（去注释编译、打包、SHA256SUMS、冒烟、Commits API 推送）完全相同。
 //
 // 私有云连接信息从环境变量或仓库根目录的 .private-gitlab.env（已 gitignore）读取：
 //   PRIVATE_GITLAB_URL      例如 https://gitlab.example.com
@@ -41,11 +46,19 @@ function git(...args) {
 
 // ---- 参数与配置
 const argv = process.argv.slice(2)
-const flags = new Set(argv.filter(a => a.startsWith('--') && a !== '--tag'))
+const flags = new Set(argv.filter(a => a.startsWith('--') && a !== '--tag' && a !== '--profile'))
 const tagIndex = argv.indexOf('--tag')
-const tag = tagIndex >= 0 ? argv[tagIndex + 1] : undefined
+const profileIndex = argv.indexOf('--profile')
+const profile = profileIndex >= 0 ? argv[profileIndex + 1] : 'private'
 for (const f of flags) {
   if (!['--dry-run', '--allow-overwrite', '--skip-tests'].includes(f)) die(`unknown option ${f}`)
+}
+if (!['private', 'gitlab-com'].includes(profile)) die(`unknown --profile ${profile}`)
+const publicProfile = profile === 'gitlab-com'
+let tag = tagIndex >= 0 ? argv[tagIndex + 1] : undefined
+if (publicProfile) {
+  if (tag != null) die('--profile gitlab-com derives the version from HEAD; do not pass --tag')
+  tag = `v0.0.0-develop.${git('rev-parse', '--short=7', 'HEAD')}`
 }
 if (tag == null || !TAG_PATTERN.test(tag)) die('--tag vX.Y.Z is required')
 
@@ -65,18 +78,22 @@ for (const key of ['PRIVATE_GITLAB_URL', 'PRIVATE_GITLAB_PROJECT', 'PRIVATE_GITL
 const commitTitle = process.env.PRIVATE_GITLAB_COMMIT_TITLE || fileEnv.PRIVATE_GITLAB_COMMIT_TITLE
 if (commitTitle) cfg.PRIVATE_GITLAB_COMMIT_TITLE = commitTitle
 
-// ---- 1. 工作区必须干净，且 HEAD 正是要发布的 tag
+// ---- 1. 工作区必须干净；private 还要求 HEAD 正是要发布的 tag
 step(`check worktree for ${tag}`)
 if (git('status', '--porcelain') !== '') die('worktree is not clean; commit or stash first')
-let tagCommit
-try {
-  tagCommit = git('rev-parse', `refs/tags/${tag}^{commit}`)
-} catch {
-  die(`tag ${tag} does not exist locally`)
-}
 const head = git('rev-parse', 'HEAD')
-if (tagCommit !== head) die(`HEAD (${head}) is not ${tag} (${tagCommit}); run: git checkout ${tag}`)
-console.log(`ok: HEAD is ${tag} (${head})`)
+if (publicProfile) {
+  console.log(`ok: publishing HEAD ${head} as ${tag}`)
+} else {
+  let tagCommit
+  try {
+    tagCommit = git('rev-parse', `refs/tags/${tag}^{commit}`)
+  } catch {
+    die(`tag ${tag} does not exist locally`)
+  }
+  if (tagCommit !== head) die(`HEAD (${head}) is not ${tag} (${tagCommit}); run: git checkout ${tag}`)
+  console.log(`ok: HEAD is ${tag} (${head})`)
+}
 
 rmSync(work, {recursive: true, force: true})
 
@@ -104,7 +121,7 @@ sh('npx', ['ncc', 'build', path.join(work, 'lib/private-gitlab-publish.js'), '-o
 // ---- 5. 组装
 step('assemble')
 const out = path.join(work, 'out')
-sh('node', ['scripts/assemble-gitlab-dist.mjs', '--root', root, '--out', out, '--bundle', bundle, '--tag', tag])
+sh('node', ['scripts/assemble-gitlab-dist.mjs', '--root', root, '--out', out, '--bundle', bundle, '--tag', tag, '--profile', profile])
 
 // ---- 6. 冒烟：去注释后的 bundle 能加载并走到已知的 fail-closed 分支
 step('smoke test assembled bundle')
