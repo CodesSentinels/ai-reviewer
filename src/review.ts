@@ -22,7 +22,6 @@ import {
   isOwnAuthor,
   stateMarker,
   commentReplyTag,
-  commentTag,
   rawSummaryEndTag,
   rawSummaryStartTag,
   shortSummaryEndTag,
@@ -1633,9 +1632,9 @@ ${
     ...(reviewsFailed.length > 0 ? [`${reviewsFailed.length} 个文件审查失败`] : [])
   ]
   if (incomplete.length > 0) {
+    const incompleteList = incomplete.map(d => `> - ${d}`).join('\n')
     summarizeComment +=
-      `\n\n> ⚠️ 本次审查不完整，共 ${incomplete.length} 项未能完成：\n>\n` +
-      incomplete.map(d => `> - ${d}`).join('\n') +
+      `\n\n> ⚠️ 本次审查不完整，共 ${incomplete.length} 项未能完成：\n>\n${incompleteList}` +
       '\n>\n> 已发布的部分仍然有效；重新触发审查可以重试失败的环节。\n'
   }
 
