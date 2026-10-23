@@ -49,12 +49,11 @@ beforeAll(() => {
   git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init')
   head = git('rev-parse', 'HEAD').trim()
 
-  mkdirSync(path.join(root, 'deploy/private-gitlab'), {recursive: true})
-  for (const f of ['gitlab-ci.yml', 'README.md']) {
-    copyFileSync(
-      path.join(REPO, 'deploy/private-gitlab', f),
-      path.join(root, 'deploy/private-gitlab', f)
-    )
+  for (const dir of ['deploy/private-gitlab', 'deploy/gitlab-com']) {
+    mkdirSync(path.join(root, dir), {recursive: true})
+    for (const f of ['gitlab-ci.yml', 'README.md']) {
+      copyFileSync(path.join(REPO, dir, f), path.join(root, dir, f))
+    }
   }
   mkdirSync(bundle)
   writeFileSync(path.join(bundle, 'index.js'), '// trigger\n')
@@ -140,5 +139,52 @@ describe('assemble-gitlab-dist.mjs', () => {
     } finally {
       rmSync(map)
     }
+  })
+
+  describe('--profile gitlab-com', () => {
+    test('产物布局与私有云一致，且 CI 模板不绑定自建 Runner 标签', () => {
+      expect(assemble('--tag', 'v0.0.0-develop.abc1234', '--profile', 'gitlab-com').status).toBe(0)
+      const files = listFsFiles(out)
+      expect(isClean(checkAgainstManifest(out, files))).toBe(true)
+      for (const f of REQUIRED_DIST_FILES) expect(files).toContain(f)
+      const ci = readFileSync(path.join(out, '.gitlab-ci.yml'), 'utf8')
+      expect(ci).toContain('ai_review_trigger')
+      expect(ci).not.toMatch(/^\s*tags:/m)
+      // 产物仓库没有 MR，也就没有 mr_verify
+      expect(ci).not.toContain('mr_verify')
+    })
+
+    test('默认（private）模板仍绑定 ai-reviewer 标签的 Runner', () => {
+      expect(assemble('--tag', 'v1.2.3').status).toBe(0)
+      expect(readFileSync(path.join(out, '.gitlab-ci.yml'), 'utf8')).toMatch(
+        /tags:\s*\[ai-reviewer\]/
+      )
+    })
+
+    test('不做源码标识的泄露门禁（目标就是源码所在组织自己的项目）', () => {
+      const index = path.join(bundle, 'index.js')
+      const original = readFileSync(index)
+      appendFileSync(index, '// CodesSentinels\n')
+      try {
+        expect(assemble('--tag', 'v0.0.0-develop.abc1234', '--profile', 'gitlab-com').status).toBe(
+          0
+        )
+        // 同一份内容在 private 下仍被拒
+        expect(assemble('--tag', 'v1.2.3').status).not.toBe(0)
+      } finally {
+        writeFileSync(index, original)
+      }
+    })
+
+    test('未知 profile → 拒绝', () => {
+      const res = assemble('--tag', 'v1.2.3', '--profile', 'nope')
+      expect(res.status).not.toBe(0)
+      expect(res.stderr).toMatch(/unknown --profile/)
+    })
+
+    test('gitlab-com 的 README 说明了这是自动写入的产物仓库', () => {
+      expect(assemble('--tag', 'v0.0.0-develop.abc1234', '--profile', 'gitlab-com').status).toBe(0)
+      expect(readFileSync(path.join(out, 'README.md'), 'utf8')).toMatch(/请勿手动修改/)
+    })
   })
 })

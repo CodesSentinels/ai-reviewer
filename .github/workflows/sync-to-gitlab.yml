@@ -5,17 +5,18 @@ name: Sync to GitLab
 permissions:
   contents: read
 
+# develop 不再走这里：gitlab.com 的 develop 是保护分支，不允许 force push，整体镜像自 10-16 起
+# 一直失败。develop 改由 publish-gitlab-com.yml 以「产物」方式追加提交。本 workflow 只管 main。
 on:
   push:
     branches:
       - main
-      - develop
   workflow_dispatch:
     inputs:
       branch:
-        description: 'Branch to sync to GitLab (must exist with the same name on both remotes)'
+        description: 'Branch to sync to GitLab (main only; develop is published by publish-gitlab-com.yml)'
         required: true
-        default: 'develop'
+        default: 'main'
 
 # SYNC-003：按目标分支分组，同一分支的旧同步在新一次触发后被取消，
 # 避免旧同步比新同步跑得慢、完成顺序颠倒导致新内容被旧内容覆盖。
@@ -38,10 +39,10 @@ jobs:
           SYNC_BRANCH: ${{ github.event.inputs.branch || github.ref_name }}
         run: |
           case "$SYNC_BRANCH" in
-            main|develop)
+            main)
               echo "ok: $SYNC_BRANCH is in sync allowlist" ;;
             *)
-              echo "REFUSED: '$SYNC_BRANCH' is not in the sync allowlist (main, develop)" >&2
+              echo "REFUSED: '$SYNC_BRANCH' is not in the sync allowlist (main)" >&2
               exit 1 ;;
           esac
 
@@ -65,8 +66,8 @@ jobs:
           # 因为当时 GitLab 侧确实存在独立提交（团队成员直接在 GitLab 开发），
           # 那个前提已经不再成立。
           #
-          # main 和 develop 都纳入自动触发；workflow_dispatch 的 branch 输入
-          # 仍可用于手动同步 main/develop（上面的白名单校验已限制取值范围）。
+          # 只同步 main；workflow_dispatch 的 branch 输入也只接受 main
+          # （上面的白名单校验已限制取值范围）。
           git push gitlab "HEAD:refs/heads/${SYNC_BRANCH}" --force
 
       # SYNC-004：git push 命令本身成功退出，不代表 GitLab 那端真的收到了这次

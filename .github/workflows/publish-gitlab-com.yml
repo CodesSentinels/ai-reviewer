@@ -1,0 +1,75 @@
+name: Publish to gitlab.com
+
+# GitHub develop 每次有新提交，就构建 GitLab 审查 bundle，并作为「产物」整体提交到
+# gitlab.com/CodesSentinels/ai-reviewer 的 develop。gitlab.com 上不再有源码，只有 bundle、
+# CI 模板、VERSION.json 和 SHA256SUMS（与私有云产物仓库同一套布局，见
+# scripts/publish-private-gitlab.mjs 的 --profile gitlab-com）。
+#
+# 用 Commits API 追加提交，不 force push：gitlab.com 的 develop 是保护分支，不允许 force push，
+# 旧的整体镜像（sync-to-gitlab.yml）因此自 10-16 起一直失败。sync-to-gitlab.yml 现在只管 main。
+#
+# 本 workflow 只读 GitHub 代码，推送目标是 GitLab（用 GITLAB_TOKEN），不需要任何 GitHub 写权限。
+permissions:
+  contents: read
+
+on:
+  push:
+    branches:
+      - develop
+  workflow_dispatch:
+
+# 同一时刻只发布一次：发布器会在提交前确认目标分支没被移动，并发会让后到的那次失败。
+# 不取消进行中的发布（半途取消只会留下一次白跑），GitHub 只保留最新的一个排队项。
+concurrency:
+  group: publish-gitlab-com
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      # workflow_dispatch 可以选任意分支运行；不校验的话，任何分支都能被当作 develop 发布出去。
+      # 放在 checkout 和拿到 GITLAB_TOKEN 之前。
+      - name: Validate ref is develop
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$REF_NAME" != "develop" ]; then
+            echo "REFUSED: '$REF_NAME' is not develop" >&2
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build and publish
+        env:
+          PRIVATE_GITLAB_URL: https://gitlab.com
+          PRIVATE_GITLAB_PROJECT: CodesSentinels/ai-reviewer
+          PRIVATE_GITLAB_BRANCH: develop
+          PRIVATE_GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+        run: node scripts/publish-private-gitlab.mjs --profile gitlab-com
+
+      # 发布器的提交成功不等于目标分支上的内容就是这次的：回读 VERSION.json，
+      # 确认记录的源码 revision 等于本次触发的提交。
+      - name: Verify gitlab.com received this revision
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+        run: |
+          RECORDED=$(curl -sf --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+            "https://gitlab.com/api/v4/projects/CodesSentinels%2Fai-reviewer/repository/files/VERSION.json/raw?ref=develop" \
+            | jq -r '.revision')
+          if [ "$RECORDED" != "$GITHUB_SHA" ]; then
+            echo "PUBLISH FAILED: gitlab.com develop records revision $RECORDED, expected $GITHUB_SHA" >&2
+            exit 1
+          fi
+          echo "OK: gitlab.com develop records revision $GITHUB_SHA"

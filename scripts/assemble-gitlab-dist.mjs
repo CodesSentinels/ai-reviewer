@@ -10,7 +10,11 @@
 //                              不记来源仓库
 //   SHA256SUMS               ← 以上所有文件，格式与 `sha256sum` 一致
 //
-// 用法：node scripts/assemble-gitlab-dist.mjs --out <dir> --tag <vX.Y.Z> --bundle <dir> [--root <repo>]
+// 用法：node scripts/assemble-gitlab-dist.mjs --out <dir> --tag <vX.Y.Z> --bundle <dir> [--root <repo>] [--profile private|gitlab-com]
+//
+// --profile 决定用哪一套 CI 模板与 README，以及是否做泄露门禁：
+//   private（默认）  deploy/private-gitlab/*，交付物不得出现源码仓库 / 组织标识
+//   gitlab-com       deploy/gitlab-com/*，目标就是源码所在组织自己的 gitlab.com 项目，不做该门禁
 //
 // 格式约定与 src/dist-sync/manifest.ts 一致（__tests__/assemble-gitlab-dist.test.ts
 // 用后者校验本脚本的输出，两边不一致测试会失败）。
@@ -24,6 +28,11 @@ const TAG_PATTERN = /^v\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?$/
 // 泄露门禁：交付物里不得出现源码仓库 / 组织的标识。第三方依赖自带的通用链接
 // （如 github.com/nodejs/...）不在此列——那不指向我们。
 const FORBIDDEN = [/CodesSentinels/i, /ai-reviewer\.git/i, /gitlab-dist/]
+
+const PROFILES = {
+  private: {dir: 'deploy/private-gitlab', leakGate: true},
+  'gitlab-com': {dir: 'deploy/gitlab-com', leakGate: false}
+}
 
 function die(msg) {
   console.error(`assemble-gitlab-dist: ${msg}`)
@@ -46,6 +55,7 @@ const root = path.resolve(args.root ?? process.cwd())
 const out = args.out ? path.resolve(args.out) : die('--out is required')
 const bundle = args.bundle ? path.resolve(args.bundle) : die('--bundle is required')
 const tag = args.tag ?? die('--tag is required')
+const profile = PROFILES[args.profile ?? 'private'] ?? die(`unknown --profile ${args.profile}`)
 if (!TAG_PATTERN.test(tag)) die(`tag must look like v1.2.3: ${tag}`)
 if (out === root || root.startsWith(out + path.sep)) die('--out must not contain the repository')
 
@@ -60,8 +70,8 @@ function copy(src, to) {
   copyFileSync(src, path.join(out, to))
 }
 
-copy(path.join(root, 'deploy/private-gitlab/gitlab-ci.yml'), '.gitlab-ci.yml')
-copy(path.join(root, 'deploy/private-gitlab/README.md'), 'README.md')
+copy(path.join(root, profile.dir, 'gitlab-ci.yml'), '.gitlab-ci.yml')
+copy(path.join(root, profile.dir, 'README.md'), 'README.md')
 
 if (!existsSync(path.join(bundle, 'index.js'))) die(`missing ${bundle}/index.js`)
 // SOURCE_SHA 由构建步骤写入；和当前 HEAD 不一致说明 bundle 不是这次构建的产物
@@ -88,10 +98,12 @@ function listFiles(dir, rel = '') {
 const byteOrder = (a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b))
 const files = listFiles(out).sort(byteOrder)
 
-for (const f of files) {
-  const text = readFileSync(path.join(out, f)).toString('latin1')
-  const hit = FORBIDDEN.find(re => re.test(text))
-  if (hit) die(`${f} contains forbidden identifier ${hit} — refusing to assemble`)
+if (profile.leakGate) {
+  for (const f of files) {
+    const text = readFileSync(path.join(out, f)).toString('latin1')
+    const hit = FORBIDDEN.find(re => re.test(text))
+    if (hit) die(`${f} contains forbidden identifier ${hit} — refusing to assemble`)
+  }
 }
 
 const sums = files
