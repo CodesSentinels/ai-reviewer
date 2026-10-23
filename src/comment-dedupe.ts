@@ -109,6 +109,43 @@ export function splitReviewSections(message: string): string[] {
   return sections
 }
 
+/**
+ * 评论里「修复建议」diff 的签名：删掉的行和新增的行各自去掉全部空白后拼起来。
+ *
+ * 标识符指纹靠正文里反引号包起来的名字，措辞一换（新评论提到函数名 `share`，旧评论没提）
+ * 覆盖率就掉下去，同一个缺陷会被再发一遍，而且常常锚在本次提交新增的无关行上。
+ * 两条评论建议把同一处代码改成同一个样子，说的就是同一件事，不看措辞。
+ *
+ * 去掉全部空白是为了容忍同一个修复换了排版（单行 `{ return a / b }` 与分行写法）。
+ * 只认修复建议里「有删除行」的 diff：纯新增的建议没有锚定到具体问题代码，不拿来判重。
+ */
+export function extractFixSignatures(text: string): Set<string> {
+  const sigs = new Set<string>()
+  const re = /```diff[^\n]*\n([\s\S]*?)```/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec((text ?? '').replace(MARKER_COMMENT, ''))) != null) {
+    const removed: string[] = []
+    const added: string[] = []
+    for (const line of m[1].split('\n')) {
+      if (line.startsWith('---') || line.startsWith('+++')) continue
+      if (line.startsWith('-')) removed.push(line.slice(1).replace(/\s+/g, ''))
+      else if (line.startsWith('+')) added.push(line.slice(1).replace(/\s+/g, ''))
+    }
+    const removedKey = removed.join('')
+    if (removedKey === '') continue
+    sigs.add(`${removedKey}=>${added.join('')}`)
+  }
+  return sigs
+}
+
+/** 这一段的修复建议全部已经在已有评论里出现过（至少有一条可比较的 diff） */
+function fixCovered(section: string, existingSigs: Set<string>): boolean {
+  const sigs = extractFixSignatures(section)
+  if (sigs.size === 0) return false
+  for (const sig of sigs) if (!existingSigs.has(sig)) return false
+  return true
+}
+
 function coverage(keys: Set<string>, existing: Set<string>): number {
   if (keys.size === 0) return 0
   let hit = 0
@@ -165,8 +202,14 @@ function dropCoveredBullets(
  */
 export function dedupeAgainstExisting(message: string, existingBodies: string[]): DedupeResult {
   const existing = new Set<string>()
-  for (const body of existingBodies) for (const k of extractIssueKeys(body)) existing.add(k)
-  if (existing.size === 0) return {message, droppedSections: 0, droppedBullets: 0}
+  const existingSigs = new Set<string>()
+  for (const body of existingBodies) {
+    for (const k of extractIssueKeys(body)) existing.add(k)
+    for (const sig of extractFixSignatures(body)) existingSigs.add(sig)
+  }
+  if (existing.size === 0 && existingSigs.size === 0) {
+    return {message, droppedSections: 0, droppedBullets: 0}
+  }
 
   const sections = splitReviewSections(message)
   const kept: string[] = []
@@ -177,6 +220,12 @@ export function dedupeAgainstExisting(message: string, existingBodies: string[])
   sections.forEach((section, index) => {
     const {header, body} = index === 0 ? splitHeader(section) : {header: '', body: section}
     const keys = extractIssueKeys(body)
+    // 修复建议与已有评论完全相同 → 同一个问题（标识符指纹认不出措辞不同的重复）
+    if (fixCovered(body, existingSigs)) {
+      droppedSections += 1
+      if (index === 0) orphanHeader = header
+      return
+    }
     if (keys.size > 0 && coverage(keys, existing) >= SECTION_COVERAGE) {
       droppedSections += 1
       if (index === 0) orphanHeader = header

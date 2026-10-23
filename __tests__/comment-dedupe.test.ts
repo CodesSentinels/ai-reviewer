@@ -8,6 +8,7 @@
  */
 import {describe, expect, test} from '@jest/globals'
 import {
+  extractFixSignatures,
   dedupeAgainstExisting,
   extractIssueKeys,
   splitReviewSections,
@@ -138,5 +139,85 @@ describe('dedupeAgainstExisting', () => {
 
   test('没有已有评论 → 原样返回', () => {
     expect(dedupeAgainstExisting(MERGED, []).message).toBe(MERGED)
+  })
+})
+
+// 回归（GitLab 回归测试 FT-092）：增量审查时同一个缺陷措辞换了、锚点落在本次提交新增的无关行上，
+// 标识符指纹覆盖率不够，被当成新问题再发一遍。修复建议 diff 相同就是同一个问题。
+const FIX_HEADER = '🦉   CodeSentinel\n\n> [!WARNING]\n> 🟠 **重要** — 建议尽快处理\n'
+const EXISTING_DIV = `${FIX_HEADER}
+这里把除数固定写成了 \`b - b\`，无论传入什么值都会变成 \`0\`，导致函数始终返回 \`Infinity\`/\`-Infinity\` 或 \`NaN\`。
+
+<details>
+<summary>🔧 修复建议</summary>
+
+\`\`\`diff
+-export function share(a: number, b: number): number { return a / (b - b) }
++export function share(a: number, b: number): number { return a / b }
+\`\`\`
+
+</details>
+`
+const NEW_DIV_REWORDED = `${FIX_HEADER}
+\`share\` 现在会对任意输入执行 \`a / (b - b)\`，分母恒为 \`0\`，因此返回值始终是不可用的结果，所有调用方都会得到错误值。
+
+<details>
+<summary>🔧 修复建议</summary>
+
+\`\`\`diff
+-export function share(a: number, b: number): number { return a / (b - b) }
++export function share(a: number, b: number): number {
++  return a / b
++}
+\`\`\`
+
+</details>
+`
+
+describe('extractFixSignatures', () => {
+  test('删除行和新增行各自去掉空白后拼成签名，排版不同的同一修复签名相同', () => {
+    expect([...extractFixSignatures(EXISTING_DIV)]).toEqual([
+      ...extractFixSignatures(NEW_DIV_REWORDED)
+    ])
+    expect(extractFixSignatures(EXISTING_DIV).size).toBe(1)
+  })
+
+  test('没有删除行（纯新增）的 diff 不产生签名', () => {
+    expect(extractFixSignatures('```diff\n+const a = 1\n```').size).toBe(0)
+  })
+
+  test('没有 diff 代码块 → 空', () => {
+    expect(extractFixSignatures('只有正文').size).toBe(0)
+    expect(extractFixSignatures('').size).toBe(0)
+  })
+})
+
+describe('dedupeAgainstExisting：修复建议相同视为同一问题', () => {
+  test('措辞不同、修复建议排版不同但内容相同 → 整条丢弃', () => {
+    const r = dedupeAgainstExisting(NEW_DIV_REWORDED, [EXISTING_DIV])
+    expect(r.message).toBe('')
+    expect(r.droppedSections).toBe(1)
+  })
+
+  test('同一行代码、建议的改法不同 → 保留（可能是另一个问题）', () => {
+    const other = NEW_DIV_REWORDED.replace('+  return a / b', '+  return b === 0 ? 0 : a / b')
+    const r = dedupeAgainstExisting(other, [EXISTING_DIV])
+    expect(r.message).toBe(other)
+    expect(r.droppedSections).toBe(0)
+  })
+
+  test('已有评论没有 diff → 行为不变', () => {
+    const noDiff = `${FIX_HEADER}\n正文里没有修复建议\n`
+    const r = dedupeAgainstExisting(NEW_DIV_REWORDED, [noDiff])
+    expect(r.message).toBe(NEW_DIV_REWORDED)
+  })
+
+  test('合并评论里只有重复的那一段被丢弃，新问题的那段保留', () => {
+    const fresh = '另一个独立的问题：`parse()` 没有处理空字符串，解析会得到 `NaN`。'
+    const merged = `${NEW_DIV_REWORDED}\n---\n\n${fresh}\n`
+    const r = dedupeAgainstExisting(merged, [EXISTING_DIV])
+    expect(r.droppedSections).toBe(1)
+    expect(r.message).toContain('另一个独立的问题')
+    expect(r.message).not.toContain('return a / b')
   })
 })
