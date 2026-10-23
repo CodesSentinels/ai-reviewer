@@ -13,6 +13,7 @@
 import {describe, expect, test, jest, beforeEach, afterEach} from '@jest/globals'
 
 import mrOpen from './fixtures/gitlab-mr-hook-open.json'
+import mrReopen from './fixtures/gitlab-mr-hook-reopen.json'
 import mrFork from './fixtures/gitlab-mr-hook-fork.json'
 import malformed from './fixtures/gitlab-malformed.json'
 import unknownEvent from './fixtures/gitlab-unknown-event.json'
@@ -343,6 +344,91 @@ describe('gitlab-trigger.ts run()', () => {
           'event=head-sha-0001 current=head-sha-9999) — skipping stale delivery (EVENT-012)'
         )
       )
+    })
+
+    // 回归（ai-reviewer-test#3）：MR 关闭期间推送的提交，GitLab 不发 MR 事件；重开时 reopen 事件带的
+    // last_commit 还是关闭前的旧值，随后那个带新 HEAD 的 update 事件没有 oldrev，被归类为元数据更新、
+    // 不触发审查。reopen 一旦被当作陈旧事件丢掉，新提交就永远没人审。
+    describe('重开事件携带旧 HEAD（关闭期间推送过）', () => {
+      const showWithHead = (headSha: string) =>
+        mockMergeRequests.show.mockResolvedValue({
+          iid: 7,
+          title: 'MR title',
+          description: 'MR body',
+          state: 'opened',
+          target_branch: 'main',
+          source_branch: 'feature',
+          diff_refs: {base_sha: 'base-sha-0001', head_sha: headSha},
+          author: {username: 'alice'}
+        })
+
+      test('不跳过：改按当前 HEAD 继续，并用当前 HEAD 做幂等判断', async () => {
+        process.env.TRIGGER_PAYLOAD = '/tmp/payload.json'
+        fsState.readFileSync.mockReturnValue(JSON.stringify(mrReopen))
+        showWithHead('head-sha-9999')
+        mrIdempotencyState.hasHeadBeenReviewed.mockResolvedValue(false)
+
+        await runTrigger()
+
+        const logged = logSpy.mock.calls.map(c => String(c[0])).join('\n')
+        expect(logged).toContain(
+          'reopened with an outdated HEAD (event=head-sha-0001 current=head-sha-9999) — ' +
+            'reviewing the current HEAD instead (EVENT-012)'
+        )
+        expect(logged).not.toContain('skipping stale delivery')
+        // 幂等判断用的是当前 HEAD，不是事件里的旧值
+        expect(mrIdempotencyState.hasHeadBeenReviewed).toHaveBeenCalledWith(
+          'octo',
+          'demo',
+          7,
+          'head-sha-9999'
+        )
+      })
+
+      test('当前 HEAD 已经审查过 → 跳过，不重复审查', async () => {
+        process.env.TRIGGER_PAYLOAD = '/tmp/payload.json'
+        fsState.readFileSync.mockReturnValue(JSON.stringify(mrReopen))
+        showWithHead('head-sha-9999')
+        mrIdempotencyState.hasHeadBeenReviewed.mockResolvedValue(true)
+
+        await runTrigger()
+
+        expect(logSpy).toHaveBeenCalledWith(
+          expect.stringContaining(
+            'headSha head-sha-9999 already reviewed (idempotency key ' +
+              'gitlab:42:7:head:head-sha-9999) — skipping duplicate delivery (EVENT-013)'
+          )
+        )
+      })
+
+      test('重开时 HEAD 没有变化 → 行为不变，不出现“旧 HEAD”提示', async () => {
+        process.env.TRIGGER_PAYLOAD = '/tmp/payload.json'
+        fsState.readFileSync.mockReturnValue(JSON.stringify(mrReopen))
+        showWithHead('head-sha-0001')
+        mrIdempotencyState.hasHeadBeenReviewed.mockResolvedValue(false)
+
+        await runTrigger()
+
+        const logged = logSpy.mock.calls.map(c => String(c[0])).join('\n')
+        expect(logged).not.toContain('outdated HEAD')
+        expect(mrIdempotencyState.hasHeadBeenReviewed).toHaveBeenCalledWith(
+          'octo',
+          'demo',
+          7,
+          'head-sha-0001'
+        )
+      })
+
+      test('其他 MR 事件（open）HEAD 变化仍然按陈旧跳过', async () => {
+        process.env.TRIGGER_PAYLOAD = '/tmp/payload.json'
+        fsState.readFileSync.mockReturnValue(JSON.stringify(mrOpen))
+        showWithHead('head-sha-9999')
+
+        await runTrigger()
+
+        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('skipping stale delivery'))
+        expect(mrIdempotencyState.hasHeadBeenReviewed).not.toHaveBeenCalled()
+      })
     })
 
     test('重新读取 HEAD 失败 → 记警告但不 fail closed，不提前跳过', async () => {

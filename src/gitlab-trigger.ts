@@ -272,7 +272,18 @@ export async function run(): Promise<void> {
     try {
       const current = await platform.getChangeRequest(owner, repo, execCtx.changeRequestId)
       const staleCheck = isHeadStale(execCtx.headSha, current.headSha)
-      if (staleCheck.stale) {
+      if (staleCheck.stale && execCtx.eventKind === 'pr_reopened') {
+        // 重开事件是特例：关闭期间推送的提交 GitLab 不发 MR 事件，重开时带的 last_commit 还是
+        // 关闭前的旧值，随后那个带新 HEAD 的 update 事件又没有 oldrev，被归类为元数据更新、
+        // 不会触发审查（ai-reviewer-test#3）。按上面「新 commit 有自己的投递」的假设跳过，
+        // 新提交就没人审了。重开本身就是「请审查这个 MR 现在的样子」，所以改按当前 HEAD 继续。
+        logger.info(
+          `MR ${execCtx.changeRequestId} was reopened with an outdated HEAD ` +
+            `(event=${staleCheck.eventHeadSha} current=${staleCheck.currentHeadSha}) — ` +
+            'reviewing the current HEAD instead (EVENT-012)'
+        )
+        execCtx = {...execCtx, headSha: staleCheck.currentHeadSha}
+      } else if (staleCheck.stale) {
         logger.info(
           `MR ${execCtx.changeRequestId} HEAD has moved since this event was emitted ` +
             `(event=${staleCheck.eventHeadSha} current=${staleCheck.currentHeadSha}) — ` +
