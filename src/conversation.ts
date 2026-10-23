@@ -53,6 +53,18 @@ export function botCommentTagVariants(): string[] {
   return [...stateMarkerVariantsFor('comment'), ...stateMarkerVariantsFor('commentReply')]
 }
 
+/**
+ * 主评论区对话的「回复」标签：只有 bot 的对话回复才带 comment-reply 标签。
+ *
+ * 主评论区对话要数的是 bot 已经回复了几轮，不能用 botCommentTagVariants()：
+ * 那组标签还包含 bot 自己发的行级审查评论和摘要（comment 标签）。GitHub 的 PR 主评论区接口
+ * 不返回行级评论，所以没出过问题；GitLab 的 listComments 返回 MR 里全部 note，行级审查评论
+ * 一多（回放夹具后常有三十条以上），第一次提问就被判成「轮次已达上限」。
+ */
+export function botReplyTagVariants(): string[] {
+  return stateMarkerVariantsFor('commentReply')
+}
+
 /** 单个 thread 的对话轮次上限（bot 已回复的次数），超过后停止追问 */
 export const MAX_CONVERSATION_TURNS = 10
 
@@ -614,7 +626,8 @@ export const handleIssueConversation = async (
 
   // ===== 5. 对话历史收集 + 轮次上限 =====
   const rawChain = composeIssueCommentChain(allComments, comment.id)
-  const turns = countBotTurns(rawChain)
+  // 只数 bot 的对话回复：行级审查评论和摘要不是对话轮次（见 botReplyTagVariants）
+  const turns = countBotTurns(rawChain, botReplyTagVariants())
   if (turns >= MAX_CONVERSATION_TURNS) {
     logger.info(`issue-conversation: turn limit reached (${turns}/${MAX_CONVERSATION_TURNS})`)
     await postIssueReply(
