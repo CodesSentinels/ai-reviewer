@@ -27,7 +27,7 @@ import {
   type GitLabClientConfig
 } from './gitlab-client'
 import {normalizeGitLabError} from './gitlab-errors'
-import {withGitLabRetry} from './gitlab-retry'
+import {probeAfterTimeout, withGitLabRetry} from './gitlab-retry'
 import {getLogger} from './logger'
 import {
   appendWriteMarker,
@@ -487,9 +487,14 @@ export class GitLabPlatform implements IGitPlatform {
     })
     const markedBody = appendWriteMarker(body, marker)
 
-    return withGitLabRetry('createComment', async attempt => {
+    return withGitLabRetry('createComment', async (attempt, lastError) => {
       if (attempt > 1) {
-        const existing = await this.findNoteByMarker(projectPath, changeRequestId, marker)
+        const existing = await probeAfterTimeout(
+          'createComment',
+          () => this.findNoteByMarker(projectPath, changeRequestId, marker),
+          r => r != null,
+          lastError
+        )
         if (existing != null) return existing
       }
       const note = (await this.api.MergeRequestNotes.create(
@@ -692,10 +697,16 @@ export class GitLabPlatform implements IGitPlatform {
     })
     const markedBody = appendWriteMarker(comment.body, marker)
 
-    await withGitLabRetry('createReviewComment', async attempt => {
-      // GLAPI-027：重试前先确认上一次是否已经建出 discussion
+    await withGitLabRetry('createReviewComment', async (attempt, lastError) => {
+      // GLAPI-027：重试前先确认上一次是否已经建出 discussion；上一次是超时的话，请求可能
+      // 还在服务端处理，多等几轮再确认，真的没落库才重发
       if (attempt > 1) {
-        const exists = await this.findDiscussionByMarker(projectPath, changeRequestId, marker)
+        const exists = await probeAfterTimeout(
+          'createReviewComment',
+          () => this.findDiscussionByMarker(projectPath, changeRequestId, marker),
+          r => r === true,
+          lastError
+        )
         if (exists) return
       }
       // 需要 base_sha / head_sha / start_sha 构造 position
@@ -781,11 +792,18 @@ export class GitLabPlatform implements IGitPlatform {
     })
     const markedBody = appendWriteMarker(body, marker)
 
-    return withGitLabRetry('replyToReviewComment', async attempt => {
+    return withGitLabRetry('replyToReviewComment', async (attempt, lastError) => {
       if (attempt > 1) {
-        const {discussions} = await this.getAllDiffDiscussions(projectPath, changeRequestId)
-        const disc = discussions.find(d => d.id === discussionId)
-        const hit = (disc?.notes ?? []).find((n: any) => hasWriteMarker(n.body, marker))
+        const hit = await probeAfterTimeout(
+          'replyToReviewComment',
+          async () => {
+            const {discussions} = await this.getAllDiffDiscussions(projectPath, changeRequestId)
+            const disc = discussions.find(d => d.id === discussionId)
+            return (disc?.notes ?? []).find((n: any) => hasWriteMarker(n.body, marker))
+          },
+          r => r != null,
+          lastError
+        )
         if (hit != null) return toPlatformComment(hit)
       }
       const note = (await this.api.MergeRequestDiscussions.addNote(

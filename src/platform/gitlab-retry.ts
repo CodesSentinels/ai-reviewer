@@ -28,7 +28,27 @@ export interface GitLabRetryPolicy {
   random?: () => number
   /** sleep 实现，测试可注入 */
   sleep?: (ms: number) => Promise<void>
+  /** 超时后探测写入是否落库的最长等待（ms），默认 GITLAB_TIMEOUT_PROBE_DEFAULTS.windowMS */
+  timeoutProbeWindowMS?: number
+  /** 超时后探测写入的间隔（ms） */
+  timeoutProbeIntervalMS?: number
+  /** 整个进程里所有超时探测累计最多等待的时间（ms），用完后不再等待、直接重发 */
+  timeoutProbeBudgetMS?: number
 }
+
+/**
+ * 写操作超时后「等一等再重发」的默认参数。
+ *
+ * 客户端超时不等于服务端没写：GitLab 响应变慢时，第一次请求在超时之后仍会落库，实测
+ * 在客户端放弃约 100 秒之后才出现（ai-reviewer-test#4）。重试前只探测一次，什么都看不到就
+ * 重发，结果两个请求都落库，MR 里出现两条一模一样的评论。超时之后先多探测几次，确认
+ * 真的没落库再重发。
+ */
+export const GITLAB_TIMEOUT_PROBE_DEFAULTS = {
+  windowMS: 180_000,
+  intervalMS: 15_000,
+  budgetMS: 300_000
+} as const
 
 export const GITLAB_RETRY_DEFAULTS: GitLabRetryPolicy = {
   maxAttempts: 4,
@@ -53,7 +73,11 @@ export function configureGitLabRetry(overrides: Partial<GitLabRetryPolicy>): voi
 
 export function resetGitLabRetryPolicy(): void {
   policyOverrides = {}
+  probeBudgetUsedMS = 0
 }
+
+/** 进程内已经花在超时探测上的等待时间；GitLab 持续变慢时用它封顶，避免整轮审查被拖死 */
+let probeBudgetUsedMS = 0
 
 /**
  * 计算第 attempt 次失败后的退避时长（attempt 从 1 开始）。
@@ -83,7 +107,7 @@ export function computeBackoffMS(
  */
 export async function withGitLabRetry<T>(
   operation: string,
-  fn: (attempt: number) => Promise<T>,
+  fn: (attempt: number, lastError?: GitPlatformError) => Promise<T>,
   overrides: Partial<GitLabRetryPolicy> = {}
 ): Promise<T> {
   const policy: GitLabRetryPolicy = {...GITLAB_RETRY_DEFAULTS, ...policyOverrides, ...overrides}
@@ -93,7 +117,7 @@ export async function withGitLabRetry<T>(
   let lastError: GitPlatformError | undefined
   for (let attempt = 1; attempt <= policy.maxAttempts; attempt++) {
     try {
-      return await fn(attempt)
+      return await fn(attempt, lastError)
     } catch (e) {
       const err = normalizeGitLabError(e, operation)
       lastError = err
@@ -121,4 +145,58 @@ export async function withGitLabRetry<T>(
 
   // 循环只可能因「重试次数耗尽」退出，此时 lastError 必然存在
   throw lastError ?? normalizeGitLabError(new Error('unknown failure'), operation)
+}
+
+/**
+ * 写操作重试前的「是否已落库」探测。
+ *
+ * - 先探测一次；命中就返回，调用方不要重发；
+ * - 上一次失败是超时（请求可能仍在服务端处理中）时，继续按间隔探测，直到命中或超过窗口，
+ *   窗口内一直没命中才返回未命中，调用方再重发；
+ * - 其他错误（5xx、限流等，请求明确没被处理）只探测一次，不额外等待；
+ * - 所有探测累计的等待有进程级预算，用完后退化成只探测一次，避免 GitLab 持续变慢时拖垮整轮审查。
+ *
+ * @param probe 查询是否已落库，返回查询结果（异常原样抛出，由 withGitLabRetry 当作本次尝试的失败）
+ * @param found 判断查询结果是否表示已落库
+ */
+export async function probeAfterTimeout<T>(
+  operation: string,
+  probe: () => Promise<T>,
+  found: (result: T) => boolean,
+  lastError: GitPlatformError | undefined,
+  overrides: Partial<GitLabRetryPolicy> = {}
+): Promise<T> {
+  let result = await probe()
+  if (found(result) || lastError?.errorKind !== 'timeout') return result
+
+  const policy: GitLabRetryPolicy = {...GITLAB_RETRY_DEFAULTS, ...policyOverrides, ...overrides}
+  const sleep = policy.sleep ?? defaultSleep
+  const windowMS = policy.timeoutProbeWindowMS ?? GITLAB_TIMEOUT_PROBE_DEFAULTS.windowMS
+  const intervalMS = policy.timeoutProbeIntervalMS ?? GITLAB_TIMEOUT_PROBE_DEFAULTS.intervalMS
+  const budgetMS = policy.timeoutProbeBudgetMS ?? GITLAB_TIMEOUT_PROBE_DEFAULTS.budgetMS
+  const logger = getLogger()
+
+  let waited = 0
+  while (waited < windowMS) {
+    if (probeBudgetUsedMS + intervalMS > budgetMS) {
+      logger.warning(
+        `${operation}: timeout-probe budget (${budgetMS}ms) exhausted — resending without further waiting`
+      )
+      return result
+    }
+    await sleep(intervalMS)
+    waited += intervalMS
+    probeBudgetUsedMS += intervalMS
+    result = await probe()
+    if (found(result)) {
+      logger.info(
+        `${operation}: the timed-out request landed after ${waited}ms — not resending (avoids a duplicate)`
+      )
+      return result
+    }
+  }
+  logger.warning(
+    `${operation}: previous request timed out and nothing landed within ${waited}ms — resending`
+  )
+  return result
 }
