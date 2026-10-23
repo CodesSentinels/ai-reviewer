@@ -217,24 +217,24 @@ export function dedupeAgainstExisting(message: string, existingBodies: string[])
   let droppedBullets = 0
   // 评论开头的机器人署名与严重级别提示只出现在第一段；第一段被丢弃时要把它们留给后面的段
   let orphanHeader = ''
-  sections.forEach((section, index) => {
+  for (const [index, section] of sections.entries()) {
     const {header, body} = index === 0 ? splitHeader(section) : {header: '', body: section}
     const keys = extractIssueKeys(body)
     // 修复建议与已有评论完全相同 → 同一个问题（标识符指纹认不出措辞不同的重复）
     if (fixCovered(body, existingSigs)) {
       droppedSections += 1
       if (index === 0) orphanHeader = header
-      return
+      continue
     }
     if (keys.size > 0 && coverage(keys, existing) >= SECTION_COVERAGE) {
       droppedSections += 1
       if (index === 0) orphanHeader = header
-      return
+      continue
     }
     const {text, dropped} = dropCoveredBullets(body, existing)
     droppedBullets += dropped
     kept.push(header !== '' ? `${header}\n${text}` : text)
-  })
+  }
   // 什么都没去掉：原样返回，不做任何规整（空白、换行都保持原样）
   if (droppedSections === 0 && droppedBullets === 0)
     return {message, droppedSections, droppedBullets}
