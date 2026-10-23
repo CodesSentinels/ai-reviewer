@@ -292,6 +292,24 @@ export function extractSeverityTags(comment: string): {
   return {severity, comment: lines.join('\n').trim()}
 }
 
+/**
+ * 把评论开头的严重级别标签行单独拆出来（保持原样），其余正文返回。
+ *
+ * 给评论前面拼接说明（例如「超出 patch 的意见被映射到最近的 patch」）时，必须把说明放在
+ * 标签行**后面**：extractSeverityTags 只认首个非空行，说明拼在前面会让标签行留在正文里，
+ * 原样展示给用户（形如 `[severity: major]`）。
+ */
+export function splitLeadingSeverityTag(comment: string): {tagLine: string | null; rest: string} {
+  const lines = comment.split('\n')
+  const idx = lines.findIndex(l => l.trim().length > 0)
+  if (idx === -1 || !SEVERITY_TAG_LINE.test(lines[idx].trim())) {
+    return {tagLine: null, rest: comment}
+  }
+  const tagLine = lines[idx].trim()
+  lines.splice(idx, 1)
+  return {tagLine, rest: lines.join('\n').trim()}
+}
+
 /** 取两个级别中较高的一个；null 表示"模型未给出有效级别" */
 export function higherSeverity(
   a: FindingSeverity | null | undefined,

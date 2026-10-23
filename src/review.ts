@@ -50,6 +50,7 @@ import {parseLintReport} from './lint/report-schema'
 import {
   classifyFindingSeverity,
   extractSeverityTags,
+  splitLeadingSeverityTag,
   prepareFindings,
   mergeSimilarFindings,
   severityBadge,
@@ -2023,6 +2024,9 @@ export function parseReview(
 
   const lines = response.split('\n')
   const lineNumberRangeRegex = /(?:^|\s)(\d+)-(\d+):\s*$/
+  // 模型偶尔把分隔符和下一条的行号写在同一行（`---1-4:`）：既不匹配行号正则，也不等于
+  // 分隔符，会连同后面整条意见一起被拼进上一条评论的正文
+  const gluedSeparatorRangeRegex = /^\s*-{3}\s*(\d+)-(\d+):\s*$/
   const commentSeparator = '---'
 
   let currentStartLine: number | null = null
@@ -2065,9 +2069,16 @@ export function parseReview(
       // 如果评论不在任何 patch 内，映射到最佳匹配的 patch
       if (!withinPatch) {
         if (bestPatchStartLine !== -1 && bestPatchEndLine !== -1) {
-          review.comment = `> Note: This review was outside of the patch, so it was mapped to the patch with the greatest overlap. Original lines [${review.startLine}-${review.endLine}]
+          // 说明放在严重级别标签行后面：标签必须保持首个非空行，否则 extractSeverityTags
+          // 认不出，标签原样露在正文里
+          const {tagLine, rest} = splitLeadingSeverityTag(review.comment)
+          review.comment = `${
+            tagLine == null ? '' : `${tagLine}\n`
+          }> Note: This review was outside of the patch, so it was mapped to the patch with the greatest overlap. Original lines [${
+            review.startLine
+          }-${review.endLine}]
 
-${review.comment}`
+${rest}`
           review.startLine = bestPatchStartLine
           review.endLine = bestPatchEndLine
         } else {
@@ -2137,7 +2148,8 @@ ${review.comment}`
 
   // 逐行解析 AI 响应
   for (const line of lines) {
-    const lineNumberRangeMatch = line.match(lineNumberRangeRegex)
+    const lineNumberRangeMatch =
+      line.match(lineNumberRangeRegex) ?? line.match(gluedSeparatorRangeRegex)
 
     if (lineNumberRangeMatch != null) {
       // 遇到新的行号范围标记，保存之前的评论并开始新评论
