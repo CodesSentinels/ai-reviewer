@@ -127,6 +127,7 @@ bin/act
 settings.local.json
 event.json
 **/todo
+.vscode
 
 # Playwright MCP
 .playwright-mcp/
