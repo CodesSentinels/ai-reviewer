@@ -486,7 +486,8 @@ describe('publish-gitlab-com.yml：develop 以产物方式发布到 gitlab.com',
     const withToken = steps.filter((s: any) => JSON.stringify(s).includes('secrets.GITLAB_TOKEN'))
     expect(withToken.map((s: any) => s.name)).toEqual([
       'Build and publish',
-      'Verify gitlab.com received this revision'
+      'Verify gitlab.com received this revision',
+      'Verify provenance of what gitlab.com serves'
     ])
     for (const s of withToken) {
       expect(String(s.run ?? '')).not.toContain('secrets.GITLAB_TOKEN')
@@ -516,5 +517,75 @@ describe('publish-gitlab-com.yml：develop 以产物方式发布到 gitlab.com',
     expect(publishIdx).toBeGreaterThanOrEqual(0)
     expect(verifyIdx).toBeGreaterThan(publishIdx)
     expect(String(steps[verifyIdx].run)).toMatch(/GITHUB_SHA/)
+  })
+
+  describe('构建出处证明（#222）', () => {
+    const job = () => jobsOf(wf.doc)[0][1]
+    const steps = () => stepsOf(job())
+    const idx = (re: RegExp) =>
+      steps().findIndex((s: any) => re.test(`${s.name ?? ''} ${s.uses ?? ''} ${s.run ?? ''}`))
+
+    test('顶层仍是只读；id-token 与 attestations 写权限只放在这个 job 上', () => {
+      expect(wf.doc.permissions).toEqual({contents: 'read'})
+      expect(job().permissions).toEqual({
+        contents: 'read',
+        'id-token': 'write',
+        attestations: 'write'
+      })
+    })
+
+    test('attest 步骤固定到完整 commit SHA，签名的是 SHA256SUMS，且不带 env / secret', () => {
+      const attest = steps()[idx(/attest-build-provenance/)]
+      expect(String(attest.uses)).toMatch(/^actions\/attest-build-provenance@[0-9a-f]{40}( |$)/)
+      expect(attest.with['subject-path']).toBe('.publish/out/SHA256SUMS')
+      expect(attest.env).toBeUndefined()
+      expect(JSON.stringify(attest)).not.toMatch(/secrets\./)
+    })
+
+    test('顺序：发布 → 证明 → 验证 gitlab.com 实际提供的文件', () => {
+      const publishIdx = idx(/publish-private-gitlab\.mjs/)
+      const attestIdx = idx(/attest-build-provenance/)
+      const verifyIdx = idx(/gh attestation verify/)
+      expect(publishIdx).toBeGreaterThanOrEqual(0)
+      expect(attestIdx).toBeGreaterThan(publishIdx)
+      expect(verifyIdx).toBeGreaterThan(attestIdx)
+    })
+
+    test('验证的是从 gitlab.com 下载的 SHA256SUMS，并限定仓库、签名 workflow、提交与托管 runner', () => {
+      const verify = String(steps()[idx(/gh attestation verify/)].run)
+      expect(verify).toMatch(/repository\/files\/SHA256SUMS\/raw\?ref=develop/)
+      expect(verify).toMatch(/--repo "\$\{GITHUB_REPOSITORY\}"/)
+      expect(verify).toMatch(/--signer-workflow .*publish-gitlab-com\.yml/)
+      expect(verify).toMatch(/--source-digest "\$\{GITHUB_SHA\}"/)
+      expect(verify).toContain('--deny-self-hosted-runners')
+      // 验证对象不能是本地构建出来的那份，否则证明不了 gitlab.com 上的内容
+      expect(verify).not.toContain('.publish/out')
+    })
+  })
+})
+
+describe('test.yml：PR 上跑全量测试（#221）', () => {
+  const wf = workflows.find(w => w.name === 'test.yml')
+
+  test('存在，且 job 名为 test（分支保护按这个名字设必须检查）', () => {
+    expect(wf).toBeDefined()
+    expect(Object.keys(wf!.doc.jobs)).toEqual(['test'])
+  })
+
+  test('用 pull_request，不用 pull_request_target；覆盖 develop 和 main', () => {
+    const triggers = triggersOf(wf!.doc)
+    expect(Object.keys(triggers)).toContain('pull_request')
+    expect(Object.keys(triggers)).not.toContain('pull_request_target')
+    expect(triggers.pull_request.branches).toEqual(['develop', 'main'])
+  })
+
+  test('只读权限，且不使用任何 Secret', () => {
+    expect(wf!.doc.permissions).toEqual({contents: 'read'})
+    expect(codeOf(wf!.raw)).not.toMatch(/secrets\./)
+  })
+
+  test('跑的是全量 npm test', () => {
+    const steps = stepsOf(wf!.doc.jobs.test)
+    expect(steps.some(s => typeof s.run === 'string' && s.run.includes('npm test'))).toBe(true)
   })
 })

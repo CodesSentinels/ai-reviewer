@@ -27,6 +27,11 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    # 顶层仍是只读；构建出处证明（#222）需要这两项，只放在这个 job 上。
+    permissions:
+      contents: read
+      id-token: write # 向 Sigstore 申请签名用的短期证书
+      attestations: write # 写入 attestation
     steps:
       # workflow_dispatch 可以选任意分支运行；不校验的话，任何分支都能被当作 develop 发布出去。
       # 放在 checkout 和拿到 GITLAB_TOKEN 之前。
@@ -65,6 +70,15 @@ jobs:
           PRIVATE_GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
         run: node scripts/publish-private-gitlab.mjs --profile gitlab-com --skip-tests
 
+      # 构建出处证明（#222）：SHA256SUMS 覆盖产物仓库里的每个文件，签名它就等于签名整份产物。
+      # 证明绑定「本仓库的本 workflow 在这个提交上构建」，保存在 GitHub 的 attestation 里。
+      # 发布在前、证明在后：证明失败会让本次运行变红，但不会撤回已推送的内容；
+      # 下一步会用 gitlab.com 上实际提供的文件去验证证明。
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: .publish/out/SHA256SUMS
+
       # 发布器的提交成功不等于目标分支上的内容就是这次的：回读 VERSION.json，
       # 确认记录的源码 revision 等于本次触发的提交。
       - name: Verify gitlab.com received this revision
@@ -79,3 +93,19 @@ jobs:
             exit 1
           fi
           echo "OK: gitlab.com develop records revision $GITHUB_SHA"
+
+      # 下载 gitlab.com 上实际提供的 SHA256SUMS（不是本地那份），验证它确实由本仓库的本 workflow
+      # 在本次提交上、于 GitHub 托管的 runner 上构建。SHA256SUMS 在 gitlab.com 上被改过就会验证失败。
+      - name: Verify provenance of what gitlab.com serves
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -sf --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+            "https://gitlab.com/api/v4/projects/CodesSentinels%2Fai-reviewer/repository/files/SHA256SUMS/raw?ref=develop" \
+            -o "${RUNNER_TEMP}/SHA256SUMS"
+          gh attestation verify "${RUNNER_TEMP}/SHA256SUMS" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/publish-gitlab-com.yml" \
+            --source-digest "${GITHUB_SHA}" \
+            --deny-self-hosted-runners
