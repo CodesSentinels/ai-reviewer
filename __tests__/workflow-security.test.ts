@@ -518,3 +518,29 @@ describe('publish-gitlab-com.yml：develop 以产物方式发布到 gitlab.com',
     expect(String(steps[verifyIdx].run)).toMatch(/GITHUB_SHA/)
   })
 })
+
+describe('test.yml：PR 上跑全量测试（#221）', () => {
+  const wf = workflows.find(w => w.name === 'test.yml')
+
+  test('存在，且 job 名为 test（分支保护按这个名字设必须检查）', () => {
+    expect(wf).toBeDefined()
+    expect(Object.keys(wf!.doc.jobs)).toEqual(['test'])
+  })
+
+  test('用 pull_request，不用 pull_request_target；覆盖 develop 和 main', () => {
+    const triggers = triggersOf(wf!.doc)
+    expect(Object.keys(triggers)).toContain('pull_request')
+    expect(Object.keys(triggers)).not.toContain('pull_request_target')
+    expect(triggers.pull_request.branches).toEqual(['develop', 'main'])
+  })
+
+  test('只读权限，且不使用任何 Secret', () => {
+    expect(wf!.doc.permissions).toEqual({contents: 'read'})
+    expect(codeOf(wf!.raw)).not.toMatch(/secrets\./)
+  })
+
+  test('跑的是全量 npm test', () => {
+    const steps = stepsOf(wf!.doc.jobs.test)
+    expect(steps.some(s => typeof s.run === 'string' && s.run.includes('npm test'))).toBe(true)
+  })
+})
