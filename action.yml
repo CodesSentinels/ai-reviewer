@@ -312,7 +312,7 @@ inputs:
     description:
       'Master switch for static analysis (Linter/SAST). When false, all per-tool
       enable_* flags are ignored and the whole Phase 0b lint scan is skipped.'
-    default: 'true'
+    default: 'false'
   enable_eslint:
     required: false
     description:
