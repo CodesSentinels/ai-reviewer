@@ -374,3 +374,116 @@ describe('REVIEW-010：summary 命令可重新生成摘要', () => {
     expect(updated).toContain(stateMarker('commitIdsStart'))
   })
 })
+
+describe('disable_review 更新摘要时保留 reviewed-commit-ids（Issue #230）', () => {
+  const A = 'a'.repeat(40)
+  const commitBlock = (...ids: string[]): string =>
+    `${stateMarker('commitIdsStart')}\n${ids.map(id => `<!-- ${id} -->`).join('\n')}\n${stateMarker(
+      'commitIdsEnd'
+    )}`
+
+  /** 取本轮最终发布的摘要里已审 commit 区块中的 SHA 列表 */
+  function publishedReviewedIds(): string[] {
+    const posted = platformState.createComment.mock.calls
+      .concat(platformState.updateComment.mock.calls)
+      .map((c: any[]) => String(c[3]))
+      .filter((b: string) => b.includes(stateMarker('summarize')))
+      .at(-1) as string
+    const start = posted.indexOf(stateMarker('commitIdsStart'))
+    const end = posted.indexOf(stateMarker('commitIdsEnd'))
+    if (start < 0 || end < 0) return []
+    return [...posted.slice(start, end).matchAll(/<!-- ([0-9a-z]{40}) -->/g)].map(m => m[1])
+  }
+
+  function withExistingSummary(platform: Platform): void {
+    platformState.listComments.mockResolvedValue([
+      comment(100, `旧摘要\n${stateMarker('summarize')}\n${commitBlock(A)}`)
+    ])
+    platformState.listChangeRequestCommits.mockResolvedValue([A, HEAD])
+    void platform
+  }
+
+  test.each<[Platform]>([['github'], ['gitlab']])(
+    '%s：disable_review=true → 摘要保留旧记录 A，且不把当前 HEAD 记为已审',
+    async platform => {
+      const ctx = useCtx(platform)
+      withExistingSummary(platform)
+
+      await codeReview(
+        ctx,
+        makeBot(),
+        makeBot(),
+        makeOptions({disableReview: true}),
+        new Prompts('', '')
+      )
+
+      expect(platformState.submitReviewComments).not.toHaveBeenCalled()
+      expect(publishedReviewedIds()).toEqual([A])
+    }
+  )
+
+  test('对照组：disable_review=false 且行级审查成功 → 在 A 之后追加 HEAD', async () => {
+    const ctx = useCtx()
+    withExistingSummary('github')
+
+    await codeReview(ctx, makeBot(), makeBot(), makeOptions(), new Prompts('', ''))
+
+    expect(publishedReviewedIds()).toEqual([A, HEAD])
+  })
+
+  test('disable_review=true 且没有旧记录 → 不凭空生成记录', async () => {
+    const ctx = useCtx()
+
+    await codeReview(
+      ctx,
+      makeBot(),
+      makeBot(),
+      makeOptions({disableReview: true}),
+      new Prompts('', '')
+    )
+
+    expect(publishedReviewedIds()).toEqual([])
+  })
+
+  test('初始化 PR + disable_review=true → 也不把 HEAD 记为已审（根本没做行级审查）', async () => {
+    const ctx = useCtx()
+    withExistingSummary('github')
+    const files = Array.from({length: 80}, (_, i) => ({
+      filename: `f${i}.ts`,
+      status: 'added',
+      patch: '@@ -0,0 +1,2 @@\n+a\n+b'
+    }))
+    platformState.compareDiff.mockResolvedValue({files, commits: [{sha: HEAD}]})
+
+    await codeReview(
+      ctx,
+      makeBot(),
+      makeBot(),
+      makeOptions({disableReview: true, initialPrSummaryOnly: true}),
+      new Prompts('', '')
+    )
+
+    expect(publishedReviewedIds()).toEqual([A])
+  })
+
+  test('对照组：初始化 PR 且 disable_review=false → 仍把 HEAD 记为已审（Issue #51 行为不变）', async () => {
+    const ctx = useCtx()
+    withExistingSummary('github')
+    const files = Array.from({length: 80}, (_, i) => ({
+      filename: `f${i}.ts`,
+      status: 'added',
+      patch: '@@ -0,0 +1,2 @@\n+a\n+b'
+    }))
+    platformState.compareDiff.mockResolvedValue({files, commits: [{sha: HEAD}]})
+
+    await codeReview(
+      ctx,
+      makeBot(),
+      makeBot(),
+      makeOptions({initialPrSummaryOnly: true}),
+      new Prompts('', '')
+    )
+
+    expect(publishedReviewedIds()).toEqual([A, HEAD])
+  })
+})
