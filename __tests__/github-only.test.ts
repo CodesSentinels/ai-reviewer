@@ -198,6 +198,9 @@ jest.mock('../src/bot', () => ({Bot: jest.fn().mockImplementation(() => botInsta
 const reviewState = {codeReview: jest.fn<(...a: any[]) => Promise<void>>()}
 jest.mock('../src/review', () => ({codeReview: (...a: any[]) => reviewState.codeReview(...a)}))
 
+// 仓库配置读取会走 GitHub API；本文件只验证 GitLab 缺席不影响 GitHub 流程，不需要它
+jest.mock('../src/repo-config', () => ({loadRepoConfig: async () => null}))
+
 const commandHandlerState = {handleCommentEvent: jest.fn<(...a: any[]) => Promise<void>>()}
 jest.mock('../src/command-handler', () => ({
   handleCommentEvent: (...a: any[]) => commandHandlerState.handleCommentEvent(...a)

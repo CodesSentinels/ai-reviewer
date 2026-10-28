@@ -10,7 +10,7 @@
  * ARCH-011：print() 不输出 token / OpenAI Key。
  */
 
-import {getBooleanInput, getInput, getMultilineInput} from '@actions/core'
+import {getBooleanInput, getInput} from '@actions/core'
 import type {BotConfig, ConfigProvider, PromptConfig} from './config-provider'
 import {CONFIG_DEFAULTS, validateFloatStr, validateIntStr} from './config-provider'
 import type {Platform} from './execution-context'
@@ -49,8 +49,9 @@ export class GitHubConfigProvider implements ConfigProvider {
       validateIntStr(getInput('max_files'), P, 'max_files'),
       getBooleanInput('review_simple_changes'),
       getBooleanInput('review_comment_lgtm'),
-      getMultilineInput('path_filters'),
-      getInput('system_message'),
+      // 基线：path_filters / system_message 不再是 Action 输入，仓库定制走 .ai-reviewer.yml（issue #231）
+      [...CONFIG_DEFAULTS.pathFilters],
+      CONFIG_DEFAULTS.systemMessage,
       getInput('openai_light_model'),
       getInput('openai_heavy_model'),
       validateFloatStr(getInput('openai_model_temperature'), P, 'openai_model_temperature'),
@@ -87,7 +88,7 @@ export class GitHubConfigProvider implements ConfigProvider {
       getInput('lint_report_path'),
       validateIntStr(getInput('warn_files'), P, 'warn_files'),
       getBooleanInput('initial_pr_summary_only'),
-      getMultilineInput('path_instructions')
+      []
     )
 
     return this.cachedOptions

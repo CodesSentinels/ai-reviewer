@@ -10,6 +10,7 @@
 import {info, warning} from './actions-log'
 import {minimatch} from 'minimatch'
 import {TokenLimits} from './limits'
+import type {RepoConfig} from './repo-config'
 
 /**
  * Options 类 - 全局配置
@@ -26,6 +27,8 @@ export class Options {
   reviewCommentLGTM: boolean // 是否保留 LGTM 评论
   pathFilters: PathFilter // 文件路径过滤规则
   pathInstructions: PathInstructions // 按路径追加的审查指令
+  private pathFilterRules: string[] // 基线 + 仓库配置的过滤规则原文，供 applyRepoConfig 继续追加
+  private pathInstructionLines: string[] // 同上，路径指令
   systemMessage: string // AI 系统消息（定义角色和行为）
   openaiLightModel: string // 轻量模型名称（用于摘要）
   openaiHeavyModel: string // 重量模型名称（用于代码审查）
@@ -134,6 +137,8 @@ export class Options {
     this.maxFiles = parseInt(maxFiles)
     this.reviewSimpleChanges = reviewSimpleChanges
     this.reviewCommentLGTM = reviewCommentLGTM
+    this.pathFilterRules = [...(pathFilters ?? [])]
+    this.pathInstructionLines = [...(pathInstructions ?? [])]
     this.pathFilters = new PathFilter(pathFilters)
     this.pathInstructions = new PathInstructions(pathInstructions)
     this.systemMessage = systemMessage
@@ -165,6 +170,37 @@ export class Options {
     this.lintReportPath = lintReportPath
     this.warnFiles = parseInt(warnFiles)
     this.initialPrSummaryOnly = initialPrSummaryOnly
+  }
+
+  /**
+   * 叠加仓库级配置（issue #231）。只在白名单字段上追加或覆盖标量，调用方负责
+   * 在创建 Bot 之前调用——Bot 的系统消息和语言在构造时就固定了。
+   *
+   * - path_filters / path_instructions：追加到基线之后（过滤只会收窄，不会放宽）
+   * - system_message_append：接在基线 system_message 后面，不替换
+   * - 其余是标量，仓库值覆盖基线值
+   */
+  applyRepoConfig(rc: RepoConfig): void {
+    if (rc.pathFilters?.length) {
+      this.pathFilterRules = [...this.pathFilterRules, ...rc.pathFilters]
+      this.pathFilters = new PathFilter(this.pathFilterRules)
+    }
+    if (rc.pathInstructions?.length) {
+      this.pathInstructionLines = [...this.pathInstructionLines, ...rc.pathInstructions]
+      this.pathInstructions = new PathInstructions(this.pathInstructionLines)
+    }
+    if (rc.systemMessageAppend) {
+      this.systemMessage = `${this.systemMessage}\n\n${rc.systemMessageAppend}`
+    }
+    if (rc.language !== undefined) this.language = rc.language
+    if (rc.reviewSimpleChanges !== undefined) this.reviewSimpleChanges = rc.reviewSimpleChanges
+    if (rc.reviewCommentLGTM !== undefined) this.reviewCommentLGTM = rc.reviewCommentLGTM
+    if (rc.maxFiles !== undefined) this.maxFiles = rc.maxFiles
+    if (rc.maxReviewComments !== undefined) this.maxReviewComments = rc.maxReviewComments
+    if (rc.enableDependencyAnalysis !== undefined) {
+      this.enableDependencyAnalysis = rc.enableDependencyAnalysis
+    }
+    if (rc.maxDependencyFiles !== undefined) this.maxDependencyFiles = rc.maxDependencyFiles
   }
 
   /** 打印所有配置项到日志，方便调试 */

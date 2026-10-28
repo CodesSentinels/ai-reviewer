@@ -59,18 +59,21 @@ function envFloatStr(key: string, fallback: string): string {
   return validateFloatStr(v, 'gitlab', key)
 }
 
-/** 从环境变量读取多行值（按换行分割） */
-function envMultiline(key: string): string[] | undefined {
-  const v = envStr(key)
-  if (v == null) return undefined
-  return v.split('\n').filter(line => line.trim().length > 0)
-}
-
 /**
  * 受安全强制覆盖保护的字段名称。
  * 即使 CI variable 显式设为 true，也会被强制覆盖为 false。
  */
 const SECURITY_FORCED_FALSE = ['AI_REVIEWER_ENABLE_SHELL', 'AI_REVIEWER_ENABLE_LINT_TOOLS'] as const
+
+/**
+ * 已移除的 CI 变量（issue #231）：提示词和路径规则改由目标分支上的 .ai-reviewer.yml 提供。
+ * 变量仍在时不再生效，仅在日志里提示迁移，避免静默失效。
+ */
+const REMOVED_VARIABLES = [
+  'AI_REVIEWER_SYSTEM_MESSAGE',
+  'AI_REVIEWER_PATH_FILTERS',
+  'AI_REVIEWER_PATH_INSTRUCTIONS'
+] as const
 
 export class GitLabConfigProvider implements ConfigProvider {
   readonly platform: Platform = 'gitlab'
@@ -82,6 +85,9 @@ export class GitLabConfigProvider implements ConfigProvider {
   /** 安全强制覆盖日志（供测试验证） */
   readonly securityOverrides: string[] = []
 
+  /** 仍被设置但已不再生效的 CI 变量名（供日志提示和测试验证） */
+  readonly removedVariables: string[] = []
+
   getOptions(): Options {
     if (this.cachedOptions) return this.cachedOptions
 
@@ -91,6 +97,10 @@ export class GitLabConfigProvider implements ConfigProvider {
       if (raw != null && raw.toLowerCase() !== 'false' && raw !== '0' && raw !== 'no') {
         this.securityOverrides.push(`${key}="${raw}" overridden to false (CFG-002 security policy)`)
       }
+    }
+
+    for (const key of REMOVED_VARIABLES) {
+      if (envStr(key) != null) this.removedVariables.push(key)
     }
 
     // 工具版本覆盖
@@ -125,8 +135,9 @@ export class GitLabConfigProvider implements ConfigProvider {
       envIntStr('AI_REVIEWER_MAX_FILES', CONFIG_DEFAULTS.maxFiles),
       envBool('AI_REVIEWER_REVIEW_SIMPLE_CHANGES') ?? CONFIG_DEFAULTS.reviewSimpleChanges,
       envBool('AI_REVIEWER_REVIEW_COMMENT_LGTM') ?? CONFIG_DEFAULTS.reviewCommentLGTM,
-      envMultiline('AI_REVIEWER_PATH_FILTERS') ?? [...CONFIG_DEFAULTS.pathFilters],
-      envStr('AI_REVIEWER_SYSTEM_MESSAGE') ?? CONFIG_DEFAULTS.systemMessage,
+      // 基线：不再读 CI 变量，仓库定制走 .ai-reviewer.yml（issue #231）
+      [...CONFIG_DEFAULTS.pathFilters],
+      CONFIG_DEFAULTS.systemMessage,
       envStr('AI_REVIEWER_OPENAI_LIGHT_MODEL') ?? CONFIG_DEFAULTS.openaiLightModel,
       envStr('AI_REVIEWER_OPENAI_HEAVY_MODEL') ?? CONFIG_DEFAULTS.openaiHeavyModel,
       envFloatStr('AI_REVIEWER_OPENAI_MODEL_TEMPERATURE', CONFIG_DEFAULTS.openaiModelTemperature),
@@ -160,7 +171,7 @@ export class GitLabConfigProvider implements ConfigProvider {
       '',
       envIntStr('AI_REVIEWER_WARN_FILES', CONFIG_DEFAULTS.warnFiles),
       envBool('AI_REVIEWER_INITIAL_PR_SUMMARY_ONLY') ?? CONFIG_DEFAULTS.initialPrSummaryOnly,
-      envMultiline('AI_REVIEWER_PATH_INSTRUCTIONS') ?? []
+      []
     )
 
     return this.cachedOptions
@@ -205,6 +216,12 @@ export class GitLabConfigProvider implements ConfigProvider {
       log(`  [SECURITY] ${override}`)
     }
 
+    for (const key of this.removedVariables) {
+      log(
+        `  [REMOVED] ${key} is no longer read; move it to .ai-reviewer.yml on the target branch (see README)`
+      )
+    }
+
     log(`[ConfigProvider:gitlab] Configuration:`)
     log(`  debug: ${opts.debug}`)
     log(`  disable_review: ${opts.disableReview}`)
@@ -216,10 +233,8 @@ export class GitLabConfigProvider implements ConfigProvider {
     log(`  review_comment_lgtm: ${opts.reviewCommentLGTM}`)
     log(`  path_filters: ${opts.pathFilters}`)
     log(`  path_instructions: ${opts.pathInstructions}`)
-    // 只标注是否自定义，不打印原文：默认 prompt 面向双平台书写，原文进 job 日志没有排障价值
-    log(
-      `  system_message: ${envStr('AI_REVIEWER_SYSTEM_MESSAGE') != null ? '(custom)' : '(default)'}`
-    )
+    // 基线文案不进日志：默认 prompt 面向双平台书写，原文没有排障价值；仓库追加见 [repo-config] 日志
+    log(`  system_message: (baseline)`)
     log(`  openai_light_model: ${opts.openaiLightModel}`)
     log(`  openai_heavy_model: ${opts.openaiHeavyModel}`)
     log(`  openai_model_temperature: ${opts.openaiModelTemperature}`)
