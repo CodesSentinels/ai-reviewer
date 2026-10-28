@@ -451,9 +451,10 @@ describe('gitlab-trigger.ts run()', () => {
 
       await runTrigger()
 
-      // dispatcher.ts 自己也会查一次 head/base sha + 作者（与陈旧检查无关），
-      // 这里断言只发生了那一次，证明 EVENT-012 没有对评论事件多查一次陈旧账本。
-      expect(mockMergeRequests.show).toHaveBeenCalledTimes(1)
+      // 两次查询都与陈旧检查无关：dispatcher.ts 查一次 head/base sha + 作者，
+      // repo-config 读 .ai-reviewer.yml 前查一次 base。断言恰好是这两次，
+      // 证明 EVENT-012 没有对评论事件多查一次陈旧账本。
+      expect(mockMergeRequests.show).toHaveBeenCalledTimes(2)
       const logged = logSpy.mock.calls.map(c => String(c[0])).join('\n')
       expect(logged).not.toContain('skipping stale delivery')
     })

@@ -267,9 +267,9 @@ review comments
   changes (e.g. typo fixes) and when changes look good for the most part. It can
   be disabled by setting `review_simple_changes` and `review_comment_lgtm` to
   `true`.
-- **Customizable prompts**: Tailor the `system_message`, `summarize`, and
-  `summarize_release_notes` prompts to focus on specific aspects of the review
-  process or even change the review objective.
+- **Customizable prompts**: Append repository-specific guidance with
+  `system_message_append` and `path_instructions` in `.ai-reviewer.yml`, or tune
+  the `summarize` and `summarize_release_notes` prompts.
 
 To use this tool, you need to add the provided YAML file to your repository and
 configure the required environment variables, such as `GITHUB_TOKEN` and
@@ -345,39 +345,44 @@ gpt-4o on many benchmarks at 80% lower cost, making it the best value for code r
 
 See: [action.yml](./action.yml)
 
-Tip: You can change the bot personality by configuring the `system_message`
-value. For example, to review docs/blog posts, you can use the following prompt:
+### Repository config: `.ai-reviewer.yml`
 
-<details>
-<summary>Blog Reviewer Prompt</summary>
+Prompt and path settings live in a `.ai-reviewer.yml` at the root of each
+reviewed repository, layered on top of a shared baseline shipped with this
+action. The `system_message`, `path_filters` and `path_instructions` action
+inputs (and the GitLab `AI_REVIEWER_SYSTEM_MESSAGE`, `AI_REVIEWER_PATH_FILTERS`,
+`AI_REVIEWER_PATH_INSTRUCTIONS` variables) were removed: they are no longer read.
 
 ```yaml
-system_message: |
-  You are `@ai-reviewer` (aka `github-actions[bot]`), a language model
-  trained by OpenAI. Your purpose is to act as a highly experienced
-  DevRel (developer relations) professional with focus on cloud-native
-  infrastructure.
-
-  AI Reviewer is an AI-powered code reviewer. It boosts code quality and cuts manual effort. Offers context-aware, line-by-line feedback, highlights critical changes,
-  enables bot interaction, and lets you commit suggestions directly from GitHub.
-
-  When reviewing or generating content focus on key areas such as -
-  - Accuracy
-  - Relevance
-  - Clarity
-  - Technical depth
-  - Call-to-action
-  - SEO optimization
-  - Brand consistency
-  - Grammar and prose
-  - Typos
-  - Hyperlink suggestions
-  - Graphics or images (suggest Dall-E image prompts if needed)
-  - Empathy
-  - Engagement
+version: 1
+path_filters: # appended to the baseline; can only narrow
+  - "!**/generated/**"
+path_instructions: # appended after the baseline rules
+  "src/api/**": validate every request parameter and check authorization
+  "migrations/**": check rollback, table locking and existing data
+system_message_append: | # appended to the baseline system message
+  Money fields in this repository always use Decimal.
+language: zh-CN
 ```
 
-</details>
+- The file is read from the **target branch** only, never from the PR head, so a
+  PR cannot change its own review rules.
+- The baseline cannot be replaced, only appended to. `path_filters` can only
+  narrow: a baseline exclusion cannot be undone, and adding a plain include rule
+  (e.g. `src/**`) limits the review to those paths.
+- Allowed keys: `path_filters`, `path_instructions`, `system_message_append`,
+  `language`, `review_simple_changes`, `review_comment_lgtm`, `max_files`,
+  `max_review_comments`, `enable_dependency_analysis`, `max_dependency_files`.
+  Anything else (models, `openai_base_url`, shell/lint switches, `disable_review`…)
+  is ignored with a warning.
+- A missing, malformed or oversized (> 64KB) file falls back to the baseline and
+  never fails the review.
+
+#### Migrating from the removed inputs
+
+Add `.ai-reviewer.yml` to the repository **before** upgrading (older versions
+ignore the file), then upgrade, check the `[repo-config]` log lines, and finally
+delete the removed inputs from the workflow / CI variables.
 
 ## Conversation with AI Reviewer
 

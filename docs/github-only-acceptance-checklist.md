@@ -30,7 +30,7 @@ enable_web_search: true         （action.yml 默认）
 enable_dependency_analysis: true（action.yml 默认）
 max_review_comments: 20
 max_files: 150
-path_filters: 排除 dist/** 与 **/*.lock
+path_filters: 基线（含 dist/** 与 **/*.lock），不再是 Action 输入，仓库定制走 .ai-reviewer.yml
 bot_github_login: 未配置        →  身份靠 getAuthenticatedLogin()，即 github-actions[bot]
 ```
 

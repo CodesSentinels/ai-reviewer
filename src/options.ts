@@ -10,6 +10,7 @@
 import {info, warning} from './actions-log'
 import {minimatch} from 'minimatch'
 import {TokenLimits} from './limits'
+import {mergeConfig, type RepoConfig} from './repo-config-merge'
 
 /**
  * Options 类 - 全局配置
@@ -26,6 +27,8 @@ export class Options {
   reviewCommentLGTM: boolean // 是否保留 LGTM 评论
   pathFilters: PathFilter // 文件路径过滤规则
   pathInstructions: PathInstructions // 按路径追加的审查指令
+  private pathFilterRules: string[] // 基线 + 仓库配置的过滤规则原文，供 applyRepoConfig 继续追加
+  private pathInstructionLines: string[] // 同上，路径指令
   systemMessage: string // AI 系统消息（定义角色和行为）
   openaiLightModel: string // 轻量模型名称（用于摘要）
   openaiHeavyModel: string // 重量模型名称（用于代码审查）
@@ -134,6 +137,8 @@ export class Options {
     this.maxFiles = parseInt(maxFiles)
     this.reviewSimpleChanges = reviewSimpleChanges
     this.reviewCommentLGTM = reviewCommentLGTM
+    this.pathFilterRules = [...(pathFilters ?? [])]
+    this.pathInstructionLines = [...(pathInstructions ?? [])]
     this.pathFilters = new PathFilter(pathFilters)
     this.pathInstructions = new PathInstructions(pathInstructions)
     this.systemMessage = systemMessage
@@ -165,6 +170,41 @@ export class Options {
     this.lintReportPath = lintReportPath
     this.warnFiles = parseInt(warnFiles)
     this.initialPrSummaryOnly = initialPrSummaryOnly
+  }
+
+  /**
+   * 叠加仓库级配置（issue #231）。合并规则在 mergeConfig（纯函数）里，这里只负责
+   * 取出当前值、合并、写回，并重建依赖规则原文的 PathFilter / PathInstructions。
+   * 调用方负责在创建 Bot 之前调用——Bot 的系统消息和语言在构造时就固定了。
+   */
+  applyRepoConfig(rc: RepoConfig): void {
+    const merged = mergeConfig(
+      {
+        pathFilterRules: this.pathFilterRules,
+        pathInstructionLines: this.pathInstructionLines,
+        systemMessage: this.systemMessage,
+        language: this.language,
+        reviewSimpleChanges: this.reviewSimpleChanges,
+        reviewCommentLGTM: this.reviewCommentLGTM,
+        maxFiles: this.maxFiles,
+        maxReviewComments: this.maxReviewComments,
+        enableDependencyAnalysis: this.enableDependencyAnalysis,
+        maxDependencyFiles: this.maxDependencyFiles
+      },
+      rc
+    )
+    this.pathFilterRules = merged.pathFilterRules
+    this.pathFilters = new PathFilter(merged.pathFilterRules)
+    this.pathInstructionLines = merged.pathInstructionLines
+    this.pathInstructions = new PathInstructions(merged.pathInstructionLines)
+    this.systemMessage = merged.systemMessage
+    this.language = merged.language
+    this.reviewSimpleChanges = merged.reviewSimpleChanges
+    this.reviewCommentLGTM = merged.reviewCommentLGTM
+    this.maxFiles = merged.maxFiles
+    this.maxReviewComments = merged.maxReviewComments
+    this.enableDependencyAnalysis = merged.enableDependencyAnalysis
+    this.maxDependencyFiles = merged.maxDependencyFiles
   }
 
   /** 打印所有配置项到日志，方便调试 */

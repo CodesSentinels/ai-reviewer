@@ -321,6 +321,27 @@ export class GitHubPlatform implements IGitPlatform {
     }
   }
 
+  async getFileContentStrict(
+    owner: string,
+    repo: string,
+    path: string,
+    ref: string
+  ): Promise<string | null> {
+    try {
+      const {data} = await octokit.repos.getContent({owner, repo, path, ref})
+      const file = data as {content?: string; encoding?: string}
+      if (file.content && file.encoding === 'base64') {
+        return Buffer.from(file.content, 'base64').toString()
+      }
+      // 目录、符号链接等：这条路径上没有可读的文件内容
+      return null
+    } catch (e) {
+      const err = toGitPlatformError(e)
+      if (err.errorKind === 'not_found') return null
+      throw err
+    }
+  }
+
   // ─── 4. 顶层评论 ─────────────────────────────────────────────────────────
 
   /**

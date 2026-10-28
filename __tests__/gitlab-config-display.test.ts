@@ -10,12 +10,14 @@ import * as fs from 'fs'
 import * as path from 'path'
 import {PathFilter} from '../src/options'
 import {GitLabConfigProvider} from '../src/platform/gitlab-config-provider'
+import {CONFIG_DEFAULTS} from '../src/platform/config-provider'
 import {buildConfigurationMessage} from '../src/commands/handlers/configuration'
 
 const TOUCHED = [
   'AI_REVIEWER_GITLAB_CONCURRENCY_LIMIT',
   'AI_REVIEWER_GITHUB_CONCURRENCY_LIMIT',
   'AI_REVIEWER_PATH_FILTERS',
+  'AI_REVIEWER_PATH_INSTRUCTIONS',
   'AI_REVIEWER_SYSTEM_MESSAGE'
 ]
 let saved: Record<string, string | undefined>
@@ -75,17 +77,28 @@ describe('GitLab 平台 API 并发上限变量', () => {
 })
 
 describe('GitLab 配置日志', () => {
-  test('path_filters 按规则展示', () => {
+  test('path_filters 展示基线规则，不再读 CI 变量', () => {
     process.env.AI_REVIEWER_PATH_FILTERS = 'src/**\n!dist/**'
-    expect(printed()).toContain('  path_filters: src/**, !dist/**')
+    const lines = printed()
+    expect(lines).toContain(`  path_filters: ${CONFIG_DEFAULTS.pathFilters.join(', ')}`)
+    expect(lines.join('\n')).not.toContain('path_filters: src/**')
   })
 
-  test('system_message 只标注是否自定义，不打印原文', () => {
-    expect(printed()).toContain('  system_message: (default)')
+  test('system_message 只标注基线，不打印原文，也不读 CI 变量', () => {
     process.env.AI_REVIEWER_SYSTEM_MESSAGE = 'You are a careful reviewer. SECRET-PROMPT-TEXT'
     const lines = printed()
-    expect(lines).toContain('  system_message: (custom)')
+    expect(lines).toContain('  system_message: (baseline)')
     expect(lines.join('\n')).not.toContain('SECRET-PROMPT-TEXT')
+  })
+
+  test('已移除的 CI 变量仍被设置时输出迁移提示', () => {
+    process.env.AI_REVIEWER_PATH_INSTRUCTIONS = 'src/**: x'
+    const lines = printed()
+    expect(lines.some(l => l.includes('[REMOVED] AI_REVIEWER_PATH_INSTRUCTIONS'))).toBe(true)
+  })
+
+  test('没有设置已移除的变量时不输出迁移提示', () => {
+    expect(printed().some(l => l.includes('[REMOVED]'))).toBe(false)
   })
 
   test('默认配置下整段日志不含 GitHub 字样', () => {

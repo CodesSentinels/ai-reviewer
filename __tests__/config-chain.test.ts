@@ -467,31 +467,6 @@ const CONFIG_MATRIX: MatrixEntry[] = [
     expected: true
   },
   {
-    field: 'pathFilters',
-    input: 'path_filters',
-    gitlabEnv: 'AI_REVIEWER_PATH_FILTERS',
-    value: '!dist/**',
-    // PathFilter 是对象，比较它对同一路径的判定结果
-    read: o => o.checkPath('dist/index.js'),
-    expected: false
-  },
-  {
-    field: 'pathInstructions',
-    input: 'path_instructions',
-    gitlabEnv: 'AI_REVIEWER_PATH_INSTRUCTIONS',
-    value: 'src/api/**: 校验入参',
-    // PathInstructions 是对象，比较它对同一路径命中的指令
-    read: o => o.pathInstructions.match('src/api/user.ts'),
-    expected: ['校验入参']
-  },
-  {
-    field: 'systemMessage',
-    input: 'system_message',
-    gitlabEnv: 'AI_REVIEWER_SYSTEM_MESSAGE',
-    value: '自定义系统消息',
-    expected: '自定义系统消息'
-  },
-  {
     field: 'openaiLightModel',
     input: 'openai_light_model',
     gitlabEnv: 'AI_REVIEWER_OPENAI_LIGHT_MODEL',
@@ -633,7 +608,12 @@ const INTENTIONALLY_DIVERGENT: Record<string, string> = {
   lintReportPath: 'SEC-002：只在 GitHub 低权限 lint job 链路上有值',
   lightTokenLimits: '由模型名推导，不是独立配置项',
   heavyTokenLimits: '同上',
-  minimizeBotWrites: '不是配置项：未设置时两个平台都不省写入；只有调用方显式传 true 才省'
+  minimizeBotWrites: '不是配置项：未设置时两个平台都不省写入；只有调用方显式传 true 才省',
+  pathFilters: '不再是平台输入（issue #231）：两平台同为基线，仓库定制走 .ai-reviewer.yml',
+  pathInstructions: '同上：基线为空，仓库定制走 .ai-reviewer.yml',
+  systemMessage: '同上：两平台同为基线，仓库只能 system_message_append',
+  pathFilterRules: '内部：applyRepoConfig 用来继续追加的规则原文',
+  pathInstructionLines: '内部：同上，路径指令原文'
 }
 
 /**
@@ -644,8 +624,7 @@ const INTENTIONALLY_DIVERGENT: Record<string, string> = {
  * 这两项本来就允许发散。
  */
 const SPECIALLY_COMPARED: Record<string, string> = {
-  toolVersionOverrides: '对象形态：设相同覆盖后逐 key 比较完整 map',
-  pathFilters: '对象形态：通过 checkPath 对同一路径的判定结果比较（已在矩阵里）'
+  toolVersionOverrides: '对象形态：设相同覆盖后逐 key 比较完整 map'
 }
 
 const savedEnv: Record<string, string | undefined> = {}
