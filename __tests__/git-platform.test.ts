@@ -610,10 +610,10 @@ describe('GitHubPlatform', () => {
       expect(login).toBe('my-bot')
     })
 
-    test('失败时回退为 github-actions', async () => {
+    test('失败时回退为 github-actions[bot]（与 REST 里评论作者的真实登录名一致）', async () => {
       mockOctokit.users.getAuthenticated.mockRejectedValue(new Error('no scope'))
       const login = await platform.getAuthenticatedLogin()
-      expect(login).toBe('github-actions')
+      expect(login).toBe('github-actions[bot]')
     })
   })
 

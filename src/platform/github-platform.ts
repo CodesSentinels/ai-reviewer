@@ -1048,7 +1048,10 @@ export class GitHubPlatform implements IGitPlatform {
       const {data} = await octokit.users.getAuthenticated()
       return data.login
     } catch {
-      return 'github-actions'
+      // GITHUB_TOKEN / App 安装令牌调不了 GET /user。评论作者在 REST 里的真实登录名
+      // 带 [bot] 后缀，这里的回退值必须与它一致；Commenter 另外会用自己写成功的评论
+      // 的作者纠正（见 learnBotLoginFromOwnWrite）。
+      return 'github-actions[bot]'
     }
   }
 
