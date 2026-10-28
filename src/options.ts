@@ -10,7 +10,7 @@
 import {info, warning} from './actions-log'
 import {minimatch} from 'minimatch'
 import {TokenLimits} from './limits'
-import type {RepoConfig} from './repo-config'
+import {mergeConfig, type RepoConfig} from './repo-config-merge'
 
 /**
  * Options 类 - 全局配置
@@ -173,34 +173,38 @@ export class Options {
   }
 
   /**
-   * 叠加仓库级配置（issue #231）。只在白名单字段上追加或覆盖标量，调用方负责
-   * 在创建 Bot 之前调用——Bot 的系统消息和语言在构造时就固定了。
-   *
-   * - path_filters / path_instructions：追加到基线之后（过滤只会收窄，不会放宽）
-   * - system_message_append：接在基线 system_message 后面，不替换
-   * - 其余是标量，仓库值覆盖基线值
+   * 叠加仓库级配置（issue #231）。合并规则在 mergeConfig（纯函数）里，这里只负责
+   * 取出当前值、合并、写回，并重建依赖规则原文的 PathFilter / PathInstructions。
+   * 调用方负责在创建 Bot 之前调用——Bot 的系统消息和语言在构造时就固定了。
    */
   applyRepoConfig(rc: RepoConfig): void {
-    if (rc.pathFilters?.length) {
-      this.pathFilterRules = [...this.pathFilterRules, ...rc.pathFilters]
-      this.pathFilters = new PathFilter(this.pathFilterRules)
-    }
-    if (rc.pathInstructions?.length) {
-      this.pathInstructionLines = [...this.pathInstructionLines, ...rc.pathInstructions]
-      this.pathInstructions = new PathInstructions(this.pathInstructionLines)
-    }
-    if (rc.systemMessageAppend) {
-      this.systemMessage = `${this.systemMessage}\n\n${rc.systemMessageAppend}`
-    }
-    if (rc.language !== undefined) this.language = rc.language
-    if (rc.reviewSimpleChanges !== undefined) this.reviewSimpleChanges = rc.reviewSimpleChanges
-    if (rc.reviewCommentLGTM !== undefined) this.reviewCommentLGTM = rc.reviewCommentLGTM
-    if (rc.maxFiles !== undefined) this.maxFiles = rc.maxFiles
-    if (rc.maxReviewComments !== undefined) this.maxReviewComments = rc.maxReviewComments
-    if (rc.enableDependencyAnalysis !== undefined) {
-      this.enableDependencyAnalysis = rc.enableDependencyAnalysis
-    }
-    if (rc.maxDependencyFiles !== undefined) this.maxDependencyFiles = rc.maxDependencyFiles
+    const merged = mergeConfig(
+      {
+        pathFilterRules: this.pathFilterRules,
+        pathInstructionLines: this.pathInstructionLines,
+        systemMessage: this.systemMessage,
+        language: this.language,
+        reviewSimpleChanges: this.reviewSimpleChanges,
+        reviewCommentLGTM: this.reviewCommentLGTM,
+        maxFiles: this.maxFiles,
+        maxReviewComments: this.maxReviewComments,
+        enableDependencyAnalysis: this.enableDependencyAnalysis,
+        maxDependencyFiles: this.maxDependencyFiles
+      },
+      rc
+    )
+    this.pathFilterRules = merged.pathFilterRules
+    this.pathFilters = new PathFilter(merged.pathFilterRules)
+    this.pathInstructionLines = merged.pathInstructionLines
+    this.pathInstructions = new PathInstructions(merged.pathInstructionLines)
+    this.systemMessage = merged.systemMessage
+    this.language = merged.language
+    this.reviewSimpleChanges = merged.reviewSimpleChanges
+    this.reviewCommentLGTM = merged.reviewCommentLGTM
+    this.maxFiles = merged.maxFiles
+    this.maxReviewComments = merged.maxReviewComments
+    this.enableDependencyAnalysis = merged.enableDependencyAnalysis
+    this.maxDependencyFiles = merged.maxDependencyFiles
   }
 
   /** 打印所有配置项到日志，方便调试 */

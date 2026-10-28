@@ -241,6 +241,20 @@ export interface IGitPlatform {
   /** 获取指定 ref 下的文件内容（base64 解码后的字符串） */
   getFileContent(owner: string, repo: string, path: string, ref: string): Promise<string | null>
 
+  /**
+   * 严格读取：文件不存在（404）返回 null；权限不足、限流、5xx、网络错误等一律抛出。
+   *
+   * 与 getFileContent 的区别：后者把失败当作「没有这个文件」，适合尽力而为的上下文
+   * 读取；读取配置文件不能这样——读不到和不存在必须区分，否则权限问题会被悄悄
+   * 当成「没有仓库配置」。两个平台语义一致。
+   */
+  getFileContentStrict(
+    owner: string,
+    repo: string,
+    path: string,
+    ref: string
+  ): Promise<string | null>
+
   // ─── 4. 顶层评论（issue comment / MR note）──────────────────────────────
 
   /** 创建顶层评论 */
