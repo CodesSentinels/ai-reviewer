@@ -93028,7 +93028,9 @@ ${summariesFailed.length > 0
     const reviewsFailed = [];
     beginLogSection('ai_review_review', 'Review files');
     // ==================== 阶段四：逐文件代码审查 ====================
-    if (!options.disableReview && runOptions.summaryOnly !== true && !skipLineReviewForInitialPr) {
+    // 本轮是否进入逐文件行级审查。没进入时，摘要里的 reviewed-commit-ids 不能被新摘要覆盖掉（见发布阶段）。
+    const lineReviewRan = !options.disableReview && runOptions.summaryOnly !== true && !skipLineReviewForInitialPr;
+    if (lineReviewRan) {
         // 筛选出需要审查的文件（分类为 NEEDS_REVIEW 的文件）
         const filesAndChangesReview = filesAndChanges.filter(([filename]) => {
             const needsReview = summaries.find(([summaryFilename]) => summaryFilename === filename)?.[2] ?? true;
@@ -93435,15 +93437,21 @@ ${reviewsSkipped.length > 0
         await commenter.submitReview(pr.number, commits[commits.length - 1].sha, statusMsg, threadStatusMap, async () => (await ensureHeadFresh('line-level write')).fresh);
     }
     beginLogSection('ai_review_publish', 'Publish comments and summary');
-    // summary-only 等跳过审查阶段的场景：保留既有的已审查 commit 记录，
-    // 否则 replace 摘要评论会清空增量审查标记，导致下次自动审查从 base 重审
-    if (runOptions.summaryOnly === true && existingCommitIdsBlock !== '') {
-        summarizeComment += `\n${existingCommitIdsBlock}`;
-    }
-    else if (skipLineReviewForInitialPr && runOptions.summaryOnly !== true) {
-        // 初始化 PR 的整体已经由摘要覆盖：把 HEAD 记为已审，之后的 push 只审增量。
-        // 不记的话，下次自动审查仍从 base 起算、再次被判为初始化 PR，后续改动永远得不到行级审查。
-        summarizeComment += `\n${commenter.addReviewedCommitId(existingCommitIdsBlock, pr.head.sha)}`;
+    // 已审查 commit 记录的统一规则（摘要用 replace 发布，不写就会被清空）：
+    //   - 行级审查跑过：阶段四已经按结果处理（成功追加 HEAD，有可重试失败则保留旧记录）；
+    //   - 没跑过（summaryOnly / disable_review 等）：保留旧记录，不把 HEAD 记为已审。
+    //     否则下次恢复审查会找不到起点，从 base 全量重审；
+    //   - 唯一例外：初始化 PR 的摘要已覆盖整体，自动审查下把 HEAD 记为已审（disable_review 时不适用，
+    //     那时根本没做过行级审查）。
+    if (!lineReviewRan) {
+        if (skipLineReviewForInitialPr && runOptions.summaryOnly !== true && !options.disableReview) {
+            // 初始化 PR 的整体已经由摘要覆盖：把 HEAD 记为已审，之后的 push 只审增量。
+            // 不记的话，下次自动审查仍从 base 起算、再次被判为初始化 PR，后续改动永远得不到行级审查。
+            summarizeComment += `\n${commenter.addReviewedCommitId(existingCommitIdsBlock, pr.head.sha)}`;
+        }
+        else if (existingCommitIdsBlock !== '') {
+            summarizeComment += `\n${existingCommitIdsBlock}`;
+        }
     }
     // Issue #51：大型 PR 提醒与初始化 PR 说明，放在必定发布的摘要评论里
     const notices = [
