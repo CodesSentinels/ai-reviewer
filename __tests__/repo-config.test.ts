@@ -263,7 +263,8 @@ describe('loadRepoConfig', () => {
     projectPath: 'octo/demo',
     projectId: 'octo/demo',
     changeRequestId: 7,
-    baseSha: 'base-sha-1',
+    // 故意给一个「看起来可用」的 baseSha 和 headSha：实现不应该使用它们
+    baseSha: 'ctx-base-sha',
     headSha: 'head-sha-1',
     ...over
   })
@@ -273,47 +274,45 @@ describe('loadRepoConfig', () => {
       baseRef: 'main',
       ...over
     })),
-    getFileContent: jest.fn(async () => text)
+    getFileContentStrict: jest.fn(async () => text)
   })
 
-  test('GitHub PR 事件：直接用 ctx.baseSha 读，不多一次 getChangeRequest；从不读 head', async () => {
-    const p = platform('language: zh-CN\n')
-    const cfg = await loadRepoConfig(p, ctx(), log())
-    expect(cfg).toEqual({language: 'zh-CN'})
-    expect(p.getChangeRequest).not.toHaveBeenCalled()
-    expect(p.getFileContent).toHaveBeenCalledWith('octo', 'demo', REPO_CONFIG_PATH, 'base-sha-1')
-    for (const call of p.getFileContent.mock.calls) {
-      expect(call[3]).not.toBe('head-sha-1')
+  test.each([
+    ['github', 'octo/demo', 'octo', 'demo'],
+    ['gitlab', 'grp/sub/demo', 'grp/sub', 'demo']
+  ])(
+    '%s：一律经 getChangeRequest 取 base，不用 ctx.baseSha，也从不读 head',
+    async (plat, projectPath, owner, repo) => {
+      const p = platform('language: zh-CN\n')
+      const cfg = await loadRepoConfig(p, ctx({platform: plat, projectPath}), log())
+
+      expect(cfg).toEqual({language: 'zh-CN'})
+      expect(p.getChangeRequest).toHaveBeenCalledWith(owner, repo, 7)
+      expect(p.getFileContentStrict).toHaveBeenCalledWith(
+        owner,
+        repo,
+        REPO_CONFIG_PATH,
+        'cr-base-sha'
+      )
+      for (const call of p.getFileContentStrict.mock.calls) {
+        expect(call[3]).not.toBe('head-sha-1')
+        expect(call[3]).not.toBe('ctx-base-sha')
+      }
     }
-  })
-
-  test('评论事件（ctx.baseSha 为空）：经 getChangeRequest 取 base', async () => {
-    const p = platform('language: zh-CN\n')
-    await loadRepoConfig(p, ctx({baseSha: ''}), log())
-    expect(p.getChangeRequest).toHaveBeenCalledWith('octo', 'demo', 7)
-    expect(p.getFileContent).toHaveBeenCalledWith('octo', 'demo', REPO_CONFIG_PATH, 'cr-base-sha')
-  })
-
-  test('GitLab：ctx.baseSha 是 oldrev 不是 base，一律经 getChangeRequest', async () => {
-    const p = platform('language: zh-CN\n')
-    await loadRepoConfig(
-      p,
-      ctx({platform: 'gitlab', projectPath: 'grp/sub/demo', baseSha: 'oldrev-not-base'}),
-      log()
-    )
-    expect(p.getChangeRequest).toHaveBeenCalledWith('grp/sub', 'demo', 7)
-    expect(p.getFileContent).toHaveBeenCalledWith(
-      'grp/sub',
-      'demo',
-      REPO_CONFIG_PATH,
-      'cr-base-sha'
-    )
-  })
+  )
 
   test('getChangeRequest 没给 sha 时退到目标分支名', async () => {
     const p = platform('language: zh-CN\n', {baseSha: ''})
-    await loadRepoConfig(p, ctx({baseSha: ''}), log())
-    expect(p.getFileContent).toHaveBeenCalledWith('octo', 'demo', REPO_CONFIG_PATH, 'main')
+    await loadRepoConfig(p, ctx(), log())
+    expect(p.getFileContentStrict).toHaveBeenCalledWith('octo', 'demo', REPO_CONFIG_PATH, 'main')
+  })
+
+  test('sha 和分支名都没有 → null 并 warning，不读文件', async () => {
+    const l = log()
+    const p = platform('x', {baseSha: '', baseRef: ''})
+    expect(await loadRepoConfig(p, ctx(), l)).toBeNull()
+    expect(p.getFileContentStrict).not.toHaveBeenCalled()
+    expect(l.warning).toHaveBeenCalledWith(expect.stringContaining('no base ref'))
   })
 
   test('文件不存在 → null，只是 info，不 warning', async () => {
@@ -322,14 +321,24 @@ describe('loadRepoConfig', () => {
     expect(l.warning).not.toHaveBeenCalled()
   })
 
-  test('读取抛错 → null 并 warning，不向上抛', async () => {
+  test('读取抛错（权限 / 限流 / 5xx）→ null 并 warning，不向上抛', async () => {
     const l = log()
     const p = platform('x')
-    p.getFileContent = jest.fn(async () => {
+    p.getFileContentStrict = jest.fn(async () => {
       throw new Error('403 Forbidden')
     })
     expect(await loadRepoConfig(p, ctx(), l)).toBeNull()
     expect(l.warning).toHaveBeenCalledWith(expect.stringContaining('403 Forbidden'))
+  })
+
+  test('getChangeRequest 抛错 → null 并 warning', async () => {
+    const l = log()
+    const p = platform('x')
+    p.getChangeRequest = jest.fn(async () => {
+      throw new Error('rate limited')
+    })
+    expect(await loadRepoConfig(p, ctx(), l)).toBeNull()
+    expect(l.warning).toHaveBeenCalledWith(expect.stringContaining('rate limited'))
   })
 
   test('配置里的 warning 逐条输出，生效的有效字段仍返回', async () => {

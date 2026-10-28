@@ -14,6 +14,7 @@
  */
 
 import {CORE_SCHEMA, load} from 'js-yaml'
+import type {RepoConfig} from './repo-config-merge'
 import type {ExecutionContext} from './platform/execution-context'
 import type {IGitPlatform} from './platform/git-platform'
 import {repoCoordsOf} from './platform/run-context'
@@ -21,20 +22,7 @@ import {repoCoordsOf} from './platform/run-context'
 export const REPO_CONFIG_PATH = '.ai-reviewer.yml'
 export const REPO_CONFIG_MAX_BYTES = 64 * 1024
 
-/** 仓库层可设置的字段（已规范化为 Options 使用的形态） */
-export interface RepoConfig {
-  pathFilters?: string[]
-  /** 每项是一条 `<glob>: <指令>`，直接交给 PathInstructions */
-  pathInstructions?: string[]
-  systemMessageAppend?: string
-  language?: string
-  reviewSimpleChanges?: boolean
-  reviewCommentLGTM?: boolean
-  maxFiles?: number
-  maxReviewComments?: number
-  enableDependencyAnalysis?: boolean
-  maxDependencyFiles?: number
-}
+export type {RepoConfig}
 
 export interface ParsedRepoConfig {
   config: RepoConfig
@@ -246,32 +234,30 @@ export interface RepoConfigLogger {
 /**
  * 读取并解析目标分支上的 `.ai-reviewer.yml`。
  *
- * 读取版本：优先 PR/MR 的 base commit SHA，其次目标分支名。两者都不是 PR head，
- * PR 作者改不了。注意 ExecutionContext.baseSha 在评论事件里为空，GitLab MR 事件里
- * 也不是 base，所以统一经 getChangeRequest 取。
+ * 读取版本：优先 PR/MR 的 base commit SHA（GitLab 是 merge-base），其次目标分支名。
+ * 两者都不是 PR head，PR 作者改不了。两个平台一律经 getChangeRequest 取。
  *
  * 返回 null 表示没有可用的仓库配置（文件不存在，或读取失败——后者已 warning）。
  */
 export async function loadRepoConfig(
-  platform: Pick<IGitPlatform, 'getChangeRequest' | 'getFileContent'>,
+  platform: Pick<IGitPlatform, 'getChangeRequest' | 'getFileContentStrict'>,
   ctx: ExecutionContext,
   log: RepoConfigLogger
 ): Promise<RepoConfig | null> {
   let text: string | null
   try {
     const {owner, repo} = repoCoordsOf(ctx)
-    // GitHub 的 PR 事件自带 base.sha，省一次 API 调用；评论事件为空，GitLab 的
-    // baseSha 字段是 oldrev 而不是 base，这两种情况都经 getChangeRequest 取。
-    let ref = ctx.platform === 'github' ? ctx.baseSha : ''
-    if (!ref) {
-      const cr = await platform.getChangeRequest(owner, repo, ctx.changeRequestId)
-      ref = cr.baseSha || cr.baseRef
-    }
+    // 两个平台走同一条路径：一律经 getChangeRequest 取 base。
+    // 不用 ctx.baseSha：评论事件里它为空，GitLab 的 MR 事件里它是 oldrev 而不是 base。
+    const cr = await platform.getChangeRequest(owner, repo, ctx.changeRequestId)
+    const ref = cr.baseSha || cr.baseRef
     if (!ref) {
       log.warning(`repo-config: no base ref for #${ctx.changeRequestId}, using baseline only`)
       return null
     }
-    text = await platform.getFileContent(owner, repo, REPO_CONFIG_PATH, ref)
+    // 严格读取：404 → null；权限不足、限流、5xx 等抛出，由下面的 catch 给 warning，
+    // 不能当成“没有这个文件”而悄悄回退
+    text = await platform.getFileContentStrict(owner, repo, REPO_CONFIG_PATH, ref)
   } catch (e) {
     log.warning(
       `repo-config: could not read ${REPO_CONFIG_PATH} (${
