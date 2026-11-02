@@ -1,11 +1,13 @@
 /**
  * repo-config.ts - 仓库级配置 `.ai-reviewer.yml`（issue #231）
  *
- * 分层：基线（CONFIG_DEFAULTS）→ 仓库配置。仓库层只能在白名单内追加或收窄：
- * - system_message：只能 `project_context` 追加，没有整体替换的入口
+ * 分层：基线（CONFIG_DEFAULTS）→ 仓库配置。仓库层只接受下面五项，其余一律忽略并 warning：
+ * - version
  * - path_filters / path_instructions：追加到基线之后；排除规则命中即排除，
  *   所以仓库无法把基线已排除的文件重新纳入
- * - 其余白名单字段是标量，仓库值覆盖基线值
+ * - profile：语言 / 领域白名单枚举，对应我们自己维护的提示词片段
+ * - project_context：自然语言的项目背景，是数据不是指令，经 scrubber 后包进系统消息；
+ *   system_message 没有整体替换的入口
  *
  * 安全：文件只从目标分支（base）读取，绝不读 PR head——pull_request_target 持有
  * 密钥，head 内容由 PR 作者控制。读取失败、格式错误、超限一律回退基线，不让审查失败。
@@ -37,6 +39,14 @@ export interface ParsedRepoConfig {
 
 /** 出现在仓库配置里会被忽略并 warning 的字段：执行面、外发地址、绕过审查或运维项 */
 const FORBIDDEN_KEYS = new Set([
+  // 曾考虑开放的标量：仓库层只接受 path_filters / path_instructions / profile / project_context
+  'language',
+  'review_simple_changes',
+  'review_comment_lgtm',
+  'max_files',
+  'max_review_comments',
+  'enable_dependency_analysis',
+  'max_dependency_files',
   'openai_base_url',
   'enable_shell',
   'enable_lint_tools',
@@ -83,18 +93,6 @@ function asStringList(v: unknown, key: string, warnings: string[]): string[] | u
     return (v as string[]).filter(l => l.trim().length > 0)
   }
   warnings.push(`${key}: expected a list of strings, ignored`)
-  return undefined
-}
-
-function asNonNegativeInt(v: unknown, key: string, warnings: string[]): number | undefined {
-  if (typeof v === 'number' && Number.isInteger(v) && v >= 0) return v
-  warnings.push(`${key}: expected a non-negative integer, ignored`)
-  return undefined
-}
-
-function asBool(v: unknown, key: string, warnings: string[]): boolean | undefined {
-  if (typeof v === 'boolean') return v
-  warnings.push(`${key}: expected true/false, ignored`)
   return undefined
 }
 
@@ -254,40 +252,6 @@ export function parseRepoConfig(text: string): ParsedRepoConfig {
           warnings.push(`${key}: expected a string, ignored`)
         }
         break
-      case 'language':
-        if (typeof value === 'string' && value.trim()) config.language = value.trim()
-        else warnings.push(`${key}: expected a non-empty string, ignored`)
-        break
-      case 'review_simple_changes': {
-        const b = asBool(value, key, warnings)
-        if (b !== undefined) config.reviewSimpleChanges = b
-        break
-      }
-      case 'review_comment_lgtm': {
-        const b = asBool(value, key, warnings)
-        if (b !== undefined) config.reviewCommentLGTM = b
-        break
-      }
-      case 'enable_dependency_analysis': {
-        const b = asBool(value, key, warnings)
-        if (b !== undefined) config.enableDependencyAnalysis = b
-        break
-      }
-      case 'max_files': {
-        const n = asNonNegativeInt(value, key, warnings)
-        if (n !== undefined) config.maxFiles = n
-        break
-      }
-      case 'max_review_comments': {
-        const n = asNonNegativeInt(value, key, warnings)
-        if (n !== undefined) config.maxReviewComments = n
-        break
-      }
-      case 'max_dependency_files': {
-        const n = asNonNegativeInt(value, key, warnings)
-        if (n !== undefined) config.maxDependencyFiles = n
-        break
-      }
       default:
         if (FORBIDDEN_KEYS.has(key)) {
           warnings.push(`${key}: not allowed in ${REPO_CONFIG_PATH}, ignored`)
@@ -316,13 +280,6 @@ export function describeRepoConfig(config: RepoConfig): string[] {
     out.push(`profile.languages(${config.profileLanguages.join('/')})`)
   }
   if (config.profileDomains?.length) out.push(`profile.domains(${config.profileDomains.join('/')})`)
-  if (config.language !== undefined) out.push('language')
-  if (config.reviewSimpleChanges !== undefined) out.push('review_simple_changes')
-  if (config.reviewCommentLGTM !== undefined) out.push('review_comment_lgtm')
-  if (config.maxFiles !== undefined) out.push('max_files')
-  if (config.maxReviewComments !== undefined) out.push('max_review_comments')
-  if (config.enableDependencyAnalysis !== undefined) out.push('enable_dependency_analysis')
-  if (config.maxDependencyFiles !== undefined) out.push('max_dependency_files')
   return out
 }
 

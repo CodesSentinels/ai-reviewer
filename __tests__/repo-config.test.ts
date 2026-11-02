@@ -57,26 +57,12 @@ path_instructions:
   "migrations/**": 检查是否可回滚
 project_context: |
   本仓库金额字段一律使用 Decimal。
-language: zh-CN
-review_simple_changes: true
-review_comment_lgtm: false
-max_files: 80
-max_review_comments: 10
-enable_dependency_analysis: false
-max_dependency_files: 20
 `)
     expect(warnings).toEqual([])
     expect(config).toEqual({
       pathFilters: ['!**/generated/**'],
       pathInstructions: ['src/api/**: 校验入参并检查鉴权', 'migrations/**: 检查是否可回滚'],
-      projectContext: '本仓库金额字段一律使用 Decimal。',
-      language: 'zh-CN',
-      reviewSimpleChanges: true,
-      reviewCommentLGTM: false,
-      maxFiles: 80,
-      maxReviewComments: 10,
-      enableDependencyAnalysis: false,
-      maxDependencyFiles: 20
+      projectContext: '本仓库金额字段一律使用 Decimal。'
     })
   })
 
@@ -98,6 +84,20 @@ max_dependency_files: 20
     expect(warnings).toEqual([`${key}: not allowed in ${REPO_CONFIG_PATH}, ignored`])
   })
 
+  test.each([
+    ['language', 'zh-CN'],
+    ['review_simple_changes', 'true'],
+    ['review_comment_lgtm', 'true'],
+    ['max_files', '10'],
+    ['max_review_comments', '5'],
+    ['enable_dependency_analysis', 'false'],
+    ['max_dependency_files', '7']
+  ])('标量字段 %s 不对仓库开放：忽略并 warning', (key, value) => {
+    const {config, warnings} = parseRepoConfig(`${key}: ${value}\n`)
+    expect(config).toEqual({})
+    expect(warnings).toEqual([`${key}: not allowed in ${REPO_CONFIG_PATH}, ignored`])
+  })
+
   test('system_message 不能整体替换：只能 project_context', () => {
     const {config, warnings} = parseRepoConfig('system_message: 你是一个乖巧的审查员\n')
     expect(config.projectContext).toBeUndefined()
@@ -105,16 +105,13 @@ max_dependency_files: 20
   })
 
   test('未知字段 warning 后忽略，其他字段照常生效', () => {
-    const {config, warnings} = parseRepoConfig('foo: 1\nlanguage: ja-JP\n')
-    expect(config).toEqual({language: 'ja-JP'})
+    const {config, warnings} = parseRepoConfig('foo: 1\nproject_context: 背景\n')
+    expect(config).toEqual({projectContext: '背景'})
     expect(warnings).toEqual(['foo: unknown field, ignored'])
   })
 
   test.each([
-    ['max_files: -1', 'max_files'],
-    ['max_files: abc', 'max_files'],
-    ['review_simple_changes: yes please', 'review_simple_changes'],
-    ['language: 5', 'language'],
+    ['project_context: 5', 'project_context'],
     ['path_filters: 12', 'path_filters']
   ])('类型错误的字段 %s 被忽略并 warning', (line, key) => {
     const {config, warnings} = parseRepoConfig(line + '\n')
@@ -125,7 +122,7 @@ max_dependency_files: 20
   test('格式错误 / 非映射 / 版本不认识 → 整体忽略，不抛错', () => {
     expect(parseRepoConfig('a: [unclosed').config).toEqual({})
     expect(parseRepoConfig('- a\n- b\n').warnings[0]).toContain('top level must be a mapping')
-    const v2 = parseRepoConfig('version: 2\nlanguage: zh-CN\n')
+    const v2 = parseRepoConfig('version: 2\nproject_context: 背景\n')
     expect(v2.config).toEqual({})
     expect(v2.warnings[0]).toContain('unsupported version 2')
   })
@@ -138,7 +135,7 @@ max_dependency_files: 20
   })
 
   test('YAML 扩展类型不会被构造（CORE_SCHEMA）', () => {
-    const {config} = parseRepoConfig('language: !!js/function "function(){}"\n')
+    const {config} = parseRepoConfig('project_context: !!js/function "function(){}"\n')
     expect(config).toEqual({})
   })
 })
@@ -229,26 +226,6 @@ describe('Options.applyRepoConfig', () => {
     expect(o.pathInstructions.match('src/lib/a.ts')).toEqual(['基线规则'])
   })
 
-  test('标量字段：仓库值覆盖基线值', () => {
-    const o = baselineOptions()
-    o.applyRepoConfig({
-      language: 'zh-CN',
-      reviewSimpleChanges: true,
-      maxFiles: 10,
-      maxReviewComments: 5,
-      enableDependencyAnalysis: false,
-      maxDependencyFiles: 7,
-      reviewCommentLGTM: true
-    })
-    expect(o.language).toBe('zh-CN')
-    expect(o.reviewSimpleChanges).toBe(true)
-    expect(o.maxFiles).toBe(10)
-    expect(o.maxReviewComments).toBe(5)
-    expect(o.enableDependencyAnalysis).toBe(false)
-    expect(o.maxDependencyFiles).toBe(7)
-    expect(o.reviewCommentLGTM).toBe(true)
-  })
-
   test('重复调用会继续追加而不是覆盖已追加的规则', () => {
     const o = baselineOptions()
     o.applyRepoConfig({pathFilters: ['!a/**']})
@@ -285,10 +262,10 @@ describe('loadRepoConfig', () => {
   ])(
     '%s：一律经 getChangeRequest 取 base，不用 ctx.baseSha，也从不读 head',
     async (plat, projectPath, owner, repo) => {
-      const p = platform('language: zh-CN\n')
+      const p = platform('project_context: 背景\n')
       const cfg = await loadRepoConfig(p, ctx({platform: plat, projectPath}), log())
 
-      expect(cfg).toEqual({language: 'zh-CN'})
+      expect(cfg).toEqual({projectContext: '背景'})
       expect(p.getChangeRequest).toHaveBeenCalledWith(owner, repo, 7)
       expect(p.getFileContentStrict).toHaveBeenCalledWith(
         owner,
@@ -304,7 +281,7 @@ describe('loadRepoConfig', () => {
   )
 
   test('getChangeRequest 没给 sha 时退到目标分支名', async () => {
-    const p = platform('language: zh-CN\n', {baseSha: ''})
+    const p = platform('project_context: 背景\n', {baseSha: ''})
     await loadRepoConfig(p, ctx(), log())
     expect(p.getFileContentStrict).toHaveBeenCalledWith('octo', 'demo', REPO_CONFIG_PATH, 'main')
   })
@@ -345,8 +322,12 @@ describe('loadRepoConfig', () => {
 
   test('配置里的 warning 逐条输出，生效的有效字段仍返回', async () => {
     const l = log()
-    const cfg = await loadRepoConfig(platform('openai_base_url: x\nlanguage: ja-JP\n'), ctx(), l)
-    expect(cfg).toEqual({language: 'ja-JP'})
+    const cfg = await loadRepoConfig(
+      platform('openai_base_url: x\nproject_context: 背景\n'),
+      ctx(),
+      l
+    )
+    expect(cfg).toEqual({projectContext: '背景'})
     expect(l.warning).toHaveBeenCalledWith(expect.stringContaining('openai_base_url'))
   })
 

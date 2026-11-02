@@ -184,14 +184,7 @@ export class Options {
       {
         pathFilterRules: this.pathFilterRules,
         pathInstructionLines: this.pathInstructionLines,
-        systemMessage: this.systemMessage,
-        language: this.language,
-        reviewSimpleChanges: this.reviewSimpleChanges,
-        reviewCommentLGTM: this.reviewCommentLGTM,
-        maxFiles: this.maxFiles,
-        maxReviewComments: this.maxReviewComments,
-        enableDependencyAnalysis: this.enableDependencyAnalysis,
-        maxDependencyFiles: this.maxDependencyFiles
+        systemMessage: this.systemMessage
       },
       rc
     )
@@ -200,13 +193,6 @@ export class Options {
     this.pathInstructionLines = merged.pathInstructionLines
     this.pathInstructions = new PathInstructions(merged.pathInstructionLines)
     this.systemMessage = merged.systemMessage
-    this.language = merged.language
-    this.reviewSimpleChanges = merged.reviewSimpleChanges
-    this.reviewCommentLGTM = merged.reviewCommentLGTM
-    this.maxFiles = merged.maxFiles
-    this.maxReviewComments = merged.maxReviewComments
-    this.enableDependencyAnalysis = merged.enableDependencyAnalysis
-    this.maxDependencyFiles = merged.maxDependencyFiles
     this.configNotices = [...(rc.notices ?? [])]
   }
 

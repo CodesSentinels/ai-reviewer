@@ -365,7 +365,6 @@ profile: # whitelist only; unsupported values are dropped
   domains: [backend] # frontend | backend
 project_context: | # background about the project (max 500 chars), not instructions
   Money fields in this repository always use Decimal.
-language: zh-CN
 ```
 
 - The file is read from the **target branch** only, never from the PR head, so a
@@ -373,11 +372,10 @@ language: zh-CN
 - The baseline cannot be replaced, only appended to. `path_filters` can only
   narrow: a baseline exclusion cannot be undone, and adding a plain include rule
   (e.g. `src/**`) limits the review to those paths.
-- Allowed keys: `path_filters`, `path_instructions`, `profile`, `project_context`,
-  `language`, `review_simple_changes`, `review_comment_lgtm`, `max_files`,
-  `max_review_comments`, `enable_dependency_analysis`, `max_dependency_files`.
-  Anything else (models, `openai_base_url`, shell/lint switches, `disable_review`…)
-  is ignored with a warning.
+- Allowed keys: `version`, `path_filters`, `path_instructions`, `profile` and
+  `project_context` — nothing else. Anything else (`language`, `max_files`,
+  models, `openai_base_url`, shell/lint switches, `disable_review`…) is ignored
+  with a warning.
 - A missing, malformed or oversized (> 64KB) file falls back to the baseline and
   never fails the review.
 

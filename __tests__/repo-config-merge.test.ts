@@ -11,14 +11,7 @@ import {mergeConfig, type MergeableConfig} from '../src/repo-config-merge'
 const baseline = (): MergeableConfig => ({
   pathFilterRules: ['!**/dist/**'],
   pathInstructionLines: ['src/**: 基线规则'],
-  systemMessage: 'BASELINE',
-  language: 'en-US',
-  reviewSimpleChanges: false,
-  reviewCommentLGTM: false,
-  maxFiles: 150,
-  maxReviewComments: 20,
-  enableDependencyAnalysis: true,
-  maxDependencyFiles: 50
+  systemMessage: 'BASELINE'
 })
 
 describe('mergeConfig', () => {
@@ -79,37 +72,9 @@ describe('mergeConfig', () => {
   })
 
   test('没有 project_context 时 systemMessage 原样不变', () => {
-    expect(mergeConfig(baseline(), {language: 'zh-CN'}).systemMessage).toBe('BASELINE')
     expect(mergeConfig(baseline(), {profileLanguages: [], profileDomains: []}).systemMessage).toBe(
       'BASELINE'
     )
-  })
-
-  test('标量：仓库值覆盖基线值，包括 false 和 0', () => {
-    const b = {...baseline(), enableDependencyAnalysis: true, maxFiles: 150}
-    const out = mergeConfig(b, {
-      language: 'zh-CN',
-      reviewSimpleChanges: true,
-      reviewCommentLGTM: true,
-      maxFiles: 0,
-      maxReviewComments: 5,
-      enableDependencyAnalysis: false,
-      maxDependencyFiles: 7
-    })
-    expect(out).toMatchObject({
-      language: 'zh-CN',
-      reviewSimpleChanges: true,
-      reviewCommentLGTM: true,
-      maxFiles: 0,
-      maxReviewComments: 5,
-      enableDependencyAnalysis: false,
-      maxDependencyFiles: 7
-    })
-  })
-
-  test('只设置了一部分字段时，其余沿用基线', () => {
-    const out = mergeConfig(baseline(), {maxFiles: 10})
-    expect(out).toEqual({...baseline(), maxFiles: 10})
   })
 
   test('连续合并等价于一次合并（再次叠加不会覆盖已追加的内容）', () => {

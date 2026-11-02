@@ -127,10 +127,11 @@ describe('两个平台对同一份仓库配置的结果一致', () => {
     const v = view(first.o)
     expect(v.msg.startsWith(CONFIG_DEFAULTS.systemMessage)).toBe(true)
     expect(v.msg).toContain('<<<REPO_NOTES\n金额字段使用 Decimal\nREPO_NOTES>>>')
+    // language / max_files / enable_dependency_analysis 不再对仓库开放：写了也不生效
     expect(v).toMatchObject({
-      lang: 'zh-CN',
-      maxFiles: 40,
-      dep: false,
+      lang: 'en-US',
+      maxFiles: 150,
+      dep: true,
       generated: false,
       dist: false
     })

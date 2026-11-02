@@ -9,7 +9,6 @@
  * - 文本（system_message）：分层组装，不替换——
  *     基线（受信）→ profile 片段（受信，白名单枚举）→ 仓库的 project_context
  *     （不受信，被明确标记的分隔符包住）→ 不可覆盖的收尾约束
- * - 标量：仓库值覆盖基线值
  */
 
 import {renderProfileSection} from './prompt-profile'
@@ -33,13 +32,6 @@ export interface RepoConfig {
    * 不参与合并，只是随配置一起带到审查流程。
    */
   notices?: string[]
-  language?: string
-  reviewSimpleChanges?: boolean
-  reviewCommentLGTM?: boolean
-  maxFiles?: number
-  maxReviewComments?: number
-  enableDependencyAnalysis?: boolean
-  maxDependencyFiles?: number
 }
 
 /** 参与合并的字段的当前值（基线，或合并结果） */
@@ -47,13 +39,6 @@ export interface MergeableConfig {
   pathFilterRules: string[]
   pathInstructionLines: string[]
   systemMessage: string
-  language: string
-  reviewSimpleChanges: boolean
-  reviewCommentLGTM: boolean
-  maxFiles: number
-  maxReviewComments: number
-  enableDependencyAnalysis: boolean
-  maxDependencyFiles: number
 }
 
 /**
@@ -78,15 +63,6 @@ export function mergeConfig(
     renderProfileSection(repo.profileLanguages ?? [], repo.profileDomains ?? []),
     repo.projectContext
   )
-  if (repo.language !== undefined) merged.language = repo.language
-  if (repo.reviewSimpleChanges !== undefined) merged.reviewSimpleChanges = repo.reviewSimpleChanges
-  if (repo.reviewCommentLGTM !== undefined) merged.reviewCommentLGTM = repo.reviewCommentLGTM
-  if (repo.maxFiles !== undefined) merged.maxFiles = repo.maxFiles
-  if (repo.maxReviewComments !== undefined) merged.maxReviewComments = repo.maxReviewComments
-  if (repo.enableDependencyAnalysis !== undefined) {
-    merged.enableDependencyAnalysis = repo.enableDependencyAnalysis
-  }
-  if (repo.maxDependencyFiles !== undefined) merged.maxDependencyFiles = repo.maxDependencyFiles
   return merged
 }
 
