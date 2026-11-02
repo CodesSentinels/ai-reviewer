@@ -125,7 +125,8 @@ describe('两个平台对同一份仓库配置的结果一致', () => {
     }
 
     const v = view(first.o)
-    expect(v.msg.endsWith('\n\n金额字段使用 Decimal')).toBe(true)
+    expect(v.msg.startsWith(CONFIG_DEFAULTS.systemMessage)).toBe(true)
+    expect(v.msg).toContain('<<<REPO_NOTES\n金额字段使用 Decimal\nREPO_NOTES>>>')
     expect(v).toMatchObject({
       lang: 'zh-CN',
       maxFiles: 40,

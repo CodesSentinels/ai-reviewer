@@ -613,7 +613,8 @@ const INTENTIONALLY_DIVERGENT: Record<string, string> = {
   pathInstructions: '同上：基线为空，仓库定制走 .ai-reviewer.yml',
   systemMessage: '同上：两平台同为基线，仓库只能 system_message_append',
   pathFilterRules: '内部：applyRepoConfig 用来继续追加的规则原文',
-  pathInstructionLines: '内部：同上，路径指令原文'
+  pathInstructionLines: '内部：同上，路径指令原文',
+  configNotices: '内部：仓库配置被净化 / 过滤时产生的提示，只来自 .ai-reviewer.yml，不是平台输入'
 }
 
 /**
