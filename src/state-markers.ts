@@ -116,6 +116,12 @@ export const STATE_MARKERS = {
     legacy: '<!-- ai-reviewer:__no-legacy:review-invalidated -->',
     current: () => buildStateMarker('review-invalidated')
   },
+  repoConfigNotice: {
+    kind: 'repo-config-notice',
+    // 新增 marker，无历史形态（空串会被 includes('') 恒真命中，故用占位）
+    legacy: '<!-- ai-reviewer:__no-legacy:repo-config-notice -->',
+    current: () => buildStateMarker('repo-config-notice')
+  },
   undeliverableFindings: {
     kind: 'undeliverable-findings',
     // 新增 marker，没有历史形态；legacy 留空串会被 includes('') 恒真命中，

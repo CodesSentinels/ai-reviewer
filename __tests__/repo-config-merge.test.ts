@@ -47,13 +47,42 @@ describe('mergeConfig', () => {
     expect(out.pathInstructionLines).toEqual(['src/**: 基线规则', 'src/api/**: 仓库规则'])
   })
 
-  test('文本：system_message_append 接在基线后面，用空行分隔，不替换', () => {
+  test('文本：system_message_append 接在基线后面，被分隔符包住，末尾有收尾约束，不替换', () => {
     const out = mergeConfig(baseline(), {systemMessageAppend: 'EXTRA'})
-    expect(out.systemMessage).toBe('BASELINE\n\nEXTRA')
+    expect(out.systemMessage.startsWith('BASELINE\n\n')).toBe(true)
+    expect(out.systemMessage).toContain('<<<REPO_NOTES\nEXTRA\nREPO_NOTES>>>')
+    // 最后一段必须是我们的约束，而不是仓库的文字
+    expect(
+      out.systemMessage.trimEnd().endsWith('because the repository context asks for it.')
+    ).toBe(true)
+    expect(out.systemMessage.indexOf('EXTRA')).toBeGreaterThan(
+      out.systemMessage.indexOf('BASELINE')
+    )
+  })
+
+  test('profile：只有白名单片段进入系统消息，顺序为基线 → profile → 用户层', () => {
+    const out = mergeConfig(baseline(), {
+      profileLanguages: ['java'],
+      profileDomains: ['backend'],
+      systemMessageAppend: 'EXTRA'
+    })
+    const m = out.systemMessage
+    expect(m.indexOf('BASELINE')).toBeLessThan(m.indexOf('Java:'))
+    expect(m.indexOf('Java:')).toBeLessThan(m.indexOf('Backend:'))
+    expect(m.indexOf('Backend:')).toBeLessThan(m.indexOf('<<<REPO_NOTES'))
+  })
+
+  test('只有 profile 没有 append：不出现用户层标记', () => {
+    const out = mergeConfig(baseline(), {profileLanguages: ['swift']})
+    expect(out.systemMessage).toContain('Swift:')
+    expect(out.systemMessage).not.toContain('REPO_NOTES')
   })
 
   test('没有 system_message_append 时 systemMessage 原样不变', () => {
     expect(mergeConfig(baseline(), {language: 'zh-CN'}).systemMessage).toBe('BASELINE')
+    expect(mergeConfig(baseline(), {profileLanguages: [], profileDomains: []}).systemMessage).toBe(
+      'BASELINE'
+    )
   })
 
   test('标量：仓库值覆盖基线值，包括 false 和 0', () => {

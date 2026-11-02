@@ -93,6 +93,8 @@ export class Options {
    * 未设置时由 review.ts 按平台决定（GitLab 开，因为每次写入都会再触发一条 pipeline）。
    */
   minimizeBotWrites?: boolean
+  /** 仓库配置在净化 / 白名单过滤时产生的、需要告知维护者的提示（审查结束时发成评论） */
+  configNotices: string[] = []
 
   constructor(
     debug: boolean,
@@ -205,6 +207,7 @@ export class Options {
     this.maxReviewComments = merged.maxReviewComments
     this.enableDependencyAnalysis = merged.enableDependencyAnalysis
     this.maxDependencyFiles = merged.maxDependencyFiles
+    this.configNotices = [...(rc.notices ?? [])]
   }
 
   /** 打印所有配置项到日志，方便调试 */

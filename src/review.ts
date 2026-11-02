@@ -1654,11 +1654,43 @@ ${
     throw new Error('failed to publish the final summary comment')
   }
 
+  // .ai-reviewer.yml 里有内容被丢弃 / 截断时留一条提示评论。放在摘要之后发：
+  // 摘要必须是最早创建的那条评论，提示评论不能抢在它前面。replace 语义，重复运行原地更新
+  await postRepoConfigNotice(commenter, options)
+
   // 一次模型调用都没成功：摘要里已有「审查不完整」提示，但 CI 还得是红的
   if (modelCallsOk === 0 && modelCallsFailed > 0) {
     throw new Error(
       `all ${modelCallsFailed} model call(s) failed — nothing was reviewed (see earlier warnings)`
     )
+  }
+}
+
+/** 提示评论的正文；没有 notices 时返回 null */
+export function buildRepoConfigNoticeBody(notices: string[]): string | null {
+  if (notices.length === 0) return null
+  return [
+    '### ⚠️ `.ai-reviewer.yml` 中有内容未生效',
+    '',
+    '以下内容已被忽略或截断，本次审查按其余配置执行：',
+    '',
+    ...notices.map(n => `- ${n}`),
+    '',
+    '系统内置的审查规则、严重级别和输出格式不能被仓库配置覆盖。请修改目标分支上的 `.ai-reviewer.yml`。'
+  ].join('\n')
+}
+
+async function postRepoConfigNotice(commenter: Commenter, options: Options): Promise<void> {
+  // 测试里的 Options 桩可能没有这个字段
+  const notices = options.configNotices ?? []
+  const body = buildRepoConfigNoticeBody(notices)
+  if (body == null) return
+  try {
+    await commenter.comment(body, stateMarker('repoConfigNotice'), 'replace')
+    getLogger().info(`repo-config: posted notice comment (${notices.length} item(s))`)
+  } catch (e) {
+    // 提示评论失败不能让审查失败
+    getLogger().warning(`repo-config: failed to post notice comment: ${e}`)
   }
 }
 

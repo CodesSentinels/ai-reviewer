@@ -15,12 +15,18 @@
 
 import {CORE_SCHEMA, load} from 'js-yaml'
 import type {RepoConfig} from './repo-config-merge'
+import {describeFindings, hasUserVisibleFindings, scrubUserText} from './prompt-guard'
+import {allowedProfileValues, normalizeProfileValues, type ProfileKind} from './prompt-profile'
 import type {ExecutionContext} from './platform/execution-context'
 import type {IGitPlatform} from './platform/git-platform'
 import {repoCoordsOf} from './platform/run-context'
 
 export const REPO_CONFIG_PATH = '.ai-reviewer.yml'
 export const REPO_CONFIG_MAX_BYTES = 64 * 1024
+/** system_message_append 的字符数上限；超出部分截断并留提示 */
+export const SYSTEM_MESSAGE_APPEND_MAX_CHARS = 500
+/** 单条 path_instructions 的字符数上限（单文件合计上限仍由 PathInstructions 控制） */
+export const PATH_INSTRUCTION_MAX_CHARS = 1000
 
 export type {RepoConfig}
 
@@ -92,6 +98,52 @@ function asBool(v: unknown, key: string, warnings: string[]): boolean | undefine
   return undefined
 }
 
+/** 对一段用户自然语言做 scrub：发现写进 warnings，需要打扰用户的写进 notices */
+function scrubField(
+  text: string,
+  source: string,
+  maxLen: number,
+  warnings: string[],
+  notices: string[]
+): string {
+  const {text: clean, findings} = scrubUserText(text, {source, maxLen})
+  const lines = describeFindings(source, findings)
+  warnings.push(...lines)
+  if (hasUserVisibleFindings(findings)) {
+    // 只把真的丢弃 / 截断的发现放进评论，纯净化（去零宽字符等）只写日志
+    notices.push(
+      ...describeFindings(
+        source,
+        findings.filter(f => f.action === 'dropped' || f.action === 'truncated')
+      )
+    )
+  }
+  return clean
+}
+
+function applyProfileKind(
+  kind: ProfileKind,
+  value: unknown,
+  warnings: string[],
+  notices: string[]
+): string[] | undefined {
+  const {accepted, rejected, malformed} = normalizeProfileValues(value, kind)
+  const allowed = allowedProfileValues(kind).join(', ')
+  if (malformed) {
+    warnings.push(`profile.${kind}: expected a list of names (allowed: ${allowed}), ignored`)
+    return undefined
+  }
+  for (const r of rejected) {
+    const msg = `profile.${kind}: "${r.replace(
+      /[`\r\n]+/g,
+      ' '
+    )}" is not supported, ignored (allowed: ${allowed}). Describe it in system_message_append instead.`
+    warnings.push(msg)
+    notices.push(msg)
+  }
+  return accepted
+}
+
 /**
  * 解析 `.ai-reviewer.yml` 文本。纯函数：任何问题都落成 warning，绝不抛错。
  * 整体无法解析（超限、非 YAML、非映射、版本不认识）时返回空配置。
@@ -127,6 +179,7 @@ export function parseRepoConfig(text: string): ParsedRepoConfig {
   }
 
   const config: RepoConfig = {}
+  const notices: string[] = []
   for (const [key, value] of Object.entries(raw)) {
     switch (key) {
       case 'version':
@@ -146,18 +199,57 @@ export function parseRepoConfig(text: string): ParsedRepoConfig {
               )
               continue
             }
-            lines.push(`${glob}: ${ins}`)
+            const clean = scrubField(
+              ins,
+              `path_instructions["${glob.slice(0, 60)}"]`,
+              PATH_INSTRUCTION_MAX_CHARS,
+              warnings,
+              notices
+            )
+            // 整条被丢弃时不留空规则
+            if (clean) lines.push(`${glob}: ${clean}`)
           }
           config.pathInstructions = lines
         } else {
           const list = asStringList(value, key, warnings)
-          if (list) config.pathInstructions = list
+          if (list) {
+            // 列表形态是 `<glob>: <指令>` 整行，同样要 scrub；格式不对的行交给 PathInstructions 去丢
+            config.pathInstructions = list
+              .map(line =>
+                scrubField(line, 'path_instructions', PATH_INSTRUCTION_MAX_CHARS, warnings, notices)
+              )
+              .filter(l => l.length > 0)
+          }
+        }
+        break
+      }
+      case 'profile': {
+        if (value == null || typeof value !== 'object' || Array.isArray(value)) {
+          warnings.push('profile: expected a mapping with languages / domains, ignored')
+          break
+        }
+        for (const [pk, pv] of Object.entries(value as Record<string, unknown>)) {
+          if (pk === 'languages' || pk === 'domains') {
+            const accepted = applyProfileKind(pk, pv, warnings, notices)
+            if (accepted === undefined) continue
+            if (pk === 'languages') config.profileLanguages = accepted
+            else config.profileDomains = accepted
+          } else {
+            warnings.push(`profile.${pk}: unknown field, ignored`)
+          }
         }
         break
       }
       case 'system_message_append':
         if (typeof value === 'string') {
-          if (value.trim()) config.systemMessageAppend = value.trim()
+          const clean = scrubField(
+            value.trim(),
+            'system_message_append',
+            SYSTEM_MESSAGE_APPEND_MAX_CHARS,
+            warnings,
+            notices
+          )
+          if (clean) config.systemMessageAppend = clean
         } else {
           warnings.push(`${key}: expected a string, ignored`)
         }
@@ -205,6 +297,7 @@ export function parseRepoConfig(text: string): ParsedRepoConfig {
     }
   }
 
+  if (notices.length > 0) config.notices = notices
   return {config, warnings}
 }
 
@@ -216,6 +309,10 @@ export function describeRepoConfig(config: RepoConfig): string[] {
     out.push(`path_instructions(+${config.pathInstructions.length})`)
   }
   if (config.systemMessageAppend) out.push('system_message_append')
+  if (config.profileLanguages?.length) {
+    out.push(`profile.languages(${config.profileLanguages.join('/')})`)
+  }
+  if (config.profileDomains?.length) out.push(`profile.domains(${config.profileDomains.join('/')})`)
   if (config.language !== undefined) out.push('language')
   if (config.reviewSimpleChanges !== undefined) out.push('review_simple_changes')
   if (config.reviewCommentLGTM !== undefined) out.push('review_comment_lgtm')
