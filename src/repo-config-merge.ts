@@ -7,7 +7,7 @@
  * 规则：
  * - 列表（path_filters / path_instructions）：基线在前，仓库在后，追加
  * - 文本（system_message）：分层组装，不替换——
- *     基线（受信）→ profile 片段（受信，白名单枚举）→ 仓库的 system_message_append
+ *     基线（受信）→ profile 片段（受信，白名单枚举）→ 仓库的 project_context
  *     （不受信，被明确标记的分隔符包住）→ 不可覆盖的收尾约束
  * - 标量：仓库值覆盖基线值
  */
@@ -23,7 +23,7 @@ export interface RepoConfig {
   pathFilters?: string[]
   /** 每项是一条 `<glob>: <指令>`，直接交给 PathInstructions */
   pathInstructions?: string[]
-  systemMessageAppend?: string
+  projectContext?: string
   /** 编程语言白名单键（已规范化，见 prompt-profile.ts） */
   profileLanguages?: string[]
   /** 技术领域白名单键 */
@@ -76,7 +76,7 @@ export function mergeConfig(
   merged.systemMessage = composeSystemMessage(
     baseline.systemMessage,
     renderProfileSection(repo.profileLanguages ?? [], repo.profileDomains ?? []),
-    repo.systemMessageAppend
+    repo.projectContext
   )
   if (repo.language !== undefined) merged.language = repo.language
   if (repo.reviewSimpleChanges !== undefined) merged.reviewSimpleChanges = repo.reviewSimpleChanges

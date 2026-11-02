@@ -47,8 +47,8 @@ describe('mergeConfig', () => {
     expect(out.pathInstructionLines).toEqual(['src/**: 基线规则', 'src/api/**: 仓库规则'])
   })
 
-  test('文本：system_message_append 接在基线后面，被分隔符包住，末尾有收尾约束，不替换', () => {
-    const out = mergeConfig(baseline(), {systemMessageAppend: 'EXTRA'})
+  test('文本：project_context 接在基线后面，被分隔符包住，末尾有收尾约束，不替换', () => {
+    const out = mergeConfig(baseline(), {projectContext: 'EXTRA'})
     expect(out.systemMessage.startsWith('BASELINE\n\n')).toBe(true)
     expect(out.systemMessage).toContain('<<<REPO_NOTES\nEXTRA\nREPO_NOTES>>>')
     // 最后一段必须是我们的约束，而不是仓库的文字
@@ -64,7 +64,7 @@ describe('mergeConfig', () => {
     const out = mergeConfig(baseline(), {
       profileLanguages: ['java'],
       profileDomains: ['backend'],
-      systemMessageAppend: 'EXTRA'
+      projectContext: 'EXTRA'
     })
     const m = out.systemMessage
     expect(m.indexOf('BASELINE')).toBeLessThan(m.indexOf('Java:'))
@@ -78,7 +78,7 @@ describe('mergeConfig', () => {
     expect(out.systemMessage).not.toContain('REPO_NOTES')
   })
 
-  test('没有 system_message_append 时 systemMessage 原样不变', () => {
+  test('没有 project_context 时 systemMessage 原样不变', () => {
     expect(mergeConfig(baseline(), {language: 'zh-CN'}).systemMessage).toBe('BASELINE')
     expect(mergeConfig(baseline(), {profileLanguages: [], profileDomains: []}).systemMessage).toBe(
       'BASELINE'

@@ -267,8 +267,8 @@ review comments
   changes (e.g. typo fixes) and when changes look good for the most part. It can
   be disabled by setting `review_simple_changes` and `review_comment_lgtm` to
   `true`.
-- **Customizable prompts**: Append repository-specific guidance with
-  `system_message_append` and `path_instructions` in `.ai-reviewer.yml`, or tune
+- **Customizable prompts**: Describe your project with `profile`,
+  `project_context` and `path_instructions` in `.ai-reviewer.yml`, or tune
   the `summarize` and `summarize_release_notes` prompts.
 
 To use this tool, you need to add the provided YAML file to your repository and
@@ -360,7 +360,10 @@ path_filters: # appended to the baseline; can only narrow
 path_instructions: # appended after the baseline rules
   "src/api/**": validate every request parameter and check authorization
   "migrations/**": check rollback, table locking and existing data
-system_message_append: | # appended to the baseline system message
+profile: # whitelist only; unsupported values are dropped
+  languages: [nodejs] # nodejs | java | swift
+  domains: [backend] # frontend | backend
+project_context: | # background about the project (max 500 chars), not instructions
   Money fields in this repository always use Decimal.
 language: zh-CN
 ```
@@ -370,7 +373,7 @@ language: zh-CN
 - The baseline cannot be replaced, only appended to. `path_filters` can only
   narrow: a baseline exclusion cannot be undone, and adding a plain include rule
   (e.g. `src/**`) limits the review to those paths.
-- Allowed keys: `path_filters`, `path_instructions`, `system_message_append`,
+- Allowed keys: `path_filters`, `path_instructions`, `profile`, `project_context`,
   `language`, `review_simple_changes`, `review_comment_lgtm`, `max_files`,
   `max_review_comments`, `enable_dependency_analysis`, `max_dependency_files`.
   Anything else (models, `openai_base_url`, shell/lint switches, `disable_review`…)

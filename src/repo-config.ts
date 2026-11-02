@@ -2,7 +2,7 @@
  * repo-config.ts - 仓库级配置 `.ai-reviewer.yml`（issue #231）
  *
  * 分层：基线（CONFIG_DEFAULTS）→ 仓库配置。仓库层只能在白名单内追加或收窄：
- * - system_message：只能 `system_message_append` 追加，没有整体替换的入口
+ * - system_message：只能 `project_context` 追加，没有整体替换的入口
  * - path_filters / path_instructions：追加到基线之后；排除规则命中即排除，
  *   所以仓库无法把基线已排除的文件重新纳入
  * - 其余白名单字段是标量，仓库值覆盖基线值
@@ -23,8 +23,8 @@ import {repoCoordsOf} from './platform/run-context'
 
 export const REPO_CONFIG_PATH = '.ai-reviewer.yml'
 export const REPO_CONFIG_MAX_BYTES = 64 * 1024
-/** system_message_append 的字符数上限；超出部分截断并留提示 */
-export const SYSTEM_MESSAGE_APPEND_MAX_CHARS = 500
+/** project_context 的字符数上限；超出部分截断并留提示 */
+export const PROJECT_CONTEXT_MAX_CHARS = 500
 /** 单条 path_instructions 的字符数上限（单文件合计上限仍由 PathInstructions 控制） */
 export const PATH_INSTRUCTION_MAX_CHARS = 1000
 
@@ -137,7 +137,7 @@ function applyProfileKind(
     const msg = `profile.${kind}: "${r.replace(
       /[`\r\n]+/g,
       ' '
-    )}" is not supported, ignored (allowed: ${allowed}). Describe it in system_message_append instead.`
+    )}" is not supported, ignored (allowed: ${allowed}). Describe it in project_context instead.`
     warnings.push(msg)
     notices.push(msg)
   }
@@ -240,16 +240,16 @@ export function parseRepoConfig(text: string): ParsedRepoConfig {
         }
         break
       }
-      case 'system_message_append':
+      case 'project_context':
         if (typeof value === 'string') {
           const clean = scrubField(
             value.trim(),
-            'system_message_append',
-            SYSTEM_MESSAGE_APPEND_MAX_CHARS,
+            'project_context',
+            PROJECT_CONTEXT_MAX_CHARS,
             warnings,
             notices
           )
-          if (clean) config.systemMessageAppend = clean
+          if (clean) config.projectContext = clean
         } else {
           warnings.push(`${key}: expected a string, ignored`)
         }
@@ -291,6 +291,9 @@ export function parseRepoConfig(text: string): ParsedRepoConfig {
       default:
         if (FORBIDDEN_KEYS.has(key)) {
           warnings.push(`${key}: not allowed in ${REPO_CONFIG_PATH}, ignored`)
+        } else if (key === 'system_message_append') {
+          // 改名前的字段名：专门提示，比笼统的「未知字段」更容易自查
+          warnings.push(`${key}: renamed to project_context, ignored`)
         } else {
           warnings.push(`${key}: unknown field, ignored`)
         }
@@ -308,7 +311,7 @@ export function describeRepoConfig(config: RepoConfig): string[] {
   if (config.pathInstructions?.length) {
     out.push(`path_instructions(+${config.pathInstructions.length})`)
   }
-  if (config.systemMessageAppend) out.push('system_message_append')
+  if (config.projectContext) out.push('project_context')
   if (config.profileLanguages?.length) {
     out.push(`profile.languages(${config.profileLanguages.join('/')})`)
   }

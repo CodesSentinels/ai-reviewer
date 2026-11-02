@@ -19,7 +19,7 @@ path_filters:
   - "!**/generated/**"
 path_instructions:
   "src/api/**": 校验入参并检查鉴权
-system_message_append: 金额字段使用 Decimal
+project_context: 金额字段使用 Decimal
 language: zh-CN
 max_files: 40
 enable_dependency_analysis: false
