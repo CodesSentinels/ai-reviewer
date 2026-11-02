@@ -357,6 +357,8 @@ export class PathInstructions {
     let used = 0
     for (const [glob, text] of this.rules) {
       if (!minimatch(path, glob)) continue
+      // 同一条规则写了多个 glob、且同一个文件命中了好几个时，只注入一次
+      if (matched.includes(text)) continue
       if (used + text.length > PathInstructions.MAX_CHARS_PER_FILE) {
         warning(
           `path_instructions: instructions for ${path} exceed ${PathInstructions.MAX_CHARS_PER_FILE} chars, rest dropped`

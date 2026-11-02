@@ -268,7 +268,7 @@ review comments
   be disabled by setting `review_simple_changes` and `review_comment_lgtm` to
   `true`.
 - **Customizable prompts**: Describe your project with `profile`,
-  `project_context` and `path_instructions` in `.ai-reviewer.yml`, or tune
+  `project_context` and `rules` in `.ai-reviewer.yml`, or tune
   the `summarize` and `summarize_release_notes` prompts.
 
 To use this tool, you need to add the provided YAML file to your repository and
@@ -355,11 +355,13 @@ inputs (and the GitLab `AI_REVIEWER_SYSTEM_MESSAGE`, `AI_REVIEWER_PATH_FILTERS`,
 
 ```yaml
 version: 1
-path_filters: # appended to the baseline; can only narrow
-  - "!**/generated/**"
-path_instructions: # appended after the baseline rules
-  "src/api/**": validate every request parameter and check authorization
-  "migrations/**": check rollback, table locking and existing data
+exclude: # globs to skip, added to the baseline exclusions; can only narrow
+  - "**/generated/**"
+rules: # appended after the baseline rules, applied in order
+  - paths: ["src/api/**"]
+    instructions: validate every request parameter and check authorization
+  - paths: ["migrations/**"]
+    instructions: check rollback, table locking and existing data
 profile: # whitelist only; unsupported values are dropped
   languages: [nodejs] # nodejs | java | swift
   domains: [backend] # frontend | backend
@@ -369,10 +371,12 @@ project_context: | # background about the project (max 500 chars), not instructi
 
 - The file is read from the **target branch** only, never from the PR head, so a
   PR cannot change its own review rules.
-- The baseline cannot be replaced, only appended to. `path_filters` can only
-  narrow: a baseline exclusion cannot be undone, and adding a plain include rule
-  (e.g. `src/**`) limits the review to those paths.
-- Allowed keys: `version`, `path_filters`, `path_instructions`, `profile` and
+- The baseline cannot be replaced, only appended to. `exclude` can only narrow:
+  a baseline exclusion cannot be undone, and there is no way to write an include
+  rule, so a repository cannot accidentally shrink the review to a few paths.
+- A rule may list several globs, and the same glob may appear in several rules.
+  For instructions containing `: `, use a block scalar (`instructions: |`).
+- Allowed keys: `version` (optional), `exclude`, `rules`, `profile` and
   `project_context` — nothing else. Anything else (`language`, `max_files`,
   models, `openai_base_url`, shell/lint switches, `disable_review`…) is ignored
   with a warning.

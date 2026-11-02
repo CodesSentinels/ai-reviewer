@@ -2,9 +2,9 @@
  * repo-config.ts - 仓库级配置 `.ai-reviewer.yml`（issue #231）
  *
  * 分层：基线（CONFIG_DEFAULTS）→ 仓库配置。仓库层只接受下面五项，其余一律忽略并 warning：
- * - version
- * - path_filters / path_instructions：追加到基线之后；排除规则命中即排除，
- *   所以仓库无法把基线已排除的文件重新纳入
+ * - version（可省略）
+ * - exclude / rules：追加到基线之后。exclude 只能排除，排除规则命中即排除，
+ *   所以仓库无法把基线已排除的文件重新纳入，也不存在「包含规则悄悄收窄范围」的陷阱
  * - profile：语言 / 领域白名单枚举，对应我们自己维护的提示词片段
  * - project_context：自然语言的项目背景，是数据不是指令，经 scrubber 后包进系统消息；
  *   system_message 没有整体替换的入口
@@ -27,7 +27,7 @@ export const REPO_CONFIG_PATH = '.ai-reviewer.yml'
 export const REPO_CONFIG_MAX_BYTES = 64 * 1024
 /** project_context 的字符数上限；超出部分截断并留提示 */
 export const PROJECT_CONTEXT_MAX_CHARS = 500
-/** 单条 path_instructions 的字符数上限（单文件合计上限仍由 PathInstructions 控制） */
+/** 单条 rules 的 instructions 字符数上限（单文件合计上限仍由 PathInstructions 控制） */
 export const PATH_INSTRUCTION_MAX_CHARS = 1000
 
 export type {RepoConfig}
@@ -37,9 +37,16 @@ export interface ParsedRepoConfig {
   warnings: string[]
 }
 
+/** 改名前的字段名 → 新名字（这些字段从未发布，不保留别名） */
+const RENAMED_KEYS: ReadonlyMap<string, string> = new Map([
+  ['system_message_append', 'project_context'],
+  ['path_filters', 'exclude'],
+  ['path_instructions', 'rules']
+])
+
 /** 出现在仓库配置里会被忽略并 warning 的字段：执行面、外发地址、绕过审查或运维项 */
 const FORBIDDEN_KEYS = new Set([
-  // 曾考虑开放的标量：仓库层只接受 path_filters / path_instructions / profile / project_context
+  // 曾考虑开放的标量：仓库层只接受 exclude / rules / profile / project_context
   'language',
   'review_simple_changes',
   'review_comment_lgtm',
@@ -182,43 +189,79 @@ export function parseRepoConfig(text: string): ParsedRepoConfig {
     switch (key) {
       case 'version':
         break
-      case 'path_filters': {
+      case 'exclude': {
+        // 仓库层只能收窄，所以只表达「排除什么」。内部仍是 `!glob`，基线那边不用动。
+        // 不接受 `!` 前缀 / 包含规则：包含规则会让审查范围悄悄缩到只剩这些路径
         const list = asStringList(value, key, warnings)
-        if (list) config.pathFilters = list
-        break
-      }
-      case 'path_instructions': {
-        if (value != null && typeof value === 'object' && !Array.isArray(value)) {
-          const lines: string[] = []
-          for (const [glob, ins] of Object.entries(value as Record<string, unknown>)) {
-            if (typeof ins !== 'string' || !ins.trim()) {
+        if (list) {
+          const globs: string[] = []
+          for (const item of list) {
+            const glob = item.trim()
+            if (glob.startsWith('!')) {
               warnings.push(
-                `path_instructions: instruction for "${glob}" must be a string, ignored`
+                `exclude: "${glob.slice(0, 60)}" must be a plain glob (no "!" prefix), ignored`
               )
               continue
             }
-            const clean = scrubField(
-              ins,
-              `path_instructions["${glob.slice(0, 60)}"]`,
-              PATH_INSTRUCTION_MAX_CHARS,
-              warnings,
-              notices
-            )
-            // 整条被丢弃时不留空规则
-            if (clean) lines.push(`${glob}: ${clean}`)
+            globs.push(`!${glob}`)
           }
-          config.pathInstructions = lines
-        } else {
-          const list = asStringList(value, key, warnings)
-          if (list) {
-            // 列表形态是 `<glob>: <指令>` 整行，同样要 scrub；格式不对的行交给 PathInstructions 去丢
-            config.pathInstructions = list
-              .map(line =>
-                scrubField(line, 'path_instructions', PATH_INSTRUCTION_MAX_CHARS, warnings, notices)
-              )
-              .filter(l => l.length > 0)
+          config.pathFilters = globs
+        }
+        break
+      }
+      case 'rules': {
+        if (!Array.isArray(value)) {
+          warnings.push('rules: expected a list of {paths, instructions}, ignored')
+          break
+        }
+        const lines: string[] = []
+        for (const [i, item] of value.entries()) {
+          const label = `rules[${i}]`
+          if (item == null || typeof item !== 'object' || Array.isArray(item)) {
+            warnings.push(`${label}: expected a mapping with paths and instructions, ignored`)
+            continue
+          }
+          const rule = item as Record<string, unknown>
+          for (const k of Object.keys(rule)) {
+            // 留出扩展空间（例如将来按路径指定 domains），但现在不认的字段要明说
+            if (k !== 'paths' && k !== 'instructions') {
+              warnings.push(`${label}.${k}: unknown field, ignored`)
+            }
+          }
+          const rawPaths =
+            typeof rule.paths === 'string'
+              ? [rule.paths]
+              : Array.isArray(rule.paths) && rule.paths.every(x => typeof x === 'string')
+              ? (rule.paths as string[])
+              : null
+          const paths = (rawPaths ?? []).map(x => x.trim()).filter(Boolean)
+          if (paths.length === 0) {
+            warnings.push(`${label}.paths: expected a glob or a list of globs, rule ignored`)
+            continue
+          }
+          if (typeof rule.instructions !== 'string' || !rule.instructions.trim()) {
+            warnings.push(`${label}.instructions: expected a non-empty string, rule ignored`)
+            continue
+          }
+          const clean = scrubField(
+            rule.instructions,
+            `${label}(${paths[0].slice(0, 40)})`,
+            PATH_INSTRUCTION_MAX_CHARS,
+            warnings,
+            notices
+          )
+          // 整条被 scrubber 丢弃时不留空规则
+          if (!clean) continue
+          for (const glob of paths) {
+            // PathInstructions 以第一个 ": " 切分 glob 与指令
+            if (glob.includes(': ')) {
+              warnings.push(`${label}.paths: "${glob.slice(0, 60)}" must not contain ": ", ignored`)
+              continue
+            }
+            lines.push(`${glob}: ${clean}`)
           }
         }
+        config.pathInstructions = lines
         break
       }
       case 'profile': {
@@ -255,9 +298,9 @@ export function parseRepoConfig(text: string): ParsedRepoConfig {
       default:
         if (FORBIDDEN_KEYS.has(key)) {
           warnings.push(`${key}: not allowed in ${REPO_CONFIG_PATH}, ignored`)
-        } else if (key === 'system_message_append') {
+        } else if (RENAMED_KEYS.has(key)) {
           // 改名前的字段名：专门提示，比笼统的「未知字段」更容易自查
-          warnings.push(`${key}: renamed to project_context, ignored`)
+          warnings.push(`${key}: renamed to ${RENAMED_KEYS.get(key)}, ignored`)
         } else {
           warnings.push(`${key}: unknown field, ignored`)
         }
@@ -271,9 +314,9 @@ export function parseRepoConfig(text: string): ParsedRepoConfig {
 /** 供日志使用：列出仓库层实际生效的字段名（不含值，避免把整段指令刷进日志） */
 export function describeRepoConfig(config: RepoConfig): string[] {
   const out: string[] = []
-  if (config.pathFilters?.length) out.push(`path_filters(+${config.pathFilters.length})`)
+  if (config.pathFilters?.length) out.push(`exclude(+${config.pathFilters.length})`)
   if (config.pathInstructions?.length) {
-    out.push(`path_instructions(+${config.pathInstructions.length})`)
+    out.push(`rules(+${config.pathInstructions.length})`)
   }
   if (config.projectContext) out.push('project_context')
   if (config.profileLanguages?.length) {

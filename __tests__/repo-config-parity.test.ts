@@ -15,10 +15,11 @@ jest.mock('../src/actions-log', () => ({info: jest.fn(), warning: jest.fn(), deb
 
 const YAML_TEXT = `
 version: 1
-path_filters:
-  - "!**/generated/**"
-path_instructions:
-  "src/api/**": 校验入参并检查鉴权
+exclude:
+  - "**/generated/**"
+rules:
+  - paths: ["src/api/**"]
+    instructions: 校验入参并检查鉴权
 project_context: 金额字段使用 Decimal
 language: zh-CN
 max_files: 40
