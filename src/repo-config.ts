@@ -17,7 +17,7 @@
 
 import {CORE_SCHEMA, load} from 'js-yaml'
 import type {RepoConfig} from './repo-config-merge'
-import {describeFindings, hasUserVisibleFindings, scrubUserText} from './prompt-guard'
+import {describeFindings, isUserVisibleFinding, scrubUserText} from './prompt-guard'
 import {allowedProfileValues, normalizeProfileValues, type ProfileKind} from './prompt-profile'
 import type {ExecutionContext} from './platform/execution-context'
 import type {IGitPlatform} from './platform/git-platform'
@@ -120,15 +120,9 @@ function scrubField(
   const {text: clean, findings} = scrubUserText(text, {source, maxLen})
   const lines = describeFindings(source, findings)
   warnings.push(...lines)
-  if (hasUserVisibleFindings(findings)) {
-    // 只把真的丢弃 / 截断的发现放进评论，纯净化（去零宽字符等）只写日志
-    notices.push(
-      ...describeFindings(
-        source,
-        findings.filter(f => f.action === 'dropped' || f.action === 'truncated')
-      )
-    )
-  }
+  // 只把真的丢弃 / 截断 / 删除分隔符伪造的发现放进评论，纯格式净化（去零宽字符等）只写日志
+  const visible = findings.filter(isUserVisibleFinding)
+  if (visible.length > 0) notices.push(...describeFindings(source, visible))
   return clean
 }
 

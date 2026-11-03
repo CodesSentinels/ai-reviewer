@@ -20,7 +20,13 @@
  * 作为可选的第二层，调用方不必改。
  */
 
-export type GuardAction = 'dropped' | 'neutralized' | 'truncated'
+/**
+ * - dropped：整行丢弃（用户可见）
+ * - truncated：超长截断（用户可见）
+ * - removed：删掉了冒充提示词分隔符的片段（用户可见：几乎不可能是无意写出来的）
+ * - neutralized：纯格式净化，不影响含义（只写日志）
+ */
+export type GuardAction = 'dropped' | 'neutralized' | 'truncated' | 'removed'
 
 export interface GuardFinding {
   /** 命中的规则名，便于测试与排查 */
@@ -104,7 +110,9 @@ function stripInvisible(s: string): string {
 }
 
 /** 提示词里用来包住用户层的分隔标记，用户文本里出现必须去掉，否则能「提前闭合」 */
-const DELIMITER_RE = /<<<|>>>|<\|[^|\n]{0,30}\|>/g
+// 同时认全角的 ＜ ＞ ｜（含半角全角混写）：模型会把它们当成同一个符号读，只匹配 ASCII 就留了后门。
+// 只是匹配时放宽，不做整体 NFKC，所以正文里合法的全角标点不会被改写
+const DELIMITER_RE = /[<＜]{3}|[>＞]{3}|[<＜][|｜][^|｜\n]{0,30}[|｜][>＞]/g
 
 /** 删掉分隔符，直到结果里不再出现为止（每轮至少删 3 个字符，必然终止） */
 function stripDelimiters(s: string): string {
@@ -175,7 +183,7 @@ export function scrubUserText(input: string, opts: ScrubOptions): ScrubResult {
     // 用户就能借此提前闭合 REPO_NOTES
     const neutralized = stripDelimiters(line)
     if (neutralized !== line) {
-      findings.push({rule: 'delimiter-spoof', action: 'neutralized', excerpt: excerptOf(rawLine)})
+      findings.push({rule: 'delimiter-spoof', action: 'removed', excerpt: excerptOf(rawLine)})
       line = neutralized
     }
 
@@ -202,13 +210,19 @@ export function describeFindings(source: string, findings: GuardFinding[]): stri
         return `${source}: dropped a line that looks like an attempt to override built-in rules (${f.rule}): \`${f.excerpt}\``
       case 'truncated':
         return `${source}: truncated (${f.excerpt})`
+      case 'removed':
+        return `${source}: removed text that imitates the prompt delimiters (${f.rule}): \`${f.excerpt}\``
       default:
         return `${source}: sanitized (${f.rule}): \`${f.excerpt}\``
     }
   })
 }
 
-/** 是否值得留提示评论：只有真的丢弃或截断了内容才打扰用户，纯净化不算 */
+/** 一条发现是否值得留提示评论：丢弃、截断、删除分隔符伪造都算，纯格式净化不算 */
+export function isUserVisibleFinding(f: GuardFinding): boolean {
+  return f.action === 'dropped' || f.action === 'truncated' || f.action === 'removed'
+}
+
 export function hasUserVisibleFindings(findings: GuardFinding[]): boolean {
-  return findings.some(f => f.action === 'dropped' || f.action === 'truncated')
+  return findings.some(isUserVisibleFinding)
 }
