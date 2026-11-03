@@ -104,6 +104,17 @@ function stripInvisible(s: string): string {
 /** 提示词里用来包住用户层的分隔标记，用户文本里出现必须去掉，否则能「提前闭合」 */
 const DELIMITER_RE = /<<<|>>>|<\|[^|\n]{0,30}\|>/g
 
+/** 删掉分隔符，直到结果里不再出现为止（每轮至少删 3 个字符，必然终止） */
+function stripDelimiters(s: string): string {
+  let prev: string
+  let cur = s
+  do {
+    prev = cur
+    cur = prev.replace(DELIMITER_RE, '')
+  } while (cur !== prev)
+  return cur
+}
+
 const ROLE_PREFIX_RE = /^\s*(system|assistant|developer|user|human|ai)\s*[:：]\s*/i
 const HEADING_RE = /^(\s*)#{1,6}(\s)/
 const RULE_LINE_RE = /^\s*([-=*_]){3,}\s*$/
@@ -158,11 +169,13 @@ export function scrubUserText(input: string, opts: ScrubOptions): ScrubResult {
     // 冒充分隔线的整行（---、===）：丢弃，不计入告警（Markdown 里很常见）
     if (RULE_LINE_RE.test(line)) continue
 
-    if (DELIMITER_RE.test(line)) {
+    // 必须反复删到不再变化：只删一次的话，`>><<<>` 删掉中间的 `<<<` 后会重新拼出 `>>>`，
+    // 用户就能借此提前闭合 REPO_NOTES
+    const neutralized = stripDelimiters(line)
+    if (neutralized !== line) {
       findings.push({rule: 'delimiter-spoof', action: 'neutralized', excerpt: excerptOf(rawLine)})
-      line = line.replace(DELIMITER_RE, '')
+      line = neutralized
     }
-    DELIMITER_RE.lastIndex = 0
 
     if (ROLE_PREFIX_RE.test(line)) {
       findings.push({rule: 'role-marker', action: 'neutralized', excerpt: excerptOf(rawLine)})
