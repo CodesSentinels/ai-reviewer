@@ -9,7 +9,7 @@ import {describe, expect, jest, test} from '@jest/globals'
 
 import {Options} from '../src/options'
 import {CONFIG_DEFAULTS} from '../src/platform/config-provider'
-import {REPO_CONFIG_PATH, loadRepoConfig} from '../src/repo-config'
+import {REPO_CONFIG_PATH, loadRepoConfig, parseRepoConfig} from '../src/repo-config'
 
 jest.mock('../src/actions-log', () => ({info: jest.fn(), warning: jest.fn(), debug: jest.fn()}))
 
@@ -168,5 +168,75 @@ describe('两个平台对同一份仓库配置的结果一致', () => {
       REPO_CONFIG_PATH,
       'merge-base-sha'
     )
+  })
+})
+
+describe('多个业务项目各放一份配置：互不影响', () => {
+  // 每次运行只读被审仓库自己的 base 分支，所以两个项目的配置在各自的 Options 里隔离；
+  // 这里用同一份基线分别叠加两份不同的配置，核对规则只在自己这一边生效
+  const CONFIG_API = `
+exclude: ["**/legacy-api/**"]
+rules:
+  - paths: ["src/api/**"]
+    instructions: 校验入参并检查鉴权
+profile:
+  languages: [nodejs]
+  domains: [backend]
+project_context: 接口层服务
+`
+  const CONFIG_WEB = `
+exclude: ["**/mocks/**"]
+rules:
+  - paths: ["src/components/**"]
+    instructions: 注意无障碍与响应式
+profile:
+  languages: [swift]
+  domains: [frontend]
+project_context: 移动端页面
+`
+  function project(yamlText: string): Options {
+    const o = freshOptions()
+    o.applyRepoConfig(parseRepoConfig(yamlText).config)
+    return o
+  }
+
+  test('rules 只对本项目生效', () => {
+    const api = project(CONFIG_API)
+    const web = project(CONFIG_WEB)
+    expect(api.pathInstructions.match('src/api/a.ts')).toEqual(['校验入参并检查鉴权'])
+    expect(web.pathInstructions.match('src/api/a.ts')).toEqual([])
+    expect(web.pathInstructions.match('src/components/b.vue')).toEqual(['注意无障碍与响应式'])
+    expect(api.pathInstructions.match('src/components/b.vue')).toEqual([])
+  })
+
+  test('exclude 只对本项目生效，基线排除两边都生效', () => {
+    const api = project(CONFIG_API)
+    const web = project(CONFIG_WEB)
+    expect(api.checkPath('src/legacy-api/x.ts')).toBe(false)
+    expect(web.checkPath('src/legacy-api/x.ts')).toBe(true)
+    expect(web.checkPath('src/mocks/x.ts')).toBe(false)
+    expect(api.checkPath('src/mocks/x.ts')).toBe(true)
+    for (const o of [api, web]) expect(o.checkPath('dist/a.js')).toBe(false)
+  })
+
+  test('profile 与 project_context 只出现在本项目的系统消息里，基线原文两边相同', () => {
+    const api = project(CONFIG_API).systemMessage
+    const web = project(CONFIG_WEB).systemMessage
+    expect(api).toContain('接口层服务')
+    expect(api).not.toContain('移动端页面')
+    expect(web).toContain('移动端页面')
+    expect(web).not.toContain('接口层服务')
+    expect(api.startsWith(CONFIG_DEFAULTS.systemMessage)).toBe(true)
+    expect(web.startsWith(CONFIG_DEFAULTS.systemMessage)).toBe(true)
+  })
+
+  test('一个项目叠加配置不会改动基线常量，也不影响随后的另一个项目', () => {
+    const before = JSON.stringify([CONFIG_DEFAULTS.pathFilters, CONFIG_DEFAULTS.systemMessage])
+    project(CONFIG_API)
+    project(CONFIG_WEB)
+    expect(JSON.stringify([CONFIG_DEFAULTS.pathFilters, CONFIG_DEFAULTS.systemMessage])).toBe(
+      before
+    )
+    expect(project(CONFIG_WEB).checkPath('src/legacy-api/x.ts')).toBe(true)
   })
 })
