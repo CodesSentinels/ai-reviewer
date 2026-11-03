@@ -472,6 +472,16 @@ describe('parseRepoConfig：字段改名（issue #231）', () => {
     expect(config.projectContext).toBeUndefined()
     expect(warnings).toEqual(['system_message_append: renamed to project_context, ignored'])
   })
+
+  test.each([
+    ['system_message_append', 'project_context', '金额用 Decimal'],
+    ['path_filters', 'exclude', '["**/generated/**"]'],
+    ['path_instructions', 'rules', '"src/**: 检查鉴权"']
+  ])('旧名字 %s → warning 指向 %s，且该字段不生效', (oldKey, newKey, value) => {
+    const {config, warnings} = parseRepoConfig(`${oldKey}: ${value}`)
+    expect(config).toEqual({})
+    expect(warnings).toEqual([`${oldKey}: renamed to ${newKey}, ignored`])
+  })
 })
 
 describe('parseRepoConfig：scrubber（issue #231）', () => {
