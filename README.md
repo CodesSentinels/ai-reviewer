@@ -388,6 +388,12 @@ Add `.ai-reviewer.yml` to the repository **before** upgrading (older versions
 ignore the file), then upgrade, check the `[repo-config]` log lines, and finally
 delete the removed inputs from the workflow / CI variables.
 
+To roll back, publish the previous version again (for GitLab: re-run the release
+flow with the previous version tag; for GitHub: pin `uses:` to the previous tag).
+Because the removed inputs / CI variables are only deleted after the new version
+has proven stable, the previous version still finds them and behaves as before.
+The `.ai-reviewer.yml` file can stay in place — older versions ignore it.
+
 ## Conversation with AI Reviewer
 
 You can reply to a review comment made by this action and get a response based
