@@ -437,16 +437,6 @@ describe('GitLabConfigProvider (ARCH-009)', () => {
     expect(opts1).toBe(opts2)
   })
 
-  test('getOptions() reads multiline path filters', () => {
-    process.env.AI_REVIEWER_PATH_FILTERS = '!dist/**\n!**/*.json\nsrc/**'
-
-    const provider = new GitLabConfigProvider()
-    const opts = provider.getOptions()
-
-    expect(opts.checkPath('src/main.ts')).toBe(true)
-    expect(opts.checkPath('dist/index.js')).toBe(false)
-  })
-
   test('getPromptConfig() returns prompt templates from env vars', () => {
     process.env.AI_REVIEWER_SUMMARIZE = 'Custom GitLab summarize'
     process.env.AI_REVIEWER_SUMMARIZE_RELEASE_NOTES = 'Custom GitLab release notes'

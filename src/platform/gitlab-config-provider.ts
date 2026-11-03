@@ -65,16 +65,6 @@ function envFloatStr(key: string, fallback: string): string {
  */
 const SECURITY_FORCED_FALSE = ['AI_REVIEWER_ENABLE_SHELL', 'AI_REVIEWER_ENABLE_LINT_TOOLS'] as const
 
-/**
- * 已移除的 CI 变量（issue #231）：提示词和路径规则改由目标分支上的 .ai-reviewer.yml 提供。
- * 变量仍在时不再生效，仅在日志里提示迁移，避免静默失效。
- */
-const REMOVED_VARIABLES = [
-  'AI_REVIEWER_SYSTEM_MESSAGE',
-  'AI_REVIEWER_PATH_FILTERS',
-  'AI_REVIEWER_PATH_INSTRUCTIONS'
-] as const
-
 export class GitLabConfigProvider implements ConfigProvider {
   readonly platform: Platform = 'gitlab'
 
@@ -85,9 +75,6 @@ export class GitLabConfigProvider implements ConfigProvider {
   /** 安全强制覆盖日志（供测试验证） */
   readonly securityOverrides: string[] = []
 
-  /** 仍被设置但已不再生效的 CI 变量名（供日志提示和测试验证） */
-  readonly removedVariables: string[] = []
-
   getOptions(): Options {
     if (this.cachedOptions) return this.cachedOptions
 
@@ -97,10 +84,6 @@ export class GitLabConfigProvider implements ConfigProvider {
       if (raw != null && raw.toLowerCase() !== 'false' && raw !== '0' && raw !== 'no') {
         this.securityOverrides.push(`${key}="${raw}" overridden to false (CFG-002 security policy)`)
       }
-    }
-
-    for (const key of REMOVED_VARIABLES) {
-      if (envStr(key) != null) this.removedVariables.push(key)
     }
 
     // 工具版本覆盖
@@ -214,12 +197,6 @@ export class GitLabConfigProvider implements ConfigProvider {
     // 输出安全强制覆盖警告
     for (const override of this.securityOverrides) {
       log(`  [SECURITY] ${override}`)
-    }
-
-    for (const key of this.removedVariables) {
-      log(
-        `  [REMOVED] ${key} is no longer read; move it to .ai-reviewer.yml on the target branch (see README)`
-      )
     }
 
     log(`[ConfigProvider:gitlab] Configuration:`)

@@ -350,8 +350,7 @@ See: [action.yml](./action.yml)
 Prompt and path settings live in a `.ai-reviewer.yml` at the root of each
 reviewed repository, layered on top of a shared baseline shipped with this
 action. The `system_message`, `path_filters` and `path_instructions` action
-inputs (and the GitLab `AI_REVIEWER_SYSTEM_MESSAGE`, `AI_REVIEWER_PATH_FILTERS`,
-`AI_REVIEWER_PATH_INSTRUCTIONS` variables) were removed: they are no longer read.
+inputs were removed: they are no longer read.
 
 ```yaml
 version: 1
