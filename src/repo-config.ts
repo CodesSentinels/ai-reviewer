@@ -92,6 +92,12 @@ const FORBIDDEN_KEYS = new Set([
   'debug_resolve_inject_failures'
 ])
 
+/**
+ * 匹配仓库内任何路径的 glob：写进 exclude 会让整个 PR 零审查，而且审查会走「没有可审文件」
+ * 的 Skipped 分支，只有日志、没有评论，维护者之外的人看不出来。这类写法直接拒绝并告警。
+ */
+const MATCH_ALL_GLOBS = new Set(['**', '**/*', '**/**'])
+
 function asStringList(v: unknown, key: string, warnings: string[]): string[] | undefined {
   if (typeof v === 'string') {
     return v.split('\n').filter(l => l.trim().length > 0)
@@ -200,6 +206,12 @@ export function parseRepoConfig(text: string): ParsedRepoConfig {
             if (glob.startsWith('!')) {
               warnings.push(
                 `exclude: "${glob.slice(0, 60)}" must be a plain glob (no "!" prefix), ignored`
+              )
+              continue
+            }
+            if (MATCH_ALL_GLOBS.has(glob.replace(/^\.\//, ''))) {
+              warnings.push(
+                `exclude: "${glob}" matches every file and would skip the whole review, ignored`
               )
               continue
             }
