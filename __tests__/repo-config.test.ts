@@ -134,6 +134,26 @@ rules:
     expect(warnings).toEqual(['exclude: "!src/**" must be a plain glob (no "!" prefix), ignored'])
   })
 
+  test.each(['**', '**/*', '**/**', './**'])(
+    'exclude：匹配所有文件的 glob（%s）被拒绝并告警，不会让整个 PR 零审查',
+    glob => {
+      const {config, warnings} = parseRepoConfig(`exclude:\n  - "${glob}"\n  - "**/generated/**"\n`)
+      expect(config.pathFilters).toEqual(['!**/generated/**'])
+      expect(warnings).toEqual([
+        `exclude: "${glob}" matches every file and would skip the whole review, ignored`
+      ])
+      const o = baselineOptions()
+      o.applyRepoConfig(config)
+      expect(o.pathFilters.check('src/a.ts')).toBe(true)
+    }
+  )
+
+  test('exclude：范围很大但不是全匹配的 glob（src/**、**/*.ts）照常生效', () => {
+    const {config, warnings} = parseRepoConfig('exclude:\n  - "src/**"\n  - "**/*.ts"\n')
+    expect(config.pathFilters).toEqual(['!src/**', '!**/*.ts'])
+    expect(warnings).toEqual([])
+  })
+
   test('exclude 无法把整个仓库悄悄收窄：不存在写「包含规则」的入口', () => {
     const {config} = parseRepoConfig('exclude:\n  - "src/**"\n')
     const o = baselineOptions()

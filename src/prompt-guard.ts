@@ -14,8 +14,10 @@
  * 局限：自然语言层面没有 scrubber 能完全防住注入，这里只挡低成本攻击。真正的兜底是
  * 提示词分层（基线在前、用户层被包起来、末尾有不可覆盖的收尾约束）和输出格式由代码解析。
  *
- * 接口形状对齐 Mastra SystemPromptScrubber 的 strategy 概念，日后要接入时作为可选的
- * 第二层检测，不必改调用方。
+ * 与 Mastra SystemPromptScrubber 的关系：那是输出侧、基于 LLM 的处理器（检测模型回复里泄露的
+ * 系统提示词），方向与这里相反，所以不直接使用。这里的动作只有 dropped / neutralized /
+ * truncated，概念上近似它的 filter / redact，没有 block / warn 两类；日后若要接入 LLM 检测，
+ * 作为可选的第二层，调用方不必改。
  */
 
 export type GuardAction = 'dropped' | 'neutralized' | 'truncated'
