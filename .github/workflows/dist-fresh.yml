@@ -17,7 +17,7 @@ jobs:
   dist-fresh:
     runs-on: ubuntu-latest
     steps:
-      # 按你们 versioning.yml 的惯例固定到完整 commit SHA；下面是 actions/checkout v4 当前的 SHA，
+      # 按本仓库惯例固定到完整 commit SHA；下面是 actions/checkout v4 当前的 SHA，
       # 提交前请用 `gh api repos/actions/checkout/commits/v4 --jq .sha` 再核对一次
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
