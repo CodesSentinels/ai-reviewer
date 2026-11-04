@@ -66,6 +66,7 @@ import {
   _resetBotIdentity,
   isCurrentAuthor,
   isOwnAuthor,
+  sameLogin,
   setPreviousBotLogins,
   commentTag,
   commentReplyTag,
@@ -727,5 +728,146 @@ describe('旧 bot 账号只读认领（换 token 后 bot 账号变了）', () =>
     const {initBotGreeting} = await import('../src/commenter')
     initBotGreeting('🦉', 'CodeSentinel', '')
     expect(await isOwnAuthor('old-bot')).toBe(true)
+  })
+})
+
+describe('bot 登录名的 [bot] 后缀：摘要必须原地更新（摘要排在审查之后的根因回归）', () => {
+  // 复现线上现象：GITHUB_TOKEN 调不了 GET /user，平台层回退成不带后缀的登录名，
+  // 而 REST 里评论作者的真实登录名是 `github-actions[bot]`。此前两者精确比较，
+  // 机器人把自己的摘要当成「别人的引用回复」，永远新发一条，旧的「审查中」留在原处。
+  const actions = (id: number, body: string): any => ({
+    ...issueComment(id, body),
+    author: 'github-actions[bot]'
+  })
+
+  describe('sameLogin', () => {
+    test.each([
+      ['github-actions[bot]', 'github-actions', true],
+      ['github-actions[bot]', 'github-actions[bot]', true],
+      ['GitHub-Actions[bot]', 'github-actions', true],
+      ['my-app[bot]', 'my-app', true],
+      ['ai-reviewer', 'ai-reviewer', true]
+    ])('作者 %s / 身份 %s → %s', (author, bot, expected) => {
+      expect(sameLogin(author, bot)).toBe(expected)
+    })
+
+    test.each([
+      // 同名真人：用户名不可能带方括号，作者不带后缀就不是机器人
+      ['github-actions', 'github-actions[bot]'],
+      ['alice', 'github-actions'],
+      ['other-app[bot]', 'github-actions'],
+      ['github-actions-evil[bot]', 'github-actions'],
+      ['', 'github-actions'],
+      ['github-actions[bot]', '']
+    ])('作者 %j / 身份 %j → 不相等', (author, bot) => {
+      expect(sameLogin(author, bot)).toBe(false)
+    })
+  })
+
+  test('回退值不带后缀（旧行为）+ 作者带 [bot] → 原地更新，不再新发', async () => {
+    platform.getAuthenticatedLogin.mockResolvedValueOnce('github-actions')
+    platform.listComments.mockResolvedValue([actions(2, `in progress\n\n${summarizeTag()}`)])
+
+    await new Commenter().comment('final summary', summarizeTag(), 'replace')
+
+    expect(platform.updateComment).toHaveBeenCalledTimes(1)
+    expect((platform.updateComment.mock.calls[0] as any[])[2]).toBe(2)
+    expect(platform.createComment).not.toHaveBeenCalled()
+  })
+
+  test('回退值带后缀（修复后的平台层）+ 作者带 [bot] → 原地更新', async () => {
+    platform.getAuthenticatedLogin.mockResolvedValueOnce('github-actions[bot]')
+    platform.listComments.mockResolvedValue([actions(2, `in progress\n\n${summarizeTag()}`)])
+
+    await new Commenter().comment('final summary', summarizeTag(), 'replace')
+
+    expect(platform.updateComment).toHaveBeenCalledTimes(1)
+    expect(platform.createComment).not.toHaveBeenCalled()
+  })
+
+  test('真人引用回复仍然不会被覆盖（防护没有被放宽）', async () => {
+    platform.getAuthenticatedLogin.mockResolvedValueOnce('github-actions[bot]')
+    platform.listComments.mockResolvedValue([
+      {...issueComment(3, `quoted\n\n${summarizeTag()}`), author: 'alice'},
+      {...issueComment(4, `quoted\n\n${summarizeTag()}`), author: 'github-actions'}
+    ])
+
+    await new Commenter().comment('final summary', summarizeTag(), 'replace')
+
+    expect(platform.updateComment).not.toHaveBeenCalled()
+    expect(platform.deleteComment).not.toHaveBeenCalled()
+    expect(platform.createComment).toHaveBeenCalledTimes(1)
+  })
+
+  test('isOwnAuthor / isCurrentAuthor 同样认带后缀的机器人作者', async () => {
+    platform.getAuthenticatedLogin.mockResolvedValueOnce('github-actions')
+    expect(await isOwnAuthor('github-actions[bot]')).toBe(true)
+    expect(await isCurrentAuthor('github-actions[bot]')).toBe(true)
+    expect(await isOwnAuthor('alice')).toBe(false)
+  })
+
+  test('旧账号认领同样不受后缀影响', async () => {
+    setPreviousBotLogins(['old-app'])
+    expect(await isOwnAuthor('old-app[bot]')).toBe(true)
+    expect(await isCurrentAuthor('old-app[bot]')).toBe(false)
+  })
+
+  test('身份来自写响应：回退值猜错（App 令牌）时，同一次运行里摘要仍原地更新', async () => {
+    // 平台层给了个完全对不上的回退值；真实作者要等第一次写成功才知道
+    platform.getAuthenticatedLogin.mockResolvedValueOnce('github-actions[bot]')
+    platform.createComment.mockImplementation(async (_o: any, _r: any, _t: any, body: string) => ({
+      ...issueComment(100, body),
+      author: 'my-app[bot]'
+    }))
+    const c = new Commenter()
+
+    await c.comment('审查中', summarizeTag(), 'replace') // 第一次：没有既有评论 → 创建
+    await c.comment('final summary', summarizeTag(), 'replace') // 第二次：必须找到刚创建的
+
+    expect(platform.createComment).toHaveBeenCalledTimes(1)
+    expect(platform.updateComment).toHaveBeenCalledTimes(1)
+    expect((platform.updateComment.mock.calls[0] as any[])[2]).toBe(100)
+    expect(
+      (logs.info.mock.calls as any[][]).some(c => String(c[0]).includes('corrected from own write'))
+    ).toBe(true)
+  })
+
+  test('显式配置的身份不会被写响应覆盖', async () => {
+    const {initBotGreeting} = await import('../src/commenter')
+    initBotGreeting('🤖', 'Bot', 'configured-bot')
+    platform.createComment.mockImplementation(async (_o: any, _r: any, _t: any, body: string) => ({
+      ...issueComment(100, body),
+      author: 'someone-else[bot]'
+    }))
+
+    await new Commenter().comment('x', summarizeTag(), 'create')
+
+    expect(await isCurrentAuthor('configured-bot')).toBe(true)
+    expect(await isCurrentAuthor('someone-else[bot]')).toBe(false)
+  })
+
+  test('机器人账号带着我们的 marker 却对不上身份 → warning，而不是悄悄当成「引用回复」', async () => {
+    platform.getAuthenticatedLogin.mockResolvedValueOnce('configured-elsewhere')
+    platform.listComments.mockResolvedValue([
+      {...issueComment(7, `x\n\n${summarizeTag()}`), author: 'other-app[bot]'}
+    ])
+
+    await new Commenter().comment('final summary', summarizeTag(), 'replace')
+
+    const warned = (logs.warning.mock.calls as any[][]).map(c => String(c[0])).join('\n')
+    expect(warned).toContain('other-app[bot]')
+    expect(warned).toContain('do not match the resolved bot identity')
+  })
+
+  test('真人引用回复只有 info，不产生这条 warning', async () => {
+    platform.getAuthenticatedLogin.mockResolvedValueOnce('github-actions[bot]')
+    platform.listComments.mockResolvedValue([
+      {...issueComment(7, `quoted\n\n${summarizeTag()}`), author: 'alice'}
+    ])
+
+    await new Commenter().comment('final summary', summarizeTag(), 'replace')
+
+    const warned = (logs.warning.mock.calls as any[][]).map(c => String(c[0])).join('\n')
+    expect(warned).not.toContain('do not match the resolved bot identity')
   })
 })
