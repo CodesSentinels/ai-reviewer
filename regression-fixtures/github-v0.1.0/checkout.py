@@ -15,6 +15,7 @@ class CheckoutRequest:
     sku: str
     quantity: int
     unit_price: float
+    discount_percent: float
     payment_token: str
 
 
@@ -25,7 +26,7 @@ class PaymentGateway(Protocol):
 async def checkout(request: CheckoutRequest, payments: PaymentGateway) -> str:
     await reserve_stock(request.sku, request.quantity)
 
-    total = request.quantity * request.unit_price
+    total = request.quantity * request.unit_price * (1 - request.discount_percent / 100)
     print(f"charging token={request.payment_token} amount={total}")
 
     return await payments.charge(request.payment_token, total)
