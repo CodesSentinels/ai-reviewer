@@ -827,13 +827,18 @@ describe('TEST-036：PromptConfig 与 BotConfig 也要逐字段等价', () => {
     ]
   ]
 
-  test.each(PROMPT_MATRIX)('PromptConfig.%s 两平台等价', (field, input, env, value) => {
-    const gh = githubPrompt({[input]: value})
-    const gl = gitlabPrompt({[env]: value})
+  // 摘要 / 发布说明提示词是基线的一部分，外部输入不再生效（issue #231 / #240）
+  test.each(PROMPT_MATRIX)(
+    'PromptConfig.%s 外部输入不再生效，两平台都用基线',
+    (field, input, env, value) => {
+      const gh = githubPrompt({[input]: value})
+      const gl = gitlabPrompt({[env]: value})
 
-    expect(gh.prompt[field]).toBe(value)
-    expect(gl.prompt[field]).toBe(value)
-  })
+      expect(gh.prompt[field]).not.toBe(value)
+      expect(gl.prompt[field]).not.toBe(value)
+      expect(gh.prompt[field]).toBe(gl.prompt[field])
+    }
+  )
 
   test('PromptConfig 默认值两平台一致', () => {
     expect(githubPrompt().prompt).toEqual(gitlabPrompt().prompt)

@@ -97,9 +97,10 @@ export class GitHubConfigProvider implements ConfigProvider {
   getPromptConfig(): PromptConfig {
     if (this.cachedPromptConfig) return this.cachedPromptConfig
 
+    // 摘要 / 发布说明的提示词文案是基线的一部分，不再提供外部覆盖入口（issue #231 / #240）
     this.cachedPromptConfig = {
-      summarize: getInput('summarize'),
-      summarizeReleaseNotes: getInput('summarize_release_notes')
+      summarize: CONFIG_DEFAULTS.summarize,
+      summarizeReleaseNotes: CONFIG_DEFAULTS.summarizeReleaseNotes
     }
 
     return this.cachedPromptConfig
@@ -125,7 +126,6 @@ export class GitHubConfigProvider implements ConfigProvider {
   print(log: (msg: string) => void): void {
     const opts = this.getOptions()
     const bot = this.getBotConfig()
-    const prompt = this.getPromptConfig()
 
     log(`[ConfigProvider:github] Configuration:`)
     log(`  debug: ${opts.debug}`)
@@ -163,7 +163,6 @@ export class GitHubConfigProvider implements ConfigProvider {
     log(`  bot_icon: ${bot.icon}`)
     log(`  bot_name: ${bot.name}`)
     log(`  bot_github_login: ${bot.platformLogin}`)
-    log(`  summarize: ${prompt.summarize ? '(custom)' : '(default)'}`)
-    log(`  summarize_release_notes: ${prompt.summarizeReleaseNotes ? '(custom)' : '(default)'}`)
+    log(`  summarize / summarize_release_notes: (baseline)`)
   }
 }

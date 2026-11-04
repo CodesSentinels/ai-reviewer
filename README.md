@@ -268,8 +268,8 @@ review comments
   be disabled by setting `review_simple_changes` and `review_comment_lgtm` to
   `true`.
 - **Customizable prompts**: Describe your project with `profile`,
-  `project_context` and `rules` in `.ai-reviewer.yml`, or tune
-  the `summarize` and `summarize_release_notes` prompts.
+  `project_context` and `rules` in `.ai-reviewer.yml`. The summary and release-notes
+  prompts are part of the built-in baseline and cannot be overridden.
 
 To use this tool, you need to add the provided YAML file to your repository and
 configure the required environment variables, such as `GITHUB_TOKEN` and
