@@ -27,7 +27,7 @@ import {
   type GitLabClientConfig
 } from './gitlab-client'
 import {normalizeGitLabError} from './gitlab-errors'
-import {withGitLabRetry} from './gitlab-retry'
+import {probeAfterTimeout, withGitLabRetry} from './gitlab-retry'
 import {getLogger} from './logger'
 import {
   appendWriteMarker,
@@ -39,6 +39,8 @@ import {
 import {
   type IGitPlatform,
   type ChangeRequestInfo,
+  type CodeSearchHit,
+  type CommentReaction,
   type DiffFile,
   type DiffResult,
   type PlatformComment,
@@ -87,6 +89,10 @@ const REACTION_TO_EMOJI: Record<ReactionContent, string> = {
   rocket: 'rocket',
   eyes: 'eyes'
 }
+
+const EMOJI_TO_REACTION: Record<string, ReactionContent> = Object.fromEntries(
+  Object.entries(REACTION_TO_EMOJI).map(([reaction, emoji]) => [emoji, reaction])
+) as Record<string, ReactionContent>
 
 // ─── GitLab AccessLevel → PlatformPermission 映射 ───────────────────────────
 
@@ -233,6 +239,32 @@ export class GitLabPlatform implements IGitPlatform {
    * - API 部分失败 → 抛 GitPlatformError（不静默返回空数组）
    * - 传入 path → 只列举该目录下一层（截断后按需回填），目录不存在返回空树
    */
+  /** 项目内代码搜索（Search API，scope=blobs；搜索默认分支） */
+  async searchCode(
+    owner: string,
+    repo: string,
+    query: string,
+    limit: number
+  ): Promise<CodeSearchHit[]> {
+    const projectPath = `${owner}/${repo}`
+    try {
+      const blobs = (await withGitLabRetry('searchCode', async () =>
+        (this.api.Search as any).all('blobs', query, {
+          projectId: projectPath,
+          perPage: limit,
+          maxPages: 1
+        })
+      )) as any[]
+      return blobs.slice(0, limit).map(b => ({
+        path: String(b?.path ?? b?.filename ?? ''),
+        startLine: typeof b?.startline === 'number' ? b.startline : null,
+        snippet: String(b?.data ?? '')
+      }))
+    } catch (e) {
+      throw normalizeGitLabError(e, 'searchCode')
+    }
+  }
+
   async listRepositoryTree(
     owner: string,
     repo: string,
@@ -455,9 +487,14 @@ export class GitLabPlatform implements IGitPlatform {
     })
     const markedBody = appendWriteMarker(body, marker)
 
-    return withGitLabRetry('createComment', async attempt => {
+    return withGitLabRetry('createComment', async (attempt, lastError) => {
       if (attempt > 1) {
-        const existing = await this.findNoteByMarker(projectPath, changeRequestId, marker)
+        const existing = await probeAfterTimeout(
+          'createComment',
+          () => this.findNoteByMarker(projectPath, changeRequestId, marker),
+          r => r != null,
+          lastError
+        )
         if (existing != null) return existing
       }
       const note = (await this.api.MergeRequestNotes.create(
@@ -660,10 +697,16 @@ export class GitLabPlatform implements IGitPlatform {
     })
     const markedBody = appendWriteMarker(comment.body, marker)
 
-    await withGitLabRetry('createReviewComment', async attempt => {
-      // GLAPI-027：重试前先确认上一次是否已经建出 discussion
+    await withGitLabRetry('createReviewComment', async (attempt, lastError) => {
+      // GLAPI-027：重试前先确认上一次是否已经建出 discussion；上一次是超时的话，请求可能
+      // 还在服务端处理，多等几轮再确认，真的没落库才重发
       if (attempt > 1) {
-        const exists = await this.findDiscussionByMarker(projectPath, changeRequestId, marker)
+        const exists = await probeAfterTimeout(
+          'createReviewComment',
+          () => this.findDiscussionByMarker(projectPath, changeRequestId, marker),
+          r => r === true,
+          lastError
+        )
         if (exists) return
       }
       // 需要 base_sha / head_sha / start_sha 构造 position
@@ -749,11 +792,18 @@ export class GitLabPlatform implements IGitPlatform {
     })
     const markedBody = appendWriteMarker(body, marker)
 
-    return withGitLabRetry('replyToReviewComment', async attempt => {
+    return withGitLabRetry('replyToReviewComment', async (attempt, lastError) => {
       if (attempt > 1) {
-        const {discussions} = await this.getAllDiffDiscussions(projectPath, changeRequestId)
-        const disc = discussions.find(d => d.id === discussionId)
-        const hit = (disc?.notes ?? []).find((n: any) => hasWriteMarker(n.body, marker))
+        const hit = await probeAfterTimeout(
+          'replyToReviewComment',
+          async () => {
+            const {discussions} = await this.getAllDiffDiscussions(projectPath, changeRequestId)
+            const disc = discussions.find(d => d.id === discussionId)
+            return (disc?.notes ?? []).find((n: any) => hasWriteMarker(n.body, marker))
+          },
+          r => r != null,
+          lastError
+        )
         if (hit != null) return toPlatformComment(hit)
       }
       const note = (await this.api.MergeRequestDiscussions.addNote(
@@ -950,6 +1000,33 @@ export class GitLabPlatform implements IGitPlatform {
       // 409 文案不一致，故按状态码而非文案判定）。ACK 已经在了，视为达成目标。
       if (err.errorKind !== 'conflict') throw err
       getLogger().debug(`addReaction: ${emojiName} already awarded on note ${commentId}`)
+    }
+  }
+
+  /** 列出 MR note 上的 Award Emoji（映射回 ReactionContent） */
+  async listReactions(
+    owner: string,
+    repo: string,
+    changeRequestId: number,
+    commentId: number,
+    _commentKind: 'issue_comment' | 'review_comment'
+  ): Promise<CommentReaction[]> {
+    const projectPath = `${owner}/${repo}`
+    try {
+      const awards = (await withGitLabRetry('listReactions', async () =>
+        (this.api.MergeRequestNoteAwardEmojis as any).all(
+          projectPath,
+          changeRequestId,
+          commentId,
+          listOptions()
+        )
+      )) as any[]
+      return awards.map(a => ({
+        content: EMOJI_TO_REACTION[String(a?.name ?? '')] ?? null,
+        userLogin: String(a?.user?.username ?? '')
+      }))
+    } catch (e) {
+      throw normalizeGitLabError(e, 'listReactions')
     }
   }
 

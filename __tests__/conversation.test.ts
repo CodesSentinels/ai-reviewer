@@ -31,6 +31,7 @@ jest.mock('../src/tokenizer', () => ({getTokenCount: () => 0}))
 import {
   botCommentTagVariants,
   countBotTurns,
+  botReplyTagVariants,
   isFollowUpQuestion,
   truncateConversationChain
 } from '../src/conversation'
@@ -132,6 +133,25 @@ describe('countBotTurns — 轮次统计', () => {
 
   test('空链返回 0', () => {
     expect(countBotTurns('')).toBe(0)
+  })
+})
+
+describe('botReplyTagVariants — 主评论区只数对话回复', () => {
+  test('只含 comment-reply 标签（新旧两种形态），不含行级审查评论的 comment 标签', () => {
+    expect(botReplyTagVariants()).toEqual(['<!-- BOT_REPLY -->', '<!-- LEGACY_BOT_REPLY -->'])
+  })
+
+  test('链里的审查评论不计轮次，新旧回复都计', () => {
+    const chain = [
+      `bot: 审查评论 ${BOT_COMMENT}`,
+      `bot: 审查评论 ${BOT_COMMENT}`,
+      'u: 提问',
+      'bot: 回复一 <!-- LEGACY_BOT_REPLY -->',
+      'bot: 回复二 <!-- BOT_REPLY -->'
+    ].join('\n---\n')
+    expect(countBotTurns(chain, botReplyTagVariants())).toBe(2)
+    // 对照：沿用 botCommentTagVariants 会把审查评论也算进去
+    expect(countBotTurns(chain)).toBe(4)
   })
 })
 

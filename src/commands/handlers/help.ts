@@ -11,6 +11,7 @@ import type {Platform} from '../../platform/execution-context'
 import {getRegistry} from '../registry'
 import {resolveBotMentions} from '../parser'
 import {PRIMARY_BOT_MENTION} from '../../constants'
+import {localizeChangeRequest, permissionLabel} from '../platform-terms'
 
 export interface HelpIdentity {
   /** 运行平台，决定权限名的说明口径 */
@@ -53,9 +54,10 @@ export function buildHelpMessage(
   })
 
   for (const c of ordered) {
-    const perm = c.minPermission ?? 'write'
+    const perm = permissionLabel(c.minPermission ?? 'write', identity.platform)
     const usage = c.usage ?? `${PRIMARY_BOT_MENTION} ${c.name}`
-    lines.push(`| \`${usage}\` | ${c.description} | \`${perm}\` |`)
+    const description = localizeChangeRequest(c.description, identity.platform)
+    lines.push(`| \`${usage}\` | ${description} | \`${perm}\` |`)
   }
 
   if (ordered.some(c => (c.aliases?.length ?? 0) > 0)) {
@@ -75,9 +77,9 @@ export function buildHelpMessage(
   lines.push('### 权限说明')
   lines.push(
     identity.platform === 'gitlab'
-      ? '- `write` → Developer(30) 及以上\n' +
-          '- `triage` → Reporter(20) 及以上\n' +
-          '- `read` → 对项目可见即可\n\n' +
+      ? '- `Developer` → 项目角色 Developer(30) 及以上\n' +
+          '- `Reporter` → 项目角色 Reporter(20) 及以上\n' +
+          '- `Guest` → 对项目可见即可\n\n' +
           '`review` / `full review` / `summary` 对 MR 作者豁免权限要求；' +
           '`pause` / `resume` / `resolve` 不豁免。权限查询失败一律拒绝执行。'
       : '- `write` → 仓库 write 及以上\n' +
@@ -107,11 +109,13 @@ export function buildHelpMessage(
 /**
  * 构造"未知命令"回复消息，列出所有支持的命令。
  * 参考 coderabbitai 格式: @user, I didn't recognize `xxx` as a valid command.
+ * 命令描述按平台换成 PR / MR。
  */
 export function buildUnknownCommandMessage(
   invalidCmd: string,
   actorLogin: string,
-  commands: CommandHandler[]
+  commands: CommandHandler[],
+  platform?: Platform
 ): string {
   const lines: string[] = []
   lines.push(
@@ -127,7 +131,7 @@ export function buildUnknownCommandMessage(
 
   for (const c of ordered) {
     const usage = c.usage ?? `${PRIMARY_BOT_MENTION} ${c.name}`
-    lines.push(`- \`${usage}\` — ${c.description}`)
+    lines.push(`- \`${usage}\` — ${localizeChangeRequest(c.description, platform)}`)
   }
 
   lines.push('')

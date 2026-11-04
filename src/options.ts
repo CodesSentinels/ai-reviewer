@@ -4,9 +4,10 @@
  * 包含三个核心类：
  * - Options: 全局配置类，读取并存储所有 GitHub Action 输入参数
  * - PathFilter: 文件路径过滤器，根据 glob 规则决定哪些文件需要审查
+ * - PathInstructions: 按路径追加审查指令，让不同目录的文件带上各自的审查要求
  * - OpenAIOptions: OpenAI 模型配置，关联模型名称与其 token 限制
  */
-import {info} from './actions-log'
+import {info, warning} from './actions-log'
 import {minimatch} from 'minimatch'
 import {TokenLimits} from './limits'
 
@@ -24,6 +25,7 @@ export class Options {
   reviewSimpleChanges: boolean // 是否审查简单变更（false 时启用分类筛选）
   reviewCommentLGTM: boolean // 是否保留 LGTM 评论
   pathFilters: PathFilter // 文件路径过滤规则
+  pathInstructions: PathInstructions // 按路径追加的审查指令
   systemMessage: string // AI 系统消息（定义角色和行为）
   openaiLightModel: string // 轻量模型名称（用于摘要）
   openaiHeavyModel: string // 重量模型名称（用于代码审查）
@@ -79,6 +81,15 @@ export class Options {
    * 而是读取低权限 lint job 产出的 JSON 报告——持业务密钥的执行面不接触 PR 代码。
    */
   lintReportPath: string
+  /** 文件数超过此值时在摘要里提醒（≤ 0 关闭提醒），见 large-pr.ts */
+  warnFiles: number
+  /** 自动审查识别到初始化 PR 时只生成摘要、跳过行级审查，见 large-pr.ts */
+  initialPrSummaryOnly: boolean
+  /**
+   * 是否省掉可省的 bot 写入（「审查中」横幅、改 PR 描述）。不对外暴露为配置：
+   * 未设置时由 review.ts 按平台决定（GitLab 开，因为每次写入都会再触发一条 pipeline）。
+   */
+  minimizeBotWrites?: boolean
 
   constructor(
     debug: boolean,
@@ -102,7 +113,7 @@ export class Options {
     maxDependencyFiles = '50',
     enableWebSearch = true,
     enableShell = true,
-    enableLintTools = true,
+    enableLintTools = false,
     toolEnableOverrides: Record<string, boolean> = {},
     toolVersionOverrides: Record<string, string> = {},
     semgrepConfig = 'p/default',
@@ -112,7 +123,10 @@ export class Options {
     botIcon = '🤖',
     botName = 'AI Reviewer',
     botLogin = '',
-    lintReportPath = ''
+    lintReportPath = '',
+    warnFiles = '50',
+    initialPrSummaryOnly = true,
+    pathInstructions: string[] | null = null
   ) {
     this.debug = debug
     this.disableReview = disableReview
@@ -121,6 +135,7 @@ export class Options {
     this.reviewSimpleChanges = reviewSimpleChanges
     this.reviewCommentLGTM = reviewCommentLGTM
     this.pathFilters = new PathFilter(pathFilters)
+    this.pathInstructions = new PathInstructions(pathInstructions)
     this.systemMessage = systemMessage
     this.openaiLightModel = openaiLightModel
     this.openaiHeavyModel = openaiHeavyModel
@@ -148,6 +163,8 @@ export class Options {
     this.botName = botName
     this.botLogin = botLogin
     this.lintReportPath = lintReportPath
+    this.warnFiles = parseInt(warnFiles)
+    this.initialPrSummaryOnly = initialPrSummaryOnly
   }
 
   /** 打印所有配置项到日志，方便调试 */
@@ -156,9 +173,12 @@ export class Options {
     info(`disable_review: ${this.disableReview}`)
     info(`disable_release_notes: ${this.disableReleaseNotes}`)
     info(`max_files: ${this.maxFiles}`)
+    info(`warn_files: ${this.warnFiles}`)
+    info(`initial_pr_summary_only: ${this.initialPrSummaryOnly}`)
     info(`review_simple_changes: ${this.reviewSimpleChanges}`)
     info(`review_comment_lgtm: ${this.reviewCommentLGTM}`)
     info(`path_filters: ${this.pathFilters}`)
+    info(`path_instructions: ${this.pathInstructions}`)
     info(`system_message: ${this.systemMessage}`)
     info(`openai_light_model: ${this.openaiLightModel}`)
     info(`openai_heavy_model: ${this.openaiHeavyModel}`)
@@ -260,6 +280,71 @@ export class PathFilter {
     // 通过条件：（不存在包含规则 或 匹配了包含规则）且 未被排除
     return (!inclusionRuleExists || included) && !excluded
   }
+
+  /** 日志展示：还原成配置时的写法（排除规则带 `!`），没有规则时显示 `(none)` */
+  toString(): string {
+    if (this.rules.length === 0) return '(none)'
+    return this.rules.map(([rule, exclude]) => (exclude ? `!${rule}` : rule)).join(', ')
+  }
+}
+
+/**
+ * PathInstructions 类 - 按路径追加审查指令
+ *
+ * 规则格式（每行一条）：`<glob>: <指令>`，例如
+ *   `src/api/**: 所有接口必须校验入参，并检查鉴权`
+ *   `__tests__/**: 只关注断言是否真的覆盖了被测行为`
+ * - 以第一个 ": "（冒号加空格）切分 glob 与指令，指令里可以再出现冒号
+ * - 以 "#" 开头的行是注释，空行忽略
+ * - 格式不对的行丢弃并给 warning，不让一行写错拖垮整次审查
+ * - 一个文件命中多条规则时，按配置顺序全部生效
+ */
+export class PathInstructions {
+  /** 单个文件最多注入的指令字符数，防止配置过长挤占 diff 的 token 预算 */
+  static readonly MAX_CHARS_PER_FILE = 4000
+
+  private readonly rules: Array<[string /* glob */, string /* 指令 */]> = []
+
+  constructor(lines: string[] | null = null) {
+    for (const raw of lines ?? []) {
+      const line = raw?.trim()
+      if (!line || line.startsWith('#')) continue
+      const sep = line.indexOf(': ')
+      const glob = sep > 0 ? line.substring(0, sep).trim() : ''
+      const text = sep > 0 ? line.substring(sep + 2).trim() : ''
+      if (!glob || !text) {
+        warning(
+          `path_instructions: ignored malformed line (expected "<glob>: <instruction>"): ${line}`
+        )
+        continue
+      }
+      this.rules.push([glob, text])
+    }
+  }
+
+  /** 返回命中该路径的全部指令（按配置顺序），总长度超过上限时截断 */
+  match(path: string): string[] {
+    const matched: string[] = []
+    let used = 0
+    for (const [glob, text] of this.rules) {
+      if (!minimatch(path, glob)) continue
+      if (used + text.length > PathInstructions.MAX_CHARS_PER_FILE) {
+        warning(
+          `path_instructions: instructions for ${path} exceed ${PathInstructions.MAX_CHARS_PER_FILE} chars, rest dropped`
+        )
+        break
+      }
+      matched.push(text)
+      used += text.length
+    }
+    return matched
+  }
+
+  /** 日志展示：只列出 glob 和规则条数，避免把整段指令刷进日志 */
+  toString(): string {
+    if (this.rules.length === 0) return '(none)'
+    return `${this.rules.length} rule(s): ${this.rules.map(([glob]) => glob).join(', ')}`
+  }
 }
 
 /**
@@ -273,12 +358,14 @@ export class OpenAIOptions {
   tokenLimits: TokenLimits // 该模型的 token 限制配置
   enableWebSearch: boolean // 是否启用 web search
   enableShell: boolean // 是否启用 shell
+  enableCodeTools: boolean // 是否提供只读代码探查工具（read_file / list_directory / search_code）
 
   constructor(
     model = 'gpt-5.4-nano',
     tokenLimits: TokenLimits | null = null,
     enableWebSearch = false,
-    enableShell = true
+    enableShell = true,
+    enableCodeTools = false
   ) {
     this.model = model
     if (tokenLimits != null) {
@@ -288,5 +375,6 @@ export class OpenAIOptions {
     }
     this.enableWebSearch = enableWebSearch
     this.enableShell = enableShell
+    this.enableCodeTools = enableCodeTools
   }
 }

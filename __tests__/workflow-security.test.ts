@@ -389,7 +389,9 @@ describe('SYNC-001~009: sync-to-gitlab.yml 加固', () => {
       expect(validateIdx).toBeGreaterThanOrEqual(0)
 
       const validateScript = String(steps[validateIdx].run ?? '')
-      expect(validateScript).toMatch(/main\|develop/)
+      // develop 不再走这个 workflow（由 publish-gitlab-com.yml 以产物方式发布），白名单只剩 main
+      expect(validateScript).toMatch(/\bmain\)/)
+      expect(validateScript).not.toMatch(/develop/)
 
       // 校验必须排在 checkout/push 之前，不能形同虚设
       const checkoutIdx = steps.findIndex((s: any) =>
@@ -431,9 +433,159 @@ describe('SYNC-001~009: sync-to-gitlab.yml 加固', () => {
     expect(triggersOf(reviewWf.doc).workflow_run).toBeUndefined()
   })
 
-  test('SYNC-008：自动触发（on.push）只监听 main/develop，不含 tag', () => {
+  test('SYNC-008：自动触发（on.push）只监听 main，不含 tag；develop 交给 publish-gitlab-com.yml', () => {
     const pushTrigger = wf.doc.on?.push ?? wf.doc[true as unknown as string]?.push
-    expect(pushTrigger.branches).toEqual(['main', 'develop'])
+    expect(pushTrigger.branches).toEqual(['main'])
     expect(pushTrigger.tags).toBeUndefined()
+  })
+})
+
+describe('publish-gitlab-com.yml：develop 以产物方式发布到 gitlab.com', () => {
+  const wf = workflows.find(w => w.name === 'publish-gitlab-com.yml') as Workflow
+
+  test('存在 publish-gitlab-com.yml，且只监听 develop，不含 tag', () => {
+    expect(wf).toBeDefined()
+    const pushTrigger = wf.doc.on?.push ?? wf.doc[true as unknown as string]?.push
+    expect(pushTrigger.branches).toEqual(['develop'])
+    expect(pushTrigger.tags).toBeUndefined()
+  })
+
+  test('发布串行，且不取消进行中的发布', () => {
+    expect(wf.doc.concurrency.group).toBe('publish-gitlab-com')
+    expect(wf.doc.concurrency['cancel-in-progress']).toBe(false)
+  })
+
+  test('只有一个 job；ref 校验在 checkout 和任何持 token 的步骤之前', () => {
+    const jobs = jobsOf(wf.doc)
+    expect(jobs).toHaveLength(1)
+    const steps = stepsOf(jobs[0][1])
+    const validateIdx = steps.findIndex((s: any) => /Validate ref/i.test(s.name ?? ''))
+    const checkoutIdx = steps.findIndex((s: any) =>
+      String(s.uses ?? '').startsWith('actions/checkout')
+    )
+    const firstTokenIdx = steps.findIndex((s: any) =>
+      JSON.stringify(s).includes('secrets.GITLAB_TOKEN')
+    )
+    expect(validateIdx).toBeGreaterThanOrEqual(0)
+    expect(checkoutIdx).toBeGreaterThan(validateIdx)
+    expect(firstTokenIdx).toBeGreaterThan(checkoutIdx)
+    expect(String(steps[validateIdx].run)).toMatch(/!= "develop"/)
+  })
+
+  test('追加提交，不 force push；目标是固定字面量', () => {
+    const code = codeOf(wf.raw)
+    expect(code).not.toMatch(/--force/)
+    expect(code).not.toMatch(/git push/)
+    expect(code).toMatch(/PRIVATE_GITLAB_URL: https:\/\/gitlab\.com/)
+    expect(code).toMatch(/PRIVATE_GITLAB_PROJECT: CodesSentinels\/ai-reviewer/)
+    expect(code).toMatch(/PRIVATE_GITLAB_BRANCH: develop/)
+  })
+
+  test('GITLAB_TOKEN 只出现在「发布」和「回读校验」两个步骤，且只放 env', () => {
+    const steps = stepsOf(jobsOf(wf.doc)[0][1])
+    const withToken = steps.filter((s: any) => JSON.stringify(s).includes('secrets.GITLAB_TOKEN'))
+    expect(withToken.map((s: any) => s.name)).toEqual([
+      'Build and publish',
+      'Verify gitlab.com received this revision',
+      'Verify provenance of what gitlab.com serves'
+    ])
+    for (const s of withToken) {
+      expect(String(s.run ?? '')).not.toContain('secrets.GITLAB_TOKEN')
+    }
+  })
+
+  test('测试单独成步、不带环境变量，且排在发布之前；发布步骤用 --skip-tests', () => {
+    const steps = stepsOf(jobsOf(wf.doc)[0][1])
+    const testIdx = steps.findIndex((s: any) => /npm test/.test(String(s.run ?? '')))
+    const publishIdx = steps.findIndex((s: any) =>
+      /publish-private-gitlab\.mjs/.test(String(s.run ?? ''))
+    )
+    expect(testIdx).toBeGreaterThanOrEqual(0)
+    expect(testIdx).toBeLessThan(publishIdx)
+    // 发布目标主机名（gitlab.com）出现在 PRIVATE_GITLAB_URL 里时，private-gitlab-ci-config
+    // 会要求它不出现在公开文件里；测试步骤不能继承这个变量
+    expect(steps[testIdx].env).toBeUndefined()
+    expect(String(steps[publishIdx].run)).toContain('--skip-tests')
+  })
+
+  test('发布之后回读 VERSION.json，比对记录的 revision 与本次提交', () => {
+    const steps = stepsOf(jobsOf(wf.doc)[0][1])
+    const publishIdx = steps.findIndex((s: any) =>
+      /publish-private-gitlab\.mjs/.test(String(s.run ?? ''))
+    )
+    const verifyIdx = steps.findIndex((s: any) => /VERSION\.json/.test(String(s.run ?? '')))
+    expect(publishIdx).toBeGreaterThanOrEqual(0)
+    expect(verifyIdx).toBeGreaterThan(publishIdx)
+    expect(String(steps[verifyIdx].run)).toMatch(/GITHUB_SHA/)
+  })
+
+  describe('构建出处证明（#222）', () => {
+    const job = () => jobsOf(wf.doc)[0][1]
+    const steps = () => stepsOf(job())
+    const idx = (re: RegExp) =>
+      steps().findIndex((s: any) => re.test(`${s.name ?? ''} ${s.uses ?? ''} ${s.run ?? ''}`))
+
+    test('顶层仍是只读；id-token 与 attestations 写权限只放在这个 job 上', () => {
+      expect(wf.doc.permissions).toEqual({contents: 'read'})
+      expect(job().permissions).toEqual({
+        contents: 'read',
+        'id-token': 'write',
+        attestations: 'write'
+      })
+    })
+
+    test('attest 步骤固定到完整 commit SHA，签名的是 SHA256SUMS，且不带 env / secret', () => {
+      const attest = steps()[idx(/attest-build-provenance/)]
+      expect(String(attest.uses)).toMatch(/^actions\/attest-build-provenance@[0-9a-f]{40}( |$)/)
+      expect(attest.with['subject-path']).toBe('.publish/out/SHA256SUMS')
+      expect(attest.env).toBeUndefined()
+      expect(JSON.stringify(attest)).not.toMatch(/secrets\./)
+    })
+
+    test('顺序：发布 → 证明 → 验证 gitlab.com 实际提供的文件', () => {
+      const publishIdx = idx(/publish-private-gitlab\.mjs/)
+      const attestIdx = idx(/attest-build-provenance/)
+      const verifyIdx = idx(/gh attestation verify/)
+      expect(publishIdx).toBeGreaterThanOrEqual(0)
+      expect(attestIdx).toBeGreaterThan(publishIdx)
+      expect(verifyIdx).toBeGreaterThan(attestIdx)
+    })
+
+    test('验证的是从 gitlab.com 下载的 SHA256SUMS，并限定仓库、签名 workflow、提交与托管 runner', () => {
+      const verify = String(steps()[idx(/gh attestation verify/)].run)
+      expect(verify).toMatch(/repository\/files\/SHA256SUMS\/raw\?ref=develop/)
+      expect(verify).toMatch(/--repo "\$\{GITHUB_REPOSITORY\}"/)
+      expect(verify).toMatch(/--signer-workflow .*publish-gitlab-com\.yml/)
+      expect(verify).toMatch(/--source-digest "\$\{GITHUB_SHA\}"/)
+      expect(verify).toContain('--deny-self-hosted-runners')
+      // 验证对象不能是本地构建出来的那份，否则证明不了 gitlab.com 上的内容
+      expect(verify).not.toContain('.publish/out')
+    })
+  })
+})
+
+describe('test.yml：PR 上跑全量测试（#221）', () => {
+  const wf = workflows.find(w => w.name === 'test.yml')
+
+  test('存在，且 job 名为 test（分支保护按这个名字设必须检查）', () => {
+    expect(wf).toBeDefined()
+    expect(Object.keys(wf!.doc.jobs)).toEqual(['test'])
+  })
+
+  test('用 pull_request，不用 pull_request_target；覆盖 develop 和 main', () => {
+    const triggers = triggersOf(wf!.doc)
+    expect(Object.keys(triggers)).toContain('pull_request')
+    expect(Object.keys(triggers)).not.toContain('pull_request_target')
+    expect(triggers.pull_request.branches).toEqual(['develop', 'main'])
+  })
+
+  test('只读权限，且不使用任何 Secret', () => {
+    expect(wf!.doc.permissions).toEqual({contents: 'read'})
+    expect(codeOf(wf!.raw)).not.toMatch(/secrets\./)
+  })
+
+  test('跑的是全量 npm test', () => {
+    const steps = stepsOf(wf!.doc.jobs.test)
+    expect(steps.some(s => typeof s.run === 'string' && s.run.includes('npm test'))).toBe(true)
   })
 })

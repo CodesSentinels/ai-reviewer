@@ -42,7 +42,13 @@ export const DEFAULT_BOT_MENTIONS: string[] = [...BOT_MENTIONS]
  * 洁癖去赌每个调用方都传了值。
  */
 export function resolveBotMentions(botLogin: string | undefined | null): string[] {
-  const login = (botLogin ?? '').trim().replace(/^@/, '')
+  // GitHub App 的登录名带 `[bot]` 后缀（如 `codesentinel-review-bot[bot]`），但评论里
+  // 能 @ 到的只有不带后缀的 handle；不剥掉的话，`@codesentinel-review-bot help`
+  // 永远匹配不上。
+  const login = (botLogin ?? '')
+    .trim()
+    .replace(/^@/, '')
+    .replace(/\[bot\]$/i, '')
   if (login === '') return [...DEFAULT_BOT_MENTIONS]
   const real = `@${login.toLowerCase()}`
   return DEFAULT_BOT_MENTIONS.includes(real)

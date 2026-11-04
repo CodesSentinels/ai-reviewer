@@ -1,6 +1,6 @@
 // Jest Snapshot v1, https://goo.gl/fbAQLP
 
-exports[`GH-002: Action input 快照与不变量 input 数量与快照一致（新增/删除必须显式更新快照） 1`] = `42`;
+exports[`GH-002: Action input 快照与不变量 input 数量与快照一致（新增/删除必须显式更新快照） 1`] = `45`;
 
 exports[`GH-002: Action input 快照与不变量 全部 input 的名称、必填、默认值、解析类型快照 1`] = `
 Array [
@@ -89,7 +89,7 @@ Array [
     "type": "boolean",
   },
   Object {
-    "default": "true",
+    "default": "false",
     "name": "enable_lint_tools",
     "required": false,
     "sensitive": false,
@@ -143,6 +143,13 @@ Array [
     "required": false,
     "sensitive": false,
     "type": "int",
+  },
+  Object {
+    "default": "true",
+    "name": "initial_pr_summary_only",
+    "required": false,
+    "sensitive": false,
+    "type": "boolean",
   },
   Object {
     "default": "zh-CN",
@@ -229,7 +236,7 @@ Array [
     "type": "int",
   },
   Object {
-    "default": "!dist/**
+    "default": "!**/dist/**
 !**/*.app
 !**/*.bin
 !**/*.bz2
@@ -340,6 +347,13 @@ Array [
     "type": "multiline",
   },
   Object {
+    "default": "",
+    "name": "path_instructions",
+    "required": false,
+    "sensitive": false,
+    "type": "multiline",
+  },
+  Object {
     "default": "^3.0.0",
     "name": "prettier_version",
     "required": false,
@@ -383,7 +397,7 @@ Array [
   with similar changes together into a single row to save space.
 
 Avoid additional commentary as this summary will be added as a comment on the
-GitHub pull request. Use the titles \\"Walkthrough\\" and \\"Changes\\" and they must be H2.
+pull/merge request. Use the titles \\"Walkthrough\\" and \\"Changes\\" and they must be H2.
 ",
     "name": "summarize",
     "required": false,
@@ -403,7 +417,7 @@ and emphasize features visible to the end-user while omitting code-level details
     "type": "string",
   },
   Object {
-    "default": "You are \`@ai-reviewer\` (aka \`github-actions[bot]\`), a language model
+    "default": "You are \`@ai-reviewer\`, a language model
 trained by OpenAI. Your purpose is to act as a highly experienced
 software engineer and provide a thorough review of the code hunks
 and suggest code snippets to improve key areas such as:
@@ -435,6 +449,13 @@ disregarding minor issues.
     "required": false,
     "sensitive": false,
     "type": "string",
+  },
+  Object {
+    "default": "50",
+    "name": "warn_files",
+    "required": false,
+    "sensitive": false,
+    "type": "int",
   },
 ]
 `;

@@ -4,8 +4,8 @@
  * ai-reviewer 自管 lint 工具，**待审查项目不需要 npm install**。
  *
  * 实现策略：
- *   - npm   ：调用 `npm install` 装到 /tmp/ai-reviewer-lint-tools/node_modules
- *             （Phase 1 落地：eslint / @biomejs/biome / prettier）
+ *   - npm   ：调用 `npm install` 装到 /tmp/ai-reviewer-lint-tools/npm/<binName>/node_modules
+ *             （每个工具一个独立目录；Phase 1 落地：eslint / @biomejs/biome / prettier）
  *   - binary：从 URL 下载预编译归档（Phase 2+，留作扩展接口）
  *
  * 幂等性：
@@ -31,6 +31,11 @@ import {runCommand} from './adapters/exec'
  */
 function getInstallRoot(): string {
   return join(tmpdir(), 'ai-reviewer-lint-tools')
+}
+
+/** npm 工具的独立安装目录：<沙箱根>/npm/<binName> */
+function getNpmToolDir(binName: string): string {
+  return join(getInstallRoot(), 'npm', binName)
 }
 
 /** 单次 npm install 的超时（5 分钟，足够覆盖慢镜像） */
@@ -73,7 +78,12 @@ export async function ensureToolInstalled(spec: InstallSpec): Promise<InstallRes
  * 这一个工具，不在乎全局 peer 兼容性。
  */
 async function installViaNpm(spec: NpmInstallSpec): Promise<InstallResult> {
-  const root = getInstallRoot()
+  // 每个工具一个独立目录。曾经所有 npm 工具共享同一个 node_modules，而
+  // `npm install --no-save <pkg>` 会把目录里「不在 package.json 里」的已装包当作
+  // extraneous 清掉：串行安装时后装的会删掉先装的；并行安装则互相踩踏，一个工具
+  // 安装失败（例如版本号写错）还会把别的工具的 .bin 一并删掉，对应工具之后
+  // 静默得到 0 个发现。
+  const root = getNpmToolDir(spec.binName)
   const binPath = join(root, 'node_modules', '.bin', spec.binName)
 
   // 1) 缓存命中：同一 runner job 内 ai-reviewer 多次调用、或多个 adapter
@@ -94,7 +104,7 @@ async function installViaNpm(spec: NpmInstallSpec): Promise<InstallResult> {
         sandboxPkgJson,
         `${JSON.stringify(
           {
-            name: 'ai-reviewer-lint-tools',
+            name: `ai-reviewer-lint-tool-${spec.binName}`,
             private: true,
             version: '0.0.0',
             description: 'ai-reviewer 内部 lint 工具沙箱（自动管理，请勿手动修改）'

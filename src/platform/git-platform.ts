@@ -160,6 +160,16 @@ export interface TreeResult {
   truncated: boolean
 }
 
+/** 代码搜索的一条命中 */
+export interface CodeSearchHit {
+  /** 仓库根相对路径 */
+  path: string
+  /** 片段起始行号（平台不提供时为 null） */
+  startLine: number | null
+  /** 命中片段（平台不提供时为空串） */
+  snippet: string
+}
+
 /** 权限等级 */
 export type PlatformPermission = 'admin' | 'maintain' | 'write' | 'triage' | 'read' | 'none'
 
@@ -173,6 +183,14 @@ export type ReactionContent =
   | 'hooray'
   | 'rocket'
   | 'eyes'
+
+/** 评论上的一个表情反应 */
+export interface CommentReaction {
+  /** 映射回 ReactionContent；不在该集合里的平台表情为 null */
+  content: ReactionContent | null
+  /** 添加者用户名 */
+  userLogin: string
+}
 
 // ─── 平台接口（ARCH-016）──────────────────────────────────────────────────
 
@@ -205,7 +223,12 @@ export interface IGitPlatform {
     body: string
   ): Promise<void>
 
-  /** 获取 PR/MR 的所有 commit SHA */
+  /**
+   * 获取 PR/MR 的所有 commit SHA
+   *
+   * 顺序由平台决定，不做统一：GitHub 从旧到新，GitLab 从新到旧。
+   * 调用方只能把结果当集合用，不要依赖顺序。
+   */
   listChangeRequestCommits(owner: string, repo: string, changeRequestId: number): Promise<string[]>
 
   // ─── 2. Diff ──────────────────────────────────────────────────────────────
@@ -324,6 +347,18 @@ export interface IGitPlatform {
     commentKind: 'issue_comment' | 'review_comment'
   ): Promise<void>
 
+  /**
+   * 列出评论上的表情反应（只读）。
+   * changeRequestId: GitLab Award Emoji API 需要 MR IID；GitHub 可忽略。
+   */
+  listReactions(
+    owner: string,
+    repo: string,
+    changeRequestId: number,
+    commentId: number,
+    commentKind: 'issue_comment' | 'review_comment'
+  ): Promise<CommentReaction[]>
+
   // ─── 8. 权限 ──────────────────────────────────────────────────────────────
 
   /** 查询用户对项目的权限等级 */
@@ -349,6 +384,12 @@ export interface IGitPlatform {
    *   目录不存在时返回空 entries，不抛错 —— 这是投机查询，不是失败。
    */
   listRepositoryTree(owner: string, repo: string, ref: string, path?: string): Promise<TreeResult>
+
+  /**
+   * 在仓库中搜索代码（只读，供审查时的代码探查工具使用）。
+   * 搜索范围是平台索引的默认分支，不保证包含本次变更的新代码；最多返回 limit 条。
+   */
+  searchCode(owner: string, repo: string, query: string, limit: number): Promise<CodeSearchHit[]>
 }
 
 // ─── 平台单例（ARCH-018）────────────────────────────────────────────────

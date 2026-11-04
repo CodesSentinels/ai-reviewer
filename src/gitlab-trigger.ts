@@ -13,8 +13,16 @@ import {createGitLabExecutionContext} from './platform/gitlab-execution-context'
 import type {ExecutionContext} from './platform/execution-context'
 import {GitLabLogger} from './platform/gitlab-logger'
 import {GitLabPlatform} from './platform/gitlab-platform'
-import {describeGitLabClientConfig, resolveGitLabClientConfig} from './platform/gitlab-client'
+import {
+  configuredBotGitLabLogin,
+  describeGitLabClientConfig,
+  isGitLabTokenMapEnabled,
+  prepareGitLabClientConfig,
+  previousBotGitLabLogins,
+  type GitLabClientConfig
+} from './platform/gitlab-client'
 import {setPlatform} from './platform/git-platform'
+import {setPreviousBotLogins} from './commenter'
 import {setStateNamespace} from './platform/state-namespace'
 import {setLogger} from './platform/logger'
 import {handleExecCtxError} from './platform/exec-ctx-error-handler'
@@ -26,11 +34,31 @@ import {redact} from './gitlab-trigger-redact'
 import {checkForkMergeRequest, isHeadStale, buildMrIdempotencyKey} from './gitlab-mr-hook-rules'
 import {hasHeadBeenReviewed} from './gitlab-mr-idempotency'
 import {isSelfNote, buildNoteIdempotencyKey} from './gitlab-note-hook-rules'
-import {hasNoteBeenProcessed, markNoteAsProcessed} from './gitlab-note-idempotency'
+import {
+  completionReactionFor,
+  hasNoteBeenProcessed,
+  markNoteAsProcessed,
+  type NoteRef
+} from './gitlab-note-idempotency'
+import {CONFIG_DEFAULTS} from './platform/config-provider'
 import {parse, resolveBotMentions} from './commands/parser'
 import {tryEarlyReaction} from './commands/early-reaction'
+import {
+  RunOutcome,
+  buildPipelineName,
+  describeTrigger,
+  observingLogger,
+  renamePipeline
+} from './platform/gitlab-pipeline-name'
 
-const logger = new GitLabLogger()
+// 本次运行的处理结论：所有日志（含共享核心经 setLogger 打出的）都经它观察，
+// 结束时据此给 pipeline 改名，见 gitlab-pipeline-name.ts
+const outcome = new RunOutcome()
+const logger = observingLogger(new GitLabLogger(), outcome)
+
+// pipeline 改名用：run() 读到的 payload 与确认过的 bot 身份
+let triggerPayload: unknown = null
+let knownBotLogins: string[] = []
 
 /**
  * 从 GitLab 项目路径拆出 owner/repo——subgroup 项目路径可能含多级 namespace
@@ -58,7 +86,14 @@ function splitProjectPath(projectPath: string): {owner: string; repo: string} {
  * 自检失败不中止运行：CI_JOB_TOKEN 是文档里支持的认证方式，只是能力受限。
  */
 async function verifyBotIdentity(platform: GitLabPlatform): Promise<string[]> {
-  const configuredLogin = (process.env.AI_REVIEWER_BOT_GITLAB_LOGIN ?? '').trim()
+  const configuredLogin = configuredBotGitLabLogin()
+  if (isGitLabTokenMapEnabled() && (process.env.AI_REVIEWER_BOT_GITLAB_LOGIN ?? '').trim() !== '') {
+    // 各项目的 token 对应不同 bot 账号，单个配置值对不上，见 configuredBotGitLabLogin
+    logger.warning(
+      'AI_REVIEWER_BOT_GITLAB_LOGIN is ignored when AI_REVIEWER_GITLAB_TOKEN_MAP is set — ' +
+        'the bot identity comes from the selected credential.'
+    )
+  }
   try {
     const login = await platform.verifyCredential()
     logger.info(`GitLab bot identity resolved: acting as @${login}`)
@@ -100,20 +135,17 @@ export async function run(): Promise<void> {
   // 初始化 GitLab Logger（ARCH-014）+ Platform（ARCH-018/020）
   setLogger(logger)
 
-  // GLAPI-029：host / 凭据 / timeout 统一从受信任配置解析并校验，非法即 fail closed
-  let clientConfig
+  // GLAPI-029：host / 凭据 / timeout 统一从受信任配置解析并校验，非法即 fail closed。
+  // 与项目无关的部分在这里就校验；按项目选凭据（映射表）要等事件里的项目路径，
+  // 在 ExecutionContext 构造之后完成
+  let resolveClientConfig: (projectPath?: string) => GitLabClientConfig
   try {
-    clientConfig = resolveGitLabClientConfig()
+    resolveClientConfig = prepareGitLabClientConfig()
   } catch (e) {
     logger.error(redact(e instanceof Error ? e.message : String(e)))
     process.exitCode = 1
     return
   }
-  // 摘要只含 host/凭据类型/timeout，不含 token（GLAPI-029）；
-  // 走 debug 级别，避免在事件被拒绝（如 fork MR）前产生无关输出
-  logger.debug(`GitLab client: ${describeGitLabClientConfig(clientConfig)}`)
-  const platform = new GitLabPlatform(clientConfig)
-  setPlatform(platform)
   // GH-014 / STATE-006：本次运行写入的 marker / 幂等键带 gitlab: 命名空间
   setStateNamespace('gitlab')
 
@@ -141,6 +173,7 @@ export async function run(): Promise<void> {
     process.exitCode = 1
     return
   }
+  triggerPayload = parsed
 
   const validation = validateTriggerPayload(parsed)
   if (!validation.ok) {
@@ -175,9 +208,34 @@ export async function run(): Promise<void> {
     `GitLab event validated: platform=${execCtx.platform} eventKind=${execCtx.eventKind} project=${execCtx.projectPath} mr=${execCtx.changeRequestId}`
   )
 
+  let clientConfig: GitLabClientConfig
+  try {
+    clientConfig = resolveClientConfig(execCtx.projectPath)
+  } catch (e) {
+    // 映射表里没有这个项目也走这里：映射表同时是项目白名单
+    logger.error(redact(e instanceof Error ? e.message : String(e)))
+    process.exitCode = 1
+    return
+  }
+  // 摘要只含 host/凭据类型/来源变量名/timeout，不含 token（GLAPI-029）
+  logger.debug(`GitLab client: ${describeGitLabClientConfig(clientConfig)}`)
+  const platform = new GitLabPlatform(clientConfig)
+  setPlatform(platform)
+
   // 事件被接受之后才自检：被拒绝的事件（fork MR、无关事件）不该产生无关输出，
   // 也不该为此多打一次 API
-  const botLogins = await verifyBotIdentity(platform)
+  // 换过 bot 账号时，旧账号也算自己（只读认领，见 commenter.setPreviousBotLogins）
+  const previousLogins = previousBotGitLabLogins()
+  setPreviousBotLogins(previousLogins)
+  if (previousLogins.length > 0) {
+    logger.info(
+      `Previous bot account(s) claimed as the reviewer's own (read-only): ${previousLogins
+        .map(l => `@${l}`)
+        .join(', ')}`
+    )
+  }
+  const botLogins = [...new Set([...(await verifyBotIdentity(platform)), ...previousLogins])]
+  knownBotLogins = botLogins
 
   // ─── EVENT-018：自评论过滤 ───────────────────────────────────────────────
   //
@@ -214,12 +272,24 @@ export async function run(): Promise<void> {
     try {
       const current = await platform.getChangeRequest(owner, repo, execCtx.changeRequestId)
       const staleCheck = isHeadStale(execCtx.headSha, current.headSha)
-      if (staleCheck.stale) {
+      if (staleCheck.stale && execCtx.eventKind === 'pr_reopened') {
+        // 重开事件是特例：关闭期间推送的提交 GitLab 不发 MR 事件，重开时带的 last_commit 还是
+        // 关闭前的旧值，随后那个带新 HEAD 的 update 事件又没有 oldrev，被归类为元数据更新、
+        // 不会触发审查（ai-reviewer-test#3）。按上面「新 commit 有自己的投递」的假设跳过，
+        // 新提交就没人审了。重开本身就是「请审查这个 MR 现在的样子」，所以改按当前 HEAD 继续。
+        logger.info(
+          `MR ${execCtx.changeRequestId} was reopened with an outdated HEAD ` +
+            `(event=${staleCheck.eventHeadSha} current=${staleCheck.currentHeadSha}) — ` +
+            'reviewing the current HEAD instead (EVENT-012)'
+        )
+        execCtx = {...execCtx, headSha: staleCheck.currentHeadSha}
+      } else if (staleCheck.stale) {
         logger.info(
           `MR ${execCtx.changeRequestId} HEAD has moved since this event was emitted ` +
             `(event=${staleCheck.eventHeadSha} current=${staleCheck.currentHeadSha}) — ` +
             'skipping stale delivery (EVENT-012)'
         )
+        outcome.skip('HEAD 已变化')
         return
       }
     } catch (e) {
@@ -251,6 +321,7 @@ export async function run(): Promise<void> {
             execCtx.headSha
           )}) — skipping duplicate delivery (EVENT-013)`
       )
+      outcome.skip('已审查过')
       return
     }
   }
@@ -258,42 +329,46 @@ export async function run(): Promise<void> {
   // ─── EVENT-020/021：Note Hook 幂等 ───────────────────────────────────────
   //
   // GitLab webhook 不保证恰好投递一次；CI job 也可能被重试。重复投递同一条
-  // note（相同 note_id）不得重复调模型或重复回复。幂等键的记账位置见
-  // gitlab-note-idempotency.ts 的文件头说明（独立 note，不与 summary note
-  // 混用）。自评论（isBot=true）已经会被下游 dispatcher 过滤掉、不产生任何
+  // note（相同 note_id）不得重复调模型或重复回复。"已处理"标记是 bot 在该
+  // note 上添加的完成表情，见 gitlab-note-idempotency.ts 的文件头说明。自评论（isBot=true）已经会被下游 dispatcher 过滤掉、不产生任何
   // 调用/回复，这里不必再为它多查一次幂等账本。
   //
   // 只对「确实 @ 了 bot」的 note 记账：完全不提 bot 的普通讨论无论被重复投递
   // 多少次，dispatcher 都会走 `{kind: 'ignored', reason: 'no bot mention'}`
-  // 原地跳过，本来就没有副作用可去重——为它写一条记账评论纯属浪费一次 API
-  // 调用，还会在 MR 上留下与内容无关的噪音评论。判断标准复用 dispatcher 自己
+  // 原地跳过，本来就没有副作用可去重——为它查询 / 写入标记纯属浪费 API 调用。判断标准复用 dispatcher 自己
   // 用来识别命令/对话触发的同一个 parse()，避免这里另起一套 mention 规则
   // 和共享核心的判定跑偏。
-  let noteIdempotencyKey: string | null = null
+  let processedRef: NoteRef | null = null
+  // 完成表情按 ACK 表情避让（两者相同会让失败的处理被误认为已完成）
+  const completion = completionReactionFor(
+    (process.env.AI_REVIEWER_COMMAND_ACK_REACTION ?? '').trim() ||
+      CONFIG_DEFAULTS.commandAckReaction
+  )
   if (isCommentEvent && !execCtx.actor.isBot && execCtx.comment != null) {
-    const mentions = resolveBotMentions(process.env.AI_REVIEWER_BOT_GITLAB_LOGIN)
+    const mentions = resolveBotMentions(configuredBotGitLabLogin())
     const mentionsBot =
       typeof execCtx.comment.body === 'string' &&
       parse(execCtx.comment.body, {registeredCommands: new Set(), botMentions: mentions}).kind !==
         'none'
 
     if (mentionsBot) {
-      noteIdempotencyKey = buildNoteIdempotencyKey(
-        execCtx.projectId,
-        execCtx.changeRequestId,
-        execCtx.comment.id
-      )
       const {owner, repo} = splitProjectPath(execCtx.projectPath)
-      const alreadyProcessed = await hasNoteBeenProcessed(
+      processedRef = {
         owner,
         repo,
-        execCtx.changeRequestId,
-        noteIdempotencyKey
-      )
-      if (alreadyProcessed) {
-        logger.info(
-          `Note ${execCtx.comment.id} already processed (idempotency key ${noteIdempotencyKey}) — skipping duplicate delivery (EVENT-021)`
+        changeRequestId: execCtx.changeRequestId,
+        noteId: execCtx.comment.id,
+        idempotencyKey: buildNoteIdempotencyKey(
+          execCtx.projectId,
+          execCtx.changeRequestId,
+          execCtx.comment.id
         )
+      }
+      if (await hasNoteBeenProcessed(processedRef, botLogins, completion)) {
+        logger.info(
+          `Note ${execCtx.comment.id} already processed (idempotency key ${processedRef.idempotencyKey}) — skipping duplicate delivery (EVENT-021)`
+        )
+        outcome.skip('重复投递')
         return
       }
     }
@@ -328,12 +403,51 @@ export async function run(): Promise<void> {
     earlyReaction: tryEarlyReaction
   })
 
-  // 只在真正跑成功之后才记账——onFailed 会把 exitCode 设成 1，失败的这次不能
+  // 只在真正跑成功之后才标记——onFailed 会把 exitCode 设成 1，失败的这次不能
   // 被记成"已处理"，否则下次重试会被幂等检查拦住，永远无法真正跑成功。
-  if (noteIdempotencyKey != null && process.exitCode !== 1) {
-    const {owner, repo} = splitProjectPath(execCtx.projectPath)
-    await markNoteAsProcessed(owner, repo, execCtx.changeRequestId, noteIdempotencyKey)
+  if (processedRef != null && process.exitCode !== 1) {
+    await markNoteAsProcessed(processedRef, completion)
   }
+}
+
+/**
+ * 起名用的 bot 身份。
+ *
+ * bot 身份自检只在事件被接受后才跑。被提前拒绝的事件（如 bot 编辑摘要触发的
+ * note 更新）先退回配置的 bot 用户名；没有配置值时（未配置，或启用映射表后被
+ * 忽略）用事件项目对应的凭据查一次 `GET /user`，否则认不出是 bot 的操作。
+ * 只在确实要改名时才多查这一次；查不到就当不知道，不影响改名本身。
+ */
+async function botLoginsForNaming(): Promise<string[]> {
+  if (knownBotLogins.length > 0) return knownBotLogins
+  const configuredLogin = configuredBotGitLabLogin()
+  if (configuredLogin !== '') return [configuredLogin]
+  if ((process.env.AI_REVIEWER_PIPELINE_TOKEN ?? '').trim() === '') return []
+  const projectPath = (triggerPayload as {project?: {path_with_namespace?: unknown}} | null)
+    ?.project?.path_with_namespace
+  if (typeof projectPath !== 'string' || projectPath === '') return []
+  try {
+    const platform = new GitLabPlatform(prepareGitLabClientConfig()(projectPath))
+    return [await platform.verifyCredential()]
+  } catch (e) {
+    logger.debug(`pipeline name: bot identity lookup failed: ${redact(String(e))}`)
+    return []
+  }
+}
+
+/**
+ * 给本次 pipeline 起名（best effort，失败不影响退出码）。
+ *
+ * 在 run() 之后统一做：提前返回的分支很多，放在这里才能覆盖全部出口。
+ */
+async function namePipeline(): Promise<void> {
+  const botLogins = await botLoginsForNaming()
+  const trigger = describeTrigger(triggerPayload, botLogins)
+  // bot 自己的操作一律不触发处理，结论固定为「已跳过」，不受下游日志影响
+  const result = trigger.byBot ? '已跳过' : outcome.describe(process.exitCode === 1)
+  const name = buildPipelineName(trigger, result)
+  logger.debug(`pipeline name: ${name}`)
+  await renamePipeline(name, logger)
 }
 
 // 不用顶层 await（同 main.ts 的既有原因）
@@ -343,5 +457,10 @@ void (async (): Promise<void> => {
   } catch (e) {
     logger.error(`Unhandled error in gitlab-trigger run(): ${redact(String(e))}`)
     process.exitCode = 1
+  }
+  try {
+    await namePipeline()
+  } catch (e) {
+    logger.warning(`pipeline name: ${redact(String(e))}`)
   }
 })()

@@ -44,7 +44,7 @@ const SECRET_ENV_SEGMENTS = new Set([
 ])
 
 /** 环境变量名是否指向一个密钥值 */
-function isSecretEnvName(name: string): boolean {
+export function isSecretEnvName(name: string): boolean {
   return name
     .toLowerCase()
     .split(/[_\-.]/)

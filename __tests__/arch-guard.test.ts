@@ -12,6 +12,7 @@
  *   - src/octokit.ts（认证层）
  *   - src/main.ts（GitHub 入口）
  *   - src/gitlab-trigger.ts（GitLab 入口）
+ *   - src/private-gitlab-publish.ts（私有云产物发布入口）
  *   - src/platform/github-*.ts（GitHub adapter）
  *   - src/platform/gitlab-*.ts（GitLab adapter）
  *   - ARCH-018 full convergence 前暂时豁免的遗留文件
@@ -57,7 +58,14 @@ function isAdapterOrEntry(rel: string): boolean {
   if (/^platform\/(github-|gitlab-)/.test(rel)) return true
   // actions-log.ts 是 @actions/core 日志出口的脱敏包装（SEC-008），
   // 属于 GitHub 平台边界层，允许直接 import @actions/core
-  return ['octokit.ts', 'main.ts', 'gitlab-trigger.ts', 'actions-log.ts'].includes(rel)
+  // private-gitlab-publish.ts 是私有云产物仓库的发布 CLI 入口，与 gitlab-trigger.ts 同级
+  return [
+    'octokit.ts',
+    'main.ts',
+    'gitlab-trigger.ts',
+    'private-gitlab-publish.ts',
+    'actions-log.ts'
+  ].includes(rel)
 }
 
 function isExempt(rel: string): boolean {

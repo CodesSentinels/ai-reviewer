@@ -16,6 +16,7 @@ import type {CommandHandler, CommandContext, CommandResult} from '../types'
 import {getReviewState} from '../../review-state'
 import {isHeadAlreadyReviewed} from '../../review-commit-ids'
 import {PRIMARY_BOT_MENTION} from '../../constants'
+import {changeRequestNoun} from '../platform-terms'
 import {getLogger} from '../../platform/logger'
 
 /**
@@ -74,6 +75,18 @@ export const reviewHandler: CommandHandler = {
       }
     }
 
+    // 暂停期间没有新 commit、HEAD 已经审过：增量审查找不到起点（HEAD 本身就是上次的
+    // 审查点），会退回到从 base 起算，把整个 PR 重新审一遍并重复发评论。
+    // 和 `full review` 一样，直接说明没有新变更。
+    if (await isHeadAlreadyReviewed(ctx.prNumber, ctx.headSha)) {
+      return {
+        message:
+          `✅ Review finished.\n\n> **Note:** The current HEAD ` +
+          `(\`${ctx.headSha.slice(0, 7)}\`) has already been reviewed. ` +
+          `No new commits since the last review.`
+      }
+    }
+
     await ctx.triggerReview('incremental')
     return {message: '增量审查已完成'}
   }
@@ -120,6 +133,6 @@ export const summaryHandler: CommandHandler = {
     if (aborted != null) return aborted
 
     await ctx.triggerReview('summary')
-    return {message: 'PR 摘要已重新生成'}
+    return {message: `${changeRequestNoun(ctx.execCtx?.platform)} 摘要已重新生成`}
   }
 }

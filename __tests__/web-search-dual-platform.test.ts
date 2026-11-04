@@ -9,6 +9,8 @@
  *   Bot 层  —— 关掉时不把 tool 传给模型，也不产生 analysis step
  *   输出层  —— citation 清理与 analysis step 记录不泄露 secret
  */
+import {formatAnalysisChain} from '../src/review'
+import {webSearchStepFrom} from '../src/bot'
 import {describe, expect, test, jest, beforeEach} from '@jest/globals'
 
 import {CONFIG_DEFAULTS} from '../src/platform/config-provider'
@@ -251,17 +253,64 @@ describe('WS-003：关闭时不传 tool，也不产生 analysis step', () => {
 })
 
 describe('WS-004：输出侧不泄露 secret，也不夹带搜索内容', () => {
-  test('analysis chain 只记录 status，不记录搜索结果或 URL', () => {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const fs = require('fs')
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const path = require('path')
-    const src: string = fs.readFileSync(path.resolve(__dirname, '../src/review.ts'), 'utf8')
-    const start = src.indexOf("step.type === 'web_search'")
-    const block = src.slice(start, start + 300)
-    // 搜索结果是外部内容，进评论正文就是一条注入通道；只写 status（API 枚举值）
-    expect(block).toContain('status')
-    expect(block).not.toMatch(/step\.(results|urls|content|snippet)/)
+  // WS-004 的出口口径（2026-09 调整）：搜索结果是外部内容，进评论正文就是注入 /
+  // 钓鱼链接通道。Analysis chain 只展示模型的**搜索词**与来源**域名**，都放在行内
+  // 代码里（不可点击、不渲染 markdown / @提及）；完整 URL、标题、摘要一律不展示，
+  // 而且完整 URL 在记录阶段就被丢弃，连 analysis step 里都没有。
+  const searchItem = {
+    type: 'web_search_call',
+    id: 'ws_1',
+    status: 'completed',
+    action: {
+      type: 'search',
+      query: 'Array sort mutates',
+      queries: ['Array sort mutates'],
+      sources: [
+        {
+          type: 'url',
+          url: 'https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/sort?utm_source=x'
+        },
+        {type: 'url', url: 'https://evil.example/phish?token=abc'},
+        {type: 'url', url: 'javascript:alert(1)'}
+      ]
+    }
+  }
+
+  test('记录阶段只保留来源域名，完整 URL 不进入 analysis step', () => {
+    const step = webSearchStepFrom(searchItem)
+    expect(step.queries).toEqual(['Array sort mutates'])
+    expect(step.sourceDomains).toEqual(['developer.mozilla.org', 'evil.example'])
+    expect(JSON.stringify(step)).not.toMatch(/https?:|\/docs\/|token=|javascript:/)
+  })
+
+  test('评论里只有搜索词与域名，没有可点击链接、路径或查询参数', () => {
+    const md = formatAnalysisChain([webSearchStepFrom(searchItem)], '')
+    expect(md).toContain('🔍 Web search: `Array sort mutates`')
+    expect(md).toContain('`developer.mozilla.org`')
+    expect(md).not.toMatch(/https?:\/\//)
+    expect(md).not.toMatch(/\]\(/) // 没有 markdown 链接
+    expect(md).not.toMatch(/\/docs\/|token=|javascript:/)
+  })
+
+  test('模型给出的搜索词不能突破行内代码（反引号、换行被中和）', () => {
+    const md = formatAnalysisChain(
+      [
+        {
+          type: 'web_search',
+          status: 'completed',
+          queries: ['x`\n\n[click](https://evil.example) @all']
+        }
+      ],
+      ''
+    )
+    const line = md.split('\n').find(l => l.startsWith('🔍 Web search:')) ?? ''
+    // 整个搜索词被关在同一个行内代码片段里
+    expect(line).toMatch(/^🔍 Web search: `[^`]*`$/)
+  })
+
+  test('没有搜索词时退回只展示状态', () => {
+    const md = formatAnalysisChain([{type: 'web_search', status: 'completed'}], '')
+    expect(md).toContain('🔍 Web search executed (status: completed)')
   })
 
   test.each([

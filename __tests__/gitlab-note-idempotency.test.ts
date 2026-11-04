@@ -1,9 +1,13 @@
 /**
- * gitlab-note-idempotency.test.ts — Note Hook 幂等 marker 存储（STATE-005 / EVENT-020/021）
+ * gitlab-note-idempotency.test.ts — Note Hook 幂等标记（STATE-005 / EVENT-020/021）
+ *
+ * 标记 = bot 在触发命令的 note 上加的完成表情；旧版记账评论只读兼容。
  */
 import {describe, expect, test, jest, beforeEach, afterEach} from '@jest/globals'
 
 const platform = {
+  listReactions: jest.fn<(...a: any[]) => Promise<any>>(),
+  addReaction: jest.fn<(...a: any[]) => Promise<any>>(),
   listComments: jest.fn<(...a: any[]) => Promise<any>>(),
   createComment: jest.fn<(...a: any[]) => Promise<any>>(),
   updateComment: jest.fn<(...a: any[]) => Promise<any>>()
@@ -15,134 +19,137 @@ jest.mock('../src/platform/logger', () => ({getLogger: () => logs}))
 
 import {resetStateNamespace, setStateNamespace} from '../src/platform/state-namespace'
 import {
-  appendProcessedKey,
+  completionReactionFor,
   extractProcessedKeys,
   hasNoteBeenProcessed,
   markNoteAsProcessed
 } from '../src/gitlab-note-idempotency'
 
+const REF = {
+  owner: 'octo',
+  repo: 'demo',
+  changeRequestId: 7,
+  noteId: 5001,
+  idempotencyKey: 'gitlab:42:7:note:5001:create'
+}
+const BOTS = ['project_42_bot_abc', 'ai-reviewer']
+
+/** 旧版记账评论（只读兼容） */
+function legacyLedger(keys: string[]): string {
+  return (
+    '_Internal bookkeeping by AI Reviewer — ..._\n\n' +
+    '<!-- ai-reviewer:gitlab:note-hook-markers-start -->\n' +
+    keys.map(k => `<!-- ${k} -->\n`).join('') +
+    '<!-- ai-reviewer:gitlab:note-hook-markers-end -->'
+  )
+}
+
 beforeEach(() => {
   jest.clearAllMocks()
   setStateNamespace('gitlab')
+  platform.listReactions.mockResolvedValue([])
+  platform.listComments.mockResolvedValue([])
+  platform.addReaction.mockResolvedValue(undefined)
 })
 
 afterEach(() => {
   resetStateNamespace()
 })
 
-describe('extractProcessedKeys / appendProcessedKey：纯函数', () => {
-  test('空正文 → 空列表', () => {
-    expect(extractProcessedKeys('')).toEqual([])
+describe('completionReactionFor', () => {
+  test('默认完成表情为 👍', () => {
+    expect(completionReactionFor('rocket')).toBe('+1')
   })
 
-  test('新建区块：从空正文开始追加，带人类可读说明头', () => {
-    const body = appendProcessedKey('', 'gitlab:42:7:note:5001:create')
-    expect(body).toContain('Internal bookkeeping')
-    expect(extractProcessedKeys(body)).toEqual(['gitlab:42:7:note:5001:create'])
+  test('ACK 恰好是 👍 时避让为 🎉，保证失败的处理不会被误认为已完成', () => {
+    expect(completionReactionFor('+1')).toBe('hooray')
+  })
+})
+
+describe('extractProcessedKeys（旧版记账评论解析）', () => {
+  test('没有区块 → 空列表', () => {
+    expect(extractProcessedKeys('hello')).toEqual([])
   })
 
-  test('已有区块：追加第二个键，保留第一个', () => {
-    let body = appendProcessedKey('', 'gitlab:42:7:note:5001:create')
-    body = appendProcessedKey(body, 'gitlab:42:7:note:5002:create')
-    expect(extractProcessedKeys(body)).toEqual([
-      'gitlab:42:7:note:5001:create',
-      'gitlab:42:7:note:5002:create'
-    ])
-  })
-
-  test('追加已存在的键 → 原样返回，不重复', () => {
-    const once = appendProcessedKey('', 'gitlab:42:7:note:5001:create')
-    const twice = appendProcessedKey(once, 'gitlab:42:7:note:5001:create')
-    expect(twice).toBe(once)
-    expect(extractProcessedKeys(twice)).toEqual(['gitlab:42:7:note:5001:create'])
+  test('解析出全部键', () => {
+    expect(extractProcessedKeys(legacyLedger(['k1', 'k2']))).toEqual(['k1', 'k2'])
   })
 })
 
 describe('hasNoteBeenProcessed()', () => {
-  test('没有记账 comment → false', async () => {
-    platform.listComments.mockResolvedValue([])
-    const result = await hasNoteBeenProcessed('g', 'demo', 7, 'gitlab:42:7:note:5001:create')
-    expect(result).toBe(false)
+  test('bot 在 note 上加过完成表情 → true，且按 note 精确查询', async () => {
+    platform.listReactions.mockResolvedValue([{content: '+1', userLogin: 'Project_42_Bot_ABC'}])
+
+    expect(await hasNoteBeenProcessed(REF, BOTS, '+1')).toBe(true)
+    expect(platform.listReactions).toHaveBeenCalledWith('octo', 'demo', 7, 5001, 'issue_comment')
   })
 
-  test('记账 comment 存在但键不在里面 → false', async () => {
-    const body = appendProcessedKey('', 'gitlab:42:7:note:5001:create')
-    platform.listComments.mockResolvedValue([{id: 1, body}])
-    const result = await hasNoteBeenProcessed('g', 'demo', 7, 'gitlab:42:7:note:9999:create')
-    expect(result).toBe(false)
+  test('只有 ACK 表情（处理中或已失败）→ false', async () => {
+    platform.listReactions.mockResolvedValue([{content: 'rocket', userLogin: 'ai-reviewer'}])
+    expect(await hasNoteBeenProcessed(REF, BOTS, '+1')).toBe(false)
   })
 
-  test('键已记录 → true', async () => {
-    const body = appendProcessedKey('', 'gitlab:42:7:note:5001:create')
-    platform.listComments.mockResolvedValue([{id: 1, body}])
-    const result = await hasNoteBeenProcessed('g', 'demo', 7, 'gitlab:42:7:note:5001:create')
-    expect(result).toBe(true)
+  test('完成表情是别人加的 → false（只认 bot 自己的标记）', async () => {
+    platform.listReactions.mockResolvedValue([{content: '+1', userLogin: 'alice'}])
+    expect(await hasNoteBeenProcessed(REF, BOTS, '+1')).toBe(false)
   })
 
-  test('listComments 抛错 → 退化为 false，不向上抛异常', async () => {
-    platform.listComments.mockRejectedValue(new Error('network'))
-    const result = await hasNoteBeenProcessed('g', 'demo', 7, 'gitlab:42:7:note:5001:create')
-    expect(result).toBe(false)
+  test('bot 身份未知 → 不查表情、不认表情标记', async () => {
+    platform.listReactions.mockResolvedValue([{content: '+1', userLogin: 'ai-reviewer'}])
+
+    expect(await hasNoteBeenProcessed(REF, [], '+1')).toBe(false)
+    expect(platform.listReactions).not.toHaveBeenCalled()
+  })
+
+  test('旧版记账评论里记录过该键 → true（兼容已部署过旧版本的 MR）', async () => {
+    platform.listComments.mockResolvedValue([
+      {id: 1, body: 'unrelated'},
+      {id: 2, body: legacyLedger(['other', REF.idempotencyKey])}
+    ])
+    expect(await hasNoteBeenProcessed(REF, BOTS, '+1')).toBe(true)
+  })
+
+  test('旧版记账评论存在但没有该键 → false', async () => {
+    platform.listComments.mockResolvedValue([{id: 2, body: legacyLedger(['other'])}])
+    expect(await hasNoteBeenProcessed(REF, BOTS, '+1')).toBe(false)
+  })
+
+  test('表情查询失败 → 仍检查旧版记账，不向上抛', async () => {
+    platform.listReactions.mockRejectedValue(new Error('boom'))
+    platform.listComments.mockResolvedValue([{id: 2, body: legacyLedger([REF.idempotencyKey])}])
+
+    expect(await hasNoteBeenProcessed(REF, BOTS, '+1')).toBe(true)
     expect(logs.warning).toHaveBeenCalled()
   })
 
-  test('多条评论里只有其中一条带 marker，能正确挑出来', async () => {
-    const body = appendProcessedKey('', 'gitlab:42:7:note:5001:create')
-    platform.listComments.mockResolvedValue([
-      {id: 1, body: '普通用户评论，跟幂等无关'},
-      {id: 2, body}
-    ])
-    const result = await hasNoteBeenProcessed('g', 'demo', 7, 'gitlab:42:7:note:5001:create')
-    expect(result).toBe(true)
+  test('两项查询都失败 → 退化为 false，不向上抛', async () => {
+    platform.listReactions.mockRejectedValue(new Error('boom'))
+    platform.listComments.mockRejectedValue(new Error('boom'))
+
+    expect(await hasNoteBeenProcessed(REF, BOTS, '+1')).toBe(false)
   })
 })
 
 describe('markNoteAsProcessed()', () => {
-  test('记账 comment 不存在 → 新建', async () => {
-    platform.listComments.mockResolvedValue([])
-    platform.createComment.mockResolvedValue({id: 99})
+  test('在 note 上添加完成表情，不写任何评论', async () => {
+    await markNoteAsProcessed(REF, '+1')
 
-    await markNoteAsProcessed('g', 'demo', 7, 'gitlab:42:7:note:5001:create')
-
-    expect(platform.createComment).toHaveBeenCalledTimes(1)
-    const [, , , body] = platform.createComment.mock.calls[0] as any[]
-    expect(extractProcessedKeys(body)).toEqual(['gitlab:42:7:note:5001:create'])
-    expect(platform.updateComment).not.toHaveBeenCalled()
-  })
-
-  test('记账 comment 已存在 → 追加更新，不新建', async () => {
-    const existingBody = appendProcessedKey('', 'gitlab:42:7:note:5001:create')
-    platform.listComments.mockResolvedValue([{id: 42, body: existingBody}])
-
-    await markNoteAsProcessed('g', 'demo', 7, 'gitlab:42:7:note:5002:create')
-
-    expect(platform.createComment).not.toHaveBeenCalled()
-    expect(platform.updateComment).toHaveBeenCalledTimes(1)
-    const [, , commentId, newBody] = platform.updateComment.mock.calls[0] as any[]
-    expect(commentId).toBe(42)
-    expect(extractProcessedKeys(newBody)).toEqual([
-      'gitlab:42:7:note:5001:create',
-      'gitlab:42:7:note:5002:create'
-    ])
-  })
-
-  test('键已经记过 → 不发起写请求（幂等）', async () => {
-    const existingBody = appendProcessedKey('', 'gitlab:42:7:note:5001:create')
-    platform.listComments.mockResolvedValue([{id: 42, body: existingBody}])
-
-    await markNoteAsProcessed('g', 'demo', 7, 'gitlab:42:7:note:5001:create')
-
+    expect(platform.addReaction).toHaveBeenCalledWith(
+      'octo',
+      'demo',
+      7,
+      5001,
+      '+1',
+      'issue_comment'
+    )
     expect(platform.createComment).not.toHaveBeenCalled()
     expect(platform.updateComment).not.toHaveBeenCalled()
   })
 
   test('写入失败只记警告，不向上抛异常', async () => {
-    platform.listComments.mockResolvedValue([])
-    platform.createComment.mockRejectedValue(new Error('network'))
+    platform.addReaction.mockRejectedValue(new Error('boom'))
 
-    await expect(
-      markNoteAsProcessed('g', 'demo', 7, 'gitlab:42:7:note:5001:create')
-    ).resolves.toBeUndefined()
+    await expect(markNoteAsProcessed(REF, '+1')).resolves.toBeUndefined()
     expect(logs.warning).toHaveBeenCalled()
   })
 })

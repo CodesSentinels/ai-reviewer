@@ -1,0 +1,27 @@
+name: test
+
+# PR 合入前跑全量测试（ai-reviewer#221）。此前全量测试只在合入 develop 之后的
+# publish-gitlab-com 里跑，测试挂了也能合入。只读：不需要写权限，也不用任何 Secret。
+permissions:
+  contents: read
+
+on:
+  # 用 pull_request 而不是 pull_request_target：fork 的 PR 也只拿到只读 token，
+  # 且在 PR 自己的代码上跑，不会让不可信代码接触到任何密钥。
+  pull_request:
+    branches: [develop, main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: 全量测试
+        run: npm test -- --silent

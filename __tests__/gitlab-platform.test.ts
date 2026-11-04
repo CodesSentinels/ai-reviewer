@@ -801,6 +801,83 @@ describe('GitLabPlatform', () => {
   // ─── createReviewComment（GLAPI-013/014）───────────────────────────────────
 
   describe('createReviewComment', () => {
+    // 回归（ai-reviewer-test#4）：创建 discussion 超时后，第一次请求其实晚到了。重试前多探测几轮，
+    // 发现已落库就不再重发，否则 MR 里出现两条相同 marker 的评论。
+    describe('超时后第一次请求晚到', () => {
+      const timeoutErr = () => {
+        const e = new Error('Query timeout was reached')
+        e.name = 'GitbeakerTimeoutError'
+        return e
+      }
+
+      test('探测到已落库 → 不重发', async () => {
+        configureGitLabRetry({
+          sleep: async () => {},
+          timeoutProbeWindowMS: 60_000,
+          timeoutProbeIntervalMS: 15_000
+        })
+        mockMergeRequests.show.mockResolvedValue({
+          diff_refs: {base_sha: 'b', head_sha: 'h', start_sha: 's'}
+        })
+        let postedBody = ''
+        mockMergeRequestDiscussions.create.mockImplementation(async (...args: any[]) => {
+          postedBody = args[2] as string
+          throw timeoutErr()
+        })
+        let polls = 0
+        mockMergeRequestDiscussions.all.mockImplementation(async () => {
+          polls += 1
+          // 前两次探测什么都没有，第三次（第一次请求晚到）才出现
+          return polls >= 3 ? [{id: 'late-disc', notes: [{id: 9001, body: postedBody}]}] : []
+        })
+
+        await platform.createReviewComment('g', 'r', 5, 'sha', {path: 'a.ts', body: 'fix', line: 3})
+
+        expect(mockMergeRequestDiscussions.create).toHaveBeenCalledTimes(1)
+        expect(polls).toBe(3)
+      })
+
+      test('等满窗口仍未落库 → 才重发', async () => {
+        configureGitLabRetry({
+          sleep: async () => {},
+          timeoutProbeWindowMS: 30_000,
+          timeoutProbeIntervalMS: 15_000
+        })
+        mockMergeRequests.show.mockResolvedValue({
+          diff_refs: {base_sha: 'b', head_sha: 'h', start_sha: 's'}
+        })
+        mockMergeRequestDiscussions.create
+          .mockRejectedValueOnce(timeoutErr())
+          .mockResolvedValueOnce({id: 'd', notes: [{id: 1}]})
+        mockMergeRequestDiscussions.all.mockResolvedValue([])
+
+        await platform.createReviewComment('g', 'r', 5, 'sha', {path: 'a.ts', body: 'fix', line: 3})
+
+        expect(mockMergeRequestDiscussions.create).toHaveBeenCalledTimes(2)
+        // 第二次尝试前：先探测一次，再按间隔探测 2 次
+        expect(mockMergeRequestDiscussions.all).toHaveBeenCalledTimes(3)
+      })
+
+      test('上一次是 500（明确没被处理）→ 只探测一次就重发，不等待', async () => {
+        configureGitLabRetry({sleep: async () => {}})
+        mockMergeRequests.show.mockResolvedValue({
+          diff_refs: {base_sha: 'b', head_sha: 'h', start_sha: 's'}
+        })
+        const e500: any = new Error('server error')
+        e500.name = 'GitbeakerRequestError'
+        e500.cause = {description: 'x', response: {status: 500, headers: {get: () => null}}}
+        mockMergeRequestDiscussions.create
+          .mockRejectedValueOnce(e500)
+          .mockResolvedValueOnce({id: 'd', notes: [{id: 1}]})
+        mockMergeRequestDiscussions.all.mockResolvedValue([])
+
+        await platform.createReviewComment('g', 'r', 5, 'sha', {path: 'a.ts', body: 'fix', line: 3})
+
+        expect(mockMergeRequestDiscussions.create).toHaveBeenCalledTimes(2)
+        expect(mockMergeRequestDiscussions.all).toHaveBeenCalledTimes(1)
+      })
+    })
+
     test('创建行级 discussion，传递正确的 position', async () => {
       mockMergeRequests.show.mockResolvedValue({
         diff_refs: {base_sha: 'base', head_sha: 'head', start_sha: 'start'}

@@ -64,6 +64,10 @@ import {
   Commenter,
   STATE_MARKERS,
   _resetBotIdentity,
+  isCurrentAuthor,
+  isOwnAuthor,
+  sameLogin,
+  setPreviousBotLogins,
   commentTag,
   commentReplyTag,
   summarizeTag
@@ -419,6 +423,102 @@ describe('GH-007: 行级 review comment 的缓冲、定位与提交', () => {
     expect(platform.deleteReviewComment).not.toHaveBeenCalled()
   })
 
+  // 回归（FT-055 / FT-092）：位置不同（旧 5-10、新 1-17）但讲的是同一个问题，不能重复发布。
+  test('行范围不同但内容是同一问题（已有未解决评论）→ 整条跳过', async () => {
+    platform.listReviewComments.mockResolvedValue([
+      reviewComment(
+        50,
+        'src/a.ts',
+        10,
+        `\`loadAll\` 返回 \`Promise<unknown>[]\`，应使用 \`Promise.all\`。\n\n${commentTag()}`,
+        5
+      )
+    ])
+    const commenter = new Commenter()
+    await commenter.bufferReviewComment(
+      'src/a.ts',
+      1,
+      17,
+      '🦉 CodeSentinel\n\n`loadAll` 没有等待请求，应当用 `Promise.all` 汇总。'
+    )
+
+    await commenter.submitReview(7, 'sha1', 'status')
+
+    expect(platform.submitReviewComments).not.toHaveBeenCalled()
+  })
+
+  test('合并评论里只有一部分是已报告过的 → 去掉那一部分，其余照常发布', async () => {
+    platform.listReviewComments.mockResolvedValue([
+      reviewComment(
+        50,
+        'src/a.ts',
+        10,
+        `\`loadAll\` 返回 \`Promise<unknown>[]\`，应使用 \`Promise.all\`。\n\n${commentTag()}`,
+        5
+      )
+    ])
+    const commenter = new Commenter()
+    await commenter.bufferReviewComment(
+      'src/a.ts',
+      1,
+      17,
+      '🦉 CodeSentinel\n\n`loadAll` 应当用 `Promise.all`。\n\n---\n\n`findUser` 直接拼接 SQL，存在注入风险。'
+    )
+
+    await commenter.submitReview(7, 'sha1', 'status')
+
+    const drafts = (platform.submitReviewComments.mock.calls[0] as any[])[4]
+    expect(drafts).toHaveLength(1)
+    expect(drafts[0].body).toContain('findUser')
+    expect(drafts[0].body).not.toContain('loadAll')
+  })
+
+  test('同文件但内容是另一个问题 → 照常发布', async () => {
+    platform.listReviewComments.mockResolvedValue([
+      reviewComment(
+        50,
+        'src/a.ts',
+        10,
+        `\`loadAll\` 应使用 \`Promise.all\`。\n\n${commentTag()}`,
+        5
+      )
+    ])
+    const commenter = new Commenter()
+    await commenter.bufferReviewComment(
+      'src/a.ts',
+      1,
+      17,
+      '`findUser` 直接拼接 SQL，存在注入风险。'
+    )
+
+    await commenter.submitReview(7, 'sha1', 'status')
+
+    expect(platform.submitReviewComments).toHaveBeenCalledTimes(1)
+  })
+
+  test('已有的是 resolved 的评论 → 不据此去重', async () => {
+    platform.listReviewComments.mockResolvedValue([
+      reviewComment(
+        50,
+        'src/a.ts',
+        10,
+        `\`loadAll\` 应使用 \`Promise.all\`。\n\n${commentTag()}`,
+        5
+      )
+    ])
+    const commenter = new Commenter()
+    await commenter.bufferReviewComment(
+      'src/a.ts',
+      1,
+      17,
+      '`loadAll` 又出现了，仍应用 `Promise.all`。'
+    )
+
+    await commenter.submitReview(7, 'sha1', 'status', new Map([['src/a.ts:10', true]]))
+
+    expect(platform.submitReviewComments).toHaveBeenCalledTimes(1)
+  })
+
   test('同位置旧评论已 resolved → 删除后重新发布', async () => {
     platform.listReviewComments.mockResolvedValue([
       reviewComment(50, 'src/a.ts', 10, `old finding\n\n${commentTag()}`)
@@ -525,5 +625,249 @@ describe('GH-008: review comment 回复', () => {
     expect(logs.warning).toHaveBeenCalledWith(
       expect.stringContaining('Failed to update the top-level comment')
     )
+  })
+})
+
+describe('旧 bot 账号只读认领（换 token 后 bot 账号变了）', () => {
+  // 当前身份是 ai-reviewer（见 platform.getAuthenticatedLogin 桩），old-bot 是换号前的账号
+  const by = (author: string, c: any): any => ({...c, author})
+
+  beforeEach(() => {
+    setPreviousBotLogins(['Old-Bot'])
+  })
+
+  test('isOwnAuthor 认领旧账号（不区分大小写），isCurrentAuthor 不认', async () => {
+    expect(await isOwnAuthor('old-bot')).toBe(true)
+    expect(await isCurrentAuthor('old-bot')).toBe(false)
+    expect(await isOwnAuthor('ai-reviewer')).toBe(true)
+    expect(await isCurrentAuthor('ai-reviewer')).toBe(true)
+    expect(await isOwnAuthor('alice')).toBe(false)
+  })
+
+  test('没配置时旧账号不算自己（行为不变）', async () => {
+    setPreviousBotLogins([])
+    expect(await isOwnAuthor('old-bot')).toBe(false)
+  })
+
+  test('findCommentWithTag：只有旧账号的摘要 → 读它恢复状态（增量审查起点不丢）', async () => {
+    platform.listComments.mockResolvedValue([
+      by('old-bot', issueComment(4, `old\n\n${summarizeTag()}`))
+    ])
+    expect((await new Commenter().findCommentWithTag(summarizeTag(), 7))?.id).toBe(4)
+  })
+
+  test('findCommentWithTag：新旧摘要并存 → 当前身份的优先，即使旧的排在前面', async () => {
+    platform.listComments.mockResolvedValue([
+      by('old-bot', issueComment(4, `old\n\n${summarizeTag()}`)),
+      issueComment(9, `new\n\n${summarizeTag()}`)
+    ])
+    expect((await new Commenter().findCommentWithTag(summarizeTag(), 7))?.id).toBe(9)
+  })
+
+  test('findCommentWithTag：用户引用回复里的 marker 仍不认领', async () => {
+    platform.listComments.mockResolvedValue([
+      by('alice', issueComment(3, `> quoted\n\n${summarizeTag()}`))
+    ])
+    expect(await new Commenter().findCommentWithTag(summarizeTag(), 7)).toBeNull()
+  })
+
+  test('replace：只有旧账号的摘要 → 新发一条，不更新也不删除旧的', async () => {
+    platform.listComments.mockResolvedValue([
+      by('old-bot', issueComment(4, `old\n\n${summarizeTag()}`))
+    ])
+
+    await new Commenter().comment('new summary', summarizeTag(), 'replace')
+
+    expect(platform.createComment).toHaveBeenCalledTimes(1)
+    expect(platform.updateComment).not.toHaveBeenCalled()
+    expect(platform.deleteComment).not.toHaveBeenCalled()
+    expect(logs.info).toHaveBeenCalledWith(
+      expect.stringContaining('from a previous bot account untouched')
+    )
+  })
+
+  test('replace：新旧摘要并存 → 只更新当前身份的那条，旧的保留', async () => {
+    platform.listComments.mockResolvedValue([
+      by('old-bot', issueComment(4, `old\n\n${summarizeTag()}`)),
+      issueComment(9, `new\n\n${summarizeTag()}`)
+    ])
+
+    await new Commenter().comment('newer summary', summarizeTag(), 'replace')
+
+    expect(platform.updateComment).toHaveBeenCalledTimes(1)
+    expect((platform.updateComment.mock.calls[0] as any[])[2]).toBe(9)
+    expect(platform.deleteComment).not.toHaveBeenCalled()
+  })
+
+  test('submitReview：同位置有旧账号的未 resolved 评论 → 视为已覆盖，不重复发布', async () => {
+    platform.listReviewComments.mockResolvedValue([
+      by('old-bot', reviewComment(50, 'src/a.ts', 10, `old finding\n\n${commentTag()}`))
+    ])
+    const commenter = new Commenter()
+    await commenter.bufferReviewComment('src/a.ts', 10, 10, 'same spot')
+
+    await commenter.submitReview(7, 'sha1', 'status')
+
+    expect(platform.submitReviewComments).not.toHaveBeenCalled()
+  })
+
+  test('submitReview：旧账号的评论已 resolved → 发布新发现，但不删除旧评论', async () => {
+    platform.listReviewComments.mockResolvedValue([
+      by('old-bot', reviewComment(50, 'src/a.ts', 10, `old finding\n\n${commentTag()}`))
+    ])
+    const commenter = new Commenter()
+    await commenter.bufferReviewComment('src/a.ts', 10, 10, 'fresh finding')
+
+    await commenter.submitReview(7, 'sha1', 'status', new Map([['src/a.ts:10', true]]))
+
+    expect(platform.submitReviewComments).toHaveBeenCalledTimes(1)
+    expect(platform.deleteReviewComment).not.toHaveBeenCalled()
+  })
+
+  test('initBotGreeting 不会清掉已设置的旧账号', async () => {
+    const {initBotGreeting} = await import('../src/commenter')
+    initBotGreeting('🦉', 'CodeSentinel', '')
+    expect(await isOwnAuthor('old-bot')).toBe(true)
+  })
+})
+
+describe('bot 登录名的 [bot] 后缀：摘要必须原地更新（摘要排在审查之后的根因回归）', () => {
+  // 复现线上现象：GITHUB_TOKEN 调不了 GET /user，平台层回退成不带后缀的登录名，
+  // 而 REST 里评论作者的真实登录名是 `github-actions[bot]`。此前两者精确比较，
+  // 机器人把自己的摘要当成「别人的引用回复」，永远新发一条，旧的「审查中」留在原处。
+  const actions = (id: number, body: string): any => ({
+    ...issueComment(id, body),
+    author: 'github-actions[bot]'
+  })
+
+  describe('sameLogin', () => {
+    test.each([
+      ['github-actions[bot]', 'github-actions', true],
+      ['github-actions[bot]', 'github-actions[bot]', true],
+      ['GitHub-Actions[bot]', 'github-actions', true],
+      ['my-app[bot]', 'my-app', true],
+      ['ai-reviewer', 'ai-reviewer', true]
+    ])('作者 %s / 身份 %s → %s', (author, bot, expected) => {
+      expect(sameLogin(author, bot)).toBe(expected)
+    })
+
+    test.each([
+      // 同名真人：用户名不可能带方括号，作者不带后缀就不是机器人
+      ['github-actions', 'github-actions[bot]'],
+      ['alice', 'github-actions'],
+      ['other-app[bot]', 'github-actions'],
+      ['github-actions-evil[bot]', 'github-actions'],
+      ['', 'github-actions'],
+      ['github-actions[bot]', '']
+    ])('作者 %j / 身份 %j → 不相等', (author, bot) => {
+      expect(sameLogin(author, bot)).toBe(false)
+    })
+  })
+
+  test('回退值不带后缀（旧行为）+ 作者带 [bot] → 原地更新，不再新发', async () => {
+    platform.getAuthenticatedLogin.mockResolvedValueOnce('github-actions')
+    platform.listComments.mockResolvedValue([actions(2, `in progress\n\n${summarizeTag()}`)])
+
+    await new Commenter().comment('final summary', summarizeTag(), 'replace')
+
+    expect(platform.updateComment).toHaveBeenCalledTimes(1)
+    expect((platform.updateComment.mock.calls[0] as any[])[2]).toBe(2)
+    expect(platform.createComment).not.toHaveBeenCalled()
+  })
+
+  test('回退值带后缀（修复后的平台层）+ 作者带 [bot] → 原地更新', async () => {
+    platform.getAuthenticatedLogin.mockResolvedValueOnce('github-actions[bot]')
+    platform.listComments.mockResolvedValue([actions(2, `in progress\n\n${summarizeTag()}`)])
+
+    await new Commenter().comment('final summary', summarizeTag(), 'replace')
+
+    expect(platform.updateComment).toHaveBeenCalledTimes(1)
+    expect(platform.createComment).not.toHaveBeenCalled()
+  })
+
+  test('真人引用回复仍然不会被覆盖（防护没有被放宽）', async () => {
+    platform.getAuthenticatedLogin.mockResolvedValueOnce('github-actions[bot]')
+    platform.listComments.mockResolvedValue([
+      {...issueComment(3, `quoted\n\n${summarizeTag()}`), author: 'alice'},
+      {...issueComment(4, `quoted\n\n${summarizeTag()}`), author: 'github-actions'}
+    ])
+
+    await new Commenter().comment('final summary', summarizeTag(), 'replace')
+
+    expect(platform.updateComment).not.toHaveBeenCalled()
+    expect(platform.deleteComment).not.toHaveBeenCalled()
+    expect(platform.createComment).toHaveBeenCalledTimes(1)
+  })
+
+  test('isOwnAuthor / isCurrentAuthor 同样认带后缀的机器人作者', async () => {
+    platform.getAuthenticatedLogin.mockResolvedValueOnce('github-actions')
+    expect(await isOwnAuthor('github-actions[bot]')).toBe(true)
+    expect(await isCurrentAuthor('github-actions[bot]')).toBe(true)
+    expect(await isOwnAuthor('alice')).toBe(false)
+  })
+
+  test('旧账号认领同样不受后缀影响', async () => {
+    setPreviousBotLogins(['old-app'])
+    expect(await isOwnAuthor('old-app[bot]')).toBe(true)
+    expect(await isCurrentAuthor('old-app[bot]')).toBe(false)
+  })
+
+  test('身份来自写响应：回退值猜错（App 令牌）时，同一次运行里摘要仍原地更新', async () => {
+    // 平台层给了个完全对不上的回退值；真实作者要等第一次写成功才知道
+    platform.getAuthenticatedLogin.mockResolvedValueOnce('github-actions[bot]')
+    platform.createComment.mockImplementation(async (_o: any, _r: any, _t: any, body: string) => ({
+      ...issueComment(100, body),
+      author: 'my-app[bot]'
+    }))
+    const c = new Commenter()
+
+    await c.comment('审查中', summarizeTag(), 'replace') // 第一次：没有既有评论 → 创建
+    await c.comment('final summary', summarizeTag(), 'replace') // 第二次：必须找到刚创建的
+
+    expect(platform.createComment).toHaveBeenCalledTimes(1)
+    expect(platform.updateComment).toHaveBeenCalledTimes(1)
+    expect((platform.updateComment.mock.calls[0] as any[])[2]).toBe(100)
+    expect(
+      (logs.info.mock.calls as any[][]).some(c => String(c[0]).includes('corrected from own write'))
+    ).toBe(true)
+  })
+
+  test('显式配置的身份不会被写响应覆盖', async () => {
+    const {initBotGreeting} = await import('../src/commenter')
+    initBotGreeting('🤖', 'Bot', 'configured-bot')
+    platform.createComment.mockImplementation(async (_o: any, _r: any, _t: any, body: string) => ({
+      ...issueComment(100, body),
+      author: 'someone-else[bot]'
+    }))
+
+    await new Commenter().comment('x', summarizeTag(), 'create')
+
+    expect(await isCurrentAuthor('configured-bot')).toBe(true)
+    expect(await isCurrentAuthor('someone-else[bot]')).toBe(false)
+  })
+
+  test('机器人账号带着我们的 marker 却对不上身份 → warning，而不是悄悄当成「引用回复」', async () => {
+    platform.getAuthenticatedLogin.mockResolvedValueOnce('configured-elsewhere')
+    platform.listComments.mockResolvedValue([
+      {...issueComment(7, `x\n\n${summarizeTag()}`), author: 'other-app[bot]'}
+    ])
+
+    await new Commenter().comment('final summary', summarizeTag(), 'replace')
+
+    const warned = (logs.warning.mock.calls as any[][]).map(c => String(c[0])).join('\n')
+    expect(warned).toContain('other-app[bot]')
+    expect(warned).toContain('do not match the resolved bot identity')
+  })
+
+  test('真人引用回复只有 info，不产生这条 warning', async () => {
+    platform.getAuthenticatedLogin.mockResolvedValueOnce('github-actions[bot]')
+    platform.listComments.mockResolvedValue([
+      {...issueComment(7, `quoted\n\n${summarizeTag()}`), author: 'alice'}
+    ])
+
+    await new Commenter().comment('final summary', summarizeTag(), 'replace')
+
+    const warned = (logs.warning.mock.calls as any[][]).map(c => String(c[0])).join('\n')
+    expect(warned).not.toContain('do not match the resolved bot identity')
   })
 })

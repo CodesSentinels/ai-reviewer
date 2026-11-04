@@ -98,11 +98,15 @@ afterEach(() => {
   rmSync(testTmp, {recursive: true, force: true})
 })
 
+/** 每个 npm 工具有独立的安装目录：<沙箱>/npm/<binName>/node_modules/.bin */
+function npmToolBinDir(binName: string): string {
+  return path.join(testTmp, 'ai-reviewer-lint-tools', 'npm', binName, 'node_modules', '.bin')
+}
+
 /** 模拟 npm install 成功：把 bin 文件创建到沙箱里 */
 function mockNpmInstallSuccess(binName: string): void {
   runCommandMock.mockImplementationOnce(async () => {
-    const installRoot = path.join(testTmp, 'ai-reviewer-lint-tools')
-    const binDir = path.join(installRoot, 'node_modules', '.bin')
+    const binDir = npmToolBinDir(binName)
     require('fs').mkdirSync(binDir, {recursive: true})
     writeFileSync(path.join(binDir, binName), '#!/usr/bin/env node\n')
     return {
@@ -121,9 +125,7 @@ describe('ensureToolInstalled — npm 策略', () => {
     const result = await ensureToolInstalled(npmSpec)
 
     expect(result.ok).toBe(true)
-    expect(result.binPath).toBe(
-      path.join(testTmp, 'ai-reviewer-lint-tools', 'node_modules', '.bin', 'eslint')
-    )
+    expect(result.binPath).toBe(path.join(npmToolBinDir('eslint'), 'eslint'))
     expect(existsSync(result.binPath as string)).toBe(true)
     // npm install 应被调用一次
     expect(runCommandMock).toHaveBeenCalledTimes(1)
@@ -154,8 +156,7 @@ describe('ensureToolInstalled — npm 策略', () => {
 
   test('缓存命中：bin 已存在 → 不再调用 npm install', async () => {
     // 预先在沙箱里放好 bin 文件
-    const installRoot = path.join(testTmp, 'ai-reviewer-lint-tools')
-    const binDir = path.join(installRoot, 'node_modules', '.bin')
+    const binDir = npmToolBinDir('eslint')
     require('fs').mkdirSync(binDir, {recursive: true})
     writeFileSync(path.join(binDir, 'eslint'), '#!/usr/bin/env node\n')
 
@@ -169,7 +170,7 @@ describe('ensureToolInstalled — npm 策略', () => {
 
   test('沙箱目录被自动创建（首次调用）', async () => {
     mockNpmInstallSuccess('eslint')
-    const installRoot = path.join(testTmp, 'ai-reviewer-lint-tools')
+    const installRoot = path.join(testTmp, 'ai-reviewer-lint-tools', 'npm', 'eslint')
     expect(existsSync(installRoot)).toBe(false)
 
     await ensureToolInstalled(npmSpec)
@@ -180,8 +181,50 @@ describe('ensureToolInstalled — npm 策略', () => {
     const sandboxPkg = path.join(installRoot, 'package.json')
     expect(existsSync(sandboxPkg)).toBe(true)
     const pkg = JSON.parse(require('fs').readFileSync(sandboxPkg, 'utf8'))
-    expect(pkg.name).toBe('ai-reviewer-lint-tools')
+    expect(pkg.name).toBe('ai-reviewer-lint-tool-eslint')
     expect(pkg.private).toBe(true)
+  })
+
+  // 回归：多个 npm 工具共用一个 node_modules 时，`npm install --no-save` 会清掉别的工具；
+  // 一个工具安装失败（如版本号写错）还会让已装好的工具的 .bin 消失（Prettier 静默 0 发现）。
+  test('不同工具装在各自独立的目录里，互不影响', async () => {
+    mockNpmInstallSuccess('eslint')
+    mockNpmInstallSuccess('prettier')
+    const a = await ensureToolInstalled(npmSpec)
+    const b = await ensureToolInstalled({
+      kind: 'npm',
+      package: 'prettier',
+      binName: 'prettier',
+      version: '^3.0.0'
+    })
+    expect(a.binPath).not.toBe(b.binPath)
+    expect(path.dirname(path.dirname(path.dirname(a.binPath as string)))).not.toBe(
+      path.dirname(path.dirname(path.dirname(b.binPath as string)))
+    )
+    expect(existsSync(a.binPath as string)).toBe(true)
+    expect(existsSync(b.binPath as string)).toBe(true)
+  })
+
+  test('一个工具安装失败，不会动到已装好的另一个工具', async () => {
+    mockNpmInstallSuccess('prettier')
+    const ok = await ensureToolInstalled({
+      kind: 'npm',
+      package: 'prettier',
+      binName: 'prettier',
+      version: '^3.0.0'
+    })
+    expect(ok.ok).toBe(true)
+
+    runCommandMock.mockResolvedValueOnce({
+      exitCode: 1,
+      timedOut: false,
+      stdout: '',
+      stderr: 'npm error notarget No matching version found for eslint@9.999.999',
+      spawnError: false
+    })
+    const bad = await ensureToolInstalled({...npmSpec, version: '9.999.999'})
+    expect(bad.ok).toBe(false)
+    expect(existsSync(ok.binPath as string)).toBe(true)
   })
 
   test('npm install 失败（exit ≠ 0） → 返回带 reason', async () => {

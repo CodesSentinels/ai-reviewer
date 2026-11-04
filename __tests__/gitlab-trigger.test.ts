@@ -13,6 +13,7 @@
 import {describe, expect, test, jest, beforeEach, afterEach} from '@jest/globals'
 
 import mrOpen from './fixtures/gitlab-mr-hook-open.json'
+import mrReopen from './fixtures/gitlab-mr-hook-reopen.json'
 import mrFork from './fixtures/gitlab-mr-hook-fork.json'
 import malformed from './fixtures/gitlab-malformed.json'
 import unknownEvent from './fixtures/gitlab-unknown-event.json'
@@ -44,6 +45,13 @@ jest.mock('../src/bot-factory', () => ({
 // 打包产物不受影响：dist/gitlab-trigger/ 已随构建复制 tiktoken_bg.wasm。
 jest.mock('../src/tokenizer', () => ({getTokenCount: () => 0}))
 
+// 本文件只验证入口编排，不验证审查核心。过去这里靠「下游 codeReview 因 mock 不全而失败、
+// 失败又被静默吞掉」来保持 exitCode 不变——那恰恰是失败路径不诚实的表现：现在读不到
+// MR 详情会让 job 失败，所以把审查核心换成空实现。核心自身的行为由 review-* 用例覆盖。
+jest.mock('../src/review', () => ({
+  codeReview: jest.fn<(...a: any[]) => Promise<void>>().mockResolvedValue(undefined)
+}))
+
 // 凭据自检会真的调 Users.showCurrentUser()，必须 mock 掉，
 // 否则测试会朝 gitlab.com 发真实请求
 const mockUsers = {showCurrentUser: jest.fn<() => Promise<any>>()}
@@ -51,8 +59,14 @@ const mockUsers = {showCurrentUser: jest.fn<() => Promise<any>>()}
 // 直接抛错，恰好落入「读取失败→放行」分支，掩盖了「读取成功→比较结果」这条
 // 真正要测的路径，所以这里显式给出可控的默认返回值。
 const mockMergeRequests = {show: jest.fn<(...a: any[]) => Promise<any>>()}
+// pipeline 改名（run() 之后）经 Pipelines.requester.put 发出
+const mockPipelinesPut = jest.fn<(...a: any[]) => Promise<any>>()
 jest.mock('@gitbeaker/rest', () => ({
-  Gitlab: jest.fn().mockImplementation(() => ({Users: mockUsers, MergeRequests: mockMergeRequests}))
+  Gitlab: jest.fn().mockImplementation(() => ({
+    Users: mockUsers,
+    MergeRequests: mockMergeRequests,
+    Pipelines: {requester: {put: mockPipelinesPut}}
+  }))
 }))
 
 // EVENT-020/021 幂等账本的存储机制（gitlab-note-idempotency.ts）已有独立单元
@@ -64,9 +78,21 @@ const noteIdempotencyState = {
   markNoteAsProcessed: jest.fn<(...a: any[]) => Promise<void>>()
 }
 jest.mock('../src/gitlab-note-idempotency', () => ({
+  // 纯函数沿用真实实现：完成表情如何避让 ACK 表情是本文件要验证的接线的一部分
+  completionReactionFor: jest.requireActual<typeof import('../src/gitlab-note-idempotency')>(
+    '../src/gitlab-note-idempotency'
+  ).completionReactionFor,
   hasNoteBeenProcessed: (...a: any[]) => noteIdempotencyState.hasNoteBeenProcessed(...a),
   markNoteAsProcessed: (...a: any[]) => noteIdempotencyState.markNoteAsProcessed(...a)
 }))
+
+const NOTE_REF = {
+  owner: 'octo',
+  repo: 'demo',
+  changeRequestId: 7,
+  noteId: 5001,
+  idempotencyKey: 'gitlab:42:7:note:5001:create'
+}
 
 // EVENT-013 幂等判断的读取机制（gitlab-mr-idempotency.ts）已有独立单元测试
 // 覆盖其自身的 marker 解析正确性；这里同样只关心 gitlab-trigger.ts 有没有在
@@ -126,6 +152,9 @@ describe('gitlab-trigger.ts run()', () => {
     delete process.env.GITLAB_PAT
     delete process.env.CI_JOB_TOKEN
     delete process.env.AI_REVIEWER_BOT_GITLAB_LOGIN
+    delete process.env.AI_REVIEWER_GITLAB_TOKEN_MAP
+    delete process.env.GITLAB_PAT_DEMO
+    delete process.env.AI_REVIEWER_GITLAB_PREVIOUS_BOT_LOGINS
     process.exitCode = undefined
   })
 
@@ -317,6 +346,91 @@ describe('gitlab-trigger.ts run()', () => {
       )
     })
 
+    // 回归（ai-reviewer-test#3）：MR 关闭期间推送的提交，GitLab 不发 MR 事件；重开时 reopen 事件带的
+    // last_commit 还是关闭前的旧值，随后那个带新 HEAD 的 update 事件没有 oldrev，被归类为元数据更新、
+    // 不触发审查。reopen 一旦被当作陈旧事件丢掉，新提交就永远没人审。
+    describe('重开事件携带旧 HEAD（关闭期间推送过）', () => {
+      const showWithHead = (headSha: string) =>
+        mockMergeRequests.show.mockResolvedValue({
+          iid: 7,
+          title: 'MR title',
+          description: 'MR body',
+          state: 'opened',
+          target_branch: 'main',
+          source_branch: 'feature',
+          diff_refs: {base_sha: 'base-sha-0001', head_sha: headSha},
+          author: {username: 'alice'}
+        })
+
+      test('不跳过：改按当前 HEAD 继续，并用当前 HEAD 做幂等判断', async () => {
+        process.env.TRIGGER_PAYLOAD = '/tmp/payload.json'
+        fsState.readFileSync.mockReturnValue(JSON.stringify(mrReopen))
+        showWithHead('head-sha-9999')
+        mrIdempotencyState.hasHeadBeenReviewed.mockResolvedValue(false)
+
+        await runTrigger()
+
+        const logged = logSpy.mock.calls.map(c => String(c[0])).join('\n')
+        expect(logged).toContain(
+          'reopened with an outdated HEAD (event=head-sha-0001 current=head-sha-9999) — ' +
+            'reviewing the current HEAD instead (EVENT-012)'
+        )
+        expect(logged).not.toContain('skipping stale delivery')
+        // 幂等判断用的是当前 HEAD，不是事件里的旧值
+        expect(mrIdempotencyState.hasHeadBeenReviewed).toHaveBeenCalledWith(
+          'octo',
+          'demo',
+          7,
+          'head-sha-9999'
+        )
+      })
+
+      test('当前 HEAD 已经审查过 → 跳过，不重复审查', async () => {
+        process.env.TRIGGER_PAYLOAD = '/tmp/payload.json'
+        fsState.readFileSync.mockReturnValue(JSON.stringify(mrReopen))
+        showWithHead('head-sha-9999')
+        mrIdempotencyState.hasHeadBeenReviewed.mockResolvedValue(true)
+
+        await runTrigger()
+
+        expect(logSpy).toHaveBeenCalledWith(
+          expect.stringContaining(
+            'headSha head-sha-9999 already reviewed (idempotency key ' +
+              'gitlab:42:7:head:head-sha-9999) — skipping duplicate delivery (EVENT-013)'
+          )
+        )
+      })
+
+      test('重开时 HEAD 没有变化 → 行为不变，不出现“旧 HEAD”提示', async () => {
+        process.env.TRIGGER_PAYLOAD = '/tmp/payload.json'
+        fsState.readFileSync.mockReturnValue(JSON.stringify(mrReopen))
+        showWithHead('head-sha-0001')
+        mrIdempotencyState.hasHeadBeenReviewed.mockResolvedValue(false)
+
+        await runTrigger()
+
+        const logged = logSpy.mock.calls.map(c => String(c[0])).join('\n')
+        expect(logged).not.toContain('outdated HEAD')
+        expect(mrIdempotencyState.hasHeadBeenReviewed).toHaveBeenCalledWith(
+          'octo',
+          'demo',
+          7,
+          'head-sha-0001'
+        )
+      })
+
+      test('其他 MR 事件（open）HEAD 变化仍然按陈旧跳过', async () => {
+        process.env.TRIGGER_PAYLOAD = '/tmp/payload.json'
+        fsState.readFileSync.mockReturnValue(JSON.stringify(mrOpen))
+        showWithHead('head-sha-9999')
+
+        await runTrigger()
+
+        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('skipping stale delivery'))
+        expect(mrIdempotencyState.hasHeadBeenReviewed).not.toHaveBeenCalled()
+      })
+    })
+
     test('重新读取 HEAD 失败 → 记警告但不 fail closed，不提前跳过', async () => {
       process.env.TRIGGER_PAYLOAD = '/tmp/payload.json'
       fsState.readFileSync.mockReturnValue(JSON.stringify(mrOpen))
@@ -416,20 +530,34 @@ describe('gitlab-trigger.ts run()', () => {
 
       await runTrigger()
 
+      // 带上 bot 身份（用于只认 bot 自己加的完成表情）与完成表情（默认 ACK 是 🚀，完成用 👍）
       expect(noteIdempotencyState.hasNoteBeenProcessed).toHaveBeenCalledWith(
-        'octo',
-        'demo',
-        7,
-        'gitlab:42:7:note:5001:create'
+        NOTE_REF,
+        expect.any(Array),
+        '+1'
       )
-      // 未失败（onFailed 没被触发）才应该记账
+      // 未失败（onFailed 没被触发）才应该标记
       expect(process.exitCode).not.toBe(1)
-      expect(noteIdempotencyState.markNoteAsProcessed).toHaveBeenCalledWith(
-        'octo',
-        'demo',
-        7,
-        'gitlab:42:7:note:5001:create'
+      expect(noteIdempotencyState.markNoteAsProcessed).toHaveBeenCalledWith(NOTE_REF, '+1')
+    })
+
+    test('ACK 表情配置成 👍 时，完成表情改用 🎉（两者必须可区分）', async () => {
+      process.env.TRIGGER_PAYLOAD = '/tmp/payload.json'
+      process.env.AI_REVIEWER_COMMAND_ACK_REACTION = '+1'
+      fsState.readFileSync.mockReturnValue(JSON.stringify(noteToplevel))
+      noteIdempotencyState.hasNoteBeenProcessed.mockResolvedValue(false)
+      try {
+        await runTrigger()
+      } finally {
+        delete process.env.AI_REVIEWER_COMMAND_ACK_REACTION
+      }
+
+      expect(noteIdempotencyState.hasNoteBeenProcessed).toHaveBeenCalledWith(
+        NOTE_REF,
+        expect.any(Array),
+        'hooray'
       )
+      expect(noteIdempotencyState.markNoteAsProcessed).toHaveBeenCalledWith(NOTE_REF, 'hooray')
     })
 
     test('重复投递（已处理过）→ 直接跳过，不记第二次账', async () => {
@@ -534,6 +662,164 @@ describe('gitlab-trigger.ts run()', () => {
       expect(warned).toContain('CI_JOB_TOKEN')
       expect(warned).toContain('/projects/:id/members')
       expect(warned).toContain('fail closed')
+    })
+  })
+
+  describe('AI_REVIEWER_GITLAB_PREVIOUS_BOT_LOGINS：以前用过的 bot 账号', () => {
+    test('配置后打印认领的旧账号', async () => {
+      process.env.TRIGGER_PAYLOAD = '/tmp/payload.json'
+      fsState.readFileSync.mockReturnValue(JSON.stringify(mrOpen))
+      process.env.AI_REVIEWER_GITLAB_PREVIOUS_BOT_LOGINS = '@old-bot'
+
+      await runTrigger()
+
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining("claimed as the reviewer's own (read-only): @old-bot")
+      )
+    })
+
+    test('旧账号发的评论也按自评论处理，不会触发命令', async () => {
+      process.env.TRIGGER_PAYLOAD = '/tmp/payload.json'
+      // 夹具里的作者是 alice：把她当成换号前的 bot
+      fsState.readFileSync.mockReturnValue(JSON.stringify(noteToplevel))
+      process.env.AI_REVIEWER_GITLAB_PREVIOUS_BOT_LOGINS = 'alice'
+
+      await runTrigger()
+
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Note authored by the reviewer itself (@alice)')
+      )
+    })
+  })
+
+  describe('pipeline 改名：提前跳过的事件也能认出 bot', () => {
+    const CI_ENV = {
+      CI_SERVER_URL: 'https://gitlab.example.com',
+      CI_PROJECT_ID: '41',
+      CI_PIPELINE_ID: '1195',
+      AI_REVIEWER_PIPELINE_TOKEN: 'tok-pipeline'
+    }
+
+    beforeEach(() => {
+      Object.assign(process.env, CI_ENV)
+      process.env.TRIGGER_PAYLOAD = '/tmp/payload.json'
+      // bot 编辑自己的评论：入口在身份自检之前就跳过
+      fsState.readFileSync.mockReturnValue(JSON.stringify(noteNonCreate))
+      mockUsers.showCurrentUser.mockResolvedValue({username: 'alice'})
+      mockPipelinesPut.mockResolvedValue({})
+    })
+
+    afterEach(() => {
+      for (const key of Object.keys(CI_ENV)) delete process.env[key]
+    })
+
+    function renamedTo(): string | undefined {
+      return (mockPipelinesPut.mock.calls[0]?.[1] as {body?: {name?: string}} | undefined)?.body
+        ?.name
+    }
+
+    test('没有配置 bot 用户名 → 用凭据查一次身份，按 bot 的操作起名', async () => {
+      await runTrigger()
+
+      expect(mockUsers.showCurrentUser).toHaveBeenCalledTimes(1)
+      expect(renamedTo()).toBe('demo !7 @head-sh · ↳ bot 更新评论 · 已跳过')
+    })
+
+    test('启用映射表（配置值被忽略）→ 用映射到的凭据查身份', async () => {
+      process.env.AI_REVIEWER_GITLAB_TOKEN_MAP = 'octo = GITLAB_PAT'
+      process.env.AI_REVIEWER_BOT_GITLAB_LOGIN = 'someone-else'
+
+      await runTrigger()
+
+      expect(mockUsers.showCurrentUser).toHaveBeenCalledTimes(1)
+      expect(renamedTo()).toContain('↳ bot 更新评论')
+    })
+
+    test('配置了 bot 用户名 → 直接用，不多查', async () => {
+      process.env.AI_REVIEWER_BOT_GITLAB_LOGIN = 'alice'
+
+      await runTrigger()
+
+      expect(mockUsers.showCurrentUser).not.toHaveBeenCalled()
+      expect(renamedTo()).toContain('↳ bot 更新评论')
+    })
+
+    test('身份查询失败 → 按普通用户的操作起名，不影响改名', async () => {
+      mockUsers.showCurrentUser.mockRejectedValue(new Error('401 Unauthorized'))
+
+      await runTrigger()
+
+      expect(renamedTo()).toContain('评论被编辑 → 已跳过')
+      expect(process.exitCode).toBeUndefined()
+    })
+
+    test('没配改名 token → 不改名，也不为起名多查身份', async () => {
+      delete process.env.AI_REVIEWER_PIPELINE_TOKEN
+
+      await runTrigger()
+
+      expect(mockUsers.showCurrentUser).not.toHaveBeenCalled()
+      expect(mockPipelinesPut).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('AI_REVIEWER_GITLAB_TOKEN_MAP：按项目选择凭据', () => {
+    beforeEach(() => {
+      process.env.TRIGGER_PAYLOAD = '/tmp/payload.json'
+      fsState.readFileSync.mockReturnValue(JSON.stringify(mrOpen))
+      process.env.GITLAB_PAT_DEMO = 'tok-demo'
+    })
+
+    function tokensUsed(): unknown[] {
+      const {Gitlab} = jest.requireMock<{Gitlab: jest.Mock}>('@gitbeaker/rest')
+      return Gitlab.mock.calls.map(c => (c[0] as {token?: string}).token)
+    }
+
+    test('事件项目在映射表里 → 用映射到的 token，而不是 GITLAB_PAT', async () => {
+      process.env.AI_REVIEWER_GITLAB_TOKEN_MAP = 'octo = GITLAB_PAT_DEMO'
+
+      await runTrigger()
+
+      expect(tokensUsed()).toContain('tok-demo')
+      expect(tokensUsed()).not.toContain('glpat-test-token')
+      expect(errorSpy).not.toHaveBeenCalled()
+      expect(process.exitCode).toBeUndefined()
+    })
+
+    test('事件项目不在映射表里 → 报错退出，不创建 client、不做身份自检', async () => {
+      process.env.AI_REVIEWER_GITLAB_TOKEN_MAP = 'other/group = GITLAB_PAT_DEMO'
+
+      await runTrigger()
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('project "octo/demo" is not listed in AI_REVIEWER_GITLAB_TOKEN_MAP')
+      )
+      expect(tokensUsed()).toEqual([])
+      expect(mockUsers.showCurrentUser).not.toHaveBeenCalled()
+      expect(process.exitCode).toBe(1)
+    })
+
+    test('映射表语法错误 → 读事件之前就报错退出', async () => {
+      process.env.AI_REVIEWER_GITLAB_TOKEN_MAP = 'octo = OPENAI_API_KEY'
+
+      await runTrigger()
+
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('is not allowed'))
+      expect(fsState.readFileSync).not.toHaveBeenCalled()
+      expect(process.exitCode).toBe(1)
+    })
+
+    test('配了 AI_REVIEWER_BOT_GITLAB_LOGIN → 告知已忽略，身份以凭据为准', async () => {
+      process.env.AI_REVIEWER_GITLAB_TOKEN_MAP = '* = GITLAB_PAT_DEMO'
+      process.env.AI_REVIEWER_BOT_GITLAB_LOGIN = 'project_1_bot'
+
+      await runTrigger()
+
+      const warned = warnSpy.mock.calls.map(c => String(c[0])).join('\n')
+      expect(warned).toContain('AI_REVIEWER_BOT_GITLAB_LOGIN is ignored')
+      // 被忽略的配置值不参与比较，不会再报「与凭据身份不一致」
+      expect(warned).not.toContain('project_1_bot')
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('acting as @ai-reviewer-bot'))
     })
   })
 

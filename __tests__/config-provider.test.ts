@@ -64,6 +64,8 @@ function setDefaultInputs(): void {
     disable_review: 'false',
     disable_release_notes: 'false',
     max_files: '150',
+    warn_files: '50',
+    initial_pr_summary_only: 'true',
     review_simple_changes: 'false',
     review_comment_lgtm: 'false',
     path_filters: '!dist/**',
@@ -744,6 +746,8 @@ describe('Cross-platform config consistency', () => {
       disable_review: 'false',
       disable_release_notes: 'false',
       max_files: CONFIG_DEFAULTS.maxFiles,
+      warn_files: CONFIG_DEFAULTS.warnFiles,
+      initial_pr_summary_only: String(CONFIG_DEFAULTS.initialPrSummaryOnly),
       review_simple_changes: 'false',
       review_comment_lgtm: 'false',
       path_filters: '',
@@ -834,6 +838,20 @@ describe('Cross-platform config consistency', () => {
 })
 
 // ======================== CFG-003: Semgrep Version Tests ========================
+
+describe('enable_lint_tools 默认关闭', () => {
+  test('CONFIG_DEFAULTS、Options 构造默认值与 action.yml 声明一致且为 false', () => {
+    const fs = require('fs') as typeof import('fs')
+    const path = require('path') as typeof import('path')
+    const {Options} = require('../src/options') as typeof import('../src/options')
+    const actionYml = fs.readFileSync(path.join(__dirname, '..', 'action.yml'), 'utf8')
+    const block = /\n {2}enable_lint_tools:\n[\s\S]*?\n {4}default: '(\w+)'/.exec(actionYml)
+
+    expect(CONFIG_DEFAULTS.enableLintTools).toBe(false)
+    expect(new Options(false, false, false).enableLintTools).toBe(false)
+    expect(block?.[1]).toBe('false')
+  })
+})
 
 describe('CFG-003: Semgrep version alignment', () => {
   beforeEach(() => {

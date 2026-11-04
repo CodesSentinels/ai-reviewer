@@ -23,6 +23,8 @@ import {
 import {
   GitPlatformError,
   type ChangeRequestInfo,
+  type CodeSearchHit,
+  type CommentReaction,
   type DiffFile,
   type DiffResult,
   type IGitPlatform,
@@ -169,6 +171,31 @@ function toPlatformComment(data: any): PlatformComment {
     nodeId: data.node_id,
     createdAt: data.created_at
   }
+}
+
+const GITHUB_ROLE_NAMES = new Set<PlatformPermission>([
+  'admin',
+  'maintain',
+  'write',
+  'triage',
+  'read'
+])
+
+/**
+ * 把 `GET /repos/{owner}/{repo}/collaborators/{username}/permission` 的返回换算成权限等级。
+ *
+ * 旧字段 `permission` 只有 admin / write / read / none 四档：triage 被折叠成 read，
+ * maintain 被折叠成 write。只看它会把 triage 用户当成 read，导致 `configuration`
+ * （要求 triage）被误拒。新字段 `role_name` 保留了完整角色名，优先使用；
+ * 自定义角色（不在内置角色里）仍回退到旧字段。
+ */
+export function resolveGithubPermission(data: {
+  permission?: string | null
+  role_name?: string | null
+}): PlatformPermission {
+  const role = (data?.role_name ?? '').toLowerCase() as PlatformPermission
+  if (GITHUB_ROLE_NAMES.has(role)) return role
+  return (data?.permission ?? 'none') as PlatformPermission
 }
 
 export class GitHubPlatform implements IGitPlatform {
@@ -962,6 +989,39 @@ export class GitHubPlatform implements IGitPlatform {
     }
   }
 
+  async listReactions(
+    owner: string,
+    repo: string,
+    _changeRequestId: number,
+    commentId: number,
+    commentKind: 'issue_comment' | 'review_comment'
+  ): Promise<CommentReaction[]> {
+    const known = new Set<string>([
+      '+1',
+      '-1',
+      'laugh',
+      'confused',
+      'heart',
+      'hooray',
+      'rocket',
+      'eyes'
+    ])
+    try {
+      // eslint-disable-next-line camelcase
+      const params = {owner, repo, comment_id: commentId, per_page: 100}
+      const {data} =
+        commentKind === 'review_comment'
+          ? await octokit.reactions.listForPullRequestReviewComment(params)
+          : await octokit.reactions.listForIssueComment(params)
+      return data.map(r => ({
+        content: known.has(r.content) ? (r.content as ReactionContent) : null,
+        userLogin: r.user?.login ?? ''
+      }))
+    } catch (e) {
+      throw toGitPlatformError(e)
+    }
+  }
+
   // ─── 8. 权限 ──────────────────────────────────────────────────────────────
 
   async getCollaboratorPermission(
@@ -975,7 +1035,7 @@ export class GitHubPlatform implements IGitPlatform {
         repo,
         username
       })
-      return (data?.permission ?? 'none') as PlatformPermission
+      return resolveGithubPermission(data)
     } catch (e) {
       throw toGitPlatformError(e)
     }
@@ -988,11 +1048,40 @@ export class GitHubPlatform implements IGitPlatform {
       const {data} = await octokit.users.getAuthenticated()
       return data.login
     } catch {
-      return 'github-actions'
+      // GITHUB_TOKEN / App 安装令牌调不了 GET /user。评论作者在 REST 里的真实登录名
+      // 带 [bot] 后缀，这里的回退值必须与它一致；Commenter 另外会用自己写成功的评论
+      // 的作者纠正（见 learnBotLoginFromOwnWrite）。
+      return 'github-actions[bot]'
     }
   }
 
   // ─── 10. 仓库文件树（DEP-001 / DEP-003）──────────────────────────────────
+
+  /** 仓库内代码搜索（Search API；GitHub 只索引默认分支） */
+  async searchCode(
+    owner: string,
+    repo: string,
+    query: string,
+    limit: number
+  ): Promise<CodeSearchHit[]> {
+    try {
+      const {data} = await octokit.search.code({
+        q: `${query} repo:${owner}/${repo}`,
+        // eslint-disable-next-line camelcase
+        per_page: limit,
+        headers: {accept: 'application/vnd.github.text-match+json'}
+      })
+      return data.items.slice(0, limit).map(item => ({
+        path: item.path,
+        startLine: null,
+        snippet: ((item as any).text_matches ?? [])
+          .map((m: any) => String(m?.fragment ?? ''))
+          .join('\n…\n')
+      }))
+    } catch (e) {
+      throw toGitPlatformError(e)
+    }
+  }
 
   async listRepositoryTree(
     owner: string,

@@ -653,6 +653,35 @@ describe('CMD-026：每个命令的失败路径', () => {
     expect(r.message).toContain('无法获取当前 HEAD')
   })
 
+  // 回归（FT-128）：进程内令牌桶在“一条事件一个进程”的 Actions / GitLab CI 里限不住连发；
+  // 现在按平台上保存的评论记录判断。
+  test('同一用户 60 秒内第 11 条命令 → 被限流并提示；第 10 条仍可执行', async () => {
+    const t0 = Date.parse('2026-10-13T08:00:00Z')
+    const mk = (id: number, sec: number) => ({
+      id,
+      author: 'alice',
+      body: '@ai-reviewer help',
+      createdAt: new Date(t0 + sec * 1000).toISOString()
+    })
+    const burst = Array.from({length: 11}, (_, i) => mk(7000 + i, i))
+    platformState.listComments.mockResolvedValue(burst)
+
+    const tenth = await run({body: '@ai-reviewer help', commentId: 7009})
+    expect(tenth.outcome.error).toBeUndefined()
+
+    platformState.createComment.mockClear()
+    const eleventh = await run({body: '@ai-reviewer help', commentId: 7010})
+    expect(eleventh.outcome.error).toBe('RATE_LIMITED')
+    expect(eleventh.message).toContain('请求过于频繁')
+    expect(eleventh.message).toContain('10 条')
+  })
+
+  test('读取评论失败时放行（限流不能因为 API 抖动挡掉正常命令）', async () => {
+    platformState.listComments.mockRejectedValue(new Error('502 Bad Gateway'))
+    const r = await run({body: '@ai-reviewer help'})
+    expect(r.outcome.error).toBeUndefined()
+  })
+
   test('审查执行中抛错 → 反馈给用户，不静默', async () => {
     const r = await run({body: '@ai-reviewer full review'}, {triggerFails: true})
 

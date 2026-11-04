@@ -36,8 +36,16 @@
  *
  * 本轮范围内不引入 Redis、数据库或任何持久化限流服务（CMD-032），桶就是一个
  * 进程内 Map，随进程退出消失。
+ *
+ * ## 更新（回归测试 FT-128）
+ *
+ * 上面说的「基本不会触发」在实测里变成了事实问题：用户 35 秒内连发 12 条命令，12 条
+ * 全部被执行。所以另加了一层 `checkBurstFromComments`：不引入任何外部存储，而是用平台
+ * 自己保存的评论记录做计数（该用户 60 秒内、不晚于当前这条的、@ 了 bot 的评论条数）。
+ * 进程内令牌桶保留不动，两层都通过才放行。
  */
 import type {Platform} from '../platform/execution-context'
+import type {PlatformComment, ReviewComment} from '../platform/git-platform'
 
 const WINDOW_MS = 60_000
 const MAX_PER_WINDOW = 10
@@ -98,6 +106,74 @@ export function checkRateLimit(scope: RateLimitScope, now: number = Date.now()):
   }
   bucket.timestamps.push(now)
   return {allowed: true}
+}
+
+// ─── 跨进程限流：以平台上的评论记录为准 ───────────────────────────────────
+//
+// 上面的进程内令牌桶在 GitHub / GitLab 上形同虚设（一条事件一个进程，桶永远是空的）。
+// 用户连发 12 条命令，12 条全部被执行（回归测试 FT-128）。
+//
+// 这里改用**平台自己保存的评论**当计数器，不引入任何外部存储：
+//   处理第 N 条命令时，数一数该用户在 WINDOW_MS 内、**不晚于这条命令**的、@ 了 bot 的
+//   评论有几条（含这条）。超过 MAX_PER_WINDOW 就拒绝。
+//
+// 只数「不晚于这条」的评论是关键：各条命令在各自的进程里并发处理，每个进程看到的评论
+// 列表可能多也可能少，但第 11、12 条命令总能看到前面至少 10 条，所以结果是确定的——
+// 前 10 条放行，后面的被拒，而不依赖谁先抢到什么。
+
+/** 正文里是否 @ 了 bot（两侧要有边界，避开 `foo@ai-reviewer.example` 这类邮箱） */
+export function mentionsBot(body: string, botMentions: string[]): boolean {
+  const text = body ?? ''
+  return botMentions.some(m => {
+    const esc = m.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    return new RegExp(`(^|[\\s,.;:，。；：])${esc}(?![A-Za-z0-9_-])`, 'i').test(text)
+  })
+}
+
+type TimedComment = Pick<PlatformComment | ReviewComment, 'id' | 'body' | 'author' | 'createdAt'>
+
+export interface PlatformBurstInput {
+  /** 顶层评论 + 行级评论（调用方按事件类型决定要不要带上行级评论） */
+  comments: TimedComment[]
+  actor: string
+  /** 当前正在处理的这条命令评论的 id */
+  commentId: number
+  botMentions: string[]
+  now?: number
+}
+
+/**
+ * 以平台评论为准判断这条命令是否超出限流。
+ *
+ * @returns allowed=false 时 retryAfterMs 为窗口内最早一条滑出窗口还需要的时间
+ */
+export function checkBurstFromComments(input: PlatformBurstInput): RateLimitResult {
+  const {comments, actor, commentId, botMentions} = input
+  const now = input.now ?? Date.now()
+  const self = comments.find(c => c.id === commentId)
+  const ref = self?.createdAt != null ? Date.parse(self.createdAt) : now
+  if (Number.isNaN(ref)) return {allowed: true}
+
+  const mine = comments.filter(
+    c =>
+      (c.author ?? '').toLowerCase() === actor.toLowerCase() &&
+      c.createdAt != null &&
+      mentionsBot(c.body, botMentions)
+  )
+  const inWindow = mine
+    .map(c => ({id: c.id, t: Date.parse(c.createdAt as string)}))
+    .filter(c => !Number.isNaN(c.t))
+    // 不晚于当前这条：时间更早，或同一秒内 id 不更大
+    .filter(c => c.t < ref || (c.t === ref && c.id <= commentId))
+    .filter(c => c.t > ref - WINDOW_MS)
+    .sort((a, b) => a.t - b.t || a.id - b.id)
+
+  // 当前这条评论如果没出现在列表里（读写延迟），补上它自己
+  const rank = inWindow.some(c => c.id === commentId) ? inWindow.length : inWindow.length + 1
+  if (rank <= MAX_PER_WINDOW) return {allowed: true}
+
+  const earliest = inWindow.length > 0 ? inWindow[0].t : ref
+  return {allowed: false, retryAfterMs: Math.max(0, earliest + WINDOW_MS - ref)}
 }
 
 /** 仅供测试 */

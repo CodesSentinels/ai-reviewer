@@ -22,6 +22,15 @@ export interface Logger {
   error(msg: string): void
 
   debug(msg: string): void
+
+  /**
+   * 可选：开始一个可折叠的日志分段（GitHub `::group::`、GitLab section）。
+   * id 只含 [a-z0-9_]；不实现时分段调用被忽略，日志照常输出。
+   */
+  startSection?(id: string, title: string): void
+
+  /** 可选：结束 startSection 开启的分段 */
+  endSection?(id: string): void
 }
 
 /**

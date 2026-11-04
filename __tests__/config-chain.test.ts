@@ -439,6 +439,20 @@ const CONFIG_MATRIX: MatrixEntry[] = [
     expected: 77
   },
   {
+    field: 'warnFiles',
+    input: 'warn_files',
+    gitlabEnv: 'AI_REVIEWER_WARN_FILES',
+    value: '33',
+    expected: 33
+  },
+  {
+    field: 'initialPrSummaryOnly',
+    input: 'initial_pr_summary_only',
+    gitlabEnv: 'AI_REVIEWER_INITIAL_PR_SUMMARY_ONLY',
+    value: 'false',
+    expected: false
+  },
+  {
     field: 'reviewSimpleChanges',
     input: 'review_simple_changes',
     gitlabEnv: 'AI_REVIEWER_REVIEW_SIMPLE_CHANGES',
@@ -460,6 +474,15 @@ const CONFIG_MATRIX: MatrixEntry[] = [
     // PathFilter 是对象，比较它对同一路径的判定结果
     read: o => o.checkPath('dist/index.js'),
     expected: false
+  },
+  {
+    field: 'pathInstructions',
+    input: 'path_instructions',
+    gitlabEnv: 'AI_REVIEWER_PATH_INSTRUCTIONS',
+    value: 'src/api/**: 校验入参',
+    // PathInstructions 是对象，比较它对同一路径命中的指令
+    read: o => o.pathInstructions.match('src/api/user.ts'),
+    expected: ['校验入参']
   },
   {
     field: 'systemMessage',
@@ -513,7 +536,7 @@ const CONFIG_MATRIX: MatrixEntry[] = [
   {
     field: 'githubConcurrencyLimit',
     input: 'github_concurrency_limit',
-    gitlabEnv: 'AI_REVIEWER_GITHUB_CONCURRENCY_LIMIT',
+    gitlabEnv: 'AI_REVIEWER_GITLAB_CONCURRENCY_LIMIT',
     value: '6',
     expected: 6
   },
@@ -609,7 +632,8 @@ const INTENTIONALLY_DIVERGENT: Record<string, string> = {
   botLogin: '平台专有身份：GitHub App 名 vs GitLab PAT 用户名，语义上就不该相同',
   lintReportPath: 'SEC-002：只在 GitHub 低权限 lint job 链路上有值',
   lightTokenLimits: '由模型名推导，不是独立配置项',
-  heavyTokenLimits: '同上'
+  heavyTokenLimits: '同上',
+  minimizeBotWrites: '不是配置项：未设置时两个平台都不省写入；只有调用方显式传 true 才省'
 }
 
 /**

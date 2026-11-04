@@ -99,11 +99,13 @@ export const CONFIG_DEFAULTS = {
   disableReview: false,
   disableReleaseNotes: false,
   maxFiles: '150',
+  warnFiles: '50',
+  initialPrSummaryOnly: true,
   reviewSimpleChanges: false,
   reviewCommentLGTM: false,
   /** 对齐 action.yml path_filters 默认值：排除 dist/二进制/生成/图片等 */
   pathFilters: [
-    '!dist/**',
+    '!**/dist/**',
     '!**/*.app',
     '!**/*.bin',
     '!**/*.bz2',
@@ -208,7 +210,7 @@ export const CONFIG_DEFAULTS = {
     '!**/*.tfstate',
     '!**/*.tfstate.backup'
   ],
-  systemMessage: `You are \`@ai-reviewer\` (aka \`github-actions[bot]\`), a language model
+  systemMessage: `You are \`@ai-reviewer\`, a language model
 trained by OpenAI. Your purpose is to act as a highly experienced
 software engineer and provide a thorough review of the code hunks
 and suggest code snippets to improve key areas such as:
@@ -241,7 +243,7 @@ disregarding minor issues.`,
   maxDependencyFiles: '50',
   enableWebSearch: true,
   enableShell: true,
-  enableLintTools: true,
+  enableLintTools: false,
   semgrepVersion: '^1.95.0',
   semgrepConfig: 'p/default',
   commandAckReaction: 'rocket',
@@ -257,7 +259,7 @@ disregarding minor issues.`,
   with similar changes together into a single row to save space.
 
 Avoid additional commentary as this summary will be added as a comment on the
-GitHub pull request. Use the titles "Walkthrough" and "Changes" and they must be H2.`,
+pull/merge request. Use the titles "Walkthrough" and "Changes" and they must be H2.`,
   summarizeReleaseNotes: `Craft concise release notes for the pull request.
 Focus on the purpose and user impact, categorizing changes as "New Feature", "Bug Fix",
 "Documentation", "Refactor", "Style", "Test", "Chore", or "Revert". Provide a bullet-point list,

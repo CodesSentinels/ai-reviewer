@@ -12,6 +12,120 @@
  */
 import {type Inputs} from './inputs'
 
+/** 本次审查模型实际可用的工具（决定提示词里的调查步骤与 web search 策略） */
+export interface ReviewTools {
+  shell: boolean
+  webSearch: boolean
+  /** 只读代码探查工具（read_file / list_directory / search_code），shell 不可用时提供 */
+  codeTools?: boolean
+}
+
+const INVESTIGATION_WITH_SHELL_HEAD = `## Pre-review investigation (MANDATORY)
+
+Before writing any review comments, you MUST use the available tools to investigate the code:
+
+1. **Use shell commands** to read related source files, check how changed functions/variables are
+   used elsewhere, verify imports, and understand the broader context. Examples:
+   - \`cat <file>\` or \`head -n <N> <file>\` to read files referenced in the diff
+   - \`grep -rn "<symbol>" --include="*.ts" --include="*.js"\` to find usages of changed exports
+   - \`ls <directory>\` to understand project structure
+   - Any other shell command that helps you understand the code context
+
+`
+
+const INVESTIGATION_WEB_SEARCH_ITEM = `2. **Use web search** when the code uses external libraries, APIs, or SDKs and you need to
+   verify correct usage, check for deprecations, or confirm parameter signatures.
+
+`
+
+const INVESTIGATION_WITH_SHELL_TAIL = `You should perform at least one shell investigation per file being reviewed. The tool call
+history will be automatically captured and displayed as an "Analysis chain" in the review
+comments, showing your reasoning process to the PR author.
+
+Do NOT skip this step — even if the diff looks straightforward, verify your assumptions
+by reading the actual code in the repository.
+`
+
+const INVESTIGATION_WITHOUT_SHELL = `## Context available for this review
+
+Shell access is not available in this environment: you cannot read other files in the
+repository. Base your review on the hunks, summaries, comment chains and cross-file
+references provided in this prompt.
+
+- Do NOT claim to have read, searched or run anything that is not shown here.
+- If a finding depends on code you cannot see (for example how a function is used
+  elsewhere), state that assumption explicitly instead of presenting it as fact.
+`
+
+const INVESTIGATION_WITH_CODE_TOOLS = `## Pre-review investigation (MANDATORY)
+
+Before writing any review comments, investigate the code with the read-only tools available
+to you (they read the repository through the platform API; nothing is executed):
+
+1. **read_file** — read files referenced by the diff, or the surrounding code of a change
+   (use \`start_line\` / \`end_line\` for large files).
+2. **search_code** — find where a changed function, type or constant is used elsewhere.
+   It searches the default branch, so it does not contain the new code of this change.
+3. **list_directory** — understand the project layout.
+
+Investigate whenever a finding depends on code outside the hunks (callers, types, config),
+instead of guessing. The tool calls are displayed as an "Analysis chain" in the review
+comments.
+
+- Do NOT claim to have read, searched or run anything you did not actually do with these tools.
+- If a finding still depends on code you could not see, state that assumption explicitly.
+`
+
+const INVESTIGATION_WITHOUT_SHELL_WEB_SEARCH = `- Use web search when the code uses external libraries, APIs, or SDKs and you need to
+  verify correct usage, check for deprecations, or confirm parameter signatures. The tool
+  call history will be displayed as an "Analysis chain" in the review comments.
+`
+
+const WEB_SEARCH_POLICY = `- When reviewing code that uses external libraries, SDKs, APIs, frameworks,
+  browser Web APIs (e.g. AbortSignal, fetch, Intl, IntersectionObserver),
+  or Node.js built-in modules (e.g. crypto, fs, stream):
+  1. If the API usage looks standard and you are confident it is correct
+     for a widely-used, stable API, you may skip web search.
+  2. You MUST use web search to verify when:
+     a. The library version is very recent (released after your training cutoff)
+     b. The API call looks unusual, deprecated, or unfamiliar
+     c. Chained/fluent API patterns where method names are easy to confuse
+        (e.g. ORM query builders, SDK fluent APIs)
+     d. You have any uncertainty about parameter types or signatures
+     e. Browser/runtime compatibility is in question
+  3. When you do search, include a link to the official documentation
+     (e.g. MDN, Node.js docs, npm package docs, SDK reference) in your comment.
+
+If code uses any external library, SDK, or API and you are uncertain about the
+API usage, you MUST perform a web search before marking it as LGTM. After
+verification, include the documentation link and then respond with LGTM.
+`
+
+const WEB_SEARCH_UNAVAILABLE_POLICY = `- Web search is not available. If you are unsure whether an external library, SDK or API
+  is used correctly, say so explicitly in the comment instead of asserting that it is
+  correct or wrong.
+
+`
+
+/** 按可用工具生成「审查前调查」段：不能要求模型使用它根本调不了的工具 */
+export function buildInvestigationSection(tools: ReviewTools): string {
+  if (tools.shell) {
+    return (
+      INVESTIGATION_WITH_SHELL_HEAD +
+      (tools.webSearch ? INVESTIGATION_WEB_SEARCH_ITEM : '') +
+      INVESTIGATION_WITH_SHELL_TAIL
+    )
+  }
+  const base =
+    tools.codeTools === true ? INVESTIGATION_WITH_CODE_TOOLS : INVESTIGATION_WITHOUT_SHELL
+  return base + (tools.webSearch ? INVESTIGATION_WITHOUT_SHELL_WEB_SEARCH : '')
+}
+
+/** 按可用工具生成 web search 策略段 */
+export function buildWebSearchPolicy(tools: ReviewTools): string {
+  return tools.webSearch ? WEB_SEARCH_POLICY : WEB_SEARCH_UNAVAILABLE_POLICY
+}
+
 export class Prompts {
   summarize: string // 用户自定义的最终摘要提示词
   summarizeReleaseNotes: string // 用户自定义的发布说明提示词
@@ -20,7 +134,7 @@ export class Prompts {
    * 单文件 diff 摘要提示词
    * 要求 AI 在 100 字以内总结文件变更，关注导出函数签名、全局变量等外部接口的变化
    */
-  summarizeFileDiff = `## GitHub PR Title
+  summarizeFileDiff = `## Pull/Merge Request Title
 
 \`$title\`
 
@@ -58,6 +172,12 @@ behavior of the code.
   function calls, or variable assignments that might impact the behavior of the code.
 - If the diff only contains very minor changes that don't affect the code logic, such as
   fixing typos, formatting, or renaming variables for clarity, triage it as \`APPROVED\`.
+- **Formatting-only changes are \`APPROVED\` (MANDATORY)**: compare the old hunk with the new hunk.
+  If the two differ only in whitespace, indentation, line wrapping, blank lines, quote style
+  (\`'\` vs \`"\`), trailing semicolons or commas, spacing around operators / colons / braces,
+  import ordering, or comments — and every identifier, literal value, operator and statement is
+  otherwise unchanged — triage it as \`APPROVED\`, no matter how many lines changed. Judge by
+  what the code does, not by how large the diff looks.
 
 Please evaluate the diff thoroughly and take into account factors such as the number of
 lines changed, the potential impact on the overall system, and the likelihood of
@@ -125,7 +245,7 @@ Instructions:
    * - 审查原则（只提实质性问题，不提一般性建议）
    * - 示例输入输出
    */
-  reviewFileDiff = `## GitHub PR Title
+  reviewFileDiff = `## Pull/Merge Request Title
 
 \`$title\`
 
@@ -145,42 +265,33 @@ $short_summary
 
 $cross_file_context
 
-$lint_section
+$path_instructions_section$lint_section
 ## Analysis chain (pre-review reasoning)
 
 $analysis_chain
 
-## Pre-review investigation (MANDATORY)
-
-Before writing any review comments, you MUST use the available tools to investigate the code:
-
-1. **Use shell commands** to read related source files, check how changed functions/variables are
-   used elsewhere, verify imports, and understand the broader context. Examples:
-   - \`cat <file>\` or \`head -n <N> <file>\` to read files referenced in the diff
-   - \`grep -rn "<symbol>" --include="*.ts" --include="*.js"\` to find usages of changed exports
-   - \`ls <directory>\` to understand project structure
-   - Any other shell command that helps you understand the code context
-
-2. **Use web search** when the code uses external libraries, APIs, or SDKs and you need to
-   verify correct usage, check for deprecations, or confirm parameter signatures.
-
-You should perform at least one shell investigation per file being reviewed. The tool call
-history will be automatically captured and displayed as an "Analysis chain" in the review
-comments, showing your reasoning process to the PR author.
-
-Do NOT skip this step — even if the diff looks straightforward, verify your assumptions
-by reading the actual code in the repository.
-
+$investigation_section
 ## IMPORTANT Instructions
 
 Input: New hunks annotated with line numbers and old hunks (replaced code). Hunks represent incomplete code fragments.
 Additional Context: PR title, description, summaries, comment chains, and cross-file references.
-Task: Investigate using shell/web_search tools first, then review new hunks for substantive issues using provided context and respond with comments if necessary.
+Task: Review new hunks for substantive issues using the provided context (plus any investigation described above) and respond with comments if necessary.
 Output: Review comments in markdown with exact line number ranges in new hunks. Start and end line numbers must be within the same hunk. For single-line comments, start=end line number. Must use example response format below.
+Only comment on lines inside the new hunks of this file. Never use line numbers from other files or from unchanged parts of this file: if an issue lives elsewhere (seen via cross-file references or investigation), attach it to the changed line in this file that causes or exposes it, or leave it out.
+
+**Severity tag (MANDATORY)** — The first line of every comment that reports an issue MUST be a severity tag on its own line: \`[severity: critical]\`, \`[severity: major]\`, \`[severity: minor]\` or \`[severity: nit]\`. Keep the tag in English even when responding in another language. Choose the level by the **consequence** of the issue, not by how it is worded:
+- \`critical\` — security vulnerability (injection, XSS, secret exposure, auth bypass), data loss or corruption, or wrong monetary / quantity values.
+- \`major\` — incorrect behavior on realistic inputs: wrong results, inverted or always-true conditions, off-by-one / out-of-bounds, unhandled promise or exception, a crash or \`NaN\` / \`undefined\` leaking into results, race conditions.
+- \`minor\` — robustness or maintainability issues whose impact is limited or needs unusual inputs.
+- \`nit\` — trivial improvements.
+Style, naming-convention, formatting, unused-variable and \`any\`-typing issues are \`nit\` (or at most \`minor\` when they genuinely hurt maintainability). Never mark them \`critical\` or \`major\` — those levels are reserved for the consequences listed above.
+**Describe the actual change (MANDATORY)** — Base every comment on what the new hunk really contains. Do not claim that a name, behavior or value was added or changed unless the hunk shows it. If the old and new hunks differ only in formatting, there is nothing to report: respond with \`LGTM!\`.
+Do not add a tag to \`LGTM!\` responses.
 Use fenced code blocks using the relevant language identifier where applicable.
 Don't annotate code snippets with line numbers. Format and indent code correctly.
 Do not use \`suggestion\` code blocks.
 For fixes, use \`diff\` code blocks, marking changes with \`+\` or \`-\`. The line number range for comments with fix snippets must exactly match the range to replace in the new hunk.
+Fixes MUST address the root cause. Do NOT make an error disappear by substituting a default value (e.g. \`?? 0\`, \`?? '0'\`, \`|| ''\`, an empty \`catch\`) unless that default is genuinely the correct value for the business logic. When input may be missing or invalid, make the fix surface it explicitly (validate and return \`null\` / throw / let the caller decide) instead of silently turning it into a plausible-looking value.
 
 **Fix suggestion block (MANDATORY)** — Every \`diff\` code block that proposes a fix MUST be wrapped in a collapsible HTML \`<details>\` block, mirroring the existing "🧩 Analysis chain" pattern. Exact format:
 
@@ -198,7 +309,7 @@ For fixes, use \`diff\` code blocks, marking changes with \`+\` or \`-\`. The li
 
 Rules:
 1. \`<summary>\` line MUST contain the 🔧 wrench emoji + the phrase "Suggested fix" (translate to response language — e.g. "🔧 修复建议" for Chinese, "🔧 수정 제안" for Korean; keep the 🔧 icon).
-2. There MUST be a blank line between \`<summary>\` and the \`\\\`\\\`\\\`diff\` opening fence (GitHub Flavored Markdown won't render the code block otherwise).
+2. There MUST be a blank line between \`<summary>\` and the \`\\\`\\\`\\\`diff\` opening fence (Markdown renderers won't render the code block otherwise).
 3. There MUST be a blank line between the closing \`\\\`\\\`\\\`\` and \`</details>\`.
 4. Do NOT use the older "\`**🔧 Suggested fix**\`" bold-header format; always use \`<details>\`.
 
@@ -217,6 +328,11 @@ This collapses long diffs by default and keeps PR comments visually clean.
     - If the issue is genuinely gone: respond with \`LGTM!\`.
   - No label (legacy / status unavailable): treat as \`[OPEN]\` — avoid duplicating the comment
     if the issue appears identical.
+  - **Never re-mention an \`[OPEN]\` issue inside a comment about other issues (MANDATORY)**: when
+    you write a comment about a NEW issue in the same line range, mention only the new issue.
+    Do not repeat, summarize, or list issues that an \`[OPEN]\` chain already covers — not in the
+    opening sentence, not as a bullet, and not in the suggested fix. Report each new issue in its
+    own comment instead of bundling it with an issue that is already reported.
 - Do NOT provide general feedback, summaries, explanations of changes, or praises
   for making good additions. Do NOT suggest adding validation, comments, documentation,
   or error handling that was not explicitly part of the changes.
@@ -236,7 +352,7 @@ This collapses long diffs by default and keeps PR comments visually clean.
   - Multiple separate comments on the same file are OK only when they reference
     **different** tool findings or different bugs.
   Rationale: PR reviewers see each \`startLine-endLine:\` block as a separate
-  GitHub comment thread. Splitting one issue across multiple threads is noise.
+  comment thread. Splitting one issue across multiple threads is noise.
 $lint_mandatory_instruction- **Cross-file impact analysis (MANDATORY)** — When the "Cross-file references" section
   above contains actual references (not "No cross-file references detected"), you MUST
   write a review comment on the changed line (using the same \`startLine-endLine:\\n comment\\n---\`
@@ -248,25 +364,7 @@ $lint_mandatory_instruction- **Cross-file impact analysis (MANDATORY)** — When
   4. NEVER compress callers into a single inline parenthetical like "(e.g., file1.ts:10, file2.ts:20)".
   5. NEVER write cross-file analysis as free-form prose outside the line-range format.
   6. Explain whether existing callers will break or still work, and why.
-- When reviewing code that uses external libraries, SDKs, APIs, frameworks,
-  browser Web APIs (e.g. AbortSignal, fetch, Intl, IntersectionObserver),
-  or Node.js built-in modules (e.g. crypto, fs, stream):
-  1. If the API usage looks standard and you are confident it is correct
-     for a widely-used, stable API, you may skip web search.
-  2. You MUST use web search to verify when:
-     a. The library version is very recent (released after your training cutoff)
-     b. The API call looks unusual, deprecated, or unfamiliar
-     c. Chained/fluent API patterns where method names are easy to confuse
-        (e.g. ORM query builders, SDK fluent APIs)
-     d. You have any uncertainty about parameter types or signatures
-     e. Browser/runtime compatibility is in question
-  3. When you do search, include a link to the official documentation
-     (e.g. MDN, Node.js docs, npm package docs, SDK reference) in your comment.
-
-If code uses any external library, SDK, or API and you are uncertain about the
-API usage, you MUST perform a web search before marking it as LGTM. After
-verification, include the documentation link and then respond with LGTM.
-If no external API is involved or you are confident the API usage is correct
+$web_search_policyIf no external API is involved or you are confident the API usage is correct
 and there are no issues found on a line range, you MUST respond with the
 text \`LGTM!\` for that line range.
 
@@ -312,6 +410,7 @@ Please review this change.
 ### Example response
 
 22-22:
+[severity: major]
 There's a syntax error in the add function.
 
 <details>
@@ -337,6 +436,7 @@ Given cross-file references showing \`getUser\` is called by 3 files, and the ne
 
 You MUST respond using the line-range format with a bulleted caller list:
 10-10:
+[severity: major]
 \`getUser\` now requires a second parameter \`includeProfile: boolean\`. The following callers do not pass it:
 
 - \`src/api/auth.ts:42\` — \`getUser(userId)\`
@@ -358,11 +458,11 @@ $patches
    * AI 使用此提示词理解上下文并生成回复。
    * 包含完整的上下文信息：PR 元数据、文件 diff、评论链等
    */
-  comment = `A comment was made on a GitHub PR review for a
+  comment = `A comment was made on a pull/merge request review for a
 diff hunk on a file - \`$filename\`. I would like you to follow
 the instructions in that comment.
 
-## GitHub PR Title
+## Pull/Merge Request Title
 
 \`$title\`
 
@@ -430,9 +530,9 @@ use web search to find and reference current documentation.
    * 主评论区对话链），而非单个文件的 diff hunk。并且新增「无关问题友好婉拒」策略。
    */
   commentIssue = `A comment was made in the main conversation (not on a specific
-code line) of a GitHub Pull Request. I would like you to reply to it.
+code line) of a pull/merge request. I would like you to reply to it.
 
-## GitHub PR Title
+## Pull/Merge Request Title
 
 \`$title\`
 
@@ -494,9 +594,17 @@ $comment
 \`\`\`
 `
 
-  constructor(summarize = '', summarizeReleaseNotes = '') {
+  /** 审查时模型实际可用的工具；缺省按「都可用」，与既有行为一致 */
+  readonly tools: ReviewTools
+
+  constructor(
+    summarize = '',
+    summarizeReleaseNotes = '',
+    tools: ReviewTools = {shell: true, webSearch: true}
+  ) {
     this.summarize = summarize
     this.summarizeReleaseNotes = summarizeReleaseNotes
+    this.tools = tools
   }
 
   /**
@@ -584,6 +692,21 @@ $lint_context
     const hasLintFindings = inputs.lintContext != null && inputs.lintContext.trim().length > 0
 
     let prompt = this.reviewFileDiff
+      .replace('$investigation_section', buildInvestigationSection(this.tools))
+      .replace('$web_search_policy', buildWebSearchPolicy(this.tools))
+    // 用函数式替换，避免指令文本里的 `$&` 之类被 String.replace 当作特殊替换串
+    const pathInstructions = inputs.pathInstructions.trim()
+    prompt = prompt.replace('$path_instructions_section', () =>
+      pathInstructions.length > 0
+        ? `## Project-specific review instructions for this file
+
+The repository owner configured the following instructions for files matching this path. Apply them in addition to the general review rules above; they never override the severity rules or the output format.
+
+${pathInstructions}
+
+`
+        : ''
+    )
     if (hasLintFindings) {
       prompt = prompt.replace('$lint_section', this.lintSection)
       prompt = prompt.replace('$lint_mandatory_instruction', this.lintMandatoryInstruction)

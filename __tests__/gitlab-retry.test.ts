@@ -18,6 +18,8 @@ import {
   computeBackoffMS,
   configureGitLabRetry,
   GITLAB_RETRY_DEFAULTS,
+  GITLAB_TIMEOUT_PROBE_DEFAULTS,
+  probeAfterTimeout,
   resetGitLabRetryPolicy,
   withGitLabRetry
 } from '../src/platform/gitlab-retry'
@@ -161,18 +163,20 @@ describe('computeBackoffMS（GLAPI-025 有上限退避）', () => {
   const policy = {...GITLAB_RETRY_DEFAULTS, random: () => 1}
 
   test('指数增长', () => {
-    expect(computeBackoffMS(1, policy)).toBe(500)
-    expect(computeBackoffMS(2, policy)).toBe(1000)
-    expect(computeBackoffMS(3, policy)).toBe(2000)
+    expect(computeBackoffMS(1, policy)).toBe(1000)
+    expect(computeBackoffMS(2, policy)).toBe(2000)
+    expect(computeBackoffMS(3, policy)).toBe(4000)
   })
 
   test('不超过 maxDelayMS 上限', () => {
     expect(computeBackoffMS(20, policy)).toBe(policy.maxDelayMS)
   })
 
-  test('全抖动：random 越小等待越短', () => {
-    expect(computeBackoffMS(3, {...policy, random: () => 0})).toBe(0)
-    expect(computeBackoffMS(3, {...policy, random: () => 0.5})).toBe(1000)
+  test('半抖动：random 再小也保留一半作为下限，不会几乎不等待', () => {
+    expect(computeBackoffMS(3, {...policy, random: () => 0})).toBe(2000)
+    expect(computeBackoffMS(3, {...policy, random: () => 0.5})).toBe(3000)
+    // 第一次重试同样有下限：此前 random() 抽到接近 0 时只等几十毫秒
+    expect(computeBackoffMS(1, {...policy, random: () => 0})).toBe(500)
   })
 })
 
@@ -216,7 +220,7 @@ describe('withGitLabRetry（GLAPI-025/026/027）', () => {
       .mockResolvedValue('recovered')
     await expect(withGitLabRetry('op', fn)).resolves.toBe('recovered')
     expect(fn).toHaveBeenCalledTimes(2)
-    expect(sleeps).toEqual([500])
+    expect(sleeps).toEqual([1000])
   })
 
   test('5xx 与超时同样重试，次数有上限', async () => {
@@ -226,7 +230,7 @@ describe('withGitLabRetry（GLAPI-025/026/027）', () => {
       await expect(withGitLabRetry('op', fn)).rejects.toThrow(GitPlatformError)
       expect(fn).toHaveBeenCalledTimes(GITLAB_RETRY_DEFAULTS.maxAttempts)
       // 最后一次失败后不再等待
-      expect(sleeps).toEqual([500, 1000])
+      expect(sleeps).toEqual([1000, 2000, 4000])
     }
   })
 
@@ -290,5 +294,104 @@ describe('withGitLabRetry（GLAPI-025/026/027）', () => {
     const fn = jest.fn<any>().mockRejectedValue(requestError(500))
     await expect(withGitLabRetry('op', fn, {maxAttempts: 1})).rejects.toThrow(GitPlatformError)
     expect(fn).toHaveBeenCalledTimes(1)
+  })
+})
+
+// 回归（ai-reviewer-test#4）：写操作超时后，请求在服务端可能晚了一百多秒才落库。重试前只探测一次
+// 就重发，结果两个请求都落库，MR 里出现两条一模一样的评论。
+describe('probeAfterTimeout：超时后先多探测几轮再决定是否重发', () => {
+  const sleeps: number[] = []
+  const timeoutErr = new GitPlatformError('timeout', 'timeout')
+  const serverErr = new GitPlatformError('boom', 'server_error', 500)
+
+  beforeEach(() => {
+    sleeps.length = 0
+    setLogger({info: () => {}, warning: () => {}, error: () => {}, debug: () => {}})
+    configureGitLabRetry({
+      sleep: async (ms: number) => {
+        sleeps.push(ms)
+      },
+      timeoutProbeWindowMS: 60_000,
+      timeoutProbeIntervalMS: 15_000,
+      timeoutProbeBudgetMS: 300_000
+    })
+  })
+
+  afterEach(() => {
+    resetGitLabRetryPolicy()
+    resetLogger()
+  })
+
+  test('默认值：窗口足够覆盖实测的约 140 秒迟到，预算有上限', () => {
+    expect(GITLAB_TIMEOUT_PROBE_DEFAULTS.windowMS).toBeGreaterThanOrEqual(150_000)
+    expect(GITLAB_TIMEOUT_PROBE_DEFAULTS.budgetMS).toBeGreaterThan(
+      GITLAB_TIMEOUT_PROBE_DEFAULTS.windowMS
+    )
+  })
+
+  test('第一次探测就命中 → 不等待', async () => {
+    const probe = jest.fn<any>().mockResolvedValue('hit')
+    await expect(probeAfterTimeout('op', probe, r => r === 'hit', timeoutErr)).resolves.toBe('hit')
+    expect(probe).toHaveBeenCalledTimes(1)
+    expect(sleeps).toEqual([])
+  })
+
+  test('超时后请求晚到：第三次探测命中 → 返回命中，不重发', async () => {
+    const probe = jest
+      .fn<any>()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce('late')
+    await expect(probeAfterTimeout('op', probe, r => r != null, timeoutErr)).resolves.toBe('late')
+    expect(probe).toHaveBeenCalledTimes(3)
+    expect(sleeps).toEqual([15_000, 15_000])
+  })
+
+  test('超时后一直没落库：等满窗口后返回未命中（调用方才重发）', async () => {
+    const probe = jest.fn<any>().mockResolvedValue(null)
+    await expect(probeAfterTimeout('op', probe, r => r != null, timeoutErr)).resolves.toBeNull()
+    expect(sleeps).toEqual([15_000, 15_000, 15_000, 15_000])
+    expect(probe).toHaveBeenCalledTimes(5)
+  })
+
+  test('上一次不是超时（5xx 等，请求明确没被处理）→ 只探测一次，不额外等待', async () => {
+    const probe = jest.fn<any>().mockResolvedValue(null)
+    await expect(probeAfterTimeout('op', probe, r => r != null, serverErr)).resolves.toBeNull()
+    expect(probe).toHaveBeenCalledTimes(1)
+    expect(sleeps).toEqual([])
+  })
+
+  test('没有上一次错误 → 只探测一次', async () => {
+    const probe = jest.fn<any>().mockResolvedValue(null)
+    await probeAfterTimeout('op', probe, r => r != null, undefined)
+    expect(probe).toHaveBeenCalledTimes(1)
+  })
+
+  test('探测等待有进程级预算：用完后不再等待，直接让调用方重发', async () => {
+    configureGitLabRetry({timeoutProbeWindowMS: 600_000, timeoutProbeBudgetMS: 30_000})
+    const probe = jest.fn<any>().mockResolvedValue(null)
+    await probeAfterTimeout('op', probe, r => r != null, timeoutErr)
+    expect(sleeps).toEqual([15_000, 15_000])
+    sleeps.length = 0
+    await probeAfterTimeout('op', probe, r => r != null, timeoutErr)
+    expect(sleeps).toEqual([])
+  })
+
+  test('探测本身抛错 → 原样抛出（由 withGitLabRetry 当作本次尝试失败）', async () => {
+    const probe = jest.fn<any>().mockRejectedValue(new Error('probe failed'))
+    await expect(probeAfterTimeout('op', probe, r => r != null, timeoutErr)).rejects.toThrow(
+      'probe failed'
+    )
+  })
+
+  test('withGitLabRetry 把上一次的错误传给回调，超时的 kind 为 timeout', async () => {
+    const seen: Array<string | undefined> = []
+    const fn = jest.fn<any>().mockImplementation(async (attempt: any, lastError: any) => {
+      seen.push(lastError?.errorKind)
+      if ((attempt as number) === 1) throw timeoutError()
+      return 'ok'
+    })
+    await expect(withGitLabRetry('op', fn)).resolves.toBe('ok')
+    expect(seen).toEqual([undefined, 'timeout'])
   })
 })

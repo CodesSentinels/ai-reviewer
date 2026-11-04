@@ -38,7 +38,8 @@ const mockMergeRequestDiscussions = {
   removeNote: jest.fn<any>(),
   resolve: jest.fn<any>()
 }
-const mockMergeRequestNoteAwardEmojis = {award: jest.fn<any>()}
+const mockMergeRequestNoteAwardEmojis = {award: jest.fn<any>(), all: jest.fn<any>()}
+const mockSearch = {all: jest.fn<any>()}
 const mockProjectMembers = {all: jest.fn<any>()}
 const mockUsers = {all: jest.fn<any>(), showCurrentUser: jest.fn<any>()}
 
@@ -50,6 +51,7 @@ jest.mock('@gitbeaker/rest', () => ({
     MergeRequestNotes: mockMergeRequestNotes,
     MergeRequestDiscussions: mockMergeRequestDiscussions,
     MergeRequestNoteAwardEmojis: mockMergeRequestNoteAwardEmojis,
+    Search: mockSearch,
     ProjectMembers: mockProjectMembers,
     Users: mockUsers
   }))
@@ -60,7 +62,11 @@ const {GitLabPlatform} = require('../src/platform/gitlab-platform')
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const {PAGINATION_DEFAULTS, TREE_PAGINATION_DEFAULTS} = require('../src/platform/gitlab-client')
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const {configureGitLabRetry, resetGitLabRetryPolicy} = require('../src/platform/gitlab-retry')
+const {
+  configureGitLabRetry,
+  resetGitLabRetryPolicy,
+  GITLAB_RETRY_DEFAULTS
+} = require('../src/platform/gitlab-retry')
 
 const TEST_CLIENT_CONFIG = {
   host: 'https://gitlab.example.com',
@@ -502,11 +508,64 @@ describe('GitLab adapter 稳定性契约', () => {
       await expect(platform.addReaction('g', 'r', 5, 100, '+1', 'issue_comment')).rejects.toThrow(
         GitPlatformError
       )
-      expect(mockMergeRequestNoteAwardEmojis.award).toHaveBeenCalledTimes(3)
+      expect(mockMergeRequestNoteAwardEmojis.award).toHaveBeenCalledTimes(
+        GITLAB_RETRY_DEFAULTS.maxAttempts
+      )
     })
   })
 
   // ─── GLAPI-028 subgroup / URL 编码 / Unicode / 重命名 ─────────────────────
+
+  describe('searchCode', () => {
+    test('项目内 blobs 搜索，映射为路径 / 起始行 / 片段', async () => {
+      mockSearch.all.mockResolvedValue([
+        {path: 'src/a.ts', filename: 'a.ts', startline: 12, data: 'callFoo()'},
+        {filename: 'b.ts', data: 'x'}
+      ])
+      await expect(platform.searchCode('g', 'r', 'callFoo', 20)).resolves.toEqual([
+        {path: 'src/a.ts', startLine: 12, snippet: 'callFoo()'},
+        {path: 'b.ts', startLine: null, snippet: 'x'}
+      ])
+      expect(mockSearch.all).toHaveBeenCalledWith(
+        'blobs',
+        'callFoo',
+        expect.objectContaining({projectId: 'g/r', perPage: 20, maxPages: 1})
+      )
+    })
+
+    test('错误归一化为 GitPlatformError', async () => {
+      mockSearch.all.mockRejectedValue(requestError(403))
+      await expect(platform.searchCode('g', 'r', 'x', 20)).rejects.toThrow(GitPlatformError)
+    })
+  })
+
+  describe('listReactions', () => {
+    test('Award Emoji 名映射回 ReactionContent，未知表情为 null，走显式分页', async () => {
+      mockMergeRequestNoteAwardEmojis.all.mockResolvedValue([
+        {name: 'thumbsup', user: {username: 'bot'}},
+        {name: 'rocket', user: {username: 'bot'}},
+        {name: 'smile', user: {username: 'alice'}}
+      ])
+      await expect(platform.listReactions('g', 'r', 5, 100, 'issue_comment')).resolves.toEqual([
+        {content: '+1', userLogin: 'bot'},
+        {content: 'rocket', userLogin: 'bot'},
+        {content: null, userLogin: 'alice'}
+      ])
+      expect(mockMergeRequestNoteAwardEmojis.all).toHaveBeenCalledWith(
+        'g/r',
+        5,
+        100,
+        expect.objectContaining({perPage: 100})
+      )
+    })
+
+    test('错误归一化为 GitPlatformError', async () => {
+      mockMergeRequestNoteAwardEmojis.all.mockRejectedValue(requestError(403))
+      await expect(platform.listReactions('g', 'r', 5, 100, 'issue_comment')).rejects.toThrow(
+        GitPlatformError
+      )
+    })
+  })
 
   describe('GLAPI-028 路径与文件名边界', () => {
     test('subgroup（多层 group）项目路径原样拼接后交给 SDK 编码', async () => {

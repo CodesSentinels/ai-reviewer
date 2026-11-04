@@ -14,7 +14,7 @@
  * ARCH-005：不再直接 import `@actions/github`，事件类型判断改用调用方
  * （main.ts）传入的 ExecutionContext.eventKind。
  */
-import {info} from './actions-log'
+import {getLogger} from './platform/logger'
 import {bootstrapCommands} from './commands/bootstrap'
 import {dispatchCommentEvent} from './commands/dispatcher'
 import {resolveBotMentions} from './commands/parser'
@@ -64,13 +64,13 @@ export async function handleCommentEvent(deps: HandleCommentEventDeps): Promise<
     triggerReview
   })
 
-  info(`commentEvent dispatcher outcome: ${JSON.stringify(outcome)}`)
+  getLogger().info(`commentEvent dispatcher outcome: ${JSON.stringify(outcome)}`)
 
   if (outcome.kind === 'fallback_conversation') {
     // 行级评论与主评论区对话共用 heavyBot；仅在需要时构造。
     const bots = deps.heavyBot != null ? {heavyBot: deps.heavyBot} : deps.getReviewBots?.()
     if (bots == null) {
-      info('commentEvent: conversation fallback skipped (OpenAI bot unavailable)')
+      getLogger().info('commentEvent: conversation fallback skipped (OpenAI bot unavailable)')
       return
     }
 
@@ -83,7 +83,7 @@ export async function handleCommentEvent(deps: HandleCommentEventDeps): Promise<
       // PR 主评论区对话式追问（整个 PR 上下文 + 幂等去重 + 无关问题婉拒）。
       await handleIssueConversation(deps.execCtx, bots.heavyBot, deps.options, deps.prompts)
     } else {
-      info(
+      getLogger().info(
         `commentEvent: conversation fallback skipped (unsupported eventKind ${deps.execCtx.eventKind})`
       )
     }

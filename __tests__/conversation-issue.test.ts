@@ -267,6 +267,75 @@ describe('handleIssueConversation — 编排', () => {
     expect(commenterState.create.mock.calls[0][0]).toContain('上限')
   })
 
+  // 回归：GitLab 的 listComments 返回 MR 里全部 note，bot 自己发的行级审查评论（带 comment 标签）
+  // 也在链里。它们不是对话轮次，不能计入上限，否则审查评论一多第一次提问就被拒。
+  test('bot 的行级审查评论很多时，第一次提问不触发轮次上限', async () => {
+    setPayload('@ai-reviewer 这个 MR 的主要风险是什么？')
+    const history: any[] = Array.from({length: MAX_CONVERSATION_TURNS + 20}, (_, i) => ({
+      id: 100 + i,
+      body: `审查评论 ${i} <!-- BOT_COMMENT -->`,
+      user: {login: 'ai-reviewer'}
+    }))
+    history.push({
+      id: 2001,
+      body: '@ai-reviewer 这个 MR 的主要风险是什么？',
+      user: {login: 'alice'}
+    })
+    commenterState.listComments.mockResolvedValue(history)
+    const bot = makeBot('主要风险是……')
+    await handleIssueConversation(mockExecCtx, bot, stubOptions, stubPrompts)
+    expect(bot.chat).toHaveBeenCalledTimes(1)
+    expect(commenterState.create).toHaveBeenCalledTimes(1)
+    expect(commenterState.create.mock.calls[0][0]).not.toContain('上限')
+  })
+
+  test('审查评论再多，只要对话回复不足上限就继续回答', async () => {
+    setPayload('@ai-reviewer 再解释一下')
+    const history: any[] = []
+    for (let i = 0; i < 25; i++) {
+      history.push({
+        id: 100 + i,
+        body: `审查评论 ${i} <!-- BOT_COMMENT -->`,
+        user: {login: 'ai-reviewer'}
+      })
+    }
+    for (let i = 0; i < MAX_CONVERSATION_TURNS - 1; i++) {
+      history.push({
+        id: 500 + i,
+        body: `回复 ${i} <!-- BOT_REPLY -->`,
+        user: {login: 'ai-reviewer'}
+      })
+    }
+    history.push({id: 2001, body: '@ai-reviewer 再解释一下', user: {login: 'alice'}})
+    commenterState.listComments.mockResolvedValue(history)
+    const bot = makeBot('解释……')
+    await handleIssueConversation(mockExecCtx, bot, stubOptions, stubPrompts)
+    expect(bot.chat).toHaveBeenCalledTimes(1)
+  })
+
+  test('审查评论夹杂在中间，对话回复达到上限仍然拒绝', async () => {
+    setPayload('@ai-reviewer 继续追问')
+    const history: any[] = []
+    for (let i = 0; i < MAX_CONVERSATION_TURNS; i++) {
+      history.push({
+        id: 100 + i,
+        body: `审查评论 ${i} <!-- BOT_COMMENT -->`,
+        user: {login: 'ai-reviewer'}
+      })
+      history.push({
+        id: 500 + i,
+        body: `回复 ${i} <!-- BOT_REPLY -->`,
+        user: {login: 'ai-reviewer'}
+      })
+    }
+    history.push({id: 2001, body: '@ai-reviewer 继续追问', user: {login: 'alice'}})
+    commenterState.listComments.mockResolvedValue(history)
+    const bot = makeBot()
+    await handleIssueConversation(mockExecCtx, bot, stubOptions, stubPrompts)
+    expect(bot.chat).not.toHaveBeenCalled()
+    expect(commenterState.create.mock.calls[0][0]).toContain('上限')
+  })
+
   test('正常回复 → create 含引用 + @提及 + 回复标签', async () => {
     setPayload('@ai-reviewer 这个改动为什么这样写？')
     commenterState.listComments.mockResolvedValue([

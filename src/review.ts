@@ -22,7 +22,6 @@ import {
   isOwnAuthor,
   stateMarker,
   commentReplyTag,
-  commentTag,
   rawSummaryEndTag,
   rawSummaryStartTag,
   shortSummaryEndTag,
@@ -49,7 +48,10 @@ import {
 import {parseLintReport} from './lint/report-schema'
 import {
   classifyFindingSeverity,
+  extractSeverityTags,
+  splitLeadingSeverityTag,
   prepareFindings,
+  mergeSimilarFindings,
   severityBadge,
   type Finding
 } from './noise-control'
@@ -57,6 +59,7 @@ import {Inputs} from './inputs'
 import {type Options} from './options'
 import {getPlatform} from './platform/git-platform'
 import {getLogger} from './platform/logger'
+import {beginLogSection, endLogSection} from './platform/log-section'
 import {type ExecutionContext} from './platform/execution-context'
 import {type Prompts} from './prompts'
 import {mergeReviewsByTopic, type Review} from './review-dedup'
@@ -66,7 +69,10 @@ import {getReviewStateFromBody} from './review-state'
 import {isHeadStale} from './head-staleness'
 import {getRepoCoords, repoCoordsOf, setExecCtx} from './platform/run-context'
 import {getTokenCount} from './tokenizer'
+import {detectInitialPr, initialPrNotice, largePrNotice, prioritizeFiles} from './large-pr'
+import {COMPARE_FILES_CAP, selectFilesToReview} from './diff-files'
 import {fetchThreadStatusMap, type ThreadStatusMap} from './github/review-thread'
+import {isWhitespaceOnlyChange} from './whitespace-only-change'
 
 /** 平台无关的 TreeFetcher 实现（DEP-005 → ARCH-018） */
 const platformTreeFetcher: TreeFetcher = {
@@ -229,6 +235,22 @@ export const codeReview = async (
   prompts: Prompts,
   runOptions: CodeReviewRunOptions = {}
 ): Promise<void> => {
+  try {
+    await runCodeReview(execCtx, lightBot, heavyBot, options, prompts, runOptions)
+  } finally {
+    // 各阶段用 beginLogSection 切换分段，中途 return / 抛错时在这里收尾
+    endLogSection()
+  }
+}
+
+const runCodeReview = async (
+  execCtx: ExecutionContext,
+  lightBot: Bot,
+  heavyBot: Bot,
+  options: Options,
+  prompts: Prompts,
+  runOptions: CodeReviewRunOptions
+): Promise<void> => {
   // 登记当前上下文：Commenter 在十几处被构造，签名里没有 execCtx，只能读模块级
   // 上下文。共享核心入口统一登记一次，调用方（main.ts / gitlab-trigger.ts /
   // 命令 handler）不必各自记得这件事。
@@ -236,6 +258,10 @@ export const codeReview = async (
 
   const commenter: Commenter = new Commenter()
   const fromCommand = runOptions.source === 'command'
+  // 默认两个平台行为一致：先发「审查中」摘要（所以摘要总排在行级评论之前），
+  // 发布说明写进 PR/MR 描述。GitLab 上 bot 的每次写入都会经 webhook 再触发一条
+  // pipeline，想省掉这两次写入的调用方显式传 minimizeBotWrites: true。
+  const minimizeWrites = options.minimizeBotWrites === true
   const reviewMode = runOptions.mode ?? 'incremental'
 
   // 初始化并发控制器：分别限制 OpenAI 和 GitHub API 的并发数
@@ -255,6 +281,8 @@ export const codeReview = async (
     )
     return
   }
+
+  beginLogSection('ai_review_prepare', 'Prepare: load changes and context')
 
   // PR/MR 详情统一现查（ARCH-005）。
   //
@@ -280,8 +308,9 @@ export const codeReview = async (
       head: {sha: cr.headSha, ref: cr.headRef}
     }
   } catch (e) {
-    getLogger().warning(`Skipped: failed to load change request details: ${String(e)}`)
-    return
+    // 读不到 MR 详情是「没能干活」而不是「无需审查」：必须让 job 失败，
+    // 否则网络故障时 CI 是绿的、MR 上什么都没有
+    throw new Error(`failed to load change request details: ${String(e)}`)
   }
 
   if (!fromCommand && getReviewStateFromBody(pr.body ?? '') === 'paused') {
@@ -378,7 +407,8 @@ export const codeReview = async (
         `[review-003] discarded this run: ${check.reason}. No invalidation notice was posted ` +
           'because there is no evidence the results are actually outdated.'
       )
-      return
+      // 结果被丢弃且没有任何对外提示：job 必须失败，不能让这次静默的空跑显示为成功
+      throw new Error(`review results discarded: ${check.reason}`)
     }
     await publishInvalidationNotice(check.currentHeadSha)
   }
@@ -468,17 +498,17 @@ export const codeReview = async (
   // 全量审查（首次或 full mode）：incremental 与 targetBranch 相同，直接使用
   // 关键：必须用 incrementalFiles 的 patch 送入 AI，否则 AI 会看到已审查过的旧变更
   const isFirstOrFullReview = highestReviewedCommitId === pr.base.sha
-  const files = isFirstOrFullReview
-    ? targetBranchFiles.filter(targetBranchFile =>
-        incrementalFiles.some(
-          incrementalFile => incrementalFile.filename === targetBranchFile.filename
-        )
-      )
-    : incrementalFiles.filter(incrementalFile =>
-        targetBranchFiles.some(
-          targetBranchFile => targetBranchFile.filename === incrementalFile.filename
-        )
-      )
+  const {files, targetTruncated} = selectFilesToReview({
+    isFirstOrFullReview,
+    incrementalFiles,
+    targetBranchFiles
+  })
+  if (targetTruncated) {
+    getLogger().warning(
+      `compare returned ${targetBranchFiles.length} files (API limit ${COMPARE_FILES_CAP}); ` +
+        'the base...head list may be truncated, so incremental files are not intersected with it'
+    )
+  }
 
   if (files.length === 0) {
     getLogger().warning('Skipped: files is null')
@@ -516,6 +546,13 @@ export const codeReview = async (
     await Promise.all(
       filterSelectedFiles.map(file =>
         githubConcurrencyLimit(async () => {
+          // 只调整了缩进或换行的文件不值得审查：确定性判断，不依赖摘要阶段的模型分类，
+          // 也省掉读取基准内容的请求。判断很保守，见 whitespace-only-change.ts。
+          if (isWhitespaceOnlyChange(file.filename, file.patch)) {
+            getLogger().info(`skip whitespace-only change: ${file.filename}`)
+            return null
+          }
+
           // 获取文件在基准分支上的原始内容
           let fileContent = ''
           if (file.status === 'added') {
@@ -596,13 +633,42 @@ ${hunks.oldHunk}
     files.filter(file => file.status === 'removed').map(file => file.filename)
   )
 
-  const filesAndChanges = filteredFiles.filter(file => file !== null) as Array<
+  const validFiles = filteredFiles.filter(file => file !== null) as Array<
     [string, string, string, Array<[number, number, string]>]
   >
 
-  if (filesAndChanges.length === 0) {
+  if (validFiles.length === 0) {
     getLogger().error('Skipped: no files to review')
     return
+  }
+
+  // Issue #51：超出 max_files 时先按优先级排序再截断（代码 > 文档 > 锁文件 /
+  // 快照 / 删除 / 纯改名，同档位变更多的在前），而不是按平台返回的顺序硬截断。
+  // 不截断时保持原顺序，不改变摘要和评论里的文件次序。
+  const statusByFile = new Map(filterSelectedFiles.map(file => [file.filename, file.status]))
+  const filesAndChanges =
+    options.maxFiles > 0 && validFiles.length > options.maxFiles
+      ? prioritizeFiles(validFiles, ([filename, , fileDiff]) => ({
+          filename,
+          status: statusByFile.get(filename),
+          patch: fileDiff
+        }))
+      : validFiles
+  if (filesAndChanges !== validFiles) {
+    getLogger().info(
+      `max_files: ${validFiles.length} files exceed the limit of ${options.maxFiles}, processing by priority`
+    )
+  }
+
+  // Issue #51：初始化类 PR（几乎全是新增文件）在自动审查时只出摘要，跳过行级审查。
+  // 用户主动发的审查命令照常逐文件审查——那表示他就是要看行级意见。
+  const initialPr = detectInitialPr(filterSelectedFiles.map(file => file.status))
+  const skipLineReviewForInitialPr =
+    options.initialPrSummaryOnly && initialPr.isInitial && runOptions.source !== 'command'
+  if (skipLineReviewForInitialPr) {
+    getLogger().info(
+      `initial PR detected (${initialPr.added}/${initialPr.total} files added), summary only`
+    )
   }
 
   // ==================== 共享：单次扫描 unified diff，得到每文件的 PatchScan ====================
@@ -734,13 +800,26 @@ ${
     return
   }
 
-  // 更新摘要评论为"审查进行中"状态
-  const inProgressSummarizeCmt = commenter.addInProgressStatus(existingSummarizeCmtBody, statusMsg)
+  // 更新摘要评论为"审查进行中"状态（minimizeWrites 时摘要评论只在结束时写一次）
+  if (!minimizeWrites) {
+    const inProgressSummarizeCmt = commenter.addInProgressStatus(
+      existingSummarizeCmtBody,
+      statusMsg
+    )
+    await commenter.comment(`${inProgressSummarizeCmt}`, summarizeTag(), 'replace')
+  }
 
-  await commenter.comment(`${inProgressSummarizeCmt}`, summarizeTag(), 'replace')
+  beginLogSection('ai_review_summarize', 'Summarize changes')
 
   // ==================== 阶段一：并行文件摘要 ====================
   const summariesFailed: string[] = []
+
+  // 模型调用的成败统计：全部失败时 job 要以失败退出（否则 CI 是绿的而 MR 上什么都没审）
+  let modelCallsOk = 0
+  let modelCallsFailed = 0
+  // 因偶发错误（模型/网络）没审成的文件：有它就不能把本次 HEAD 记为已审查，
+  // 否则增量审查永远不会再碰这些文件
+  const retryableFailures: string[] = []
 
   /**
    * 对单个文件生成摘要
@@ -770,8 +849,16 @@ ${
   const chatOrNull = async (bot: Bot, prompt: string, label: string): Promise<string | null> => {
     try {
       const [response] = await bot.chat(prompt, {})
+      // Bot.chat() 自己吞掉接口错误、返回空串而不抛异常：空响应与抛异常一样是失败
+      if (response == null || response === '') {
+        modelCallsFailed += 1
+        degradations.push(`${label}未完成（模型没有返回内容，详情见运行日志）`)
+      } else {
+        modelCallsOk += 1
+      }
       return response
     } catch (e: any) {
+      modelCallsFailed += 1
       getLogger().warning(`${label} failed: ${e instanceof Error ? e.message : String(e)}`)
       degradations.push(`${label}未完成（模型调用失败，详情见运行日志）`)
       return null
@@ -810,10 +897,14 @@ ${
       const [summarizeResp] = await lightBot.chat(summarizePrompt, {})
 
       if (summarizeResp === '') {
+        // Bot.chat() 吞掉接口错误后返回空串：算失败，且属于偶发（不记已审查 HEAD）
+        modelCallsFailed += 1
+        retryableFailures.push(filename)
         getLogger().info('summarize: nothing obtained from openai')
         summariesFailed.push(`${filename} (nothing obtained from openai)`)
         return null
       } else {
+        modelCallsOk += 1
         if (options.reviewSimpleChanges === false) {
           // 解析 AI 响应中的分类标签：[TRIAGE]: NEEDS_REVIEW 或 APPROVED
           const triageRegex = /\[TRIAGE\]:\s*(NEEDS_REVIEW|APPROVED)/
@@ -834,6 +925,8 @@ ${
       }
     } catch (e: any) {
       getLogger().warning(`summarize: error from openai: ${e as string}`)
+      modelCallsFailed += 1
+      retryableFailures.push(filename)
       summariesFailed.push(`${filename} (error from openai: ${e as string})})`)
       return null
     }
@@ -901,13 +994,16 @@ ${filename}: ${summary}
 
   const botName = options.botName
 
-  // 生成发布说明并写入 PR 描述
+  // 生成发布说明并写入 PR 描述（minimizeWrites 时改为并入摘要评论）
+  let releaseNotesForSummary = ''
   if (options.disableReleaseNotes === false) {
     const releaseNotesResponse =
       (await chatOrNull(heavyBot, prompts.renderSummarizeReleaseNotes(inputs), '发布说明生成')) ??
       ''
     if (releaseNotesResponse === '') {
       getLogger().info('release notes: nothing obtained from openai')
+    } else if (minimizeWrites) {
+      releaseNotesForSummary = releaseNotesResponse
     } else {
       // REVIEW-003 第二道：**紧贴写入**。放在模型调用之前等于没挡——
       // 生成 release notes 本身就是一次重量模型调用，期间完全可能又推了新 commit。
@@ -933,6 +1029,7 @@ ${filename}: ${summary}
 
   // 构建最终的摘要评论内容（包含隐藏的状态数据）
   let summarizeComment = `${summarizeFinalResponse}
+${releaseNotesForSummary !== '' ? `\n### Release Notes\n\n${releaseNotesForSummary}\n` : ''}
 ${rawSummaryStartTag()}
 ${inputs.rawSummary}
 ${rawSummaryEndTag()}
@@ -983,8 +1080,13 @@ ${
   // 来生成「本次审查不完整」提示（REVIEW-006）
   const reviewsFailed: string[] = []
 
+  beginLogSection('ai_review_review', 'Review files')
+
   // ==================== 阶段四：逐文件代码审查 ====================
-  if (!options.disableReview && runOptions.summaryOnly !== true) {
+  // 本轮是否进入逐文件行级审查。没进入时，摘要里的 reviewed-commit-ids 不能被新摘要覆盖掉（见发布阶段）。
+  const lineReviewRan =
+    !options.disableReview && runOptions.summaryOnly !== true && !skipLineReviewForInitialPr
+  if (lineReviewRan) {
     // 筛选出需要审查的文件（分类为 NEEDS_REVIEW 的文件）
     const filesAndChangesReview = filesAndChanges.filter(([filename]) => {
       const needsReview =
@@ -1096,6 +1198,13 @@ ${
       getLogger().info(`reviewing ${filename}`)
       const ins: Inputs = inputs.clone()
       ins.filename = filename
+
+      // 注入按路径配置的额外审查指令
+      const pathRules = options.pathInstructions.match(filename)
+      if (pathRules.length > 0) {
+        ins.pathInstructions = pathRules.map(r => `- ${r}`).join('\n')
+        getLogger().info(`injected ${pathRules.length} path instruction(s) for ${filename}`)
+      }
 
       // 注入静态分析工具结果（仅当前文件相关的 finding）
       if (lintReport != null) {
@@ -1223,17 +1332,22 @@ ${commentChain}
 
       // 如果成功打包了至少一个 patch，执行审查
       if (patchesPacked > 0) {
+        let chatReturned = false
         try {
           // 调用重量模型执行代码审查
           const [response, , analysisSteps] = await heavyBot.chat(
             prompts.renderReviewFileDiff(ins),
             {}
           )
+          chatReturned = true
           if (response === '') {
             getLogger().info('review: nothing obtained from openai')
+            modelCallsFailed += 1
+            retryableFailures.push(filename)
             reviewsFailed.push(`${filename} (no response)`)
             return
           }
+          modelCallsOk += 1
 
           // 格式化 Analysis chain（模型执行的 shell / web_search 步骤）
           getLogger().info(
@@ -1253,7 +1367,12 @@ ${commentChain}
           // 然后做**议题级合并去重**：LLM 经常对同一个 tool finding 写出多条
           // 不同角度的评论（行号还可能不同），按"重叠的 tool finding ruleId 集合"
           // 做 key 合并 — 详见 src/review-dedup.ts。
-          const rawReviews = parseReview(response, patches, options.debug)
+          // 模型在每条意见首行给出的严重级别标签：合并前逐条取出并从正文删除（不展示给用户），
+          // 合并时取最高级别，避免扫描合并后的正文误读代码块里的同名文字
+          const rawReviews = parseReview(response, patches, options.debug).map(r => {
+            const {severity, comment} = extractSeverityTags(r.comment)
+            return {...r, severity, comment}
+          })
           const fileFindings = lintReport?.results.filter(r => r.file === filename) ?? []
           const reviews = mergeReviewsByTopic(
             rawReviews,
@@ -1277,11 +1396,13 @@ ${commentChain}
 
             try {
               reviewCount += 1
+              const taggedSeverity = review.severity ?? null
+              const reviewComment = review.comment
               // 每个文件只在第一条评论上附加一次 Analysis chain，避免重复刷屏
               const shouldAttachAnalysisChain = analysisChainMd !== '' && !analysisChainAttached
               let commentWithChain = shouldAttachAnalysisChain
-                ? `${review.comment}\n\n${analysisChainMd}`
-                : review.comment
+                ? `${reviewComment}\n\n${analysisChainMd}`
+                : reviewComment
               if (shouldAttachAnalysisChain) {
                 analysisChainAttached = true
               }
@@ -1307,7 +1428,13 @@ ${commentChain}
               )
               // 收集为 Finding，统一在审查完成后做噪音控制再 buffer。
               // 严重级别以警示框徽标的形式直接置于每条行级评论顶部（取代 PR 顶部汇总评论）。
-              const severity = classifyFindingSeverity(review.comment)
+              // 以模型给出的级别为准；漏标或标签无效时回退到关键词推断
+              const severity = taggedSeverity ?? classifyFindingSeverity(reviewComment)
+              if (taggedSeverity == null) {
+                getLogger().info(
+                  `[severity] ${filename}:${review.startLine}-${review.endLine} has no valid severity tag, inferred ${severity}`
+                )
+              }
               findings.push({
                 path: filename,
                 startLine: review.startLine,
@@ -1316,6 +1443,7 @@ ${commentChain}
                 body: `${severityBadge(severity)}\n\n${commentWithChain}`
               })
             } catch (e: any) {
+              retryableFailures.push(filename)
               reviewsFailed.push(`${filename} comment failed (${e as string})`)
             }
           }
@@ -1323,6 +1451,8 @@ ${commentChain}
           getLogger().warning(
             `Failed to review: ${e as string}, skipping. backtrace: ${e.stack as string}`
           )
+          if (!chatReturned) modelCallsFailed += 1
+          retryableFailures.push(filename)
           reviewsFailed.push(`${filename} (${e as string})`)
         }
       } else if (patchesSkippedByDedup > 0 && patchesPacked === 0) {
@@ -1351,13 +1481,21 @@ ${commentChain}
     // 噪音控制（成员 D · §2.5）：按严重级别排序 + 截断到上限（默认 20）。
     // 行级评论保留每个位置（dedupe:false），避免把不同代码行的同类问题合并导致丢失位置；
     // 同类合并仅用于下方 PR 顶部汇总评论的概览统计。
-    const {kept: keptFindings, truncated: truncatedFindings} = prepareFindings(findings, {
+    // 同一文件里正文几乎相同的多处发现先合并成一条（保留所有位置），否则同一类问题的每个位置
+    // 各发一条相同评论，会占满评论上限、挤掉同一文件里其他类别的问题。
+    const similarMerged = mergeSimilarFindings(findings)
+    if (similarMerged.length !== findings.length) {
+      getLogger().info(
+        `similar-merge: ${findings.length} findings → ${similarMerged.length} (merged same-file near-identical comments)`
+      )
+    }
+    const {kept: keptFindings, truncated: truncatedFindings} = prepareFindings(similarMerged, {
       dedupe: false,
       maxComments: options.maxReviewComments
     })
     if (truncatedFindings > 0) {
       getLogger().info(
-        `noise-control: ${findings.length} findings → posting ${keptFindings.length}, truncated ${truncatedFindings} low-priority`
+        `noise-control: ${similarMerged.length} findings → posting ${keptFindings.length}, truncated ${truncatedFindings} low-priority`
       )
     }
     for (const f of keptFindings) {
@@ -1421,6 +1559,8 @@ ${
 
 </details>
 `
+    beginLogSection('ai_review_publish', 'Publish comments and summary')
+
     // REVIEW-003 第三道：**阶段四跑完之后**才检查。
     // 逐文件模型审查是整条流水线最耗时的一段（每个文件一次重量模型调用），
     // 把门禁设在它之前等于什么都没挡——期间推的新 commit 照样会被旧结果覆盖。
@@ -1430,8 +1570,18 @@ ${
       return
     }
 
-    // 将最新的 head commit SHA 添加到已审查列表
-    summarizeComment += `\n${commenter.addReviewedCommitId(existingCommitIdsBlock, pr.head.sha)}`
+    // 将最新的 head commit SHA 添加到已审查列表。
+    // 有文件因偶发错误没审成时不记：记了下一次增量审查就从这个 HEAD 起算，
+    // 失败的文件再也不会被碰；不记则下次触发会从上一个完整审查过的提交起重新覆盖。
+    if (retryableFailures.length > 0) {
+      getLogger().warning(
+        `${new Set(retryableFailures).size} file(s) failed transiently; not recording ` +
+          `${pr.head.sha} as reviewed so the next run retries them`
+      )
+      summarizeComment += `\n${existingCommitIdsBlock}`
+    } else {
+      summarizeComment += `\n${commenter.addReviewedCommitId(existingCommitIdsBlock, pr.head.sha)}`
+    }
 
     // 批量提交所有缓冲的审查评论（严重级别已内嵌在每条评论顶部，不再单独发汇总评论）
     // STATE-011/012：批次内每条写入前再确认一次 HEAD。
@@ -1446,10 +1596,31 @@ ${
     )
   }
 
-  // summary-only 等跳过审查阶段的场景：保留既有的已审查 commit 记录，
-  // 否则 replace 摘要评论会清空增量审查标记，导致下次自动审查从 base 重审
-  if (runOptions.summaryOnly === true && existingCommitIdsBlock !== '') {
-    summarizeComment += `\n${existingCommitIdsBlock}`
+  beginLogSection('ai_review_publish', 'Publish comments and summary')
+
+  // 已审查 commit 记录的统一规则（摘要用 replace 发布，不写就会被清空）：
+  //   - 行级审查跑过：阶段四已经按结果处理（成功追加 HEAD，有可重试失败则保留旧记录）；
+  //   - 没跑过（summaryOnly / disable_review 等）：保留旧记录，不把 HEAD 记为已审。
+  //     否则下次恢复审查会找不到起点，从 base 全量重审；
+  //   - 唯一例外：初始化 PR 的摘要已覆盖整体，自动审查下把 HEAD 记为已审（disable_review 时不适用，
+  //     那时根本没做过行级审查）。
+  if (!lineReviewRan) {
+    if (skipLineReviewForInitialPr && runOptions.summaryOnly !== true && !options.disableReview) {
+      // 初始化 PR 的整体已经由摘要覆盖：把 HEAD 记为已审，之后的 push 只审增量。
+      // 不记的话，下次自动审查仍从 base 起算、再次被判为初始化 PR，后续改动永远得不到行级审查。
+      summarizeComment += `\n${commenter.addReviewedCommitId(existingCommitIdsBlock, pr.head.sha)}`
+    } else if (existingCommitIdsBlock !== '') {
+      summarizeComment += `\n${existingCommitIdsBlock}`
+    }
+  }
+
+  // Issue #51：大型 PR 提醒与初始化 PR 说明，放在必定发布的摘要评论里
+  const notices = [
+    largePrNotice(filesAndChanges.length, options.warnFiles),
+    skipLineReviewForInitialPr ? initialPrNotice(initialPr, PRIMARY_BOT_MENTION) : null
+  ].filter((n): n is string => n != null)
+  if (notices.length > 0) {
+    summarizeComment += `\n\n${notices.map(n => `> ℹ️ ${n}`).join('\n>\n')}\n`
   }
 
   // REVIEW-006：不完整的审查必须让用户看得见。
@@ -1471,9 +1642,9 @@ ${
     ...(reviewsFailed.length > 0 ? [`${reviewsFailed.length} 个文件审查失败`] : [])
   ]
   if (incomplete.length > 0) {
+    const incompleteList = incomplete.map(d => `> - ${d}`).join('\n')
     summarizeComment +=
-      `\n\n> ⚠️ 本次审查不完整，共 ${incomplete.length} 项未能完成：\n>\n` +
-      incomplete.map(d => `> - ${d}`).join('\n') +
+      `\n\n> ⚠️ 本次审查不完整，共 ${incomplete.length} 项未能完成：\n>\n${incompleteList}` +
       '\n>\n> 已发布的部分仍然有效；重新触发审查可以重试失败的环节。\n'
   }
 
@@ -1486,7 +1657,18 @@ ${
   }
 
   // 发布最终的摘要评论
-  await commenter.comment(`${summarizeComment}`, summarizeTag(), 'replace')
+  const summaryDelivered = await commenter.comment(`${summarizeComment}`, summarizeTag(), 'replace')
+  // comment() 内部吞异常，只能看返回值：摘要没发出去就是失败，不能以成功退出
+  if (summaryDelivered === false) {
+    throw new Error('failed to publish the final summary comment')
+  }
+
+  // 一次模型调用都没成功：摘要里已有「审查不完整」提示，但 CI 还得是红的
+  if (modelCallsOk === 0 && modelCallsFailed > 0) {
+    throw new Error(
+      `all ${modelCallsFailed} model call(s) failed — nothing was reviewed (see earlier warnings)`
+    )
+  }
 }
 
 // ==================== Diff 解析辅助函数 ====================
@@ -1595,7 +1777,64 @@ function normalizeRepositoryPath(path: string): string {
     .replace(/\.git$/, '')
 }
 
-function formatAnalysisChain(steps: AnalysisStep[], repositoryUrl: string): string {
+/** Analysis chain 中展示的来源上限 */
+const ANALYSIS_CHAIN_MAX_SOURCES = 5
+
+/** 放进行内代码片段的文本：去掉反引号与换行，避免破坏 markdown */
+function inlineCode(text: string, max = 200): string {
+  const t = text.replace(/[`\r\n]+/g, ' ').trim()
+  return `\`${t.length > max ? `${t.slice(0, max)}…` : t}\``
+}
+
+/**
+ * web search 步骤的展示。WS-004：搜索结果是外部内容，进评论正文就是注入 / 钓鱼链接
+ * 通道——这里只展示模型的搜索词与来源**域名**，都放在行内代码里（不可点击、
+ * 不渲染 markdown / @提及），不展示完整 URL、标题或摘要。
+ */
+function formatWebSearchStep(step: AnalysisStep): string {
+  if (step.webAction === 'open_page' && step.pageDomain != null) {
+    return `🌐 Opened page on ${inlineCode(step.pageDomain)}\n\n---\n\n`
+  }
+  if (step.webAction === 'find_in_page' && step.pattern != null) {
+    const where = step.pageDomain != null ? ` on ${inlineCode(step.pageDomain)}` : ''
+    return `🔎 Searched in page: ${inlineCode(step.pattern)}${where}\n\n---\n\n`
+  }
+  if (step.queries == null || step.queries.length === 0) {
+    return `🔍 Web search executed (status: ${step.status ?? 'unknown'})\n\n---\n\n`
+  }
+  let out = `🔍 Web search: ${step.queries.map(q => inlineCode(q)).join(', ')}\n`
+  const domains = step.sourceDomains ?? []
+  if (domains.length > 0) {
+    const shown = domains.slice(0, ANALYSIS_CHAIN_MAX_SOURCES).map(d => inlineCode(d))
+    const more =
+      domains.length > ANALYSIS_CHAIN_MAX_SOURCES
+        ? ` (+${domains.length - ANALYSIS_CHAIN_MAX_SOURCES})`
+        : ''
+    out += `\nSources: ${shown.join(', ')}${more}\n`
+  }
+  return `${out}\n---\n\n`
+}
+
+function formatCodeToolStep(step: AnalysisStep): string {
+  const failed = step.error != null ? ` — failed: ${step.error}` : ''
+  if (step.type === 'read_file') {
+    const range =
+      step.error == null && step.startLine != null && step.endLine != null
+        ? ` (lines ${step.startLine}-${step.endLine})`
+        : ''
+    return `📄 Read file: ${inlineCode(step.path ?? '')}${range}${failed}\n\n---\n\n`
+  }
+  if (step.type === 'list_directory') {
+    const count = step.error == null ? ` (${step.resultCount ?? 0} entries)` : ''
+    return `📁 Listed directory: ${inlineCode(
+      step.path === '' || step.path == null ? '(root)' : step.path
+    )}${count}${failed}\n\n---\n\n`
+  }
+  const count = step.error == null ? ` (${step.resultCount ?? 0} results)` : ''
+  return `🔎 Searched code: ${inlineCode(step.query ?? '')}${count}${failed}\n\n---\n\n`
+}
+
+export function formatAnalysisChain(steps: AnalysisStep[], repositoryUrl: string): string {
   getLogger().info(`[formatAnalysisChain] called with ${steps.length} steps`)
   if (steps.length === 0) return ''
 
@@ -1619,7 +1858,13 @@ function formatAnalysisChain(steps: AnalysisStep[], repositoryUrl: string): stri
         chain += '---\n\n'
       }
     } else if (step.type === 'web_search') {
-      chain += `🔍 Web search executed (status: ${step.status ?? 'unknown'})\n\n---\n\n`
+      chain += formatWebSearchStep(step)
+    } else if (
+      step.type === 'read_file' ||
+      step.type === 'list_directory' ||
+      step.type === 'search_code'
+    ) {
+      chain += formatCodeToolStep(step)
     }
   }
 
@@ -1772,9 +2017,10 @@ const parsePatch = (patch: string): {oldHunk: string; newHunk: string} | null =>
  *
  * 解析后将每条评论映射到实际的 patch 行号范围：
  * - 如果评论的行号完全在某个 patch 内，直接使用
- * - 如果不在任何 patch 内，映射到重叠最大的 patch（并添加说明）
+ * - 如果与 patch 部分重叠，映射到重叠最大的 patch（并添加说明）
+ * - 如果与任何 patch 都不重叠，丢弃该评论（行号不属于本次 diff，挂到哪里都是错的）
  */
-function parseReview(
+export function parseReview(
   response: string,
   patches: Array<[number, number, string]>,
   debug = false
@@ -1786,6 +2032,9 @@ function parseReview(
 
   const lines = response.split('\n')
   const lineNumberRangeRegex = /(?:^|\s)(\d+)-(\d+):\s*$/
+  // 模型偶尔把分隔符和下一条的行号写在同一行（`---1-4:`）：既不匹配行号正则，也不等于
+  // 分隔符，会连同后面整条意见一起被拼进上一条评论的正文
+  const gluedSeparatorRangeRegex = /^\s*-{3}\s*(\d+)-(\d+):\s*$/
   const commentSeparator = '---'
 
   let currentStartLine: number | null = null
@@ -1828,17 +2077,26 @@ function parseReview(
       // 如果评论不在任何 patch 内，映射到最佳匹配的 patch
       if (!withinPatch) {
         if (bestPatchStartLine !== -1 && bestPatchEndLine !== -1) {
-          review.comment = `> Note: This review was outside of the patch, so it was mapped to the patch with the greatest overlap. Original lines [${review.startLine}-${review.endLine}]
+          // 说明放在严重级别标签行后面：标签必须保持首个非空行，否则 extractSeverityTags
+          // 认不出，标签原样露在正文里
+          const {tagLine, rest} = splitLeadingSeverityTag(review.comment)
+          review.comment = `${
+            tagLine == null ? '' : `${tagLine}\n`
+          }> Note: This review was outside of the patch, so it was mapped to the patch with the greatest overlap. Original lines [${
+            review.startLine
+          }-${review.endLine}]
 
-${review.comment}`
+${rest}`
           review.startLine = bestPatchStartLine
           review.endLine = bestPatchEndLine
         } else {
-          review.comment = `> Note: This review was outside of the patch, but no patch was found that overlapped with it. Original lines [${review.startLine}-${review.endLine}]
-
-${review.comment}`
-          review.startLine = patches[0][0]
-          review.endLine = patches[0][1]
+          // 与当前文件任何 patch 都不重叠：多半是模型对 diff 之外的代码（跨文件上下文里的
+          // 其他文件、本文件未改动的部分）提的意见，行号属于别的位置。硬挂到当前文件会
+          // 落在错误的文件和行上，也让按位置去重失效，所以直接丢弃，只在日志里留痕
+          getLogger().info(
+            `Dropped comment for line range ${review.startLine}-${review.endLine}: no overlapping patch in this file`
+          )
+          return
         }
       }
 
@@ -1898,7 +2156,8 @@ ${review.comment}`
 
   // 逐行解析 AI 响应
   for (const line of lines) {
-    const lineNumberRangeMatch = line.match(lineNumberRangeRegex)
+    const lineNumberRangeMatch =
+      line.match(lineNumberRangeRegex) ?? line.match(gluedSeparatorRangeRegex)
 
     if (lineNumberRangeMatch != null) {
       // 遇到新的行号范围标记，保存之前的评论并开始新评论

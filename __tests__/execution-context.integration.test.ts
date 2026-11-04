@@ -38,6 +38,8 @@ const coreState = {
 // maxFiles/token 预算判断全部失效（体现为"一个文件都不处理"）。
 const NUMERIC_INPUT_DEFAULTS: Record<string, string> = {
   max_files: '0',
+  warn_files: '50',
+  initial_pr_summary_only: 'true',
   openai_model_temperature: '0.0',
   openai_retries: '3',
   openai_timeout_ms: '120000',

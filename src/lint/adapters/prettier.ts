@@ -11,10 +11,30 @@
  *   2+ → 配置错误或其他失败
  */
 
-import {info} from '../../actions-log'
+import {info, warning} from '../../actions-log'
 import {ensureToolInstalled} from '../tool-installer'
 import {type InstallSpec, type LintResult, type ToolAdapter, type ToolDetection} from '../types'
 import {extractVersion, runCommand} from './exec'
+
+// eslint-disable-next-line no-control-regex
+const ANSI_ESCAPE = /\u001b\[[0-9;?]*[ -/]*[@-~]/g
+
+/**
+ * 解析 `prettier --check` 的输出，返回不符合格式的文件名。
+ * Prettier 把文件名输出到 stderr，每行一个："[warn] src/foo.ts"
+ * （末尾还有一行 "[warn] Code style issues found ..."，需要排除）。
+ */
+export function parsePrettierCheckOutput(stdout: string, stderr: string): string[] {
+  const unformatted: string[] = []
+  const combined = `${stderr}\n${stdout}`.replace(ANSI_ESCAPE, '')
+  for (const rawLine of combined.split('\n')) {
+    const m = rawLine.match(/^\[warn\]\s+(.+\S)\s*$/)
+    if (m != null && !m[1].startsWith('Code style issues')) {
+      unformatted.push(m[1])
+    }
+  }
+  return unformatted
+}
 
 export class PrettierAdapter implements ToolAdapter {
   readonly name = 'prettier'
@@ -97,7 +117,11 @@ export class PrettierAdapter implements ToolAdapter {
     const result = await runCommand({
       command: this.resolvedBinPath,
       args: ['--check', '--no-error-on-unmatched-pattern', ...files],
-      cwd: repoRoot
+      cwd: repoRoot,
+      // CI 环境（CI / GITHUB_ACTIONS）下 Prettier 会给 "warn" 上色，输出变成
+      // "[\u001b[33mwarn\u001b[39m] src/foo.ts"，字面量 "[warn]" 匹配不上，
+      // 结果是永远 0 发现。这里同时关掉颜色，并在解析前剥离 ANSI 作为兜底。
+      env: {NO_COLOR: '1', FORCE_COLOR: '0'}
     })
 
     if (result.spawnError) {
@@ -105,15 +129,13 @@ export class PrettierAdapter implements ToolAdapter {
       return []
     }
 
-    // Prettier 把不符合格式的文件名输出到 stderr，每行一个：
-    // "[warn] src/foo.ts"
-    const unformatted: string[] = []
-    const combined = `${result.stderr}\n${result.stdout}`
-    for (const rawLine of combined.split('\n')) {
-      const m = rawLine.match(/^\[warn\]\s+(.+\S)\s*$/)
-      if (m != null && !m[1].startsWith('Code style issues')) {
-        unformatted.push(m[1])
-      }
+    const unformatted = parsePrettierCheckOutput(result.stdout, result.stderr)
+    if (unformatted.length === 0 && result.exitCode === 1 && !result.timedOut) {
+      // --check 以 1 退出表示有文件不符合格式；解析不到文件名说明输出格式变了，不能静默当成无问题
+      warning(
+        'lint/prettier: exit code 1 but no unformatted file could be parsed from the output; ' +
+          'the output format may have changed'
+      )
     }
 
     return unformatted.map<LintResult>(file => ({

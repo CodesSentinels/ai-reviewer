@@ -22,6 +22,7 @@ import type {BotConfig, ConfigProvider, PromptConfig} from './config-provider'
 import {CONFIG_DEFAULTS, ConfigError, validateFloatStr, validateIntStr} from './config-provider'
 import type {Platform} from './execution-context'
 import {Options} from '../options'
+import {configuredBotGitLabLogin} from './gitlab-client'
 
 /** 从环境变量读取字符串，未设置或空则返回 undefined */
 function envStr(key: string): string | undefined {
@@ -132,7 +133,8 @@ export class GitLabConfigProvider implements ConfigProvider {
       envIntStr('AI_REVIEWER_OPENAI_RETRIES', CONFIG_DEFAULTS.openaiRetries),
       envIntStr('AI_REVIEWER_OPENAI_TIMEOUT_MS', CONFIG_DEFAULTS.openaiTimeoutMS),
       envIntStr('AI_REVIEWER_OPENAI_CONCURRENCY_LIMIT', CONFIG_DEFAULTS.openaiConcurrencyLimit),
-      envIntStr('AI_REVIEWER_GITHUB_CONCURRENCY_LIMIT', CONFIG_DEFAULTS.githubConcurrencyLimit),
+      // 平台 API 并发上限：GitLab 侧用本平台的变量名（Options 字段名沿用历史命名）
+      envIntStr('AI_REVIEWER_GITLAB_CONCURRENCY_LIMIT', CONFIG_DEFAULTS.githubConcurrencyLimit),
       envStr('AI_REVIEWER_OPENAI_BASE_URL') ?? CONFIG_DEFAULTS.apiBaseUrl,
       envStr('AI_REVIEWER_LANGUAGE') ?? CONFIG_DEFAULTS.language,
       envBool('AI_REVIEWER_ENABLE_DEPENDENCY_ANALYSIS') ?? CONFIG_DEFAULTS.enableDependencyAnalysis,
@@ -152,10 +154,13 @@ export class GitLabConfigProvider implements ConfigProvider {
       ),
       envStr('AI_REVIEWER_BOT_ICON') ?? CONFIG_DEFAULTS.botIcon,
       envStr('AI_REVIEWER_BOT_NAME') ?? CONFIG_DEFAULTS.botName,
-      envStr('AI_REVIEWER_BOT_GITLAB_LOGIN') ?? '',
+      configuredBotGitLabLogin(),
       // SEC-002 的双 job 方案目前只落在 GitHub；GitLab 侧 trigger 强制关闭 lint
       // （CFG-002），没有产出报告的低权限 lint job，因此这里固定为空。
-      ''
+      '',
+      envIntStr('AI_REVIEWER_WARN_FILES', CONFIG_DEFAULTS.warnFiles),
+      envBool('AI_REVIEWER_INITIAL_PR_SUMMARY_ONLY') ?? CONFIG_DEFAULTS.initialPrSummaryOnly,
+      envMultiline('AI_REVIEWER_PATH_INSTRUCTIONS') ?? []
     )
 
     return this.cachedOptions
@@ -179,7 +184,7 @@ export class GitLabConfigProvider implements ConfigProvider {
     this.cachedBotConfig = {
       icon: envStr('AI_REVIEWER_BOT_ICON') ?? CONFIG_DEFAULTS.botIcon,
       name: envStr('AI_REVIEWER_BOT_NAME') ?? CONFIG_DEFAULTS.botName,
-      platformLogin: envStr('AI_REVIEWER_BOT_GITLAB_LOGIN') ?? ''
+      platformLogin: configuredBotGitLabLogin()
     }
 
     return this.cachedBotConfig
@@ -205,17 +210,23 @@ export class GitLabConfigProvider implements ConfigProvider {
     log(`  disable_review: ${opts.disableReview}`)
     log(`  disable_release_notes: ${opts.disableReleaseNotes}`)
     log(`  max_files: ${opts.maxFiles}`)
+    log(`  warn_files: ${opts.warnFiles}`)
+    log(`  initial_pr_summary_only: ${opts.initialPrSummaryOnly}`)
     log(`  review_simple_changes: ${opts.reviewSimpleChanges}`)
     log(`  review_comment_lgtm: ${opts.reviewCommentLGTM}`)
     log(`  path_filters: ${opts.pathFilters}`)
-    log(`  system_message: ${opts.systemMessage}`)
+    log(`  path_instructions: ${opts.pathInstructions}`)
+    // 只标注是否自定义，不打印原文：默认 prompt 面向双平台书写，原文进 job 日志没有排障价值
+    log(
+      `  system_message: ${envStr('AI_REVIEWER_SYSTEM_MESSAGE') != null ? '(custom)' : '(default)'}`
+    )
     log(`  openai_light_model: ${opts.openaiLightModel}`)
     log(`  openai_heavy_model: ${opts.openaiHeavyModel}`)
     log(`  openai_model_temperature: ${opts.openaiModelTemperature}`)
     log(`  openai_retries: ${opts.openaiRetries}`)
     log(`  openai_timeout_ms: ${opts.openaiTimeoutMS}`)
     log(`  openai_concurrency_limit: ${opts.openaiConcurrencyLimit}`)
-    log(`  github_concurrency_limit: ${opts.githubConcurrencyLimit}`)
+    log(`  gitlab_concurrency_limit: ${opts.githubConcurrencyLimit}`)
     log(`  summary_token_limits: ${opts.lightTokenLimits.string()}`)
     log(`  review_token_limits: ${opts.heavyTokenLimits.string()}`)
     log(`  api_base_url: ${opts.apiBaseUrl}`)

@@ -140,6 +140,8 @@ describe('main.ts run() — 改造前事件分发行为基线', () => {
     // 数值字段必须返回有效字符串，否则 validateIntStr/validateFloatStr 会 fail closed
     const numericDefaults: Record<string, string> = {
       max_files: '150',
+      warn_files: '50',
+      initial_pr_summary_only: 'true',
       max_review_comments: '20',
       openai_retries: '5',
       openai_timeout_ms: '360000',

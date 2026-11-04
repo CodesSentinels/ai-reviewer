@@ -33,6 +33,7 @@ const PLACEHOLDER = {
   url: '<repo-url>',
   id: '<id>',
   login: '<login>',
+  changeRequest: '<cr>',
   writeMarker: ''
 }
 
@@ -73,6 +74,10 @@ export function normalizeForComparison(text: string, options: NormalizeOptions =
     // 独立出现：前后都不是标识符字符，且后面不是冒号（那是 marker 命名空间）
     out = out.replace(new RegExp(`(^|[^\\w@/-])${esc}(?![\\w:/-])`, 'g'), `$1${PLACEHOLDER.login}`)
   }
+
+  // 4b) 变更请求的叫法：GitHub 叫 PR、GitLab 叫 MR，属于契约允许的平台 UI 用词差异。
+  //     只换独立出现的词；`PR/MR` 这种已兼顾两平台的写法两边本来就一样，不动。
+  out = out.replace(/(^|[^A-Za-z/])(?:PR|MR)(?![A-Za-z/])/g, `$1${PLACEHOLDER.changeRequest}`)
 
   // 5) 40 位 commit SHA 与其 7 位短写
   out = out.replace(/\b[0-9a-f]{40}\b/g, PLACEHOLDER.id)

@@ -38,4 +38,25 @@ export class GitLabLogger implements Logger {
       console.log(`[DEBUG] ${redactForLog(msg)}`)
     }
   }
+
+  /**
+   * GitLab job log 的可折叠分段：
+   * https://docs.gitlab.com/ci/jobs/job_logs/#custom-collapsible-sections
+   * section 头会显示该段耗时；默认折叠，展开即可看到段内全部日志。
+   */
+  startSection(id: string, title: string): void {
+    // eslint-disable-next-line no-console
+    console.log(
+      `\x1b[0Ksection_start:${unixNow()}:${id}[collapsed=true]\r\x1b[0K${redactForLog(title)}`
+    )
+  }
+
+  endSection(id: string): void {
+    // eslint-disable-next-line no-console
+    console.log(`\x1b[0Ksection_end:${unixNow()}:${id}\r\x1b[0K`)
+  }
+}
+
+function unixNow(): number {
+  return Math.floor(Date.now() / 1000)
 }

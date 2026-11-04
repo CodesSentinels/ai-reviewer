@@ -41,8 +41,10 @@ export async function dispatchEvent(deps: {
   prompts: Prompts
   logger: Logger
   createBots: () => {lightBot: Bot; heavyBot: Bot} | null
+  /** 审查无法进行时让整个 job 失败（红色）；缺省时只记录日志 */
+  onFailed?: (msg: string) => void
 }): Promise<void> {
-  const {execCtx, options, prompts, logger, createBots} = deps
+  const {execCtx, options, prompts, logger, createBots, onFailed} = deps
 
   if (
     execCtx.eventKind === 'pr_opened' ||
@@ -70,7 +72,17 @@ export async function dispatchEvent(deps: {
     }
 
     const bots = createBots()
-    if (bots == null) return
+    if (bots == null) {
+      // 模型客户端建不起来（最常见的原因：OPENAI_API_KEY 没配置或为空）。
+      // 此前只在日志里写一条 warning 就以成功退出，maintainer 在 PR 页面看到绿色 ✓，
+      // 根本不知道这次根本没审查。必须让 job 失败，错误信息要能直接指出该查什么。
+      onFailed?.(
+        'Review not performed: cannot create the OpenAI clients. ' +
+          'Check that the OPENAI_API_KEY secret is configured and not empty ' +
+          '(for pull_request events from forks, secrets are not available).'
+      )
+      return
+    }
     await codeReview(execCtx, bots.lightBot, bots.heavyBot, options, prompts)
   } else if (
     execCtx.eventKind === 'comment_created' ||
@@ -151,7 +163,13 @@ export async function runOrchestrator(deps: OrchestratorDeps): Promise<void> {
 
   // 4. 构建提示词
   const promptConfig = configProvider.getPromptConfig()
-  const prompts = new Prompts(promptConfig.summarize, promptConfig.summarizeReleaseNotes)
+  // 提示词里的调查步骤按实际可用工具生成（GitLab trigger 强制关闭 shell，CFG-002）
+  const prompts = new Prompts(promptConfig.summarize, promptConfig.summarizeReleaseNotes, {
+    shell: options.enableShell,
+    webSearch: options.enableWebSearch,
+    // 与 bot-factory 一致：shell 不可用时审查模型拿到只读代码探查工具
+    codeTools: !options.enableShell
+  })
 
   // 5. 事件分发
   try {
@@ -160,7 +178,8 @@ export async function runOrchestrator(deps: OrchestratorDeps): Promise<void> {
       options,
       prompts,
       logger,
-      createBots: () => createBots(options)
+      createBots: () => createBots(options),
+      onFailed
     })
   } catch (e: any) {
     if (e instanceof Error) {

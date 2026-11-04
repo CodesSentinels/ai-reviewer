@@ -13,6 +13,7 @@
  * 实现评论的幂等性操作（查找并替换已有评论，而非重复创建）
  */
 import {getPlatform} from './platform/git-platform'
+import {dedupeAgainstExisting} from './comment-dedupe'
 import {getLogger} from './platform/logger'
 import {buildStateMarker} from './platform/state-namespace'
 import {getExecCtx, getRepoCoords} from './platform/run-context'
@@ -63,10 +64,38 @@ export function initBotGreeting(icon: string, name: string, botLogin = ''): void
   _commentGreeting = `${icon}   ${name}`
   _configuredBotLogin = botLogin.trim()
   _resolvedBotLogin = undefined
+  _identitySource = 'none'
 }
 
 /** 解析结果缓存：undefined = 还没查过，null = 查不到 */
 let _resolvedBotLogin: string | null | undefined
+
+/** 身份的来源，仅用于日志和「是否允许被写入响应纠正」 */
+type IdentitySource = 'config' | 'api' | 'learned' | 'none'
+let _identitySource: IdentitySource = 'none'
+
+/**
+ * 评论作者与 bot 身份是不是同一个登录名。
+ *
+ * GitHub 把 App / Actions 机器人的登录名报成 `name[bot]`，而「我是谁」的来源（配置、
+ * `GET /user`、回退值）常常不带这个后缀——`GITHUB_TOKEN` 调不了 `GET /user`，只能
+ * 回退成 `github-actions`，与真实作者 `github-actions[bot]` 精确比较永远不相等，
+ * 机器人就把自己的评论当成「别人的引用回复」，摘要无法原地更新、只能新发一条。
+ *
+ * 规则（不对称，避免放宽过头）：
+ * - 精确相等（不区分大小写）→ 同一个
+ * - 作者带 `[bot]` 后缀、身份不带 → 去掉作者的后缀再比。GitHub 用户名不可能含方括号，
+ *   所以带 `[bot]` 本身就证明作者是机器人，不会把同名真人当成自己
+ * - 其余（包括作者不带后缀而身份带）一律不相等
+ */
+export function sameLogin(author: string, botLogin: string): boolean {
+  const a = author.trim().toLowerCase()
+  const b = botLogin.trim().toLowerCase()
+  if (a === '' || b === '') return false
+  if (a === b) return true
+  const suffix = '[bot]'
+  return a.endsWith(suffix) && !b.endsWith(suffix) && a.slice(0, -suffix.length) === b
+}
 
 /**
  * 本次运行的 bot 登录名（REVIEW-008 / STATE-008）。
@@ -85,6 +114,7 @@ async function resolveBotLogin(): Promise<string | null> {
   if (_resolvedBotLogin !== undefined) return _resolvedBotLogin
   if (_configuredBotLogin !== '') {
     _resolvedBotLogin = _configuredBotLogin
+    _identitySource = 'config'
     return _resolvedBotLogin
   }
   try {
@@ -94,22 +124,116 @@ async function resolveBotLogin(): Promise<string | null> {
     // 这里显式判类型，两种情况都 fail closed。
     const trimmed = typeof login === 'string' ? login.trim() : ''
     _resolvedBotLogin = trimmed === '' ? null : trimmed
+    _identitySource = trimmed === '' ? 'none' : 'api'
+    getLogger().info(
+      `Bot identity: ${_resolvedBotLogin ?? '(unknown)'} (source: ${
+        _identitySource === 'api' ? 'platform lookup' : 'none'
+      })`
+    )
   } catch (e) {
     getLogger().warning(
       `Failed to resolve bot identity: ${String(e)} — comment ownership checks will fail closed`
     )
     _resolvedBotLogin = null
+    _identitySource = 'none'
   }
   return _resolvedBotLogin
+}
+
+/**
+ * 用自己刚写成功的评论的作者纠正身份。
+ *
+ * 写响应里的作者就是当前 token 实际使用的账号，比任何推测都可靠：`GITHUB_TOKEN` /
+ * App 安装令牌调不了 `GET /user`，平台层只能给一个回退值，换成 App 令牌后回退值
+ * 与真实账号（`<app>[bot]`）对不上。显式配置的身份不被覆盖。
+ */
+function learnBotLoginFromOwnWrite(author: string | undefined): void {
+  // 配置值优先；此时可能还没走到 resolveBotLogin，所以看配置本身而不是 _identitySource
+  if (_configuredBotLogin !== '') return
+  const real = (author ?? '').trim()
+  if (real === '') return
+  // 身份查不到（null）时保持 fail closed：不因为一次写入就放开对既有评论的更新/删除。
+  // 这里只纠正「查到了、但与真实账号对不上」的情况。
+  if (_resolvedBotLogin == null) return
+  if (sameLogin(real, _resolvedBotLogin)) return
+  getLogger().info(
+    `Bot identity corrected from own write: ${_resolvedBotLogin ?? '(unknown)'} -> ${real}`
+  )
+  _resolvedBotLogin = real
+  _identitySource = 'learned'
+}
+
+/**
+ * 本 reviewer 以前用过的 bot 账号（换过 token、bot 账号随之变化时配置）。
+ *
+ * Project / Group Access Token 每新建一个就对应一个新的 bot 账号。换号后，已有
+ * MR 上的摘要和行级评论都出自旧账号；只认当前账号的话，新 bot 认不出这些状态：
+ * 增量审查起点丢失（退化成全量审查）、已有问题被重复评论、摘要多出一条。
+ *
+ * 旧账号只做**只读认领**：读取它留下的状态、用它去重、把它当作「自己」不回复，
+ * 但不更新、不删除它的评论——新身份改不了别人的评论，也不该去删。写操作只认
+ * 当前身份，见 isCurrentAuthor。
+ */
+let _previousBotLogins: string[] = []
+
+/** 设置以前用过的 bot 账号（由入口在运行前调用；不受 initBotGreeting 重置） */
+export function setPreviousBotLogins(logins: string[]): void {
+  _previousBotLogins = logins.map(l => l.trim().toLowerCase()).filter(l => l !== '')
+}
+
+function isPreviousBotLogin(author: string): boolean {
+  return _previousBotLogins.some(previous => sameLogin(author, previous))
 }
 
 /** 仅供测试重置身份缓存 */
 export function _resetBotIdentity(): void {
   _configuredBotLogin = ''
   _resolvedBotLogin = undefined
+  _identitySource = 'none'
+  _previousBotLogins = []
 }
 
 /** 行级评论的位置键，用于把「待清理的旧评论」和「这次要发的新评论」对上 */
+/** 已有评论的位置字段（listReviewComments 映射后的形状） */
+interface CommentLocation {
+  line?: number | null
+  // eslint-disable-next-line camelcase
+  start_line?: number | null
+}
+
+/**
+ * 位置完全一致：有起始行的评论要求起止行都相同；只有锚点行的评论要求新评论
+ * 也是同一单行。这是替换（删除）旧评论时使用的严格口径。
+ */
+export function isExactCommentLocation(
+  existing: CommentLocation,
+  startLine: number,
+  endLine: number
+): boolean {
+  if (existing.start_line != null) {
+    return existing.start_line === startLine && existing.line === endLine
+  }
+  return startLine === endLine && existing.line === endLine
+}
+
+/**
+ * 同一位置（去重口径）：在「位置完全一致」之外，只有锚点行的旧评论，锚点落在
+ * 新评论的行范围内也算同一处。
+ *
+ * GitLab 行级评论只保存一个锚点行（不保留起始行），GitHub 单行评论同样没有
+ * 起始行；而模型给出的新评论通常是一个行范围，且两轮审查对同一问题选取的范围
+ * 会略有不同。只认精确匹配时这类评论永远去重不掉——full review 会把整套评论
+ * 再发一遍。
+ */
+export function isSameCommentLocation(
+  existing: CommentLocation,
+  startLine: number,
+  endLine: number
+): boolean {
+  if (existing.start_line != null) return isExactCommentLocation(existing, startLine, endLine)
+  return existing.line != null && existing.line >= startLine && existing.line <= endLine
+}
+
 function commentKey(c: {path: string; startLine: number; endLine: number}): string {
   return `${c.path}:${c.startLine}-${c.endLine}`
 }
@@ -136,21 +260,41 @@ export interface ReviewCommentBuffer {
   message: string
 }
 
-/** 这条评论是不是我们自己发的（身份未知时返回 null，表示无法判断） */
+/**
+ * 这条评论是不是**当前身份**发的（身份未知时返回 null，表示无法判断）。
+ * 写操作（更新、删除）只能以它为准。
+ */
 function isOwnComment(comment: {user?: {login?: string}}, botLogin: string | null): boolean | null {
   if (botLogin == null) return null
   const author = (comment.user?.login ?? '').trim()
   if (author === '') return null
-  return author.toLowerCase() === botLogin.toLowerCase()
+  return sameLogin(author, botLogin)
+}
+
+/** 这条评论是不是本 reviewer 发的：当前身份，或以前用过的 bot 账号 */
+function isClaimedComment(
+  comment: {user?: {login?: string}},
+  botLogin: string | null
+): boolean | null {
+  const author = (comment.user?.login ?? '').trim()
+  if (author !== '' && isPreviousBotLogin(author)) return true
+  return isOwnComment(comment, botLogin)
 }
 
 /**
- * 按作者判断某条评论是否出自本 reviewer（REVIEW-012/013）。
+ * 按作者判断某条评论是否出自本 reviewer（REVIEW-012/013），以前用过的 bot 账号
+ * 也算（只读认领，见 setPreviousBotLogins）。
  *
- * 供 commenter 之外的去重逻辑复用（如 review.ts 的 full review 覆盖范围计算）。
+ * 供读取状态、去重、自评论过滤使用。要更新或删除评论时用 isCurrentAuthor。
  * 返回 null 表示「判断不了」——调用方必须自己决定保守方向，不要当成 false。
  */
 export async function isOwnAuthor(author: string | undefined | null): Promise<boolean | null> {
+  const botLogin = await resolveBotLogin()
+  return isClaimedComment({user: {login: author ?? undefined}}, botLogin)
+}
+
+/** 某条评论是否出自**当前**身份（可以更新、删除的评论）。null 表示判断不了 */
+export async function isCurrentAuthor(author: string | undefined | null): Promise<boolean | null> {
   const botLogin = await resolveBotLogin()
   return isOwnComment({user: {login: author ?? undefined}}, botLogin)
 }
@@ -513,10 +657,12 @@ ${statusMsg}
         )
       }
       if (existingBotComments.length > 0) {
-        // 检查该位置是否已 resolved
-        const key = `${comment.path}:${comment.endLine}`
-        const isResolved = threadStatusMap?.get(key)
-        if (isResolved !== true) {
+        // 按每条旧评论**自己的**锚点行查 resolved 状态：旧评论只因锚点落在新范围内
+        // 而匹配时，它的锚点与新评论的结束行并不相同。
+        const unresolved = existingBotComments.filter(
+          c => threadStatusMap?.get(`${c.path}:${c.line}`) !== true
+        )
+        if (unresolved.length > 0) {
           logger.info(
             `[submit-dedup] skipping comment for ${comment.path}:${comment.startLine}-${comment.endLine} — existing unresolved bot comment found`
           )
@@ -527,10 +673,53 @@ ${statusMsg}
         // 真正的发布发生在后面的批量/逐条请求里；先删后发的话，一旦平台拒收新
         // 行号（422），旧讨论已经没了，新发现也发不出去——历史和新内容一起丢。
         // 这里只登记，等确认新评论落地后再清理。
-        pendingDeletions.set(
-          commentKey(comment),
-          existingBotComments.map(c => c.id)
+        //
+        // 只取代**位置完全一致**的旧评论。仅锚点落在新范围内的旧评论可能讨论的是
+        // 同一段代码里的另一个问题，删掉就丢了那段历史——保留它，照常发布新发现。
+        // 以前的 bot 账号发的评论只读认领：用来去重，但不删除
+        const replaceable = await Promise.all(
+          existingBotComments.map(async c => (await isCurrentAuthor(c.user?.login)) === true)
         )
+        const replaced = existingBotComments.filter(
+          (c, i) => replaceable[i] && isExactCommentLocation(c, comment.startLine, comment.endLine)
+        )
+        if (replaced.length > 0) {
+          pendingDeletions.set(
+            commentKey(comment),
+            replaced.map(c => c.id)
+          )
+        }
+      }
+
+      // 内容层去重：位置层只认行范围，同一个问题换个范围（旧 5-10、新 1-17）就认不出来，
+      // 会被重复发布。再对照同文件附近未解决的 bot 评论，去掉新评论里已经报告过的部分。
+      const nearby = await this.getUnresolvedBotCommentsNear(
+        pullNumber,
+        comment.path,
+        comment.startLine,
+        comment.endLine,
+        threadStatusMap
+      )
+      if (nearby.length > 0) {
+        const deduped = dedupeAgainstExisting(
+          comment.message,
+          nearby.map(c => c.body as string)
+        )
+        if (deduped.droppedSections + deduped.droppedBullets > 0) {
+          if (deduped.message === '') {
+            logger.info(
+              `[submit-dedup] skipping comment for ${comment.path}:${comment.startLine}-${comment.endLine} — ` +
+                'the same issue is already reported by an unresolved bot comment (content match)'
+            )
+            continue
+          }
+          logger.info(
+            `[submit-dedup] ${comment.path}:${comment.startLine}-${comment.endLine}: removed ` +
+              `${deduped.droppedSections} section(s) and ${deduped.droppedBullets} bullet(s) already reported ` +
+              'by an unresolved bot comment (content match)'
+          )
+          comment.message = deduped.message
+        }
       }
       commentsToSubmit.push(comment)
     }
@@ -778,17 +967,43 @@ ${commentReplyTag()}
     )
   }
 
-  /** 获取精确匹配指定行号范围的 review comment */
+  /**
+   * 同文件、行范围附近的未解决 bot 评论（只认确认是自己发的）。
+   * 范围放宽到前后各 NEARBY_LINES 行：同一问题两轮审查选取的范围常常对不上，
+   * 真正判定“是不是同一问题”靠内容（见 comment-dedupe.ts），这里只负责缩小候选。
+   */
+  async getUnresolvedBotCommentsNear(
+    pullNumber: number,
+    path: string,
+    startLine: number,
+    endLine: number,
+    threadStatusMap?: Map<string, boolean>
+  ) {
+    const NEARBY_LINES = 20
+    const all = await this.listReviewComments(pullNumber)
+    const candidates = all.filter((c: any) => {
+      if (c.path !== path || !c.body || !bodyHasMarker(c.body, 'comment')) return false
+      if (c.in_reply_to_id) return false
+      if (threadStatusMap?.get(`${c.path}:${c.line}`) === true) return false
+      const cEnd = c.line ?? c.original_line
+      if (cEnd == null) return false
+      const cStart = c.start_line ?? cEnd
+      return cEnd >= startLine - NEARBY_LINES && cStart <= endLine + NEARBY_LINES
+    })
+    const own = await Promise.all(
+      candidates.map(async (c: any) => await isOwnAuthor(c.user?.login))
+    )
+    return candidates.filter((_c: any, i: number) => own[i] === true)
+  }
+
+  /** 获取与指定行号范围处于同一位置的 review comment（判定见 isSameCommentLocation） */
   async getCommentsAtRange(pullNumber: number, path: string, startLine: number, endLine: number) {
     const comments = await this.listReviewComments(pullNumber)
     return comments.filter(
       (comment: any) =>
         comment.path === path &&
         comment.body !== '' &&
-        ((comment.start_line !== undefined &&
-          comment.start_line === startLine &&
-          comment.line === endLine) ||
-          (startLine === endLine && comment.line === endLine))
+        isSameCommentLocation(comment, startLine, endLine)
     )
   }
 
@@ -948,6 +1163,7 @@ ${chain}
   async create(body: string, target: number): Promise<boolean> {
     try {
       const result = await getPlatform().createComment(repo.owner, repo.repo, target, body)
+      learnBotLoginFromOwnWrite(result.author)
       const data = {
         id: result.id,
         body: result.body,
@@ -999,12 +1215,40 @@ ${chain}
       }
 
       const ownComments = taggedComments.filter((cmt: any) => isOwnComment(cmt, botLogin) === true)
-      const foreignCount = taggedComments.length - ownComments.length
+      // 以前的 bot 账号留下的同类评论改不了，保留原样，由当前身份新发一条
+      const previousCount = taggedComments.filter(
+        (cmt: any) => isOwnComment(cmt, botLogin) !== true && isClaimedComment(cmt, botLogin)
+      ).length
+      if (previousCount > 0) {
+        logger.info(
+          `Leaving ${previousCount} comment(s) with tag ${tag} from a previous bot account untouched`
+        )
+      }
+      const foreignCount = taggedComments.length - ownComments.length - previousCount
       if (foreignCount > 0) {
         logger.info(
           `Ignoring ${foreignCount} comment(s) carrying tag ${tag} but authored by someone else ` +
             '(likely a quoted reply)'
         )
+        // 用户的引用回复是真人账号；机器人账号携带我们的 marker 却被判成别人，
+        // 几乎一定是身份对不上（旧版本会因此悄悄多发一条摘要），必须显眼地报出来
+        const botAuthors = taggedComments
+          .filter(
+            (cmt: any) =>
+              isOwnComment(cmt, botLogin) !== true &&
+              !isClaimedComment(cmt, botLogin) &&
+              (cmt.user?.type === 'Bot' || String(cmt.user?.login ?? '').endsWith('[bot]'))
+          )
+          .map((cmt: any) => String(cmt.user?.login ?? ''))
+        if (botAuthors.length > 0) {
+          logger.warning(
+            `Bot account(s) ${[...new Set(botAuthors)].join(
+              ', '
+            )} authored comment(s) carrying tag ` +
+              `${tag} but do not match the resolved bot identity "${botLogin}". ` +
+              "If these are this reviewer's own comments, set the bot login in configuration."
+          )
+        }
       }
 
       if (ownComments.length > 0) {
@@ -1045,13 +1289,13 @@ ${chain}
         )
         return null
       }
-      for (const cmt of comments) {
-        if (!cmt.body || !variants.some(v => cmt.body.includes(v))) continue
-        if (isOwnComment(cmt, botLogin) !== true) continue
-        return cmt
-      }
-
-      return null
+      const tagged = comments.filter(
+        (cmt: any) => cmt.body && variants.some(v => cmt.body.includes(v))
+      )
+      // 当前身份的优先：换号后新旧摘要并存，旧摘要里的状态已经过时
+      const current = tagged.find((cmt: any) => isOwnComment(cmt, botLogin) === true)
+      if (current != null) return current
+      return tagged.find((cmt: any) => isClaimedComment(cmt, botLogin) === true) ?? null
     } catch (e: unknown) {
       getLogger().warning(`Failed to find comment with tag: ${e}`)
       return null
@@ -1138,13 +1382,22 @@ ${chain}
   }
 
   /**
-   * 从 commit 列表中找到最近一次已审查的 commit ID
-   * 从后向前遍历，返回第一个匹配的已审查 commit
+   * 找到最近一次审查时的 HEAD，作为增量 diff 的起点
+   *
+   * 已审查列表由 addReviewedCommitId 按审查顺序追加，末尾就是上一次审查的 HEAD。
+   * 从末尾往前找第一个仍在当前 PR/MR 中的 SHA：force push / rebase 改写掉的
+   * 旧 HEAD 会被跳过，退回到更早一次仍有效的审查点；都无效时返回空串（调用方
+   * 退回 base 全量审查）。
+   *
+   * 不能按 commitIds 的顺序找：平台返回的顺序不一致（GitHub 从旧到新，GitLab
+   * 从新到旧），按列表末尾倒推在 GitLab 上会选中**最早**审过的提交，增量范围
+   * 退回到很久以前。
    */
   getHighestReviewedCommitId(commitIds: string[], reviewedCommitIds: string[]): string {
-    for (let i = commitIds.length - 1; i >= 0; i--) {
-      if (reviewedCommitIds.includes(commitIds[i])) {
-        return commitIds[i]
+    const inChangeRequest = new Set(commitIds)
+    for (let i = reviewedCommitIds.length - 1; i >= 0; i--) {
+      if (inChangeRequest.has(reviewedCommitIds[i])) {
+        return reviewedCommitIds[i]
       }
     }
     return ''

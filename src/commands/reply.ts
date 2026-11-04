@@ -12,6 +12,7 @@
  * - success/error 若收到 ackId 则 updateComment，否则 createComment
  * - error 文案带错误码，便于日志与用户排查
  */
+import type {Platform} from '../platform/execution-context'
 import {getCommentGreeting} from '../commenter'
 import {redactForLog} from '../redact'
 import {getPlatform} from '../platform/git-platform'
@@ -38,6 +39,8 @@ export interface ReplyContext {
   commandName: string
   /** 事件类型：当为 pull_request_review_comment 时回复到 thread */
   eventName?: 'issue_comment' | 'pull_request_review_comment'
+  /** 运行平台：决定错误文案里的权限 / 配置说法（缺省按 GitHub 口径） */
+  platform?: Platform
 }
 
 /** 组装幂等 tag（带平台命名空间，用于写入） */
@@ -61,29 +64,34 @@ export function cmdReplyTagVariants(originalCommentId: number, commandName: stri
 }
 
 /** 错误码 → 用户可读文案 */
-export function formatErrorMessage(code: ErrorCode, detail?: string): string {
-  const base = ERROR_MESSAGES[code] ?? '命令执行出错'
+export function formatErrorMessage(code: ErrorCode, detail?: string, platform?: Platform): string {
+  const base =
+    (platform === 'gitlab' ? GITLAB_ERROR_MESSAGES[code] : undefined) ??
+    ERROR_MESSAGES[code] ??
+    '命令执行出错'
   return detail ? `${base}\n\n详情: ${detail}` : base
 }
 
 const ERROR_MESSAGES: Record<ErrorCode, string> = {
   UNKNOWN_COMMAND: '❓ **未知命令**。发送 `@ai-reviewer help` 查看支持的命令列表。',
   INVALID_ARGS: '⚠️ **参数不合法**。命令参数仅接受字母、数字以及 `._-/:=` 字符。',
-  FORBIDDEN: '🚫 **权限不足**。执行该命令需要仓库 `write` 及以上权限。',
+  // 不写死具体等级：各命令的最低权限不同（help=read、configuration=triage、其余=write），
+  // 具体要求由调用方放进 detail。
+  FORBIDDEN: '🚫 **权限不足**。你的仓库权限不足以执行该命令。',
   BOT_FORBIDDEN:
     '🚫 **Bot 权限不足**。请检查 workflow `permissions` 配置（pull-requests: write / contents: read）。',
   NOT_IMPLEMENTED: '🚧 **命令暂未实现**。该命令已在路线图中，等待实现。',
-  // CMD-029：不能给出「N 条 / M 秒」这种配额承诺。
-  //
-  // 桶只活在单个 Node 进程里，而 GitHub comment 与 GitLab note 通常是一条事件一
-  // 个新进程——用户连发 10 条评论会起 10 个进程，每个桶都是空的，谁也限不住。
-  // 说成「同一用户 60 秒内最多 10 条」，用户照着数就会发现根本对不上。
-  //
-  // 它也不负责重复投递——那在 dispatcher 里先被幂等检查拦下了（CMD-030）。
-  // 所以文案只说作用范围，不说场景，也不给数字。
-  RATE_LIMITED: '⏱️ **请求过于频繁**。本次运行中检测到过多命令请求，请稍后再试。',
+  // 限流按平台上的评论记录判断（同一用户 60 秒内 @ bot 的评论最多 10 条，超出的被拒）。
+  RATE_LIMITED: '⏱️ **请求过于频繁**。同一用户 60 秒内最多发送 10 条命令，请稍后再试。',
   DUPLICATE: 'ℹ️ **命令已处理**（重复事件已去重）。',
   INTERNAL: '💥 **命令执行失败**。错误已记录，请联系维护者。'
+}
+
+/** GitLab 上说法不同的错误文案（其余沿用 ERROR_MESSAGES） */
+const GITLAB_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = {
+  FORBIDDEN: '🚫 **权限不足**。你在本项目的角色不足以执行该命令。',
+  BOT_FORBIDDEN:
+    '🚫 **Bot 权限不足**。请检查 bot 所用 token 的 scope（需要 `api`）及其在本项目的角色（Developer 及以上）。'
 }
 
 /**
@@ -125,7 +133,9 @@ export class Reply implements IReply {
   }
 
   async error(code: ErrorCode, detail?: string, ackId?: number | null): Promise<void> {
-    const body = this.wrap(`${formatErrorMessage(code, detail)}\n\n\`错误码: ${code}\``)
+    const body = this.wrap(
+      `${formatErrorMessage(code, detail, this.ctx.platform)}\n\n\`错误码: ${code}\``
+    )
     await this.publish(body, ackId)
     getLogger().info(`command error [${code}] ${detail ?? ''}`)
   }

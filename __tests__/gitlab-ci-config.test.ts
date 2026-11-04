@@ -89,8 +89,10 @@ describe('CI-004/CI-008: 两个 job 之间没有 artifact 依赖', () => {
     expect(job(TRIGGER).dependencies).toEqual([])
   })
 
-  test('mr_verify 的 artifact 设了过期时间（只用于本次验证，不长期保留）', () => {
-    expect(job(MR_VERIFY).artifacts?.expire_in).toBeDefined()
+  test('mr_verify 不长期保留产物：不声明 artifacts，或声明时必须设过期时间', () => {
+    // 不可信面不产生产物最安全；若将来确需产物，必须设置短过期时间
+    const artifacts = job(MR_VERIFY).artifacts
+    if (artifacts != null) expect(artifacts.expire_in).toBeDefined()
   })
 })
 
