@@ -15,8 +15,8 @@
 ## 工作方式
 
 ```
-GitHub develop 有新提交
-  └─► publish-gitlab-com.yml：构建 → 组装 → Commits API 提交到本仓库 develop
+GitHub develop / main 有新提交
+  └─► publish-gitlab-com.yml：构建 → 组装 → Commits API 提交到本仓库同名分支
 
 测试项目 Webhook（Merge request events + Comments）
   └─► Pipeline Trigger API（本仓库默认分支）→ ai_review_trigger → 在测试项目 MR 上评论
