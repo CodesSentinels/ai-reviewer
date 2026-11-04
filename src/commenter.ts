@@ -64,10 +64,38 @@ export function initBotGreeting(icon: string, name: string, botLogin = ''): void
   _commentGreeting = `${icon}   ${name}`
   _configuredBotLogin = botLogin.trim()
   _resolvedBotLogin = undefined
+  _identitySource = 'none'
 }
 
 /** 解析结果缓存：undefined = 还没查过，null = 查不到 */
 let _resolvedBotLogin: string | null | undefined
+
+/** 身份的来源，仅用于日志和「是否允许被写入响应纠正」 */
+type IdentitySource = 'config' | 'api' | 'learned' | 'none'
+let _identitySource: IdentitySource = 'none'
+
+/**
+ * 评论作者与 bot 身份是不是同一个登录名。
+ *
+ * GitHub 把 App / Actions 机器人的登录名报成 `name[bot]`，而「我是谁」的来源（配置、
+ * `GET /user`、回退值）常常不带这个后缀——`GITHUB_TOKEN` 调不了 `GET /user`，只能
+ * 回退成 `github-actions`，与真实作者 `github-actions[bot]` 精确比较永远不相等，
+ * 机器人就把自己的评论当成「别人的引用回复」，摘要无法原地更新、只能新发一条。
+ *
+ * 规则（不对称，避免放宽过头）：
+ * - 精确相等（不区分大小写）→ 同一个
+ * - 作者带 `[bot]` 后缀、身份不带 → 去掉作者的后缀再比。GitHub 用户名不可能含方括号，
+ *   所以带 `[bot]` 本身就证明作者是机器人，不会把同名真人当成自己
+ * - 其余（包括作者不带后缀而身份带）一律不相等
+ */
+export function sameLogin(author: string, botLogin: string): boolean {
+  const a = author.trim().toLowerCase()
+  const b = botLogin.trim().toLowerCase()
+  if (a === '' || b === '') return false
+  if (a === b) return true
+  const suffix = '[bot]'
+  return a.endsWith(suffix) && !b.endsWith(suffix) && a.slice(0, -suffix.length) === b
+}
 
 /**
  * 本次运行的 bot 登录名（REVIEW-008 / STATE-008）。
@@ -86,6 +114,7 @@ async function resolveBotLogin(): Promise<string | null> {
   if (_resolvedBotLogin !== undefined) return _resolvedBotLogin
   if (_configuredBotLogin !== '') {
     _resolvedBotLogin = _configuredBotLogin
+    _identitySource = 'config'
     return _resolvedBotLogin
   }
   try {
@@ -95,13 +124,43 @@ async function resolveBotLogin(): Promise<string | null> {
     // 这里显式判类型，两种情况都 fail closed。
     const trimmed = typeof login === 'string' ? login.trim() : ''
     _resolvedBotLogin = trimmed === '' ? null : trimmed
+    _identitySource = trimmed === '' ? 'none' : 'api'
+    getLogger().info(
+      `Bot identity: ${_resolvedBotLogin ?? '(unknown)'} (source: ${
+        _identitySource === 'api' ? 'platform lookup' : 'none'
+      })`
+    )
   } catch (e) {
     getLogger().warning(
       `Failed to resolve bot identity: ${String(e)} — comment ownership checks will fail closed`
     )
     _resolvedBotLogin = null
+    _identitySource = 'none'
   }
   return _resolvedBotLogin
+}
+
+/**
+ * 用自己刚写成功的评论的作者纠正身份。
+ *
+ * 写响应里的作者就是当前 token 实际使用的账号，比任何推测都可靠：`GITHUB_TOKEN` /
+ * App 安装令牌调不了 `GET /user`，平台层只能给一个回退值，换成 App 令牌后回退值
+ * 与真实账号（`<app>[bot]`）对不上。显式配置的身份不被覆盖。
+ */
+function learnBotLoginFromOwnWrite(author: string | undefined): void {
+  // 配置值优先；此时可能还没走到 resolveBotLogin，所以看配置本身而不是 _identitySource
+  if (_configuredBotLogin !== '') return
+  const real = (author ?? '').trim()
+  if (real === '') return
+  // 身份查不到（null）时保持 fail closed：不因为一次写入就放开对既有评论的更新/删除。
+  // 这里只纠正「查到了、但与真实账号对不上」的情况。
+  if (_resolvedBotLogin == null) return
+  if (sameLogin(real, _resolvedBotLogin)) return
+  getLogger().info(
+    `Bot identity corrected from own write: ${_resolvedBotLogin ?? '(unknown)'} -> ${real}`
+  )
+  _resolvedBotLogin = real
+  _identitySource = 'learned'
 }
 
 /**
@@ -123,13 +182,14 @@ export function setPreviousBotLogins(logins: string[]): void {
 }
 
 function isPreviousBotLogin(author: string): boolean {
-  return _previousBotLogins.includes(author.toLowerCase())
+  return _previousBotLogins.some(previous => sameLogin(author, previous))
 }
 
 /** 仅供测试重置身份缓存 */
 export function _resetBotIdentity(): void {
   _configuredBotLogin = ''
   _resolvedBotLogin = undefined
+  _identitySource = 'none'
   _previousBotLogins = []
 }
 
@@ -208,7 +268,7 @@ function isOwnComment(comment: {user?: {login?: string}}, botLogin: string | nul
   if (botLogin == null) return null
   const author = (comment.user?.login ?? '').trim()
   if (author === '') return null
-  return author.toLowerCase() === botLogin.toLowerCase()
+  return sameLogin(author, botLogin)
 }
 
 /** 这条评论是不是本 reviewer 发的：当前身份，或以前用过的 bot 账号 */
@@ -1103,6 +1163,7 @@ ${chain}
   async create(body: string, target: number): Promise<boolean> {
     try {
       const result = await getPlatform().createComment(repo.owner, repo.repo, target, body)
+      learnBotLoginFromOwnWrite(result.author)
       const data = {
         id: result.id,
         body: result.body,
@@ -1169,6 +1230,25 @@ ${chain}
           `Ignoring ${foreignCount} comment(s) carrying tag ${tag} but authored by someone else ` +
             '(likely a quoted reply)'
         )
+        // 用户的引用回复是真人账号；机器人账号携带我们的 marker 却被判成别人，
+        // 几乎一定是身份对不上（旧版本会因此悄悄多发一条摘要），必须显眼地报出来
+        const botAuthors = taggedComments
+          .filter(
+            (cmt: any) =>
+              isOwnComment(cmt, botLogin) !== true &&
+              !isClaimedComment(cmt, botLogin) &&
+              (cmt.user?.type === 'Bot' || String(cmt.user?.login ?? '').endsWith('[bot]'))
+          )
+          .map((cmt: any) => String(cmt.user?.login ?? ''))
+        if (botAuthors.length > 0) {
+          logger.warning(
+            `Bot account(s) ${[...new Set(botAuthors)].join(
+              ', '
+            )} authored comment(s) carrying tag ` +
+              `${tag} but do not match the resolved bot identity "${botLogin}". ` +
+              "If these are this reviewer's own comments, set the bot login in configuration."
+          )
+        }
       }
 
       if (ownComments.length > 0) {
