@@ -839,6 +839,20 @@ describe('Cross-platform config consistency', () => {
 
 // ======================== CFG-003: Semgrep Version Tests ========================
 
+describe('enable_lint_tools 默认关闭', () => {
+  test('CONFIG_DEFAULTS、Options 构造默认值与 action.yml 声明一致且为 false', () => {
+    const fs = require('fs') as typeof import('fs')
+    const path = require('path') as typeof import('path')
+    const {Options} = require('../src/options') as typeof import('../src/options')
+    const actionYml = fs.readFileSync(path.join(__dirname, '..', 'action.yml'), 'utf8')
+    const block = /\n {2}enable_lint_tools:\n[\s\S]*?\n {4}default: '(\w+)'/.exec(actionYml)
+
+    expect(CONFIG_DEFAULTS.enableLintTools).toBe(false)
+    expect(new Options(false, false, false).enableLintTools).toBe(false)
+    expect(block?.[1]).toBe('false')
+  })
+})
+
 describe('CFG-003: Semgrep version alignment', () => {
   beforeEach(() => {
     cleanEnvVars()

@@ -113,7 +113,7 @@ export class Options {
     maxDependencyFiles = '50',
     enableWebSearch = true,
     enableShell = true,
-    enableLintTools = true,
+    enableLintTools = false,
     toolEnableOverrides: Record<string, boolean> = {},
     toolVersionOverrides: Record<string, string> = {},
     semgrepConfig = 'p/default',

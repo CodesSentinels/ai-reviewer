@@ -52212,7 +52212,7 @@ disregarding minor issues.`,
     maxDependencyFiles: '50',
     enableWebSearch: true,
     enableShell: true,
-    enableLintTools: true,
+    enableLintTools: false,
     semgrepVersion: '^1.95.0',
     semgrepConfig: 'p/default',
     commandAckReaction: 'rocket',
@@ -54430,7 +54430,7 @@ class Options {
      * 未设置时由 review.ts 按平台决定（GitLab 开，因为每次写入都会再触发一条 pipeline）。
      */
     minimizeBotWrites;
-    constructor(debug, disableReview, disableReleaseNotes, maxFiles = '0', reviewSimpleChanges = false, reviewCommentLGTM = false, pathFilters = null, systemMessage = '', openaiLightModel = 'gpt-5.4-nano', openaiHeavyModel = 'gpt-5.4-mini', openaiModelTemperature = '0.0', openaiRetries = '3', openaiTimeoutMS = '120000', openaiConcurrencyLimit = '6', githubConcurrencyLimit = '6', apiBaseUrl = 'https://api.openai.com/v1', language = 'en-US', enableDependencyAnalysis = true, maxDependencyFiles = '50', enableWebSearch = true, enableShell = true, enableLintTools = true, toolEnableOverrides = {}, toolVersionOverrides = {}, semgrepConfig = 'p/default', commandAckReaction = 'eyes', maxReviewComments = '20', debugResolveInjectFailures = '0', botIcon = '🤖', botName = 'AI Reviewer', botLogin = '', lintReportPath = '', warnFiles = '50', initialPrSummaryOnly = true, pathInstructions = null) {
+    constructor(debug, disableReview, disableReleaseNotes, maxFiles = '0', reviewSimpleChanges = false, reviewCommentLGTM = false, pathFilters = null, systemMessage = '', openaiLightModel = 'gpt-5.4-nano', openaiHeavyModel = 'gpt-5.4-mini', openaiModelTemperature = '0.0', openaiRetries = '3', openaiTimeoutMS = '120000', openaiConcurrencyLimit = '6', githubConcurrencyLimit = '6', apiBaseUrl = 'https://api.openai.com/v1', language = 'en-US', enableDependencyAnalysis = true, maxDependencyFiles = '50', enableWebSearch = true, enableShell = true, enableLintTools = false, toolEnableOverrides = {}, toolVersionOverrides = {}, semgrepConfig = 'p/default', commandAckReaction = 'eyes', maxReviewComments = '20', debugResolveInjectFailures = '0', botIcon = '🤖', botName = 'AI Reviewer', botLogin = '', lintReportPath = '', warnFiles = '50', initialPrSummaryOnly = true, pathInstructions = null) {
         this.debug = debug;
         this.disableReview = disableReview;
         this.disableReleaseNotes = disableReleaseNotes;

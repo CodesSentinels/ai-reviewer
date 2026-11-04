@@ -89,7 +89,7 @@ Array [
     "type": "boolean",
   },
   Object {
-    "default": "true",
+    "default": "false",
     "name": "enable_lint_tools",
     "required": false,
     "sensitive": false,
