@@ -369,89 +369,35 @@ describe('SEC-002/004/005: 双执行面的分工与产物流向', () => {
   })
 })
 
-describe('SYNC-001~009: sync-to-gitlab.yml 加固', () => {
-  const wf = workflows.find(w => w.name === 'sync-to-gitlab.yml') as Workflow
-
-  test('存在 sync-to-gitlab.yml', () => {
-    expect(wf).toBeDefined()
+describe('sync-to-gitlab.yml 已删除', () => {
+  // 原来把 main 的源码强推到 gitlab.com；现在 develop 和 main 都由 publish-gitlab-com.yml 以产物方式发布，
+  // 不能再有任何 workflow 把源码整体镜像过去（否则会和产物式发布互相覆盖）。
+  test('不再存在 sync-to-gitlab.yml', () => {
+    expect(workflows.find(w => w.name === 'sync-to-gitlab.yml')).toBeUndefined()
   })
 
-  test('SYNC-003：配置了 concurrency，且按目标分支分组', () => {
-    expect(wf.doc.concurrency).toBeDefined()
-    expect(wf.doc.concurrency.group).toContain('github.event.inputs.branch')
-    expect(wf.doc.concurrency.group).toContain('github.ref_name')
-  })
-
-  test('SYNC-002/008：workflow_dispatch 的 branch 输入前有白名单校验 step', () => {
-    for (const [, job] of jobsOf(wf.doc)) {
-      const steps = stepsOf(job)
-      const validateIdx = steps.findIndex((s: any) => /allowlist/i.test(s.name ?? ''))
-      expect(validateIdx).toBeGreaterThanOrEqual(0)
-
-      const validateScript = String(steps[validateIdx].run ?? '')
-      // develop 不再走这个 workflow（由 publish-gitlab-com.yml 以产物方式发布），白名单只剩 main
-      expect(validateScript).toMatch(/\bmain\)/)
-      expect(validateScript).not.toMatch(/develop/)
-
-      // 校验必须排在 checkout/push 之前，不能形同虚设
-      const checkoutIdx = steps.findIndex((s: any) =>
-        String(s.uses ?? '').startsWith('actions/checkout')
-      )
-      expect(checkoutIdx).toBeGreaterThan(validateIdx)
+  test('没有任何 workflow 对 GitLab 做 git push', () => {
+    for (const w of workflows) {
+      expect({name: w.name, pushes: /git push gitlab/.test(codeOf(w.raw))}).toEqual({
+        name: w.name,
+        pushes: false
+      })
     }
-  })
-
-  test('SYNC-004：push 之后存在一个回读 GitLab HEAD 并比对 SHA 的 step', () => {
-    for (const [, job] of jobsOf(wf.doc)) {
-      const steps = stepsOf(job)
-      const pushIdx = steps.findIndex((s: any) => String(s.run ?? '').includes('git push gitlab'))
-      const verifyIdx = steps.findIndex((s: any) =>
-        String(s.run ?? '').includes('repository/branches')
-      )
-      expect(pushIdx).toBeGreaterThanOrEqual(0)
-      expect(verifyIdx).toBeGreaterThan(pushIdx)
-      expect(String(steps[verifyIdx].run)).toContain('LOCAL_SHA')
-    }
-  })
-
-  test('SYNC-002：目标仓库 URL 是固定字面量，不是变量插值', () => {
-    expect(codeOf(wf.raw)).toContain('gitlab.com/CodesSentinels/ai-reviewer.git')
-    expect(codeOf(wf.raw)).not.toMatch(/gitlab\.com\/\$\{/)
-  })
-
-  test('SYNC-005/006：sync-to-gitlab.yml 只有一个 job，内部没有 needs（file 内没有可失败的依赖链）', () => {
-    const jobs = jobsOf(wf.doc)
-    expect(jobs).toHaveLength(1)
-    for (const [, job] of jobs) {
-      expect(job.needs).toBeUndefined()
-    }
-  })
-
-  test('SYNC-005/006：sync-to-gitlab.yml 与 openai-review.yml 互不跨文件触发（无 workflow_run 指向对方）', () => {
-    const reviewWf = workflows.find(w => w.name === 'openai-review.yml') as Workflow
-    expect(triggersOf(wf.doc).workflow_run).toBeUndefined()
-    expect(triggersOf(reviewWf.doc).workflow_run).toBeUndefined()
-  })
-
-  test('SYNC-008：自动触发（on.push）只监听 main，不含 tag；develop 交给 publish-gitlab-com.yml', () => {
-    const pushTrigger = wf.doc.on?.push ?? wf.doc[true as unknown as string]?.push
-    expect(pushTrigger.branches).toEqual(['main'])
-    expect(pushTrigger.tags).toBeUndefined()
   })
 })
 
-describe('publish-gitlab-com.yml：develop 以产物方式发布到 gitlab.com', () => {
+describe('publish-gitlab-com.yml：develop 和 main 以产物方式发布到 gitlab.com', () => {
   const wf = workflows.find(w => w.name === 'publish-gitlab-com.yml') as Workflow
 
-  test('存在 publish-gitlab-com.yml，且只监听 develop，不含 tag', () => {
+  test('存在 publish-gitlab-com.yml，监听 develop 和 main，不含 tag', () => {
     expect(wf).toBeDefined()
     const pushTrigger = wf.doc.on?.push ?? wf.doc[true as unknown as string]?.push
-    expect(pushTrigger.branches).toEqual(['develop'])
+    expect(pushTrigger.branches).toEqual(['develop', 'main'])
     expect(pushTrigger.tags).toBeUndefined()
   })
 
-  test('发布串行，且不取消进行中的发布', () => {
-    expect(wf.doc.concurrency.group).toBe('publish-gitlab-com')
+  test('发布按目标分支串行，且不取消进行中的发布', () => {
+    expect(wf.doc.concurrency.group).toBe('publish-gitlab-com-${{ github.ref_name }}')
     expect(wf.doc.concurrency['cancel-in-progress']).toBe(false)
   })
 
@@ -469,7 +415,10 @@ describe('publish-gitlab-com.yml：develop 以产物方式发布到 gitlab.com',
     expect(validateIdx).toBeGreaterThanOrEqual(0)
     expect(checkoutIdx).toBeGreaterThan(validateIdx)
     expect(firstTokenIdx).toBeGreaterThan(checkoutIdx)
-    expect(String(steps[validateIdx].run)).toMatch(/!= "develop"/)
+    // 白名单恰好是 develop 和 main，其余分支一律拒绝
+    const validateScript = String(steps[validateIdx].run)
+    expect(validateScript).toMatch(/develop\|main\)/)
+    expect(validateScript).toMatch(/REFUSED/)
   })
 
   test('追加提交，不 force push；目标是固定字面量', () => {
@@ -478,7 +427,8 @@ describe('publish-gitlab-com.yml：develop 以产物方式发布到 gitlab.com',
     expect(code).not.toMatch(/git push/)
     expect(code).toMatch(/PRIVATE_GITLAB_URL: https:\/\/gitlab\.com/)
     expect(code).toMatch(/PRIVATE_GITLAB_PROJECT: CodesSentinels\/ai-reviewer/)
-    expect(code).toMatch(/PRIVATE_GITLAB_BRANCH: develop/)
+    // 目标分支跟随触发分支（develop → develop，main → main），不写死
+    expect(code).toMatch(/PRIVATE_GITLAB_BRANCH: \$\{\{ github\.ref_name \}\}/)
   })
 
   test('GITLAB_TOKEN 只出现在「发布」和「回读校验」两个步骤，且只放 env', () => {
@@ -553,7 +503,7 @@ describe('publish-gitlab-com.yml：develop 以产物方式发布到 gitlab.com',
 
     test('验证的是从 gitlab.com 下载的 SHA256SUMS，并限定仓库、签名 workflow、提交与托管 runner', () => {
       const verify = String(steps()[idx(/gh attestation verify/)].run)
-      expect(verify).toMatch(/repository\/files\/SHA256SUMS\/raw\?ref=develop/)
+      expect(verify).toMatch(/repository\/files\/SHA256SUMS\/raw\?ref=\$\{REF_NAME\}/)
       expect(verify).toMatch(/--repo "\$\{GITHUB_REPOSITORY\}"/)
       expect(verify).toMatch(/--signer-workflow .*publish-gitlab-com\.yml/)
       expect(verify).toMatch(/--source-digest "\$\{GITHUB_SHA\}"/)
