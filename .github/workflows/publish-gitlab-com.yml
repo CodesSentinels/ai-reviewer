@@ -1,12 +1,15 @@
 name: Publish to gitlab.com
 
-# GitHub develop 每次有新提交，就构建 GitLab 审查 bundle，并作为「产物」整体提交到
-# gitlab.com/CodesSentinels/ai-reviewer 的 develop。gitlab.com 上不再有源码，只有 bundle、
+# GitHub develop / main 每次有新提交，就构建 GitLab 审查 bundle，并作为「产物」整体提交到
+# gitlab.com/CodesSentinels/ai-reviewer 的同名分支（develop → develop，main → main）。
+# gitlab.com 上不再有源码，只有 bundle、
 # CI 模板、VERSION.json 和 SHA256SUMS（与私有云产物仓库同一套布局，见
 # scripts/publish-private-gitlab.mjs 的 --profile gitlab-com）。
 #
-# 用 Commits API 追加提交，不 force push：gitlab.com 的 develop 是保护分支，不允许 force push，
-# 旧的整体镜像（sync-to-gitlab.yml）因此自 10-16 起一直失败。sync-to-gitlab.yml 现在只管 main。
+# 用 Commits API 追加提交，不 force push：gitlab.com 的分支是保护分支，不允许 force push。
+# 原来的整体镜像（sync-to-gitlab.yml，把 main 的源码强推过去）已删除：gitlab.com 两个分支的行为一致，都只有产物。
+# main 首次以产物方式发布时，目标分支还没有 SHA256SUMS，按「首次发布」处理，
+# 在一个提交里把旧的源码文件换成产物，之后都是增量。
 #
 # 本 workflow 只读 GitHub 代码，推送目标是 GitLab（用 GITLAB_TOKEN），不需要任何 GitHub 写权限。
 permissions:
@@ -16,12 +19,14 @@ on:
   push:
     branches:
       - develop
+      - main
   workflow_dispatch:
 
 # 同一时刻只发布一次：发布器会在提交前确认目标分支没被移动，并发会让后到的那次失败。
 # 不取消进行中的发布（半途取消只会留下一次白跑），GitHub 只保留最新的一个排队项。
+# 按目标分支分组：develop 和 main 的发布互不排队。
 concurrency:
-  group: publish-gitlab-com
+  group: publish-gitlab-com-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -33,16 +38,18 @@ jobs:
       id-token: write # 向 Sigstore 申请签名用的短期证书
       attestations: write # 写入 attestation
     steps:
-      # workflow_dispatch 可以选任意分支运行；不校验的话，任何分支都能被当作 develop 发布出去。
+      # workflow_dispatch 可以选任意分支运行；不校验的话，任何分支都能被当作 develop / main 发布出去。
       # 放在 checkout 和拿到 GITLAB_TOKEN 之前。
-      - name: Validate ref is develop
+      - name: Validate ref is develop or main
         env:
           REF_NAME: ${{ github.ref_name }}
         run: |
-          if [ "$REF_NAME" != "develop" ]; then
-            echo "REFUSED: '$REF_NAME' is not develop" >&2
-            exit 1
-          fi
+          case "$REF_NAME" in
+            develop|main) echo "ok: $REF_NAME is in publish allowlist" ;;
+            *)
+              echo "REFUSED: '$REF_NAME' is not develop or main" >&2
+              exit 1 ;;
+          esac
 
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -66,7 +73,7 @@ jobs:
         env:
           PRIVATE_GITLAB_URL: https://gitlab.com
           PRIVATE_GITLAB_PROJECT: CodesSentinels/ai-reviewer
-          PRIVATE_GITLAB_BRANCH: develop
+          PRIVATE_GITLAB_BRANCH: ${{ github.ref_name }}
           PRIVATE_GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
         run: node scripts/publish-private-gitlab.mjs --profile gitlab-com --skip-tests
 
@@ -84,15 +91,16 @@ jobs:
       - name: Verify gitlab.com received this revision
         env:
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           RECORDED=$(curl -sf --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
-            "https://gitlab.com/api/v4/projects/CodesSentinels%2Fai-reviewer/repository/files/VERSION.json/raw?ref=develop" \
+            "https://gitlab.com/api/v4/projects/CodesSentinels%2Fai-reviewer/repository/files/VERSION.json/raw?ref=${REF_NAME}" \
             | jq -r '.revision')
           if [ "$RECORDED" != "$GITHUB_SHA" ]; then
-            echo "PUBLISH FAILED: gitlab.com develop records revision $RECORDED, expected $GITHUB_SHA" >&2
+            echo "PUBLISH FAILED: gitlab.com ${REF_NAME} records revision $RECORDED, expected $GITHUB_SHA" >&2
             exit 1
           fi
-          echo "OK: gitlab.com develop records revision $GITHUB_SHA"
+          echo "OK: gitlab.com ${REF_NAME} records revision $GITHUB_SHA"
 
       # 下载 gitlab.com 上实际提供的 SHA256SUMS（不是本地那份），验证它确实由本仓库的本 workflow
       # 在本次提交上、于 GitHub 托管的 runner 上构建。SHA256SUMS 在 gitlab.com 上被改过就会验证失败。
@@ -100,9 +108,10 @@ jobs:
         env:
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
           GH_TOKEN: ${{ github.token }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           curl -sf --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
-            "https://gitlab.com/api/v4/projects/CodesSentinels%2Fai-reviewer/repository/files/SHA256SUMS/raw?ref=develop" \
+            "https://gitlab.com/api/v4/projects/CodesSentinels%2Fai-reviewer/repository/files/SHA256SUMS/raw?ref=${REF_NAME}" \
             -o "${RUNNER_TEMP}/SHA256SUMS"
           gh attestation verify "${RUNNER_TEMP}/SHA256SUMS" \
             --repo "${GITHUB_REPOSITORY}" \

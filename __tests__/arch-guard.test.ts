@@ -584,7 +584,7 @@ describe('GH-015: 平台状态 marker 不跨平台读写', () => {
 describe('SYNC-009: GitLab 运行代码不得读取同步 Token', () => {
   const allFiles = collectTsFiles(SRC)
 
-  // GITLAB_TOKEN 是 .github/workflows/sync-to-gitlab.yml 专用的、持有 GitLab
+  // GITLAB_TOKEN 是 .github/workflows/publish-gitlab-com.yml 专用的、持有 GitLab
   // 写权限的同步凭据，只应存在于 GitHub Actions secret 里；GitLab-only 运行时
   // 用的是完全不同的 GITLAB_PAT/CI_JOB_TOKEN（见 gitlab-trigger.ts
   // resolveGitLabCredential()）。src/ 里任何地方出现 GITLAB_TOKEN 字符串，
