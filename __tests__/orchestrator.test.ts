@@ -23,7 +23,16 @@ jest.mock('../src/command-handler', () => ({
   handleCommentEvent: jest.fn<() => Promise<void>>().mockResolvedValue(undefined)
 }))
 
+jest.mock('../src/repo-config', () => ({
+  loadRepoConfig: jest.fn<() => Promise<unknown>>().mockResolvedValue(null)
+}))
+jest.mock('../src/platform/git-platform', () => ({
+  ...jest.requireActual<object>('../src/platform/git-platform'),
+  getPlatform: () => ({})
+}))
+
 import {handleExecCtxError, dispatchEvent, runOrchestrator} from '../src/platform/orchestrator'
+import {loadRepoConfig} from '../src/repo-config'
 import {codeReview} from '../src/review'
 import {handleCommentEvent} from '../src/command-handler'
 import {ConfigError} from '../src/platform/config-provider'
@@ -272,5 +281,62 @@ describe('runOrchestrator（ARCH-025）', () => {
     })
     expect(onFailed).not.toHaveBeenCalled()
     expect(codeReview).toHaveBeenCalledTimes(1)
+  })
+
+  describe('仓库配置（issue #231）', () => {
+    function deps(applyRepoConfig: jest.Mock, createBots: jest.Mock): any {
+      return {
+        configProvider: {
+          platform: 'github',
+          getOptions: () =>
+            ({botIcon: 'x', botName: 'y', commandAckReaction: '', applyRepoConfig} as any),
+          getPromptConfig: () => ({summarize: '', summarizeReleaseNotes: ''}),
+          getBotConfig: () => ({icon: '', name: '', platformLogin: ''}),
+          print: () => {}
+        },
+        createExecCtx: () => mockExecCtx('pr_opened'),
+        logger: mockLogger(),
+        onFailed: jest.fn(),
+        createBots
+      }
+    }
+
+    test('读到仓库配置 → 在创建 Bot 之前叠加到 Options', async () => {
+      const cfg = {language: 'zh-CN'}
+      ;(loadRepoConfig as any).mockResolvedValueOnce(cfg)
+      const apply = jest.fn()
+      const createBots = jest.fn(() => ({lightBot: {} as any, heavyBot: {} as any}))
+
+      await runOrchestrator(deps(apply, createBots))
+
+      expect(apply).toHaveBeenCalledWith(cfg)
+      expect(apply.mock.invocationCallOrder[0]).toBeLessThan(createBots.mock.invocationCallOrder[0])
+      expect(codeReview).toHaveBeenCalledTimes(1)
+    })
+
+    test('没有仓库配置 → 不叠加，照常审查', async () => {
+      const apply = jest.fn()
+      await runOrchestrator(
+        deps(
+          apply,
+          jest.fn(() => ({lightBot: {} as any, heavyBot: {} as any}))
+        )
+      )
+      expect(apply).not.toHaveBeenCalled()
+      expect(codeReview).toHaveBeenCalledTimes(1)
+    })
+
+    test('读取抛错 → warning 并回退基线，审查不受影响', async () => {
+      ;(loadRepoConfig as any).mockRejectedValueOnce(new Error('boom'))
+      const d = deps(
+        jest.fn(),
+        jest.fn(() => ({lightBot: {} as any, heavyBot: {} as any}))
+      )
+      await runOrchestrator(d)
+
+      expect(d.logger.warning).toHaveBeenCalledWith(expect.stringContaining('repo-config: skipped'))
+      expect(d.onFailed).not.toHaveBeenCalled()
+      expect(codeReview).toHaveBeenCalledTimes(1)
+    })
   })
 })

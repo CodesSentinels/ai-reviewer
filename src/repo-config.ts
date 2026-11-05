@@ -1,0 +1,392 @@
+/**
+ * repo-config.ts - 仓库级配置 `.ai-reviewer.yml`（issue #231）
+ *
+ * 分层：基线（CONFIG_DEFAULTS）→ 仓库配置。仓库层只接受下面五项，其余一律忽略并 warning：
+ * - version（可省略）
+ * - exclude / rules：追加到基线之后。exclude 只能排除，排除规则命中即排除，
+ *   所以仓库无法把基线已排除的文件重新纳入，也不存在「包含规则悄悄收窄范围」的陷阱
+ * - profile：语言 / 领域白名单枚举，对应我们自己维护的提示词片段
+ * - project_context：自然语言的项目背景，是数据不是指令，经 scrubber 后包进系统消息；
+ *   system_message 没有整体替换的入口
+ *
+ * 安全：文件只从目标分支（base）读取，绝不读 PR head——pull_request_target 持有
+ * 密钥，head 内容由 PR 作者控制。读取失败、格式错误、超限一律回退基线，不让审查失败。
+ *
+ * 本文件不依赖 @actions/core，两个平台共用。
+ */
+
+import {CORE_SCHEMA, load} from 'js-yaml'
+import type {RepoConfig} from './repo-config-merge'
+import {describeFindings, hasUserVisibleFindings, scrubUserText} from './prompt-guard'
+import {allowedProfileValues, normalizeProfileValues, type ProfileKind} from './prompt-profile'
+import type {ExecutionContext} from './platform/execution-context'
+import type {IGitPlatform} from './platform/git-platform'
+import {repoCoordsOf} from './platform/run-context'
+
+export const REPO_CONFIG_PATH = '.ai-reviewer.yml'
+export const REPO_CONFIG_MAX_BYTES = 64 * 1024
+/** project_context 的字符数上限；超出部分截断并留提示 */
+export const PROJECT_CONTEXT_MAX_CHARS = 500
+/** 单条 rules 的 instructions 字符数上限（单文件合计上限仍由 PathInstructions 控制） */
+export const PATH_INSTRUCTION_MAX_CHARS = 1000
+
+export type {RepoConfig}
+
+export interface ParsedRepoConfig {
+  config: RepoConfig
+  warnings: string[]
+}
+
+/** 改名前的字段名 → 新名字（这些字段从未发布，不保留别名） */
+const RENAMED_KEYS: ReadonlyMap<string, string> = new Map([
+  ['system_message_append', 'project_context'],
+  ['path_filters', 'exclude'],
+  ['path_instructions', 'rules']
+])
+
+/** 出现在仓库配置里会被忽略并 warning 的字段：执行面、外发地址、绕过审查或运维项 */
+const FORBIDDEN_KEYS = new Set([
+  // 曾考虑开放的标量：仓库层只接受 exclude / rules / profile / project_context
+  'language',
+  'review_simple_changes',
+  'review_comment_lgtm',
+  'max_files',
+  'max_review_comments',
+  'enable_dependency_analysis',
+  'max_dependency_files',
+  'openai_base_url',
+  'enable_shell',
+  'enable_lint_tools',
+  'enable_eslint',
+  'enable_biome',
+  'enable_tsc',
+  'enable_prettier',
+  'enable_semgrep',
+  'eslint_version',
+  'biome_version',
+  'tsc_version',
+  'prettier_version',
+  'semgrep_version',
+  'semgrep_config',
+  'lint_report_path',
+  'disable_review',
+  'disable_release_notes',
+  'system_message',
+  'summarize',
+  'summarize_release_notes',
+  'openai_light_model',
+  'openai_heavy_model',
+  'openai_model_temperature',
+  'openai_retries',
+  'openai_timeout_ms',
+  'openai_concurrency_limit',
+  'github_concurrency_limit',
+  'enable_web_search',
+  'bot_icon',
+  'bot_name',
+  'bot_github_login',
+  'command_ack_reaction',
+  'warn_files',
+  'initial_pr_summary_only',
+  'debug',
+  'debug_resolve_inject_failures'
+])
+
+/**
+ * 匹配仓库内任何路径的 glob：写进 exclude 会让整个 PR 零审查，而且审查会走「没有可审文件」
+ * 的 Skipped 分支，只有日志、没有评论，维护者之外的人看不出来。这类写法直接拒绝并告警。
+ */
+const MATCH_ALL_GLOBS = new Set(['**', '**/*', '**/**'])
+
+function asStringList(v: unknown, key: string, warnings: string[]): string[] | undefined {
+  if (typeof v === 'string') {
+    return v.split('\n').filter(l => l.trim().length > 0)
+  }
+  if (Array.isArray(v) && v.every(x => typeof x === 'string')) {
+    return (v as string[]).filter(l => l.trim().length > 0)
+  }
+  warnings.push(`${key}: expected a list of strings, ignored`)
+  return undefined
+}
+
+/** 对一段用户自然语言做 scrub：发现写进 warnings，需要打扰用户的写进 notices */
+function scrubField(
+  text: string,
+  source: string,
+  maxLen: number,
+  warnings: string[],
+  notices: string[]
+): string {
+  const {text: clean, findings} = scrubUserText(text, {source, maxLen})
+  const lines = describeFindings(source, findings)
+  warnings.push(...lines)
+  if (hasUserVisibleFindings(findings)) {
+    // 只把真的丢弃 / 截断的发现放进评论，纯净化（去零宽字符等）只写日志
+    notices.push(
+      ...describeFindings(
+        source,
+        findings.filter(f => f.action === 'dropped' || f.action === 'truncated')
+      )
+    )
+  }
+  return clean
+}
+
+function applyProfileKind(
+  kind: ProfileKind,
+  value: unknown,
+  warnings: string[],
+  notices: string[]
+): string[] | undefined {
+  const {accepted, rejected, malformed} = normalizeProfileValues(value, kind)
+  const allowed = allowedProfileValues(kind).join(', ')
+  if (malformed) {
+    warnings.push(`profile.${kind}: expected a list of names (allowed: ${allowed}), ignored`)
+    return undefined
+  }
+  for (const r of rejected) {
+    const msg = `profile.${kind}: "${r.replace(
+      /[`\r\n]+/g,
+      ' '
+    )}" is not supported, ignored (allowed: ${allowed}). Describe it in project_context instead.`
+    warnings.push(msg)
+    notices.push(msg)
+  }
+  return accepted
+}
+
+/**
+ * 解析 `.ai-reviewer.yml` 文本。纯函数：任何问题都落成 warning，绝不抛错。
+ * 整体无法解析（超限、非 YAML、非映射、版本不认识）时返回空配置。
+ */
+export function parseRepoConfig(text: string): ParsedRepoConfig {
+  const warnings: string[] = []
+  const empty: ParsedRepoConfig = {config: {}, warnings}
+
+  if (Buffer.byteLength(text, 'utf8') > REPO_CONFIG_MAX_BYTES) {
+    warnings.push(`${REPO_CONFIG_PATH}: larger than ${REPO_CONFIG_MAX_BYTES} bytes, ignored`)
+    return empty
+  }
+
+  let doc: unknown
+  try {
+    // CORE_SCHEMA：不解析时间戳、二进制等扩展类型，只保留基础类型
+    doc = load(text, {schema: CORE_SCHEMA})
+  } catch (e) {
+    warnings.push(`${REPO_CONFIG_PATH}: invalid YAML, ignored (${(e as Error).message})`)
+    return empty
+  }
+
+  if (doc == null) return empty
+  if (typeof doc !== 'object' || Array.isArray(doc)) {
+    warnings.push(`${REPO_CONFIG_PATH}: top level must be a mapping, ignored`)
+    return empty
+  }
+
+  const raw = doc as Record<string, unknown>
+  if ('version' in raw && raw.version !== 1) {
+    warnings.push(`${REPO_CONFIG_PATH}: unsupported version ${String(raw.version)}, ignored`)
+    return empty
+  }
+
+  const config: RepoConfig = {}
+  const notices: string[] = []
+  for (const [key, value] of Object.entries(raw)) {
+    switch (key) {
+      case 'version':
+        break
+      case 'exclude': {
+        // 仓库层只能收窄，所以只表达「排除什么」。内部仍是 `!glob`，基线那边不用动。
+        // 不接受 `!` 前缀 / 包含规则：包含规则会让审查范围悄悄缩到只剩这些路径
+        const list = asStringList(value, key, warnings)
+        if (list) {
+          const globs: string[] = []
+          for (const item of list) {
+            const glob = item.trim()
+            if (glob.startsWith('!')) {
+              warnings.push(
+                `exclude: "${glob.slice(0, 60)}" must be a plain glob (no "!" prefix), ignored`
+              )
+              continue
+            }
+            if (MATCH_ALL_GLOBS.has(glob.replace(/^\.\//, ''))) {
+              warnings.push(
+                `exclude: "${glob}" matches every file and would skip the whole review, ignored`
+              )
+              continue
+            }
+            globs.push(`!${glob}`)
+          }
+          config.pathFilters = globs
+        }
+        break
+      }
+      case 'rules': {
+        if (!Array.isArray(value)) {
+          warnings.push('rules: expected a list of {paths, instructions}, ignored')
+          break
+        }
+        const lines: string[] = []
+        for (const [i, item] of value.entries()) {
+          const label = `rules[${i}]`
+          if (item == null || typeof item !== 'object' || Array.isArray(item)) {
+            warnings.push(`${label}: expected a mapping with paths and instructions, ignored`)
+            continue
+          }
+          const rule = item as Record<string, unknown>
+          for (const k of Object.keys(rule)) {
+            // 留出扩展空间（例如将来按路径指定 domains），但现在不认的字段要明说
+            if (k !== 'paths' && k !== 'instructions') {
+              warnings.push(`${label}.${k}: unknown field, ignored`)
+            }
+          }
+          const rawPaths =
+            typeof rule.paths === 'string'
+              ? [rule.paths]
+              : Array.isArray(rule.paths) && rule.paths.every(x => typeof x === 'string')
+              ? (rule.paths as string[])
+              : null
+          const paths = (rawPaths ?? []).map(x => x.trim()).filter(Boolean)
+          if (paths.length === 0) {
+            warnings.push(`${label}.paths: expected a glob or a list of globs, rule ignored`)
+            continue
+          }
+          if (typeof rule.instructions !== 'string' || !rule.instructions.trim()) {
+            warnings.push(`${label}.instructions: expected a non-empty string, rule ignored`)
+            continue
+          }
+          const clean = scrubField(
+            rule.instructions,
+            `${label}(${paths[0].slice(0, 40)})`,
+            PATH_INSTRUCTION_MAX_CHARS,
+            warnings,
+            notices
+          )
+          // 整条被 scrubber 丢弃时不留空规则
+          if (!clean) continue
+          for (const glob of paths) {
+            // PathInstructions 以第一个 ": " 切分 glob 与指令
+            if (glob.includes(': ')) {
+              warnings.push(`${label}.paths: "${glob.slice(0, 60)}" must not contain ": ", ignored`)
+              continue
+            }
+            lines.push(`${glob}: ${clean}`)
+          }
+        }
+        config.pathInstructions = lines
+        break
+      }
+      case 'profile': {
+        if (value == null || typeof value !== 'object' || Array.isArray(value)) {
+          warnings.push('profile: expected a mapping with languages / domains, ignored')
+          break
+        }
+        for (const [pk, pv] of Object.entries(value as Record<string, unknown>)) {
+          if (pk === 'languages' || pk === 'domains') {
+            const accepted = applyProfileKind(pk, pv, warnings, notices)
+            if (accepted === undefined) continue
+            if (pk === 'languages') config.profileLanguages = accepted
+            else config.profileDomains = accepted
+          } else {
+            warnings.push(`profile.${pk}: unknown field, ignored`)
+          }
+        }
+        break
+      }
+      case 'project_context':
+        if (typeof value === 'string') {
+          const clean = scrubField(
+            value.trim(),
+            'project_context',
+            PROJECT_CONTEXT_MAX_CHARS,
+            warnings,
+            notices
+          )
+          if (clean) config.projectContext = clean
+        } else {
+          warnings.push(`${key}: expected a string, ignored`)
+        }
+        break
+      default:
+        if (FORBIDDEN_KEYS.has(key)) {
+          warnings.push(`${key}: not allowed in ${REPO_CONFIG_PATH}, ignored`)
+        } else if (RENAMED_KEYS.has(key)) {
+          // 改名前的字段名：专门提示，比笼统的「未知字段」更容易自查
+          warnings.push(`${key}: renamed to ${RENAMED_KEYS.get(key)}, ignored`)
+        } else {
+          warnings.push(`${key}: unknown field, ignored`)
+        }
+    }
+  }
+
+  if (notices.length > 0) config.notices = notices
+  return {config, warnings}
+}
+
+/** 供日志使用：列出仓库层实际生效的字段名（不含值，避免把整段指令刷进日志） */
+export function describeRepoConfig(config: RepoConfig): string[] {
+  const out: string[] = []
+  if (config.pathFilters?.length) out.push(`exclude(+${config.pathFilters.length})`)
+  if (config.pathInstructions?.length) {
+    out.push(`rules(+${config.pathInstructions.length})`)
+  }
+  if (config.projectContext) out.push('project_context')
+  if (config.profileLanguages?.length) {
+    out.push(`profile.languages(${config.profileLanguages.join('/')})`)
+  }
+  if (config.profileDomains?.length) out.push(`profile.domains(${config.profileDomains.join('/')})`)
+  return out
+}
+
+export interface RepoConfigLogger {
+  info(msg: string): void
+  warning(msg: string): void
+}
+
+/**
+ * 读取并解析目标分支上的 `.ai-reviewer.yml`。
+ *
+ * 读取版本：优先 PR/MR 的 base commit SHA（GitLab 是 merge-base），其次目标分支名。
+ * 两者都不是 PR head，PR 作者改不了。两个平台一律经 getChangeRequest 取。
+ *
+ * 返回 null 表示没有可用的仓库配置（文件不存在，或读取失败——后者已 warning）。
+ */
+export async function loadRepoConfig(
+  platform: Pick<IGitPlatform, 'getChangeRequest' | 'getFileContentStrict'>,
+  ctx: ExecutionContext,
+  log: RepoConfigLogger
+): Promise<RepoConfig | null> {
+  let text: string | null
+  try {
+    const {owner, repo} = repoCoordsOf(ctx)
+    // 两个平台走同一条路径：一律经 getChangeRequest 取 base。
+    // 不用 ctx.baseSha：评论事件里它为空，GitLab 的 MR 事件里它是 oldrev 而不是 base。
+    const cr = await platform.getChangeRequest(owner, repo, ctx.changeRequestId)
+    const ref = cr.baseSha || cr.baseRef
+    if (!ref) {
+      log.warning(`repo-config: no base ref for #${ctx.changeRequestId}, using baseline only`)
+      return null
+    }
+    // 严格读取：404 → null；权限不足、限流、5xx 等抛出，由下面的 catch 给 warning，
+    // 不能当成“没有这个文件”而悄悄回退
+    text = await platform.getFileContentStrict(owner, repo, REPO_CONFIG_PATH, ref)
+  } catch (e) {
+    log.warning(
+      `repo-config: could not read ${REPO_CONFIG_PATH} (${
+        (e as Error).message
+      }), using baseline only`
+    )
+    return null
+  }
+
+  if (text == null) {
+    log.info(`repo-config: no ${REPO_CONFIG_PATH} on base branch, using baseline only`)
+    return null
+  }
+
+  const {config, warnings} = parseRepoConfig(text)
+  for (const w of warnings) log.warning(`repo-config: ${w}`)
+  const applied = describeRepoConfig(config)
+  log.info(`repo-config: applied from ${REPO_CONFIG_PATH}: ${applied.join(', ') || '(none)'}`)
+  return config
+}

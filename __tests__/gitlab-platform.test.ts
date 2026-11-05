@@ -372,6 +372,30 @@ describe('GitLabPlatform', () => {
     })
   })
 
+  describe('getFileContentStrict（与 GitHub 语义一致：只有 404 是 null）', () => {
+    test('正常返回内容', async () => {
+      mockRepositoryFiles.show.mockResolvedValue({content: Buffer.from('hi').toString('base64')})
+      expect(await platform.getFileContentStrict('g', 'r', 'a.yml', 'sha1')).toBe('hi')
+      expect(mockRepositoryFiles.show).toHaveBeenCalledWith('g/r', 'a.yml', 'sha1')
+    })
+
+    test('404 → null', async () => {
+      const err = new Error('404')
+      ;(err as any).response = {status: 404}
+      mockRepositoryFiles.show.mockRejectedValue(err)
+      expect(await platform.getFileContentStrict('g', 'r', 'a.yml', 'main')).toBeNull()
+    })
+
+    test('403 → 抛 GitPlatformError', async () => {
+      const err = new Error('403')
+      ;(err as any).response = {status: 403}
+      mockRepositoryFiles.show.mockRejectedValue(err)
+      await expect(platform.getFileContentStrict('g', 'r', 'a.yml', 'main')).rejects.toThrow(
+        GitPlatformError
+      )
+    })
+  })
+
   // ─── listRepositoryTree（DEP-001/004）──────────────────────────────────────
 
   describe('listRepositoryTree', () => {

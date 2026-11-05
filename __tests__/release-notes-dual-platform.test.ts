@@ -574,7 +574,7 @@ describe('REVIEW-020：两侧配置映射', () => {
     delete process.env.AI_REVIEWER_DISABLE_RELEASE_NOTES
   })
 
-  test('GitLab：自定义 summarize_release_notes 提示词可覆盖', () => {
+  test('GitLab：AI_REVIEWER_SUMMARIZE_RELEASE_NOTES 不再生效，仍用基线', () => {
     jest.resetModules()
     process.env.AI_REVIEWER_SUMMARIZE_RELEASE_NOTES = '自定义发布说明提示词'
     process.env.GITLAB_HOST = 'https://gitlab.example.com'
@@ -584,7 +584,8 @@ describe('REVIEW-020：两侧配置映射', () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const {GitLabConfigProvider} = require('../src/platform/gitlab-config-provider')
     const prompt = new GitLabConfigProvider().getPromptConfig()
-    expect(prompt.summarizeReleaseNotes).toBe('自定义发布说明提示词')
+    expect(prompt.summarizeReleaseNotes).not.toBe('自定义发布说明提示词')
+    expect(prompt.summarizeReleaseNotes).toContain('Craft concise release notes')
     delete process.env.AI_REVIEWER_SUMMARIZE_RELEASE_NOTES
   })
 
@@ -595,7 +596,8 @@ describe('REVIEW-020：两侧配置映射', () => {
     const path = require('path')
     const actionYml: string = fs.readFileSync(path.resolve(__dirname, '../action.yml'), 'utf8')
     expect(actionYml).toContain('disable_release_notes')
-    expect(actionYml).toContain('summarize_release_notes')
+    // summarize / summarize_release_notes 已作为基线内置，不再是 action 输入
+    expect(actionYml).not.toContain('summarize_release_notes')
   })
 })
 

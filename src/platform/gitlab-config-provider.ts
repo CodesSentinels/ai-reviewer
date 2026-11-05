@@ -59,13 +59,6 @@ function envFloatStr(key: string, fallback: string): string {
   return validateFloatStr(v, 'gitlab', key)
 }
 
-/** 从环境变量读取多行值（按换行分割） */
-function envMultiline(key: string): string[] | undefined {
-  const v = envStr(key)
-  if (v == null) return undefined
-  return v.split('\n').filter(line => line.trim().length > 0)
-}
-
 /**
  * 受安全强制覆盖保护的字段名称。
  * 即使 CI variable 显式设为 true，也会被强制覆盖为 false。
@@ -125,8 +118,9 @@ export class GitLabConfigProvider implements ConfigProvider {
       envIntStr('AI_REVIEWER_MAX_FILES', CONFIG_DEFAULTS.maxFiles),
       envBool('AI_REVIEWER_REVIEW_SIMPLE_CHANGES') ?? CONFIG_DEFAULTS.reviewSimpleChanges,
       envBool('AI_REVIEWER_REVIEW_COMMENT_LGTM') ?? CONFIG_DEFAULTS.reviewCommentLGTM,
-      envMultiline('AI_REVIEWER_PATH_FILTERS') ?? [...CONFIG_DEFAULTS.pathFilters],
-      envStr('AI_REVIEWER_SYSTEM_MESSAGE') ?? CONFIG_DEFAULTS.systemMessage,
+      // 基线：不再读 CI 变量，仓库定制走 .ai-reviewer.yml（issue #231）
+      [...CONFIG_DEFAULTS.pathFilters],
+      CONFIG_DEFAULTS.systemMessage,
       envStr('AI_REVIEWER_OPENAI_LIGHT_MODEL') ?? CONFIG_DEFAULTS.openaiLightModel,
       envStr('AI_REVIEWER_OPENAI_HEAVY_MODEL') ?? CONFIG_DEFAULTS.openaiHeavyModel,
       envFloatStr('AI_REVIEWER_OPENAI_MODEL_TEMPERATURE', CONFIG_DEFAULTS.openaiModelTemperature),
@@ -160,7 +154,7 @@ export class GitLabConfigProvider implements ConfigProvider {
       '',
       envIntStr('AI_REVIEWER_WARN_FILES', CONFIG_DEFAULTS.warnFiles),
       envBool('AI_REVIEWER_INITIAL_PR_SUMMARY_ONLY') ?? CONFIG_DEFAULTS.initialPrSummaryOnly,
-      envMultiline('AI_REVIEWER_PATH_INSTRUCTIONS') ?? []
+      []
     )
 
     return this.cachedOptions
@@ -170,9 +164,9 @@ export class GitLabConfigProvider implements ConfigProvider {
     if (this.cachedPromptConfig) return this.cachedPromptConfig
 
     this.cachedPromptConfig = {
-      summarize: envStr('AI_REVIEWER_SUMMARIZE') ?? CONFIG_DEFAULTS.summarize,
-      summarizeReleaseNotes:
-        envStr('AI_REVIEWER_SUMMARIZE_RELEASE_NOTES') ?? CONFIG_DEFAULTS.summarizeReleaseNotes
+      // 摘要 / 发布说明的提示词文案是基线的一部分，不再提供外部覆盖入口（issue #231 / #240）
+      summarize: CONFIG_DEFAULTS.summarize,
+      summarizeReleaseNotes: CONFIG_DEFAULTS.summarizeReleaseNotes
     }
 
     return this.cachedPromptConfig
@@ -198,7 +192,6 @@ export class GitLabConfigProvider implements ConfigProvider {
   print(log: (msg: string) => void): void {
     const opts = this.getOptions()
     const bot = this.getBotConfig()
-    const prompt = this.getPromptConfig()
 
     // 输出安全强制覆盖警告
     for (const override of this.securityOverrides) {
@@ -216,10 +209,8 @@ export class GitLabConfigProvider implements ConfigProvider {
     log(`  review_comment_lgtm: ${opts.reviewCommentLGTM}`)
     log(`  path_filters: ${opts.pathFilters}`)
     log(`  path_instructions: ${opts.pathInstructions}`)
-    // 只标注是否自定义，不打印原文：默认 prompt 面向双平台书写，原文进 job 日志没有排障价值
-    log(
-      `  system_message: ${envStr('AI_REVIEWER_SYSTEM_MESSAGE') != null ? '(custom)' : '(default)'}`
-    )
+    // 基线文案不进日志：默认 prompt 面向双平台书写，原文没有排障价值；仓库追加见 [repo-config] 日志
+    log(`  system_message: (baseline)`)
     log(`  openai_light_model: ${opts.openaiLightModel}`)
     log(`  openai_heavy_model: ${opts.openaiHeavyModel}`)
     log(`  openai_model_temperature: ${opts.openaiModelTemperature}`)
@@ -244,7 +235,6 @@ export class GitLabConfigProvider implements ConfigProvider {
     log(`  bot_icon: ${bot.icon}`)
     log(`  bot_name: ${bot.name}`)
     log(`  bot_gitlab_login: ${bot.platformLogin}`)
-    log(`  summarize: ${prompt.summarize ? '(custom)' : '(default)'}`)
-    log(`  summarize_release_notes: ${prompt.summarizeReleaseNotes ? '(custom)' : '(default)'}`)
+    log(`  summarize / summarize_release_notes: (baseline)`)
   }
 }

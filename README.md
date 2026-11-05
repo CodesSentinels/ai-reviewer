@@ -267,9 +267,9 @@ review comments
   changes (e.g. typo fixes) and when changes look good for the most part. It can
   be disabled by setting `review_simple_changes` and `review_comment_lgtm` to
   `true`.
-- **Customizable prompts**: Tailor the `system_message`, `summarize`, and
-  `summarize_release_notes` prompts to focus on specific aspects of the review
-  process or even change the review objective.
+- **Customizable prompts**: Describe your project with `profile`,
+  `project_context` and `rules` in `.ai-reviewer.yml`. The summary and release-notes
+  prompts are part of the built-in baseline and cannot be overridden.
 
 To use this tool, you need to add the provided YAML file to your repository and
 configure the required environment variables, such as `GITHUB_TOKEN` and
@@ -345,39 +345,54 @@ gpt-4o on many benchmarks at 80% lower cost, making it the best value for code r
 
 See: [action.yml](./action.yml)
 
-Tip: You can change the bot personality by configuring the `system_message`
-value. For example, to review docs/blog posts, you can use the following prompt:
+### Repository config: `.ai-reviewer.yml`
 
-<details>
-<summary>Blog Reviewer Prompt</summary>
+Prompt and path settings live in a `.ai-reviewer.yml` at the root of each
+reviewed repository, layered on top of a shared baseline shipped with this
+action. The `system_message`, `path_filters` and `path_instructions` action
+inputs were removed: they are no longer read.
 
 ```yaml
-system_message: |
-  You are `@ai-reviewer` (aka `github-actions[bot]`), a language model
-  trained by OpenAI. Your purpose is to act as a highly experienced
-  DevRel (developer relations) professional with focus on cloud-native
-  infrastructure.
-
-  AI Reviewer is an AI-powered code reviewer. It boosts code quality and cuts manual effort. Offers context-aware, line-by-line feedback, highlights critical changes,
-  enables bot interaction, and lets you commit suggestions directly from GitHub.
-
-  When reviewing or generating content focus on key areas such as -
-  - Accuracy
-  - Relevance
-  - Clarity
-  - Technical depth
-  - Call-to-action
-  - SEO optimization
-  - Brand consistency
-  - Grammar and prose
-  - Typos
-  - Hyperlink suggestions
-  - Graphics or images (suggest Dall-E image prompts if needed)
-  - Empathy
-  - Engagement
+version: 1
+exclude: # globs to skip, added to the baseline exclusions; can only narrow
+  - "**/generated/**"
+rules: # appended after the baseline rules, applied in order
+  - paths: ["src/api/**"]
+    instructions: validate every request parameter and check authorization
+  - paths: ["migrations/**"]
+    instructions: check rollback, table locking and existing data
+profile: # whitelist only; unsupported values are dropped
+  languages: [nodejs] # nodejs | java | swift
+  domains: [backend] # frontend | backend
+project_context: | # background about the project (max 500 chars), not instructions
+  Money fields in this repository always use Decimal.
 ```
 
-</details>
+- The file is read from the **target branch** only, never from the PR head, so a
+  PR cannot change its own review rules.
+- The baseline cannot be replaced, only appended to. `exclude` can only narrow:
+  a baseline exclusion cannot be undone, and there is no way to write an include
+  rule, so a repository cannot accidentally shrink the review to a few paths.
+- A rule may list several globs, and the same glob may appear in several rules.
+  For instructions containing `: `, use a block scalar (`instructions: |`).
+- Allowed keys: `version` (optional), `exclude`, `rules`, `profile` and
+  `project_context` — nothing else. Anything else (`language`, `max_files`,
+  models, `openai_base_url`, shell/lint switches, `disable_review`…) is ignored
+  with a warning.
+- A missing, malformed or oversized (> 64KB) file falls back to the baseline and
+  never fails the review.
+
+#### Migrating from the removed inputs
+
+Add `.ai-reviewer.yml` to the repository **before** upgrading (older versions
+ignore the file), then upgrade, check the `[repo-config]` log lines, and finally
+delete the removed inputs from the workflow / CI variables.
+
+To roll back, publish the previous version again (for GitLab: re-run the release
+flow with the previous version tag; for GitHub: pin `uses:` to the previous tag).
+Because the removed inputs / CI variables are only deleted after the new version
+has proven stable, the previous version still finds them and behaves as before.
+The `.ai-reviewer.yml` file can stay in place — older versions ignore it.
 
 ## Conversation with AI Reviewer
 

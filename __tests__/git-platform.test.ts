@@ -243,6 +243,37 @@ describe('GitHubPlatform', () => {
     })
   })
 
+  describe('getFileContentStrict（与 GitLab 语义一致：只有 404 是 null）', () => {
+    test('base64 解码返回字符串', async () => {
+      mockOctokit.repos.getContent.mockResolvedValue({
+        data: {content: Buffer.from('hello').toString('base64'), encoding: 'base64'}
+      })
+      expect(await platform.getFileContentStrict('o', 'r', 'f.ts', 'sha')).toBe('hello')
+    })
+
+    test('404 → null', async () => {
+      mockOctokit.repos.getContent.mockRejectedValue(
+        Object.assign(new Error('Not Found'), {status: 404})
+      )
+      expect(await platform.getFileContentStrict('o', 'r', 'f.ts', 'sha')).toBeNull()
+    })
+
+    test.each([401, 403, 429, 500])(
+      '%i → 抛 GitPlatformError，不当作没有这个文件',
+      async status => {
+        mockOctokit.repos.getContent.mockRejectedValue(Object.assign(new Error('boom'), {status}))
+        await expect(platform.getFileContentStrict('o', 'r', 'f.ts', 'sha')).rejects.toThrow(
+          GitPlatformError
+        )
+      }
+    )
+
+    test('没有 status 的网络错误同样抛出', async () => {
+      mockOctokit.repos.getContent.mockRejectedValue(new Error('ECONNRESET'))
+      await expect(platform.getFileContentStrict('o', 'r', 'f.ts', 'sha')).rejects.toThrow()
+    })
+  })
+
   // ─── 4. 顶层评论 ────────────────────────────────────────────────────
 
   describe('createComment', () => {
