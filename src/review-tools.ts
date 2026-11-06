@@ -9,8 +9,12 @@
  *   - list_directory  列出一层目录，版本为本次变更的 HEAD
  *   - search_code     在仓库中搜索代码（平台索引的默认分支）
  *
+ * 可选的「上下文仓库」（context-repos.ts，运维方配置，仅 GitLab）：三个工具多一个
+ * `repo` 参数，只能在已配置的别名里选，读取该仓库的默认分支。
+ *
  * 安全约束：
- * - 只访问当前审查的项目（坐标来自受信任的 ExecutionContext，不来自模型参数）
+ * - 只访问当前审查的项目，以及运维方显式配置过的上下文仓库（坐标来自受信任的
+ *   ExecutionContext / 配置，不来自模型参数；模型只能在别名白名单里选）
  * - 输出有硬上限，超出即截断并注明
  * - 回传给模型之前做密钥脱敏（与日志出口同一套规则）：仓库里若误提交了密钥，
  *   不会因为模型读了这个文件就被发往模型服务
@@ -18,7 +22,8 @@
  */
 import type OpenAI from 'openai'
 import type {AnalysisStep} from './bot'
-import {getPlatform} from './platform/git-platform'
+import {getContextRepos} from './context-repos'
+import {getPlatform, type IGitPlatform} from './platform/git-platform'
 import {getExecCtx, repoCoordsOf} from './platform/run-context'
 import {redactString} from './redact'
 
@@ -33,8 +38,25 @@ export const REVIEW_TOOL_LIMITS = {
   searchSnippetMaxChars: 300
 } as const
 
+/** 配置了上下文仓库时，三个工具共用的可选 `repo` 参数声明 */
+function repoParameter(): Record<string, unknown> {
+  const aliases = getContextRepos().map(r => r.alias)
+  if (aliases.length === 0) return {}
+  return {
+    repo: {
+      type: 'string',
+      enum: aliases,
+      description:
+        'Optional. Read from this read-only context repository (its default branch) instead of ' +
+        'the repository under review. It is NOT part of the change under review. ' +
+        `Available: ${aliases.join(', ')}. Omit to use the repository under review.`
+    }
+  }
+}
+
 /** Responses API 的函数工具声明 */
 export function reviewToolDefinitions(): OpenAI.Responses.FunctionTool[] {
+  const repoParam = repoParameter()
   return [
     {
       type: 'function',
@@ -49,7 +71,8 @@ export function reviewToolDefinitions(): OpenAI.Responses.FunctionTool[] {
         properties: {
           path: {type: 'string', description: 'Repository-relative file path'},
           start_line: {type: 'integer', description: 'First line to read (1-based, optional)'},
-          end_line: {type: 'integer', description: 'Last line to read (inclusive, optional)'}
+          end_line: {type: 'integer', description: 'Last line to read (inclusive, optional)'},
+          ...repoParam
         },
         required: ['path'],
         additionalProperties: false
@@ -65,7 +88,8 @@ export function reviewToolDefinitions(): OpenAI.Responses.FunctionTool[] {
       parameters: {
         type: 'object',
         properties: {
-          path: {type: 'string', description: 'Repository-relative directory path'}
+          path: {type: 'string', description: 'Repository-relative directory path'},
+          ...repoParam
         },
         required: ['path'],
         additionalProperties: false
@@ -82,7 +106,8 @@ export function reviewToolDefinitions(): OpenAI.Responses.FunctionTool[] {
       parameters: {
         type: 'object',
         properties: {
-          query: {type: 'string', description: 'Text to search for (e.g. an identifier)'}
+          query: {type: 'string', description: 'Text to search for (e.g. an identifier)'},
+          ...repoParam
         },
         required: ['query'],
         additionalProperties: false
@@ -115,6 +140,42 @@ function normalizeRepoPath(raw: unknown, allowRoot: boolean): string | null {
   return p
 }
 
+/** 一次工具调用读取的仓库：被审仓库（HEAD），或某个上下文仓库（默认分支） */
+interface ToolTarget {
+  platform: IGitPlatform
+  owner: string
+  repo: string
+  ref: string
+  /** 上下文仓库的别名；被审仓库为 null */
+  label: string | null
+}
+
+function resolveTarget(args: Record<string, unknown>): ToolTarget | {error: string} {
+  const requested = typeof args.repo === 'string' ? args.repo.trim().toLowerCase() : ''
+  if (requested === '') {
+    const ctx = getExecCtx()
+    const {owner, repo} = repoCoordsOf(ctx)
+    return {platform: getPlatform(), owner, repo, ref: ctx.headSha, label: null}
+  }
+  const contextRepos = getContextRepos()
+  const hit = contextRepos.find(r => r.alias === requested)
+  if (hit == null) {
+    const available = contextRepos.map(r => r.alias)
+    return {
+      error:
+        available.length === 0
+          ? `no context repositories are configured; omit "repo"`
+          : `unknown repo "${requested}"; available: ${available.join(', ')}`
+    }
+  }
+  return {platform: hit.platform, owner: hit.owner, repo: hit.repo, ref: hit.ref, label: hit.alias}
+}
+
+/** 展示用路径：上下文仓库加 `别名:` 前缀，避免与被审仓库的同名文件混淆 */
+function shownPath(target: ToolTarget, path: string): string {
+  return target.label == null ? path : `${target.label}:${path}`
+}
+
 function positiveInt(v: unknown): number | null {
   return typeof v === 'number' && Number.isInteger(v) && v > 0 ? v : null
 }
@@ -124,11 +185,16 @@ async function readFile(args: Record<string, unknown>): Promise<ReviewToolResult
   if (path == null) {
     return fail({type: 'read_file', path: String(args.path ?? '')}, 'invalid path')
   }
-  const ctx = getExecCtx()
-  const {owner, repo} = repoCoordsOf(ctx)
-  const content = await getPlatform().getFileContent(owner, repo, path, ctx.headSha)
+  const target = resolveTarget(args)
+  if ('error' in target) return fail({type: 'read_file', path}, target.error)
+  const content = await target.platform.getFileContent(target.owner, target.repo, path, target.ref)
   if (content == null) {
-    return fail({type: 'read_file', path}, `file not found at head commit: ${path}`)
+    return fail(
+      {type: 'read_file', path: shownPath(target, path)},
+      target.label == null
+        ? `file not found at head commit: ${path}`
+        : `file not found in context repo ${target.label} (${target.ref}): ${path}`
+    )
   }
   const lines = content.split('\n')
   const start = Math.min(positiveInt(args.start_line) ?? 1, Math.max(lines.length, 1))
@@ -151,10 +217,11 @@ async function readFile(args: Record<string, unknown>): Promise<ReviewToolResult
     body = body.slice(0, REVIEW_TOOL_LIMITS.readFileMaxChars)
     notes.push('truncated by size limit')
   }
-  const header = `${path} (lines ${start}-${end} of ${lines.length})`
+  const where = target.label == null ? '' : `[context repo ${target.label} @ ${target.ref}] `
+  const header = `${where}${path} (lines ${start}-${end} of ${lines.length})`
   return {
     output: redactString([header, body, ...notes.map(n => `[${n}]`)].join('\n')),
-    step: {type: 'read_file', path, startLine: start, endLine: end}
+    step: {type: 'read_file', path: shownPath(target, path), startLine: start, endLine: end}
   }
 }
 
@@ -163,13 +230,13 @@ async function listDirectory(args: Record<string, unknown>): Promise<ReviewToolR
   if (path == null) {
     return fail({type: 'list_directory', path: String(args.path ?? '')}, 'invalid path')
   }
-  const ctx = getExecCtx()
-  const {owner, repo} = repoCoordsOf(ctx)
+  const target = resolveTarget(args)
+  if ('error' in target) return fail({type: 'list_directory', path}, target.error)
   // 根目录只能取全量树再筛出第一层（带路径时平台接口本身只查一层）
-  const tree = await getPlatform().listRepositoryTree(
-    owner,
-    repo,
-    ctx.headSha,
+  const tree = await target.platform.listRepositoryTree(
+    target.owner,
+    target.repo,
+    target.ref,
     path === '' ? undefined : path
   )
   const prefix = path === '' ? '' : `${path}/`
@@ -182,29 +249,45 @@ async function listDirectory(args: Record<string, unknown>): Promise<ReviewToolR
   const notes: string[] = []
   if (entries.length > shown.length) notes.push(`showing ${shown.length} of ${entries.length}`)
   if (tree.truncated) notes.push('the platform reported a truncated listing')
+  const where = target.label == null ? '' : `[context repo ${target.label} @ ${target.ref}] `
   return {
     output: redactString(
-      [`${path === '' ? '(root)' : path}/`, ...shown, ...notes.map(n => `[${n}]`)].join('\n')
+      [`${where}${path === '' ? '(root)' : path}/`, ...shown, ...notes.map(n => `[${n}]`)].join(
+        '\n'
+      )
     ),
-    step: {type: 'list_directory', path, resultCount: entries.length}
+    step: {type: 'list_directory', path: shownPath(target, path), resultCount: entries.length}
   }
 }
 
 async function searchCode(args: Record<string, unknown>): Promise<ReviewToolResult> {
   const query = typeof args.query === 'string' ? args.query.trim() : ''
   if (query === '') return fail({type: 'search_code', query: ''}, 'empty query')
-  const {owner, repo} = repoCoordsOf(getExecCtx())
-  const hits = await getPlatform().searchCode(owner, repo, query, REVIEW_TOOL_LIMITS.searchMaxHits)
+  const target = resolveTarget(args)
+  if ('error' in target) return fail({type: 'search_code', query}, target.error)
+  const hits = await target.platform.searchCode(
+    target.owner,
+    target.repo,
+    query,
+    REVIEW_TOOL_LIMITS.searchMaxHits
+  )
   const body = hits.map(h => {
     const where = h.startLine != null ? `${h.path}:${h.startLine}` : h.path
     const snippet = h.snippet.trim().slice(0, REVIEW_TOOL_LIMITS.searchSnippetMaxChars)
     return snippet === '' ? `- ${where}` : `- ${where}\n${snippet}`
   })
+  const where = target.label == null ? '' : ` in context repo ${target.label}`
   return {
     output: redactString(
-      hits.length === 0 ? `no results for: ${query}` : [`results for: ${query}`, ...body].join('\n')
+      hits.length === 0
+        ? `no results${where} for: ${query}`
+        : [`results${where} for: ${query}`, ...body].join('\n')
     ),
-    step: {type: 'search_code', query, resultCount: hits.length}
+    step: {
+      type: 'search_code',
+      query: target.label == null ? query : `${target.label}: ${query}`,
+      resultCount: hits.length
+    }
   }
 }
 

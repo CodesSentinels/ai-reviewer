@@ -369,6 +369,35 @@ export class GitLabPlatform implements IGitPlatform {
     }
   }
 
+  /**
+   * 严格读取。GitLab 的 getFileContent 本来就只把 404 当作 null、其余抛出，
+   * 所以语义已经是严格的，这里直接复用，保证两个平台行为一致。
+   */
+  async getFileContentStrict(
+    owner: string,
+    repo: string,
+    path: string,
+    ref: string
+  ): Promise<string | null> {
+    return this.getFileContent(owner, repo, path, ref)
+  }
+
+  /** 项目的默认分支名；项目不存在（404）或为空仓库时返回 null，其余错误抛出 */
+  async getDefaultBranch(owner: string, repo: string): Promise<string | null> {
+    const projectPath = `${owner}/${repo}`
+    try {
+      const project = await withGitLabRetry('getDefaultBranch', async () =>
+        this.api.Projects.show(projectPath)
+      )
+      const branch = (project as any).default_branch ?? (project as any).defaultBranch
+      return typeof branch === 'string' && branch !== '' ? branch : null
+    } catch (e) {
+      const err = normalizeGitLabError(e, 'getDefaultBranch')
+      if (err.errorKind === 'not_found') return null
+      throw err
+    }
+  }
+
   // ─── 1. PR/MR 信息（GLAPI-001/002/006）────────────────────────────────────
 
   async getChangeRequest(

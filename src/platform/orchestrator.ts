@@ -23,6 +23,9 @@ import type {Logger} from './logger'
 import {Prompts} from '../prompts'
 import {codeReview} from '../review'
 import {repoCoordsOf, setExecCtx} from './run-context'
+import {getPlatform} from './git-platform'
+import {getContextRepos} from '../context-repos'
+import {loadRepoConfig} from '../repo-config'
 
 // re-export 供已有消费方（tests/main.ts）不需要改 import 路径
 export {handleExecCtxError} from './exec-ctx-error-handler'
@@ -161,6 +164,18 @@ export async function runOrchestrator(deps: OrchestratorDeps): Promise<void> {
     await deps.earlyReaction(execCtx, options)
   }
 
+  // 3b. 叠加目标分支上的仓库配置（.ai-reviewer.yml）。必须在创建 Bot 之前：
+  // Bot 的系统消息和语言在构造时就固定了。任何失败都回退基线，不影响审查。
+  try {
+    const repoConfig = await loadRepoConfig(getPlatform(), execCtx, {
+      info: msg => logger.info(msg),
+      warning: msg => logger.warning(msg)
+    })
+    if (repoConfig) options.applyRepoConfig(repoConfig)
+  } catch (e) {
+    logger.warning(`repo-config: skipped (${e instanceof Error ? e.message : String(e)})`)
+  }
+
   // 4. 构建提示词
   const promptConfig = configProvider.getPromptConfig()
   // 提示词里的调查步骤按实际可用工具生成（GitLab trigger 强制关闭 shell，CFG-002）
@@ -168,7 +183,9 @@ export async function runOrchestrator(deps: OrchestratorDeps): Promise<void> {
     shell: options.enableShell,
     webSearch: options.enableWebSearch,
     // 与 bot-factory 一致：shell 不可用时审查模型拿到只读代码探查工具
-    codeTools: !options.enableShell
+    codeTools: !options.enableShell,
+    // 运维方配置的只读上下文仓库（未配置时为空，提示词不变）
+    contextRepos: getContextRepos().map(r => r.alias)
   })
 
   // 5. 事件分发

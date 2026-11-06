@@ -4,7 +4,7 @@
  * 覆盖：执行器（读文件 / 列目录 / 搜索）的边界与安全约束、Bot 工具循环的接线、
  * Analysis chain 展示、bot-factory 与提示词的启用条件。
  */
-import {describe, expect, test, jest, beforeEach} from '@jest/globals'
+import {describe, expect, test, jest, beforeEach, afterAll} from '@jest/globals'
 
 const platform = {
   getFileContent: jest.fn<(...a: any[]) => Promise<string | null>>(),
@@ -22,6 +22,7 @@ jest.mock('../src/platform/run-context', () => {
 jest.mock('@actions/core', () => ({info: jest.fn(), warning: jest.fn(), error: jest.fn()}))
 
 import {executeReviewTool, reviewToolDefinitions, REVIEW_TOOL_LIMITS} from '../src/review-tools'
+import {CONTEXT_REPOS_ENV, configureContextRepos, resetContextRepos} from '../src/context-repos'
 import {Bot} from '../src/bot'
 import {OpenAIOptions} from '../src/options'
 import {formatAnalysisChain} from '../src/review'
@@ -291,5 +292,172 @@ describe('启用条件', () => {
     const defs = reviewToolDefinitions()
     expect(defs.map(d => d.name)).toEqual(['read_file', 'list_directory', 'search_code'])
     for (const d of defs) expect((d.parameters as any).additionalProperties).toBe(false)
+  })
+})
+
+describe('上下文仓库（repo 参数）', () => {
+  const contextPlatform = {
+    getFileContent: jest.fn<(...a: any[]) => Promise<string | null>>(),
+    listRepositoryTree: jest.fn<(...a: any[]) => Promise<any>>(),
+    searchCode: jest.fn<(...a: any[]) => Promise<any[]>>(),
+    getDefaultBranch: jest.fn<(...a: any[]) => Promise<string | null>>(async () => 'master')
+  }
+
+  beforeEach(async () => {
+    resetContextRepos()
+    await configureContextRepos(
+      'group/sub/project',
+      {[CONTEXT_REPOS_ENV]: 'group/sub = group/lib/shared-utils'},
+      {createPlatform: () => contextPlatform as any, warn: jest.fn()}
+    )
+  })
+  afterAll(() => resetContextRepos())
+
+  test('未配置时工具定义没有 repo 参数；配置后三个工具都有，取值限定为别名', async () => {
+    resetContextRepos()
+    for (const d of reviewToolDefinitions()) {
+      expect((d.parameters as any).properties.repo).toBeUndefined()
+    }
+    await configureContextRepos(
+      'group/sub/project',
+      {[CONTEXT_REPOS_ENV]: 'group/sub = group/lib/shared-utils'},
+      {createPlatform: () => contextPlatform as any, warn: jest.fn()}
+    )
+    for (const d of reviewToolDefinitions()) {
+      const repo = (d.parameters as any).properties.repo
+      expect(repo.enum).toEqual(['shared-utils'])
+      expect((d.parameters as any).required).not.toContain('repo')
+      expect((d.parameters as any).additionalProperties).toBe(false)
+    }
+  })
+
+  test('read_file 带 repo：读上下文仓库的默认分支，并标明来源', async () => {
+    contextPlatform.getFileContent.mockResolvedValue('export const a = 1\nexport const b = 2')
+    const r = await executeReviewTool(
+      'read_file',
+      JSON.stringify({path: 'src/utils/a.js', repo: 'shared-utils'})
+    )
+
+    expect(contextPlatform.getFileContent).toHaveBeenCalledWith(
+      'group/lib',
+      'shared-utils',
+      'src/utils/a.js',
+      'master'
+    )
+    expect(platform.getFileContent).not.toHaveBeenCalled()
+    expect(r.output.split('\n')[0]).toBe(
+      '[context repo shared-utils @ master] src/utils/a.js (lines 1-2 of 2)'
+    )
+    expect(r.step).toMatchObject({type: 'read_file', path: 'shared-utils:src/utils/a.js'})
+  })
+
+  test('不带 repo：仍读被审仓库的 HEAD，不碰上下文仓库', async () => {
+    platform.getFileContent.mockResolvedValue('x')
+    await executeReviewTool('read_file', JSON.stringify({path: 'src/x.ts'}))
+    expect(platform.getFileContent).toHaveBeenCalledWith(
+      'group/sub',
+      'project',
+      'src/x.ts',
+      ctx.headSha
+    )
+    expect(contextPlatform.getFileContent).not.toHaveBeenCalled()
+  })
+
+  test('repo 不在白名单 → 报错并列出可用别名，不发起任何读取', async () => {
+    const r = await executeReviewTool(
+      'read_file',
+      JSON.stringify({path: 'a.js', repo: 'some/other-repo'})
+    )
+    expect(r.output).toBe('error: unknown repo "some/other-repo"; available: shared-utils')
+    expect(platform.getFileContent).not.toHaveBeenCalled()
+    expect(contextPlatform.getFileContent).not.toHaveBeenCalled()
+  })
+
+  test('repo 别名不区分大小写', async () => {
+    contextPlatform.getFileContent.mockResolvedValue('x')
+    await executeReviewTool('read_file', JSON.stringify({path: 'a.js', repo: 'Shared-Utils'}))
+    expect(contextPlatform.getFileContent).toHaveBeenCalledTimes(1)
+  })
+
+  test('上下文仓库里找不到文件 → 错误信息指明是哪个仓库', async () => {
+    contextPlatform.getFileContent.mockResolvedValue(null)
+    const r = await executeReviewTool(
+      'read_file',
+      JSON.stringify({path: 'nope.js', repo: 'shared-utils'})
+    )
+    expect(r.output).toBe('error: file not found in context repo shared-utils (master): nope.js')
+  })
+
+  test('list_directory 带 repo：用默认分支，输出标明来源', async () => {
+    contextPlatform.listRepositoryTree.mockResolvedValue({
+      entries: [
+        {path: 'src/utils', type: 'tree'},
+        {path: 'src/index.js', type: 'blob'}
+      ],
+      truncated: false
+    })
+    const r = await executeReviewTool(
+      'list_directory',
+      JSON.stringify({path: 'src', repo: 'shared-utils'})
+    )
+    expect(contextPlatform.listRepositoryTree).toHaveBeenCalledWith(
+      'group/lib',
+      'shared-utils',
+      'master',
+      'src'
+    )
+    expect(r.output.split('\n')[0]).toBe('[context repo shared-utils @ master] src/')
+    expect(r.step).toMatchObject({type: 'list_directory', path: 'shared-utils:src'})
+  })
+
+  test('search_code 带 repo：搜上下文仓库，输出标明来源', async () => {
+    contextPlatform.searchCode.mockResolvedValue([
+      {path: 'src/utils/a.js', startLine: 3, snippet: 'export const a'}
+    ])
+    const r = await executeReviewTool(
+      'search_code',
+      JSON.stringify({query: 'resolveRevenue', repo: 'shared-utils'})
+    )
+    expect(contextPlatform.searchCode).toHaveBeenCalledWith(
+      'group/lib',
+      'shared-utils',
+      'resolveRevenue',
+      REVIEW_TOOL_LIMITS.searchMaxHits
+    )
+    expect(r.output).toContain('results in context repo shared-utils for: resolveRevenue')
+    expect(r.step).toMatchObject({type: 'search_code', query: 'shared-utils: resolveRevenue'})
+  })
+
+  test('上下文仓库的内容同样做密钥脱敏', async () => {
+    contextPlatform.getFileContent.mockResolvedValue('const token = "ghp_' + 'a'.repeat(36) + '"')
+    const r = await executeReviewTool(
+      'read_file',
+      JSON.stringify({path: 'cfg.js', repo: 'shared-utils'})
+    )
+    expect(r.output).not.toContain('ghp_' + 'a'.repeat(36))
+  })
+
+  test('提示词：配置了上下文仓库才有说明，没配置时与以前逐字一致', () => {
+    const without = buildInvestigationSection({shell: false, webSearch: false, codeTools: true})
+    const withNone = buildInvestigationSection({
+      shell: false,
+      webSearch: false,
+      codeTools: true,
+      contextRepos: []
+    })
+    const withRepos = buildInvestigationSection({
+      shell: false,
+      webSearch: false,
+      codeTools: true,
+      contextRepos: ['shared-utils']
+    })
+    expect(withNone).toBe(without)
+    expect(withRepos).toContain('### Context repositories (read-only)')
+    expect(withRepos).toContain('`shared-utils`')
+    expect(withRepos.startsWith(without)).toBe(true)
+    // 没有代码工具时不提（模型调不了）
+    expect(
+      buildInvestigationSection({shell: false, webSearch: false, contextRepos: ['shared-utils']})
+    ).not.toContain('Context repositories')
   })
 })

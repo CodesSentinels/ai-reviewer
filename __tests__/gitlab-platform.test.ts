@@ -23,6 +23,9 @@ const mockRepositories = {
 const mockRepositoryFiles = {
   show: jest.fn<any>()
 }
+const mockProjects = {
+  show: jest.fn<any>()
+}
 const mockMergeRequestNotes = {
   create: jest.fn<any>(),
   edit: jest.fn<any>(),
@@ -53,6 +56,7 @@ jest.mock('@gitbeaker/rest', () => ({
     MergeRequests: mockMergeRequests,
     Repositories: mockRepositories,
     RepositoryFiles: mockRepositoryFiles,
+    Projects: mockProjects,
     MergeRequestNotes: mockMergeRequestNotes,
     MergeRequestDiscussions: mockMergeRequestDiscussions,
     MergeRequestNoteAwardEmojis: mockMergeRequestNoteAwardEmojis,
@@ -369,6 +373,57 @@ describe('GitLabPlatform', () => {
       await expect(platform.getFileContent('g', 'r', 'a.ts', 'main')).rejects.toThrow(
         GitPlatformError
       )
+    })
+  })
+
+  describe('getFileContentStrict（与 GitHub 语义一致：只有 404 是 null）', () => {
+    test('正常返回内容', async () => {
+      mockRepositoryFiles.show.mockResolvedValue({content: Buffer.from('hi').toString('base64')})
+      expect(await platform.getFileContentStrict('g', 'r', 'a.yml', 'sha1')).toBe('hi')
+      expect(mockRepositoryFiles.show).toHaveBeenCalledWith('g/r', 'a.yml', 'sha1')
+    })
+
+    test('404 → null', async () => {
+      const err = new Error('404')
+      ;(err as any).response = {status: 404}
+      mockRepositoryFiles.show.mockRejectedValue(err)
+      expect(await platform.getFileContentStrict('g', 'r', 'a.yml', 'main')).toBeNull()
+    })
+
+    test('403 → 抛 GitPlatformError', async () => {
+      const err = new Error('403')
+      ;(err as any).response = {status: 403}
+      mockRepositoryFiles.show.mockRejectedValue(err)
+      await expect(platform.getFileContentStrict('g', 'r', 'a.yml', 'main')).rejects.toThrow(
+        GitPlatformError
+      )
+    })
+  })
+
+  describe('getDefaultBranch（上下文仓库用）', () => {
+    test('返回项目的默认分支名', async () => {
+      mockProjects.show.mockResolvedValue({default_branch: 'master'})
+      expect(await platform.getDefaultBranch('g/sub', 'r')).toBe('master')
+      expect(mockProjects.show).toHaveBeenCalledWith('g/sub/r')
+    })
+
+    test('空仓库（没有默认分支）→ null', async () => {
+      mockProjects.show.mockResolvedValue({default_branch: null})
+      expect(await platform.getDefaultBranch('g', 'r')).toBeNull()
+    })
+
+    test('404 → null', async () => {
+      const err = new Error('404')
+      ;(err as any).response = {status: 404}
+      mockProjects.show.mockRejectedValue(err)
+      expect(await platform.getDefaultBranch('g', 'r')).toBeNull()
+    })
+
+    test('403 → 抛 GitPlatformError（权限问题不能当成不存在）', async () => {
+      const err = new Error('403')
+      ;(err as any).response = {status: 403}
+      mockProjects.show.mockRejectedValue(err)
+      await expect(platform.getDefaultBranch('g', 'r')).rejects.toThrow(GitPlatformError)
     })
   })
 

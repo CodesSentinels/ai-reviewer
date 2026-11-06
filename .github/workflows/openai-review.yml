@@ -250,6 +250,3 @@ jobs:
           enable_shell: false
           enable_lint_tools: false
           lint_report_path: ${{ runner.temp }}/lint-report/lint-report.json
-          path_filters: |
-            !dist/**
-            !**/*.lock

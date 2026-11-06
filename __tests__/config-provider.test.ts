@@ -196,15 +196,15 @@ describe('GitHubConfigProvider (ARCH-008)', () => {
     expect(opts1).toBe(opts2)
   })
 
-  test('getPromptConfig() returns prompt templates', () => {
+  test('getPromptConfig() 使用基线文案，action 输入不再生效', () => {
     inputStore['summarize'] = 'Custom summarize prompt'
     inputStore['summarize_release_notes'] = 'Custom release notes prompt'
 
     const provider = new GitHubConfigProvider()
     const prompt = provider.getPromptConfig()
 
-    expect(prompt.summarize).toBe('Custom summarize prompt')
-    expect(prompt.summarizeReleaseNotes).toBe('Custom release notes prompt')
+    expect(prompt.summarize).toBe(CONFIG_DEFAULTS.summarize)
+    expect(prompt.summarizeReleaseNotes).toBe(CONFIG_DEFAULTS.summarizeReleaseNotes)
   })
 
   test('getPromptConfig() caches result', () => {
@@ -437,25 +437,15 @@ describe('GitLabConfigProvider (ARCH-009)', () => {
     expect(opts1).toBe(opts2)
   })
 
-  test('getOptions() reads multiline path filters', () => {
-    process.env.AI_REVIEWER_PATH_FILTERS = '!dist/**\n!**/*.json\nsrc/**'
-
-    const provider = new GitLabConfigProvider()
-    const opts = provider.getOptions()
-
-    expect(opts.checkPath('src/main.ts')).toBe(true)
-    expect(opts.checkPath('dist/index.js')).toBe(false)
-  })
-
-  test('getPromptConfig() returns prompt templates from env vars', () => {
+  test('getPromptConfig() 使用基线文案，AI_REVIEWER_SUMMARIZE* 不再生效', () => {
     process.env.AI_REVIEWER_SUMMARIZE = 'Custom GitLab summarize'
     process.env.AI_REVIEWER_SUMMARIZE_RELEASE_NOTES = 'Custom GitLab release notes'
 
     const provider = new GitLabConfigProvider()
     const prompt = provider.getPromptConfig()
 
-    expect(prompt.summarize).toBe('Custom GitLab summarize')
-    expect(prompt.summarizeReleaseNotes).toBe('Custom GitLab release notes')
+    expect(prompt.summarize).toBe(CONFIG_DEFAULTS.summarize)
+    expect(prompt.summarizeReleaseNotes).toBe(CONFIG_DEFAULTS.summarizeReleaseNotes)
   })
 
   test('getPromptConfig() uses CONFIG_DEFAULTS when env vars not set', () => {

@@ -27,6 +27,7 @@ import {setStateNamespace} from './platform/state-namespace'
 import {setLogger} from './platform/logger'
 import {handleExecCtxError} from './platform/exec-ctx-error-handler'
 import {GitLabConfigProvider} from './platform/gitlab-config-provider'
+import {configureContextRepos} from './context-repos'
 import {runOrchestrator} from './platform/orchestrator'
 import {createBots} from './bot-factory'
 import {validateTriggerPayload} from './gitlab-trigger-validation'
@@ -386,6 +387,14 @@ export async function run(): Promise<void> {
   // GITHUB_REPOSITORY 就抛，于是本文件一 import 编排层，模块加载阶段就崩，
   // run() 根本执行不到。三者迁移到 ExecutionContext 之后（ARCH-005），
   // 这里才成立。
+  // 运维方配置的只读上下文仓库（AI_REVIEWER_CONTEXT_REPOS）。放在事件过滤之后，
+  // 机器人自己的评论等被忽略的事件不会为此多打 API；失败只告警，不影响审查
+  await configureContextRepos(execCtx.projectPath, process.env, {
+    createPlatform: path => new GitLabPlatform(resolveClientConfig(path)),
+    warn: msg => logger.warning(redact(msg)),
+    info: msg => logger.info(msg)
+  })
+
   await runOrchestrator({
     configProvider: new GitLabConfigProvider(),
     // ExecutionContext 已在上面构造并校验过，这里直接复用，不重复解析 payload
