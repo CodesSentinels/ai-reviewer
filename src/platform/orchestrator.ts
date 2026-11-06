@@ -24,6 +24,7 @@ import {Prompts} from '../prompts'
 import {codeReview} from '../review'
 import {repoCoordsOf, setExecCtx} from './run-context'
 import {getPlatform} from './git-platform'
+import {getContextRepos} from '../context-repos'
 import {loadRepoConfig} from '../repo-config'
 
 // re-export 供已有消费方（tests/main.ts）不需要改 import 路径
@@ -182,7 +183,9 @@ export async function runOrchestrator(deps: OrchestratorDeps): Promise<void> {
     shell: options.enableShell,
     webSearch: options.enableWebSearch,
     // 与 bot-factory 一致：shell 不可用时审查模型拿到只读代码探查工具
-    codeTools: !options.enableShell
+    codeTools: !options.enableShell,
+    // 运维方配置的只读上下文仓库（未配置时为空，提示词不变）
+    contextRepos: getContextRepos().map(r => r.alias)
   })
 
   // 5. 事件分发

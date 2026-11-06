@@ -18,6 +18,8 @@ export interface ReviewTools {
   webSearch: boolean
   /** 只读代码探查工具（read_file / list_directory / search_code），shell 不可用时提供 */
   codeTools?: boolean
+  /** 可通过工具的 `repo` 参数访问的只读上下文仓库别名（见 context-repos.ts） */
+  contextRepos?: string[]
 }
 
 const INVESTIGATION_WITH_SHELL_HEAD = `## Pre-review investigation (MANDATORY)
@@ -118,7 +120,28 @@ export function buildInvestigationSection(tools: ReviewTools): string {
   }
   const base =
     tools.codeTools === true ? INVESTIGATION_WITH_CODE_TOOLS : INVESTIGATION_WITHOUT_SHELL
-  return base + (tools.webSearch ? INVESTIGATION_WITHOUT_SHELL_WEB_SEARCH : '')
+  const contextRepos =
+    tools.codeTools === true && tools.contextRepos != null && tools.contextRepos.length > 0
+      ? buildContextReposSection(tools.contextRepos)
+      : ''
+  return base + contextRepos + (tools.webSearch ? INVESTIGATION_WITHOUT_SHELL_WEB_SEARCH : '')
+}
+
+/** 上下文仓库说明：只在配置了上下文仓库时追加，没配置时提示词与以前逐字一致 */
+function buildContextReposSection(aliases: string[]): string {
+  return `
+### Context repositories (read-only)
+
+Besides the repository under review, the three tools above accept an optional \`repo\`
+parameter to read these other repositories: ${aliases.map(a => `\`${a}\``).join(', ')}.
+
+- They are read at their default branch and are NOT part of the change under review; never
+  report findings about their content, and never assume the change under review modifies them.
+- Use them to verify code that the repository under review imports or depends on (for
+  example shared utilities reached through relative imports) instead of guessing what it
+  exports or returns. If an import cannot be resolved inside the repository under review,
+  look for it in a context repository before concluding it is missing.
+`
 }
 
 /** 按可用工具生成 web search 策略段 */
