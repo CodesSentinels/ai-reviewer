@@ -81522,7 +81522,152 @@ function sanitizeModelOutput(text) {
     return out;
 }
 
+;// CONCATENATED MODULE: ./lib/context-repos.js
+const CONTEXT_REPOS_ENV = 'AI_REVIEWER_CONTEXT_REPOS';
+/** 每个项目最多配置几个上下文仓库（工具描述和提示词都会列出别名，数量要克制） */
+const CONTEXT_REPOS_MAX_PER_PROJECT = 3;
+class ContextReposConfigError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = 'ContextReposConfigError';
+    }
+}
+const PATH_RE = /^[a-z0-9._-]+(?:\/[a-z0-9._-]+)+$/;
+/**
+ * 解析 `AI_REVIEWER_CONTEXT_REPOS`。条目用换行或分号分隔，每条 `前缀 = 仓库1, 仓库2`。
+ * 路径不区分大小写（GitLab 路径不区分），统一转小写。格式非法即抛错。
+ */
+function parseContextRepos(raw) {
+    const entries = [];
+    const seen = new Set();
+    for (const item of raw.split(/[\n;]/)) {
+        const text = item.trim();
+        if (text === '')
+            continue;
+        const eq = text.indexOf('=');
+        if (eq <= 0) {
+            throw new ContextReposConfigError(`${CONTEXT_REPOS_ENV}: expected "prefix = repo", got "${text}"`);
+        }
+        const prefix = text.slice(0, eq).trim().toLowerCase();
+        if (!PATH_RE.test(prefix) && !/^[a-z0-9._-]+$/.test(prefix)) {
+            throw new ContextReposConfigError(`${CONTEXT_REPOS_ENV}: invalid project prefix "${prefix}"`);
+        }
+        if (seen.has(prefix)) {
+            throw new ContextReposConfigError(`${CONTEXT_REPOS_ENV}: duplicate entry for "${prefix}"`);
+        }
+        seen.add(prefix);
+        const repos = [
+            ...new Set(text
+                .slice(eq + 1)
+                .split(/[\s,]+/)
+                .map(r => r.trim().toLowerCase())
+                .filter(r => r !== ''))
+        ];
+        if (repos.length === 0) {
+            throw new ContextReposConfigError(`${CONTEXT_REPOS_ENV}: no repository for "${prefix}"`);
+        }
+        for (const r of repos) {
+            if (!PATH_RE.test(r)) {
+                throw new ContextReposConfigError(`${CONTEXT_REPOS_ENV}: "${r}" is not a full repository path (group/project)`);
+            }
+        }
+        if (repos.length > CONTEXT_REPOS_MAX_PER_PROJECT) {
+            throw new ContextReposConfigError(`${CONTEXT_REPOS_ENV}: at most ${CONTEXT_REPOS_MAX_PER_PROJECT} repositories per project ("${prefix}")`);
+        }
+        entries.push({ prefix, repos });
+    }
+    return entries;
+}
+/** 按路径段匹配前缀，最长前缀优先：`group/web` 覆盖 `group/web/app`，不覆盖 `group/webapp` */
+function matchContextRepos(entries, projectPath) {
+    const path = projectPath.trim().toLowerCase();
+    let best = null;
+    for (const entry of entries) {
+        const covers = path === entry.prefix || path.startsWith(`${entry.prefix}/`);
+        if (covers && (best == null || entry.prefix.length > best.prefix.length))
+            best = entry;
+    }
+    return best?.repos ?? [];
+}
+let ready = [];
+/** 当前运行里已就绪的上下文仓库（未配置时为空） */
+function getContextRepos() {
+    return ready;
+}
+function resetContextRepos() {
+    ready = [];
+}
+function splitPath(path) {
+    const idx = path.lastIndexOf('/');
+    return { owner: path.slice(0, idx), repo: path.slice(idx + 1) };
+}
+/**
+ * 按被审项目解析并准备上下文仓库。任何问题只告警并跳过对应仓库，不抛错。
+ * 结果存入模块级状态，供探查工具和提示词读取。
+ */
+async function configureContextRepos(projectPath, env, deps) {
+    ready = [];
+    const raw = (env[CONTEXT_REPOS_ENV] ?? '').trim();
+    if (raw === '')
+        return ready;
+    let paths;
+    try {
+        paths = matchContextRepos(parseContextRepos(raw), projectPath);
+    }
+    catch (e) {
+        deps.warn(`context repos disabled: ${e.message}`);
+        return ready;
+    }
+    const self = projectPath.trim().toLowerCase();
+    const aliases = new Set();
+    const result = [];
+    for (const path of paths) {
+        if (path === self) {
+            deps.warn(`context repo "${path}" is the repository under review, skipped`);
+            continue;
+        }
+        const { owner, repo } = splitPath(path);
+        const alias = repo;
+        if (aliases.has(alias)) {
+            deps.warn(`context repo "${path}": alias "${alias}" is already used, skipped`);
+            continue;
+        }
+        let platform;
+        try {
+            platform = deps.createPlatform(path);
+        }
+        catch (e) {
+            deps.warn(`context repo "${path}" skipped: ${e.message}`);
+            continue;
+        }
+        if (typeof platform.getDefaultBranch !== 'function') {
+            deps.warn(`context repo "${path}" skipped: the platform cannot report a default branch`);
+            continue;
+        }
+        let ref;
+        try {
+            ref = await platform.getDefaultBranch(owner, repo);
+        }
+        catch (e) {
+            deps.warn(`context repo "${path}" skipped: could not read the project (${e.message})`);
+            continue;
+        }
+        if (ref == null || ref === '') {
+            deps.warn(`context repo "${path}" skipped: it has no default branch`);
+            continue;
+        }
+        aliases.add(alias);
+        result.push({ alias, path, owner, repo, ref, platform });
+    }
+    ready = result;
+    if (result.length > 0) {
+        deps.info?.(`context repos: ${result.map(r => `${r.alias}@${r.ref}`).join(', ')}`);
+    }
+    return result;
+}
+
 ;// CONCATENATED MODULE: ./lib/review-tools.js
+
 
 
 
@@ -81534,8 +81679,24 @@ const REVIEW_TOOL_LIMITS = {
     searchMaxHits: 20,
     searchSnippetMaxChars: 300
 };
+/** 配置了上下文仓库时，三个工具共用的可选 `repo` 参数声明 */
+function repoParameter() {
+    const aliases = getContextRepos().map(r => r.alias);
+    if (aliases.length === 0)
+        return {};
+    return {
+        repo: {
+            type: 'string',
+            enum: aliases,
+            description: 'Optional. Read from this read-only context repository (its default branch) instead of ' +
+                'the repository under review. It is NOT part of the change under review. ' +
+                `Available: ${aliases.join(', ')}. Omit to use the repository under review.`
+        }
+    };
+}
 /** Responses API 的函数工具声明 */
 function reviewToolDefinitions() {
+    const repoParam = repoParameter();
     return [
         {
             type: 'function',
@@ -81549,7 +81710,8 @@ function reviewToolDefinitions() {
                 properties: {
                     path: { type: 'string', description: 'Repository-relative file path' },
                     start_line: { type: 'integer', description: 'First line to read (1-based, optional)' },
-                    end_line: { type: 'integer', description: 'Last line to read (inclusive, optional)' }
+                    end_line: { type: 'integer', description: 'Last line to read (inclusive, optional)' },
+                    ...repoParam
                 },
                 required: ['path'],
                 additionalProperties: false
@@ -81564,7 +81726,8 @@ function reviewToolDefinitions() {
             parameters: {
                 type: 'object',
                 properties: {
-                    path: { type: 'string', description: 'Repository-relative directory path' }
+                    path: { type: 'string', description: 'Repository-relative directory path' },
+                    ...repoParam
                 },
                 required: ['path'],
                 additionalProperties: false
@@ -81580,7 +81743,8 @@ function reviewToolDefinitions() {
             parameters: {
                 type: 'object',
                 properties: {
-                    query: { type: 'string', description: 'Text to search for (e.g. an identifier)' }
+                    query: { type: 'string', description: 'Text to search for (e.g. an identifier)' },
+                    ...repoParam
                 },
                 required: ['query'],
                 additionalProperties: false
@@ -81607,6 +81771,29 @@ function normalizeRepoPath(raw, allowRoot) {
         return null;
     return p;
 }
+function resolveTarget(args) {
+    const requested = typeof args.repo === 'string' ? args.repo.trim().toLowerCase() : '';
+    if (requested === '') {
+        const ctx = getExecCtx();
+        const { owner, repo } = repoCoordsOf(ctx);
+        return { platform: getPlatform(), owner, repo, ref: ctx.headSha, label: null };
+    }
+    const contextRepos = getContextRepos();
+    const hit = contextRepos.find(r => r.alias === requested);
+    if (hit == null) {
+        const available = contextRepos.map(r => r.alias);
+        return {
+            error: available.length === 0
+                ? `no context repositories are configured; omit "repo"`
+                : `unknown repo "${requested}"; available: ${available.join(', ')}`
+        };
+    }
+    return { platform: hit.platform, owner: hit.owner, repo: hit.repo, ref: hit.ref, label: hit.alias };
+}
+/** 展示用路径：上下文仓库加 `别名:` 前缀，避免与被审仓库的同名文件混淆 */
+function shownPath(target, path) {
+    return target.label == null ? path : `${target.label}:${path}`;
+}
 function positiveInt(v) {
     return typeof v === 'number' && Number.isInteger(v) && v > 0 ? v : null;
 }
@@ -81615,11 +81802,14 @@ async function readFile(args) {
     if (path == null) {
         return fail({ type: 'read_file', path: String(args.path ?? '') }, 'invalid path');
     }
-    const ctx = getExecCtx();
-    const { owner, repo } = repoCoordsOf(ctx);
-    const content = await getPlatform().getFileContent(owner, repo, path, ctx.headSha);
+    const target = resolveTarget(args);
+    if ('error' in target)
+        return fail({ type: 'read_file', path }, target.error);
+    const content = await target.platform.getFileContent(target.owner, target.repo, path, target.ref);
     if (content == null) {
-        return fail({ type: 'read_file', path }, `file not found at head commit: ${path}`);
+        return fail({ type: 'read_file', path: shownPath(target, path) }, target.label == null
+            ? `file not found at head commit: ${path}`
+            : `file not found in context repo ${target.label} (${target.ref}): ${path}`);
     }
     const lines = content.split('\n');
     const start = Math.min(positiveInt(args.start_line) ?? 1, Math.max(lines.length, 1));
@@ -81637,10 +81827,11 @@ async function readFile(args) {
         body = body.slice(0, REVIEW_TOOL_LIMITS.readFileMaxChars);
         notes.push('truncated by size limit');
     }
-    const header = `${path} (lines ${start}-${end} of ${lines.length})`;
+    const where = target.label == null ? '' : `[context repo ${target.label} @ ${target.ref}] `;
+    const header = `${where}${path} (lines ${start}-${end} of ${lines.length})`;
     return {
         output: (0,redact/* redactString */.iH)([header, body, ...notes.map(n => `[${n}]`)].join('\n')),
-        step: { type: 'read_file', path, startLine: start, endLine: end }
+        step: { type: 'read_file', path: shownPath(target, path), startLine: start, endLine: end }
     };
 }
 async function listDirectory(args) {
@@ -81648,10 +81839,11 @@ async function listDirectory(args) {
     if (path == null) {
         return fail({ type: 'list_directory', path: String(args.path ?? '') }, 'invalid path');
     }
-    const ctx = getExecCtx();
-    const { owner, repo } = repoCoordsOf(ctx);
+    const target = resolveTarget(args);
+    if ('error' in target)
+        return fail({ type: 'list_directory', path }, target.error);
     // 根目录只能取全量树再筛出第一层（带路径时平台接口本身只查一层）
-    const tree = await getPlatform().listRepositoryTree(owner, repo, ctx.headSha, path === '' ? undefined : path);
+    const tree = await target.platform.listRepositoryTree(target.owner, target.repo, target.ref, path === '' ? undefined : path);
     const prefix = path === '' ? '' : `${path}/`;
     const entries = tree.entries
         .filter(e => typeof e.path === 'string' && e.path.startsWith(prefix))
@@ -81664,25 +81856,35 @@ async function listDirectory(args) {
         notes.push(`showing ${shown.length} of ${entries.length}`);
     if (tree.truncated)
         notes.push('the platform reported a truncated listing');
+    const where = target.label == null ? '' : `[context repo ${target.label} @ ${target.ref}] `;
     return {
-        output: (0,redact/* redactString */.iH)([`${path === '' ? '(root)' : path}/`, ...shown, ...notes.map(n => `[${n}]`)].join('\n')),
-        step: { type: 'list_directory', path, resultCount: entries.length }
+        output: (0,redact/* redactString */.iH)([`${where}${path === '' ? '(root)' : path}/`, ...shown, ...notes.map(n => `[${n}]`)].join('\n')),
+        step: { type: 'list_directory', path: shownPath(target, path), resultCount: entries.length }
     };
 }
 async function searchCode(args) {
     const query = typeof args.query === 'string' ? args.query.trim() : '';
     if (query === '')
         return fail({ type: 'search_code', query: '' }, 'empty query');
-    const { owner, repo } = repoCoordsOf(getExecCtx());
-    const hits = await getPlatform().searchCode(owner, repo, query, REVIEW_TOOL_LIMITS.searchMaxHits);
+    const target = resolveTarget(args);
+    if ('error' in target)
+        return fail({ type: 'search_code', query }, target.error);
+    const hits = await target.platform.searchCode(target.owner, target.repo, query, REVIEW_TOOL_LIMITS.searchMaxHits);
     const body = hits.map(h => {
         const where = h.startLine != null ? `${h.path}:${h.startLine}` : h.path;
         const snippet = h.snippet.trim().slice(0, REVIEW_TOOL_LIMITS.searchSnippetMaxChars);
         return snippet === '' ? `- ${where}` : `- ${where}\n${snippet}`;
     });
+    const where = target.label == null ? '' : ` in context repo ${target.label}`;
     return {
-        output: (0,redact/* redactString */.iH)(hits.length === 0 ? `no results for: ${query}` : [`results for: ${query}`, ...body].join('\n')),
-        step: { type: 'search_code', query, resultCount: hits.length }
+        output: (0,redact/* redactString */.iH)(hits.length === 0
+            ? `no results${where} for: ${query}`
+            : [`results${where} for: ${query}`, ...body].join('\n')),
+        step: {
+            type: 'search_code',
+            query: target.label == null ? query : `${target.label}: ${query}`,
+            resultCount: hits.length
+        }
     };
 }
 function fail(step, message) {
@@ -95099,7 +95301,26 @@ function buildInvestigationSection(tools) {
             INVESTIGATION_WITH_SHELL_TAIL);
     }
     const base = tools.codeTools === true ? INVESTIGATION_WITH_CODE_TOOLS : INVESTIGATION_WITHOUT_SHELL;
-    return base + (tools.webSearch ? INVESTIGATION_WITHOUT_SHELL_WEB_SEARCH : '');
+    const contextRepos = tools.codeTools === true && tools.contextRepos != null && tools.contextRepos.length > 0
+        ? buildContextReposSection(tools.contextRepos)
+        : '';
+    return base + contextRepos + (tools.webSearch ? INVESTIGATION_WITHOUT_SHELL_WEB_SEARCH : '');
+}
+/** 上下文仓库说明：只在配置了上下文仓库时追加，没配置时提示词与以前逐字一致 */
+function buildContextReposSection(aliases) {
+    return `
+### Context repositories (read-only)
+
+Besides the repository under review, the three tools above accept an optional \`repo\`
+parameter to read these other repositories: ${aliases.map(a => `\`${a}\``).join(', ')}.
+
+- They are read at their default branch and are NOT part of the change under review; never
+  report findings about their content, and never assume the change under review modifies them.
+- Use them to verify code that the repository under review imports or depends on (for
+  example shared utilities reached through relative imports) instead of guessing what it
+  exports or returns. If an import cannot be resolved inside the repository under review,
+  look for it in a context repository before concluding it is missing.
+`;
 }
 /** 按可用工具生成 web search 策略段 */
 function buildWebSearchPolicy(tools) {
@@ -100063,6 +100284,7 @@ async function loadRepoConfig(platform, ctx, log) {
 
 
 
+
 // re-export 供已有消费方（tests/main.ts）不需要改 import 路径
 
 /**
@@ -100180,7 +100402,9 @@ async function runOrchestrator(deps) {
         shell: options.enableShell,
         webSearch: options.enableWebSearch,
         // 与 bot-factory 一致：shell 不可用时审查模型拿到只读代码探查工具
-        codeTools: !options.enableShell
+        codeTools: !options.enableShell,
+        // 运维方配置的只读上下文仓库（未配置时为空，提示词不变）
+        contextRepos: getContextRepos().map(r => r.alias)
     });
     // 5. 事件分发
     try {

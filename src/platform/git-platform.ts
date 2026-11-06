@@ -255,6 +255,13 @@ export interface IGitPlatform {
     ref: string
   ): Promise<string | null>
 
+  /**
+   * 仓库的默认分支名；仓库不存在或没有默认分支（空仓库）返回 null，其余错误抛出。
+   *
+   * 可选：目前只有 GitLab 实现，用于「上下文仓库」（见 context-repos.ts）按默认分支只读访问。
+   */
+  getDefaultBranch?(owner: string, repo: string): Promise<string | null>
+
   // ─── 4. 顶层评论（issue comment / MR note）──────────────────────────────
 
   /** 创建顶层评论 */
